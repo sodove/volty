@@ -146,6 +146,7 @@ class KableBmsRepository private constructor(
     private val coroutineContext: kotlin.coroutines.CoroutineContext,
     private val rideHistoryRepository: RideHistoryRepository,
     private val bleAdapterStateProvider: BleAdapterStateProvider,
+    private val historyStartup: (suspend () -> HistoryTelemetryIngress)? = null,
 ) : BmsRepository, CanDiscovery, ControllerConfigSource, BleDiagnosticsRepository {
 
     private val diagnosticBuffer = BleDiagnosticBuffer()
@@ -157,20 +158,46 @@ class KableBmsRepository private constructor(
     private var historyTelemetryConfigurationSealed = false
     internal var beforeHistoryDisconnectForTest: (suspend () -> Unit)? = null
 
-    private suspend fun sealHistoryTelemetryConfiguration() = sessionLock.withLock {
-        if (historyTelemetryConfigurationSealed) return@withLock
-        historyTelemetryConfigurationSealed = true
-        // Choose before any connected state is published. A configured full-stream
-        // owner must never also feed the old aggregate recorder, even if a particular
-        // source plan is unsupported. Reconnect cannot silently switch this choice.
-        if (historyTelemetryIngress == null) rideTelemetryRecorder.start()
+    private val historyStartupLock = Mutex()
+
+    private suspend fun sealHistoryTelemetryConfiguration() = historyStartupLock.withLock {
+        currentCoroutineContext().ensureActive()
+        scope.ensureActive()
+        if (sessionLock.withLock { historyTelemetryConfigurationSealed }) return@withLock
+        // DB recovery/native preparation must never hold the BLE session mutex.
+        // Failed or cancelled preparation remains retryable, with no legacy fallback.
+        val prepared = historyStartup?.invoke()
+        currentCoroutineContext().ensureActive()
+        scope.ensureActive()
+        sessionLock.withLock {
+            currentCoroutineContext().ensureActive()
+            scope.ensureActive()
+            if (historyStartup != null) historyTelemetryIngress = checkNotNull(prepared)
+            historyTelemetryConfigurationSealed = true
+            // One immutable recorder choice across unsupported sources and reconnects.
+            if (historyTelemetryIngress == null) rideTelemetryRecorder.start()
+        }
+    }
+
+    private suspend fun prepareConnectionIntent(): Any {
+        currentCoroutineContext().ensureActive()
+        val intent = sessionLock.withLock {
+            scope.ensureActive()
+            Any().also { connectionIntent = it }
+        }
+        sealHistoryTelemetryConfiguration()
+        return intent
+    }
+
+    private suspend fun publishConnectionFailure(intent: Any, reason: String) = sessionLock.withLock {
+        if (scope.isActive && connectionIntent === intent) _connectionState.value = ConnectionState.Failed(reason)
     }
 
     internal suspend fun sealHistoryTelemetryConfigurationForTest() = sealHistoryTelemetryConfiguration()
 
     /** Startup opt-in only; active attempts retain their immutable recording binding. */
     internal suspend fun configureHistoryTelemetryIngress(ingress: HistoryTelemetryIngress?) = sessionLock.withLock {
-        check(!historyTelemetryConfigurationSealed && links.isEmpty() && vehicleConnection == null) { "Configure recording ingress before connecting" }
+        check(historyStartup == null && !historyTelemetryConfigurationSealed && links.isEmpty() && vehicleConnection == null) { "Configure recording ingress before connecting" }
         historyTelemetryIngress = ingress
     }
 
@@ -215,6 +242,17 @@ class KableBmsRepository private constructor(
         rideHistoryRepository = rideHistoryRepository,
         bleAdapterStateProvider = bleAdapterStateProvider,
     )
+
+    /** Native mode: the app owns runtime shutdown, independently of this BLE scope. */
+    internal constructor(
+        vehicleRepository: VehicleRepository,
+        serviceController: ru.sodovaya.volty.service.ServiceController,
+        rideHistoryRepository: RideHistoryRepository,
+        bleAdapterStateProvider: BleAdapterStateProvider,
+        historyRuntime: ru.sodovaya.volty.data.history.HistoryRecordingRuntime,
+    ) : this(vehicleRepository, { serviceController.start() }, { serviceController.stop() },
+        Dispatchers.Default, rideHistoryRepository, bleAdapterStateProvider,
+        historyStartup = { historyRuntime.prepare().ingress })
 
     internal companion object {
         /**
@@ -389,6 +427,7 @@ class KableBmsRepository private constructor(
             coroutineContext: kotlin.coroutines.CoroutineContext,
             rideHistoryRepository: RideHistoryRepository = NoOpRideHistoryRepository,
             bleAdapterStateProvider: BleAdapterStateProvider = BleAdapterStateProvider { true },
+            historyStartup: (suspend () -> HistoryTelemetryIngress)? = null,
         ): KableBmsRepository = KableBmsRepository(
             vehicleRepository = vehicleRepository,
             serviceStart = serviceStart,
@@ -396,6 +435,7 @@ class KableBmsRepository private constructor(
             coroutineContext = coroutineContext,
             rideHistoryRepository = rideHistoryRepository,
             bleAdapterStateProvider = bleAdapterStateProvider,
+            historyStartup = historyStartup,
         )
     }
 
@@ -1004,15 +1044,18 @@ class KableBmsRepository private constructor(
         doConnect(address, type, vehicle = buildGuestVehicle(address, type))
 
     override suspend fun connectDemo(profile: DemoProfile): Result<Unit> {
-        sealHistoryTelemetryConfiguration()
+        val intent = try { prepareConnectionIntent() }
+        catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+        catch (error: Exception) { return Result.failure(error) }
         println("[VOLTY-BLE] connectDemo: starting simulated session (profile=$profile)")
         val demoVehicle = demoVehicleFor(profile)
         return try {
             // Detach under the lock, then join outside: session callbacks/queued
             // history must be able to acquire sessionLock while teardown waits.
             val outgoingHistory = sessionLock.withLock {
+                scope.ensureActive()
+                if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 val outgoing = links.mapNotNull { it.session }
-                connectionIntent = Any()
                 userInitiatedDisconnect = false
                 for (l in links) {
                     l.session = null
@@ -1063,84 +1106,92 @@ class KableBmsRepository private constructor(
                 diagnosticControllersByAddress.clear()
             }
             publishActiveDiagnosticLinks()
-            _activeVehicle.value = demoVehicle
-            historyTelemetryIngress?.installNativePlan(demoVehicle.id, emptyList(), demoVehicle) {
-                _activeVehicle.value === demoVehicle
+            sessionLock.withLock {
+                scope.ensureActive()
+                if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
+                _activeVehicle.value = demoVehicle
             }
-            ringBuffer.clear()
-            motionRingBuffer.clear()
-            _connectionState.value = ConnectionState.Connected(demoVehicle)
-            // Show the foreground notification too, so reviewers see the full
-            // monitoring experience (the service feeds off activeData/activeVehicle).
-            serviceStart()
-            demoJob = scope.launch {
-                DemoBmsSimulator(profile = profile).run { tick ->
-                    // One PackState per pack of the demo vehicle, positionally
-                    // against the simulator's own per-pack samples — a scooter
-                    // has one, a wheel has its two parallel branches.
-                    //
-                    // VoltageSocEstimator is applied here for the same reason
-                    // the real path applies it in the sample funnel: it is the
-                    // one place holding both a sample and the vehicle it
-                    // belongs to. It is an IDENTITY for the scooter's JK packs
-                    // (reportsStateOfCharge = true) and the whole fuel gauge for
-                    // the wheel's Begode branches, which report none — exactly
-                    // as on hardware.
-                    val packStates = demoVehicle.packs.mapIndexed { i, pack ->
-                        val sample = tick.packs[i]
-                        PackState(
-                            pack = pack,
-                            data = VoltageSocEstimator.withEstimatedSoc(sample, demoVehicle, pack.index),
-                            isOnline = true,
-                            lastSeenAt = sample.timestamp
+            historyTelemetryIngress?.installNativePlan(demoVehicle.id, emptyList(), demoVehicle) {
+                scope.isActive && connectionIntent === intent && !userInitiatedDisconnect && _activeVehicle.value === demoVehicle
+            }
+            sessionLock.withLock {
+                scope.ensureActive()
+                if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
+                ringBuffer.clear()
+                motionRingBuffer.clear()
+                _connectionState.value = ConnectionState.Connected(demoVehicle)
+                // Show the foreground notification too, so reviewers see the full
+                // monitoring experience (the service feeds off activeData/activeVehicle).
+                serviceStart()
+                demoJob = scope.launch {
+                    DemoBmsSimulator(profile = profile).run { tick ->
+                        // One PackState per pack of the demo vehicle, positionally
+                        // against the simulator's own per-pack samples — a scooter
+                        // has one, a wheel has its two parallel branches.
+                        //
+                        // VoltageSocEstimator is applied here for the same reason
+                        // the real path applies it in the sample funnel: it is the
+                        // one place holding both a sample and the vehicle it
+                        // belongs to. It is an IDENTITY for the scooter's JK packs
+                        // (reportsStateOfCharge = true) and the whole fuel gauge for
+                        // the wheel's Begode branches, which report none — exactly
+                        // as on hardware.
+                        val packStates = demoVehicle.packs.mapIndexed { i, pack ->
+                            val sample = tick.packs[i]
+                            PackState(
+                                pack = pack,
+                                data = VoltageSocEstimator.withEstimatedSoc(sample, demoVehicle, pack.index),
+                                isOnline = true,
+                                lastSeenAt = sample.timestamp
+                            )
+                        }
+                        // Mirrors VehicleConnection.snapshot()'s battery half via the
+                        // same PackAggregator a real connection uses — an identity
+                        // transform for a one-pack vehicle, and the real parallel fold
+                        // (average voltage, summed current) for the wheel's two
+                        // branches. Keeping the demo on the one true path rather than
+                        // on a bespoke shortcut is what makes the wheel demo's numbers
+                        // the numbers a real wheel would produce.
+                        val demoBattery = PackAggregator.build(packStates, demoVehicle.topology)
+                        ringBuffer.push(demoBattery.aggregate)
+                        _activeData.value = demoBattery.aggregate
+                        // Motion twin of the two lines above: demo bypasses the
+                        // orchestrator entirely (no VehicleConnection, no funnel),
+                        // so the ride curve is fed straight into the SAME flows a
+                        // real connection's onVehicleData hook would publish —
+                        // activeMotion directly, and the motion ring buffer /
+                        // vehicle-level snapshot alongside it. The demo vehicle
+                        // carries a controller, so this controller state is coherent
+                        // with the vehicle it is published under.
+                        val motion = tick.motion
+                        motionRingBuffer.push(motion)
+                        _activeMotion.value = motion
+                        // Battery twin of the same idea: without this, packs/aggregate
+                        // stay at VehicleData()'s all-zero default for the whole demo
+                        // session (only _activeData — the Battery tab's own flow — saw
+                        // the sample), so the Ride dashboard's BATTERY tile (which reads
+                        // activeVehicleData.aggregate, not activeData) would be stuck
+                        // at "0% / 0.0V" forever instead of tracking the demo's SoC
+                        // curve.
+                        _activeVehicleData.value = _activeVehicleData.value.copy(
+                            packs = demoBattery.packs,
+                            aggregate = demoBattery.aggregate,
+                            topology = demoBattery.topology,
+                            isPartial = demoBattery.isPartial,
+                            controllers = demoVehicle.controllers.map {
+                                ControllerState(controller = it, data = motion, isOnline = true)
+                            },
+                            motion = motion,
+                            motionPartial = false
                         )
                     }
-                    // Mirrors VehicleConnection.snapshot()'s battery half via the
-                    // same PackAggregator a real connection uses — an identity
-                    // transform for a one-pack vehicle, and the real parallel fold
-                    // (average voltage, summed current) for the wheel's two
-                    // branches. Keeping the demo on the one true path rather than
-                    // on a bespoke shortcut is what makes the wheel demo's numbers
-                    // the numbers a real wheel would produce.
-                    val demoBattery = PackAggregator.build(packStates, demoVehicle.topology)
-                    ringBuffer.push(demoBattery.aggregate)
-                    _activeData.value = demoBattery.aggregate
-                    // Motion twin of the two lines above: demo bypasses the
-                    // orchestrator entirely (no VehicleConnection, no funnel),
-                    // so the ride curve is fed straight into the SAME flows a
-                    // real connection's onVehicleData hook would publish —
-                    // activeMotion directly, and the motion ring buffer /
-                    // vehicle-level snapshot alongside it. The demo vehicle
-                    // carries a controller, so this controller state is coherent
-                    // with the vehicle it is published under.
-                    val motion = tick.motion
-                    motionRingBuffer.push(motion)
-                    _activeMotion.value = motion
-                    // Battery twin of the same idea: without this, packs/aggregate
-                    // stay at VehicleData()'s all-zero default for the whole demo
-                    // session (only _activeData — the Battery tab's own flow — saw
-                    // the sample), so the Ride dashboard's BATTERY tile (which reads
-                    // activeVehicleData.aggregate, not activeData) would be stuck
-                    // at "0% / 0.0V" forever instead of tracking the demo's SoC
-                    // curve.
-                    _activeVehicleData.value = _activeVehicleData.value.copy(
-                        packs = demoBattery.packs,
-                        aggregate = demoBattery.aggregate,
-                        topology = demoBattery.topology,
-                        isPartial = demoBattery.isPartial,
-                        controllers = demoVehicle.controllers.map {
-                            ControllerState(controller = it, data = motion, isOnline = true)
-                        },
-                        motion = motion,
-                        motionPartial = false
-                    )
                 }
             }
             Result.success(Unit)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            _connectionState.value = ConnectionState.Failed(e.message ?: "Demo failed")
+            publishConnectionFailure(intent, e.message ?: "Demo failed")
             Result.failure(e)
         }
     }
@@ -2156,6 +2207,7 @@ class KableBmsRepository private constructor(
         reason: String? = null
     ): Boolean {
         val becameConnected = synchronized(linkStateLock) {
+            if (!scope.isActive) return@synchronized false
             link.status = status
             link.reconnectAttempt = attempt
             if (reason != null) link.lastReason = reason
@@ -2324,12 +2376,18 @@ class KableBmsRepository private constructor(
     // ----- Connect: one vehicle, N links -----
 
     private suspend fun doConnect(address: String, type: BmsType?, vehicle: Vehicle?): Result<Unit> {
-        sealHistoryTelemetryConfiguration()
+        val intent = try { prepareConnectionIntent() }
+        catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+        catch (error: Exception) { return Result.failure(error) }
         val unavailableReason = bleUnavailableReason(
             bleAvailability(bleAdapterStateProvider.isBluetoothEnabled())
         )
         if (unavailableReason != null) {
-            _connectionState.value = ConnectionState.Failed(unavailableReason)
+            sessionLock.withLock {
+                scope.ensureActive()
+                if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
+                _connectionState.value = ConnectionState.Failed(unavailableReason)
+            }
             println("[VOLTY-BLE] connect skipped: $unavailableReason")
             return Result.failure(IllegalStateException(unavailableReason))
         }
@@ -2348,8 +2406,9 @@ class KableBmsRepository private constructor(
             // be reached from a stack the loop owns); they stop on their own
             // via the link-identity guard once the new list is installed.
             val outgoingHistory = sessionLock.withLock {
+                scope.ensureActive()
+                if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 val outgoing = links.mapNotNull { it.session }
-                connectionIntent = Any()
                 userInitiatedDisconnect = false
                 for (l in links) {
                     l.session = null
@@ -2369,36 +2428,39 @@ class KableBmsRepository private constructor(
             // primaryAddress, the same identity [connect] hands us as
             // [address] — and the only one that does not throw when the
             // previously active vehicle stores no packs.
-            val previousAddress = _activeVehicle.value?.primaryAddress
-            if (previousAddress != null && previousAddress != address) {
-                ringBuffer.clear()
-                _activeData.value = BmsData()
-                // Same reasoning on the motion side: a different device's
-                // motion must not bleed into the new vehicle's graph / flow.
-                motionRingBuffer.clear()
-                _activeMotion.value = ControllerData()
-                // Same reasoning on the vehicle-level snapshot: without this,
-                // a stale demo (or previous real vehicle's) packs/aggregate
-                // survive into the new connection and RideDashboardComponent's
-                // BATTERY tile shows the WRONG vehicle's SoC/voltage until the
-                // new vehicle's first sample overwrites it. Reachable via the
-                // Picker's "+ Add battery" from a live demo session, which
-                // connects without disconnecting first.
-                _activeVehicleData.value = VehicleData()
-                primaryPackProtocol = null // see disconnect()'s note on this line
-                clearControllerConfigSources()
-            }
-            // Initial state, written directly: the links are not installed yet,
-            // so the fold cannot own this first transition. From installation
-            // on, every state write goes through [setLinkState].
-            _connectionState.value = ConnectionState.Connecting(vehicle)
-            _activeVehicle.value = vehicle
+            sessionLock.withLock {
+                scope.ensureActive()
+                if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
+                val previousAddress = _activeVehicle.value?.primaryAddress
+                if (previousAddress != null && previousAddress != address) {
+                    ringBuffer.clear()
+                    _activeData.value = BmsData()
+                    // Same reasoning on the motion side: a different device's
+                    // motion must not bleed into the new vehicle's graph / flow.
+                    motionRingBuffer.clear()
+                    _activeMotion.value = ControllerData()
+                    // Same reasoning on the vehicle-level snapshot: without this,
+                    // a stale demo (or previous real vehicle's) packs/aggregate
+                    // survive into the new connection and RideDashboardComponent's
+                    // BATTERY tile shows the WRONG vehicle's SoC/voltage until the
+                    // new vehicle's first sample overwrites it. Reachable via the
+                    // Picker's "+ Add battery" from a live demo session, which
+                    // connects without disconnecting first.
+                    _activeVehicleData.value = VehicleData()
+                    primaryPackProtocol = null // see disconnect()'s note on this line
+                    clearControllerConfigSources()
+                }
+                // Initial state, written directly: the links are not installed yet,
+                // so the fold cannot own this first transition. From installation
+                // on, every state write goes through [setLinkState].
+                _connectionState.value = ConnectionState.Connecting(vehicle)
+                _activeVehicle.value = vehicle
 
+            }
             val specs = effectiveLinkSpecs(vehicle, address, type)
             val newLinks = specs.map { PackLink(spec = it, vehicle = vehicle) }
             val orchestrator = buildOrchestrator(vehicle, address, type)
             installedOrchestrator = orchestrator
-            val channel = sampleFunnelChannel()
             // Install under the lock: the failure cleanup below is an
             // identity-guarded check-then-write, and it can only be safe if
             // the competing writer — a concurrent connect / reconnect attempt
@@ -2410,6 +2472,9 @@ class KableBmsRepository private constructor(
             // is fine — the consumer runs undispatched only to its first
             // channel receive, before any sample transaction takes the lock.
             sessionLock.withLock {
+                scope.ensureActive()
+                if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
+                val channel = sampleFunnelChannel()
                 vehicleConnection = orchestrator
                 closeSampleFunnelLocked()
                 sampleChannel = channel
@@ -2473,7 +2538,7 @@ class KableBmsRepository private constructor(
             // could clobber the successor's freshly installed orchestrator.
             throw e
         } catch (e: Exception) {
-            _connectionState.value = ConnectionState.Failed(readableBleFailureReason(e))
+            publishConnectionFailure(intent, readableBleFailureReason(e))
             clearOrchestratorAfterFailure(installedOrchestrator)
             Result.failure(e)
         }
@@ -2500,6 +2565,7 @@ class KableBmsRepository private constructor(
         link: PackLink,
         isReconnectAttempt: Boolean
     ): Result<Unit> {
+        scope.ensureActive()
         var historyProtocol: Any? = null
         var completed = false
         val vehicle = link.vehicle
@@ -2641,6 +2707,7 @@ class KableBmsRepository private constructor(
             // Install the session under the lock so a racing disconnect()
             // can't see a partially-set state.
             sessionLock.withLock {
+                scope.ensureActive()
                 if (userInitiatedDisconnect) {
                     // Someone called disconnect() while we were preparing —
                     // honour it: don't even attempt to bring the link up.
@@ -2661,6 +2728,7 @@ class KableBmsRepository private constructor(
             }
 
             val connectResult = session.connect()
+            scope.ensureActive()
             if (connectResult.isFailure) {
                 val err = connectResult.exceptionOrNull()?.message ?: "Connection failed"
                 setLinkState(link, LinkStatus.FAILED, reason = err)

@@ -848,3 +848,24 @@ queued Main native session factory and recording service retention. Resolution d
 not prepare or launch recording. Repository startup gating/installation, complete
 app-owner shutdown integration, source qualification and device acceptance remain
 open; the production repository still chooses the legacy recorder by default.
+
+Task7 repository startup-gate checkpoint (2026-10-16): an opt-in constructor now
+binds the app-owned runtime to first-connection preparation. Startup is serialized
+outside sessionLock; native ingress is installed and the single recorder choice is
+sealed only after preparation succeeds. Failure or caller cancellation can retry,
+without silently starting the legacy recorder. Manual configuration cannot replace
+that constructor-owned choice. Both demo and physical/guest entry use the gate.
+
+Each connection reserves its request identity before waiting. Disconnect or a newer
+request supersedes the old continuation; the latest concurrent request wins while
+successful startup runs once. Repository closure is checked again after startup,
+after history/teardown suspensions, and before state/native installation. Late
+physical link-state updates are ignored after closure. Outer error handlers publish
+Failed only for the current live request; current service failures remain visible.
+All history/native joins stay outside the BLE session mutex.
+
+Tests use actual repository/demo transitions, a real runtime recovery gate, and
+existing installed-link state seams. No phone/strict cross-thread shutdown proof is
+claimed. The default AppModule still uses the legacy constructor: app-owner ordered
+shutdown, remaining source qualification and native/performance acceptance are
+required before final activation. Screen migration remains separate and unfinished.
