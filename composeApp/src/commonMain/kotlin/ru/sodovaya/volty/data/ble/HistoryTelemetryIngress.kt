@@ -61,7 +61,7 @@ internal class HistoryTelemetryIngress(
                 }
             } }
             historySessionTelemetryCapture(protocol, sessionId, controller, readTick, { ownership.isCurrent() && nativeLifecycle?.isAccepting != false },
-                binding, preparation) { telemetry ->
+                binding, preparation, dispatchObservation = native?.dispatchObservation ?: { action -> action() }) { telemetry ->
                 val queued = if (nativeLifecycle != null) controller.reserveQueuedTelemetry(
                     telemetry.recording, telemetry.tick, telemetry.source.id) ?: return@historySessionTelemetryCapture else null
                 val sample = HistoryTelemetrySample(telemetry, controller, ownership, queued) {

@@ -47,9 +47,11 @@ internal class NativeHistoryRecordingLifecycle(
     } catch (cancel: CancellationException) { throw cancel }
     catch (_: Exception) { onFailure(); false }
 
-    internal class Binding(val sources: Map<HistoryTelemetrySource, HistorySource>, val prepare: suspend () -> Unit)
+    internal class Binding(val sources: Map<HistoryTelemetrySource, HistorySource>,
+        val dispatchObservation: (() -> Unit) -> Unit, val prepare: suspend () -> Unit)
     private class Link(val spec: LinkSpec, val binding: Map<HistoryTelemetrySource, HistorySource>)
-    private class Attempt(val protocol: Any, val capability: HistoryRecordingConnections.Attempt)
+    private class Attempt(val protocol: Any, val capability: HistoryRecordingConnections.Attempt,
+        val observations: HistoryObservationGate)
     private class Plan(val selection: HistoryRecordingConnections.Selection,
         val links: List<Link>, val owns: () -> Boolean,
         val attempts: MutableMap<Int, Attempt> = mutableMapOf())
@@ -71,6 +73,7 @@ internal class NativeHistoryRecordingLifecycle(
             closing = true
             controls.withLock {
                 val current = plan ?: return@withLock
+                closeObservationIntake(current)
                 check(connections.disconnect(current.selection)) { "Recording selection retired before close" }
                 plan = null
             }
@@ -94,6 +97,7 @@ internal class NativeHistoryRecordingLifecycle(
         catch (_: Exception) { failed = true; emptyList() }
         safeControl {
             if (!isAccepting || !ownsPlan()) return@safeControl
+            plan?.let { closeObservationIntake(it) }
             val selection = connections.install(vehicleId, links.mapIndexed { index, link ->
                 index.toString() to link.binding.values.toList()
             }.toMap())
@@ -127,14 +131,25 @@ internal class NativeHistoryRecordingLifecycle(
         val index = captured.links.indexOfFirst { it.spec === spec }
         if (index < 0) return null
         val link = captured.links[index]
-        return Binding(link.binding) {
+        val observations = HistoryObservationGate()
+        var preparationStarted = false // Serialized by controls, including retries of this exact binding.
+        return Binding(link.binding, { action ->
+            observations.dispatch {
+                if (isAccepting && plan === captured && captured.owns()) action()
+            }
+        }) {
             val ready = try {
                 control {
                     if (!isAccepting || plan !== captured || !captured.owns() || !ownsAttempt()) return@control false
+                    if (preparationStarted) return@control observations.isOpen
+                    preparationStarted = true
+                    // Fence old issuance before connections.newAttempt drains its queued
+                    // prefix. Physical live ownership is intentionally independent.
+                    captured.attempts[index]?.observations?.closeAndJoin()
                     val capability = connections.newAttempt(captured.selection, index.toString()) ?: return@control false
                     // Retain before durable begin so cancellation/failed setup can retire exactly it.
-                    captured.attempts[index] = Attempt(protocol, capability)
-                    connections.ready(capability)
+                    captured.attempts[index] = Attempt(protocol, capability, observations)
+                    connections.ready(capability) && observations.open()
                 }
             } catch (cancel: CancellationException) { throw cancel }
             catch (error: Exception) { onFailure(); throw error }
@@ -145,6 +160,7 @@ internal class NativeHistoryRecordingLifecycle(
     suspend fun retire(protocol: Any) = safeControl {
         val current = plan ?: return@safeControl
         val entry = current.attempts.entries.firstOrNull { it.value.protocol === protocol } ?: return@safeControl
+        entry.value.observations.closeAndJoin()
         connections.lost(entry.value.capability)
         current.attempts.remove(entry.key)
     }
@@ -155,8 +171,13 @@ internal class NativeHistoryRecordingLifecycle(
     suspend fun disconnect(ownsDisconnect: () -> Boolean) = safeControl {
         if (!ownsDisconnect()) return@safeControl
         val current = plan ?: return@safeControl
+        closeObservationIntake(current)
         connections.disconnect(current.selection)
         plan = null
+    }
+
+    private suspend fun closeObservationIntake(current: Plan) {
+        current.attempts.values.forEach { it.observations.closeAndJoin() }
     }
 
     private suspend fun safeControl(action: suspend () -> Unit) {

@@ -919,3 +919,14 @@ Ambiguous current selections expose no recording/manual bindings and report setu
 failure through the existing optional-recording path. This is an admission guard,
 not automatic alias handover or default alias-source qualification; no BLE commands,
 link release/reconnect policy, or production recorder activation changed.
+
+Task7 observation-right handover checkpoint (2026-10-17): an exact native binding
+now owns a pending/open/closed dispatch capability independent of live BLE
+ownership. Ready ACK opens it; replacement/retirement/switch/disconnect/close
+irreversibly fence it, wait in-flight callback issuance, then use the existing
+controller accepted-prefix drain. Atomic nonblocking reservations prevent a check
+then enqueue race. Numeric and receipt-loss callbacks both require this capability.
+Old callbacks cannot write or mark successor loss after handover, even with reused
+public IDs/protocol identity. Live decoding and original queued receipts remain
+usable. This does not complete cross-alias source selection/qualification or enable
+the production recorder; native/performance acceptance and screens remain open.

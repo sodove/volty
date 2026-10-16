@@ -49,7 +49,7 @@ internal fun historySessionTelemetryCapture(
     sources: Map<HistoryTelemetrySource, HistorySource>,
     onTelemetry: (CapturedHistoryTelemetry) -> Unit,
 ): SessionTelemetryCapture = historySessionTelemetryCapture(protocol, sessionId, controller, readTick,
-    ownsSession, sources, null, onTelemetry)
+    ownsSession, sources, null, onTelemetry = onTelemetry)
 
 internal fun historySessionTelemetryCapture(
     protocol: BmsProtocol,
@@ -59,6 +59,7 @@ internal fun historySessionTelemetryCapture(
     ownsSession: () -> Boolean,
     sources: Map<HistoryTelemetrySource, HistorySource>,
     prepareRecording: (suspend () -> Unit)?,
+    dispatchObservation: (() -> Unit) -> Unit = { action -> action() },
     onTelemetry: (CapturedHistoryTelemetry) -> Unit,
 ): SessionTelemetryCapture {
     // A caller can rebuild or mutate its map later; one attempt keeps its own plan.
@@ -79,17 +80,21 @@ internal fun historySessionTelemetryCapture(
         captured = recording to tick
         TelemetryReceiptTime(tick.epochMillis, tick.elapsedMillis)
     }, ownsSession, { received ->
-        val snapshot = captured
-        val recording = snapshot?.first
-        val tick = snapshot?.second
-        if (recording != null && tick != null) {
-            val observation = received.observation
-            val source = binding[observation.historySourceKey()]
-            if (source != null) onTelemetry(CapturedHistoryTelemetry(recording, source, tick, received))
+        dispatchObservation {
+            val snapshot = captured
+            val recording = snapshot?.first
+            val tick = snapshot?.second
+            if (recording != null && tick != null) {
+                val observation = received.observation
+                val source = binding[observation.historySourceKey()]
+                if (source != null) onTelemetry(CapturedHistoryTelemetry(recording, source, tick, received))
+            }
         }
     }, onUnreceiptedObservation = { observation ->
-        val recording = captured?.first
-        val source = binding[observation.historySourceKey()]
-        if (recording != null && source != null) controller.reportTelemetryReceiptLoss(recording, source.id)
+        dispatchObservation {
+            val recording = captured?.first
+            val source = binding[observation.historySourceKey()]
+            if (recording != null && source != null) controller.reportTelemetryReceiptLoss(recording, source.id)
+        }
     }, onPrepare = prepareRecording)
 }

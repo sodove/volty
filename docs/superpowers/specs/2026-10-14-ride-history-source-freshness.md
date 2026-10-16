@@ -1388,3 +1388,27 @@ registry already finished the old ride and GPS before this guard. The new reache
 replacement failure was publication of controls for the ambiguous new selection,
 not a missing old-ride teardown. The regression retains old finish/GPS assertions
 as positive controls. Default production recorder remains legacy.
+
+## Exact native observation-right handover (2026-10-17)
+
+Live BLE ownership alone is insufficient when a native history attempt is replaced
+while its old decoder can still run. Actual managed-ingress tests reached old
+numeric sends after reopening, same-plan/same-protocol capability reuse, and an
+old clock failure reporting ReceiptLoss against its successor. Existing accepted
+queue drain already worked; it did not itself fence a later old decoder callback.
+
+Each native binding now owns an irreversible PENDING/OPEN/CLOSED dispatch gate.
+Ready acknowledgement opens it. Replacement, retirement, selection switch,
+disconnect and terminal close fence new issuance and await original in-flight
+callback dispatch before the controller drains accepted queued receipts. Dispatch
+uses atomic nonblocking reservations and finally release, not a boolean check
+that could race a later queue reservation. Numeric and unreceipted-loss callbacks
+share the gate. An active owner's real receipt failure still reports loss.
+
+The live decoder remains separately owned and can keep rendering live data after
+recording authority is revoked. Already queued receipts retain original physical
+ownership, so closing the observation gate does not discard their accepted prefix.
+Same public ride/source IDs or protocol object cannot reopen an old capability.
+No BLE command, poll cadence, SQLite schema or production activation changed.
+This is a prerequisite for alias handover, not implementation of cross-alias
+producer admission, physical-source identity merging or gateway cache freshness.
