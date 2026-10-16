@@ -21,6 +21,32 @@ internal class NativeHistoryRecordingLifecycle(
     private val sources: (LinkSpec, Vehicle?) -> Map<HistoryTelemetrySource, HistorySource>,
     private val onFailure: () -> Unit,
 ) {
+    internal class ManualControls internal constructor(
+        private val begin: suspend () -> Boolean,
+        private val end: suspend (String) -> Boolean,
+    ) {
+        suspend fun start(): Boolean = begin()
+        suspend fun stop(rideId: String): Boolean = end(rideId)
+    }
+    /** A screen keeps this exact selection capability, never a lookup of whichever
+     * vehicle happens to be current when its delayed click finally executes.
+     */
+    fun manualControls(): ManualControls? {
+        val captured = plan ?: return null
+        if (captured.links.isEmpty() || !captured.owns()) return null
+        return ManualControls(
+            begin = { manualControl(captured) { connections.start(captured.selection) } },
+            end = { rideId -> manualControl(captured) { connections.stop(captured.selection, rideId) } },
+        )
+    }
+
+    private suspend fun manualControl(captured: Plan, action: suspend () -> Boolean): Boolean = try {
+        control {
+            if (plan !== captured || !captured.owns()) false else action()
+        }
+    } catch (cancel: CancellationException) { throw cancel }
+    catch (_: Exception) { onFailure(); false }
+
     internal class Binding(val sources: Map<HistoryTelemetrySource, HistorySource>, val prepare: suspend () -> Unit)
     private class Link(val spec: LinkSpec, val binding: Map<HistoryTelemetrySource, HistorySource>)
     private class Attempt(val protocol: Any, val capability: HistoryRecordingConnections.Attempt)

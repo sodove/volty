@@ -39,6 +39,7 @@ internal class HistoryTelemetryIngress(
     }
     suspend fun retireNativeAttempt(protocol: Any) { nativeLifecycle?.retire(protocol) }
     suspend fun disconnectNative(ownsDisconnect: () -> Boolean) { nativeLifecycle?.disconnect(ownsDisconnect) }
+    fun manualControls(): NativeHistoryRecordingLifecycle.ManualControls? = nativeLifecycle?.manualControls()
 
     fun capture(protocol: BmsProtocol, sessionId: String, spec: LinkSpec, vehicle: Vehicle?,
         ownership: SampleSessionOwnership, channel: SendChannel<Sample>): SessionTelemetryCapture? {

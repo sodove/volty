@@ -761,3 +761,13 @@ are checked together for two forwarded nodes, independent local currents/power a
 VALUES geometry. Existing decoder identity checks remain in force. Mixed unqualified
 native targets, hosted/derived gateway packs and aliases remain rejected; this does
 not activate recording or establish hosted BMS age/producer semantics.
+
+Task7 manual-control ownership checkpoint (2026-10-16): the native lifecycle
+exposes an opaque manual Start/Stop capability for its exact qualified installed
+selection. Every command rechecks that selection and current native intent under
+the lifecycle mutex. Stop also requires the displayed ride ID, so a late click
+cannot finish a restarted ride. Start needs a genuinely ready attempt; reconnect
+does not override manual Stop. An accepted Stop completes independently of screen
+cancellation. Empty/unsupported selections expose no controls, and the unmanaged
+ingress cannot bypass the lifecycle owner. This prepares the UI binding; actual
+buttons, app runtime activation and legacy recorder retirement remain open.
