@@ -1365,3 +1365,26 @@ An age-bearing producer contract and aggregate/alias admission remain required;
 no polling change, new BLE command, production activation or field proof follows
 from these decoder tests. Earlier 'gateway observations pending' statements are
 superseded only for this conservative cache-response boundary.
+
+## Whole-plan physical assignment guard (2026-10-17)
+
+A per-link planner can mint different history IDs for two paths of one battery.
+Source-ID uniqueness therefore does not establish physical uniqueness. Before
+calling any per-link planner, the native lifecycle now validates the complete
+installed link selection: BLE addresses are unique ignoring case, global pack
+slots and global controller slots each occur once, and installed profile packs
+cannot repeat a nonblank aliasGroup. A blank alias is invalid metadata. Pack and
+controller index namespaces stay independent. Only installed pack assignments
+participate: an unused alternate path in the profile does not own a recording.
+
+This guard also covers injected qualified planners. It does not automatically
+choose, disconnect or hand over any BLE path, and does not qualify the default
+planner's alias/gateway producers. Rejected current selections use the existing
+unsupported-plan path: no binding/manual capability is published and optional
+recording reports setup failure while live decoding remains available.
+
+Evidence qualification: replacing a one-source plan with an ambiguous larger
+registry already finished the old ride and GPS before this guard. The new reached
+replacement failure was publication of controls for the ambiguous new selection,
+not a missing old-ride teardown. The regression retains old finish/GPS assertions
+as positive controls. Default production recorder remains legacy.

@@ -908,3 +908,14 @@ telemetry. Existing dashboard projection, polling and measured current conversio
 are unchanged. This does not admit numeric cached BMS measurements or activate
 hosted/derived gateway source plans. Firmware/provenance and alias/aggregate gates
 remain separate from recording lifecycle readiness.
+
+Task7 whole-plan physical ownership checkpoint (2026-10-17): native installation
+now checks global source-slot ownership, case-insensitive BLE endpoint uniqueness
+and installed physical alias groups before invoking any per-link source planner.
+Distinct per-path history IDs cannot bypass physical ownership validation.
+Independent pack/controller namespaces, distinct physical groups and a single
+selected path with dormant profile alternatives remain valid for qualified planners.
+Ambiguous current selections expose no recording/manual bindings and report setup
+failure through the existing optional-recording path. This is an admission guard,
+not automatic alias handover or default alias-source qualification; no BLE commands,
+link release/reconnect policy, or production recorder activation changed.

@@ -84,7 +84,9 @@ internal class NativeHistoryRecordingLifecycle(
         // Unsupported/guest/demo selections must retire old GPS but cannot auto-start a fake ride.
         var failed = false
         val links = if (vehicle == null || vehicle.isGuest || vehicle.isDemo) emptyList() else try {
-            specs.toList().map { Link(it, sources(it, vehicle).toMap()) }.also { planned ->
+            val installed = specs.toList()
+            requireUniquePhysicalOwnership(installed, vehicle)
+            installed.map { Link(it, sources(it, vehicle).toMap()) }.also { planned ->
                 val ids = planned.flatMap { it.binding.values }.map { it.id }
                 require(ids.distinct().size == ids.size) { "Duplicate physical source binding" }
             }
@@ -98,6 +100,24 @@ internal class NativeHistoryRecordingLifecycle(
             plan = Plan(selection, links, ownsPlan)
             if (failed) onFailure()
         }
+    }
+
+    /** Per-path source IDs cannot certify physical uniqueness. Until alias
+     * handover has its own recording admission, a physical pack may have only
+     * one installed path. Dormant profile alternatives do not own a recording.
+     * Slot namespaces are independent: pack 0 and controller 0 are not aliases.
+     */
+    private fun requireUniquePhysicalOwnership(specs: List<LinkSpec>, vehicle: Vehicle) {
+        val addresses = specs.map { it.address.uppercase() }
+        require(addresses.distinct().size == addresses.size) { "Duplicate physical BLE endpoint" }
+        val packs = specs.flatMap { it.ownedPacks }.map { it.globalIndex }
+        val controllers = specs.flatMap { it.ownedControllers }.map { it.globalIndex }
+        require(packs.distinct().size == packs.size) { "Duplicate physical pack slot" }
+        require(controllers.distinct().size == controllers.size) { "Duplicate physical controller slot" }
+        val installedPacks = packs.toSet()
+        val aliases = vehicle.packs.filter { it.index in installedPacks }.mapNotNull { it.aliasGroup }
+        require(aliases.all { it.isNotBlank() }) { "Blank physical alias identity" }
+        require(aliases.distinct().size == aliases.size) { "Multiple recording paths for one physical battery" }
     }
 
     /** Read-only immutable snapshot; native ownership still fences every notification. */
