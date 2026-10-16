@@ -121,6 +121,77 @@ class KableBmsRepositoryHistoryFunnelTest {
         assertNull(c.captureGpsRecording()); assertNull(c.state.value.intent.ride)
     }
 
+    @Test fun cancelledAcceptedDisconnectStillClearsNativeStateAndReleasesService() {
+        var stops = 0
+        bleRepositoryTest(serviceStop = { stops++ }) { repo ->
+            val v = vehicle()
+            repo.installLinksForTest(v, v.primaryAddress, BmsType.JK_BMS)
+            assertEquals(v, repo.activeVehicle.value)
+            assertIs<ConnectionState.Connecting>(repo.connectionState.value)
+            var accepted = false
+            repo.beforeHistoryDisconnectForTest = {
+                accepted = true
+                kotlinx.coroutines.currentCoroutineContext().cancel()
+                kotlinx.coroutines.yield()
+            }
+            val task = backgroundScope.launch { repo.disconnect() }
+            runCurrent(); task.join()
+            assertTrue(accepted)
+            assertTrue(task.isCancelled)
+            assertNull(repo.activeVehicle.value)
+            assertEquals(ConnectionState.Disconnected, repo.connectionState.value)
+            assertEquals(1, stops)
+        }
+    }
+
+    @Test fun lateDisconnectCannotClearANewerDemoConnection() {
+        var stops = 0
+        bleRepositoryTest(serviceStop = { stops++ }) { repo ->
+            val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            var accepted = false
+            repo.beforeHistoryDisconnectForTest = { accepted = true; gate.await() }
+            val old = backgroundScope.launch { repo.disconnect() }
+            try {
+                runCurrent(); assertTrue(accepted)
+                assertTrue(repo.connectDemo(DemoProfile.SCOOTER).isSuccess)
+                val successor = assertNotNull(repo.activeVehicle.value)
+                assertIs<ConnectionState.Connected>(repo.connectionState.value)
+                gate.complete(Unit); old.join()
+                assertEquals(successor, repo.activeVehicle.value)
+                assertIs<ConnectionState.Connected>(repo.connectionState.value)
+                assertEquals(0, stops)
+            } finally { gate.complete(Unit); old.cancel(); old.join() }
+        }
+    }
+
+    @Test fun lateDisconnectCannotReleaseServiceWhileANewerDisconnectIsCleaningUp() {
+        var stops = 0
+        bleRepositoryTest(serviceStop = { stops++ }) { repo ->
+            val firstGate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            val secondGate = kotlinx.coroutines.CompletableDeferred<Unit>()
+            var accepted = 0
+            repo.beforeHistoryDisconnectForTest = {
+                accepted++
+                if (accepted == 1) firstGate.await() else secondGate.await()
+            }
+            val first = backgroundScope.launch { repo.disconnect() }
+            var second: kotlinx.coroutines.Job? = null
+            try {
+                runCurrent(); assertEquals(1, accepted)
+                second = backgroundScope.launch { repo.disconnect() }
+                runCurrent(); assertEquals(2, accepted)
+                firstGate.complete(Unit); first.join()
+                assertEquals(0, stops, "The successor still owns pending native cleanup")
+                secondGate.complete(Unit); second.join()
+                assertEquals(1, stops)
+                assertEquals(ConnectionState.Disconnected, repo.connectionState.value)
+            } finally {
+                firstGate.complete(Unit); secondGate.complete(Unit)
+                first.cancel(); second?.cancel(); first.join(); second?.join()
+            }
+        }
+    }
+
     @Test fun nativeDropRechecksAttemptBeforeIssuingReconnectAndStillAcceptsCurrentDrop() = bleRepositoryTest { repo ->
         val v = vehicle(); var owns = false; var checks = 0
         val guard = { checks++; owns }

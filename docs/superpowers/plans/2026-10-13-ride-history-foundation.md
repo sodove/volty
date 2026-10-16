@@ -682,3 +682,16 @@ calls. Service stop reads current ticket/native hold live, and release also pres
 the existing active BLE startup guard. Permission watching has no timer without an
 actual history ticket. This binds the native capability; recorder runtime/ingress DI,
 legacy retirement, other Task7 gates and phone acceptance remain open.
+
+Task7 native teardown checkpoint in progress (2026-10-16): physical session
+retirement is distinct from completion. Accepted cleanup serializes under a
+NonCancellable owner so cancelled callers cannot abandon jobs/disconnect/reset;
+failed completion remains retryable. Detached batches attempt every original
+native and recording retirement and retain earlier errors. Accepted global
+disconnect finalizes history and native state even after cancellation; exact
+intent identity guards late history retirement and final reset/service release
+against a newer connect/disconnect. Native joins remain outside sessionLock.
+Common issued-action and repository-seam tests exercise these cancellation and
+successor paths; real Kable/phone teardown is not thereby verified. Existing
+best-effort Peripheral.disconnect exception behavior is unchanged. Runtime
+activation, other Task7 gates and screen port remain open.

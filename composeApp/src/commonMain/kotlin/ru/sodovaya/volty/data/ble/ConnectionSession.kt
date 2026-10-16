@@ -27,8 +27,6 @@ import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -89,9 +87,8 @@ internal class ConnectionSession(
 ) {
     init { telemetryCapture?.requireProtocol(protocol) }
 
-    private val cancelMutex = Mutex()
-    @Volatile
-    private var torn: Boolean = false
+    private val teardownOwner = SessionTeardownOwner(::releaseNativeResources)
+    private val torn: Boolean get() = teardownOwner.retired
 
     /** Opaque immutable identity for recording retirement, never a transport command target. */
     internal val recordingAttempt: Any get() = protocol
@@ -429,26 +426,23 @@ internal class ConnectionSession(
     /**
      * Tear down the session: cancel all background jobs, disconnect the peripheral.
      *
-     * Idempotent and safe from any coroutine. Held under [cancelMutex] so that
-     * concurrent callers (user disconnect + watchdog firing simultaneously)
-     * don't race.
+     * Concurrent callers await the same native cleanup acknowledgement. Once accepted,
+     * caller cancellation cannot abandon joins, disconnect or protocol reset.
      */
-    suspend fun tearDown() {
-        cancelMutex.withLock {
-            if (torn) return@withLock
-            torn = true
-            telemetryCapture?.close()
-            pollingJob?.cancelAndJoin(); pollingJob = null
-            observeJob?.cancelAndJoin(); observeJob = null
-            stateJob?.cancelAndJoin(); stateJob = null
-            watchdogJob?.cancelAndJoin(); watchdogJob = null
-            // Before reset(), which is what answers a scan parked on this link:
-            // a scan that reached the wire after the peripheral was gone would
-            // wait out its whole window for a reply that cannot arrive.
-            writeChar = null
-            try { peripheral.disconnect() } catch (_: Exception) {}
-            protocol.reset()
-        }
+    suspend fun tearDown() = teardownOwner.run()
+
+    private suspend fun releaseNativeResources() {
+        telemetryCapture?.close()
+        pollingJob?.cancelAndJoin(); pollingJob = null
+        observeJob?.cancelAndJoin(); observeJob = null
+        stateJob?.cancelAndJoin(); stateJob = null
+        watchdogJob?.cancelAndJoin(); watchdogJob = null
+        // Before reset(), which is what answers a scan parked on this link:
+        // a scan that reached the wire after the peripheral was gone would
+        // wait out its whole window for a reply that cannot arrive.
+        writeChar = null
+        try { peripheral.disconnect() } catch (_: Exception) {}
+        protocol.reset()
     }
 }
 

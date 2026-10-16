@@ -694,6 +694,10 @@ class KableBmsRepository private constructor(
     @Volatile
     private var userInitiatedDisconnect: Boolean = false
 
+    /** Exact global intent; mutated with sessionLock, read by history retirement predicates. */
+    @Volatile
+    private var connectionIntent: Any = Any()
+
     /** Guarded by [advertisementCacheLock]: written from the scan flow on
      *  Dispatchers.Default, read from connect paths on arbitrary coroutines. */
     private val advertisementCacheLock = Any()
@@ -1003,6 +1007,7 @@ class KableBmsRepository private constructor(
             // history must be able to acquire sessionLock while teardown waits.
             val outgoingHistory = sessionLock.withLock {
                 val outgoing = links.mapNotNull { it.session }
+                connectionIntent = Any()
                 userInitiatedDisconnect = false
                 for (l in links) {
                     l.session = null
@@ -1045,7 +1050,8 @@ class KableBmsRepository private constructor(
                 lastConnectionTarget = null
                 outgoing
             }
-            outgoingHistory.forEach { tearDownRemovedSessionWithHistory(it) }
+            tearDownRemovedSessionsWithHistory(outgoingHistory)
+            currentCoroutineContext().ensureActive()
             synchronized(linkStateLock) {
                 protocolDiagnosticsByAddress.clear()
                 diagnosticBatteriesByAddress.clear()
@@ -2338,6 +2344,7 @@ class KableBmsRepository private constructor(
             // via the link-identity guard once the new list is installed.
             val outgoingHistory = sessionLock.withLock {
                 val outgoing = links.mapNotNull { it.session }
+                connectionIntent = Any()
                 userInitiatedDisconnect = false
                 for (l in links) {
                     l.session = null
@@ -2348,7 +2355,8 @@ class KableBmsRepository private constructor(
                 demoJob = null
                 outgoing
             }
-            outgoingHistory.forEach { tearDownRemovedSessionWithHistory(it) }
+            tearDownRemovedSessionsWithHistory(outgoingHistory)
+            currentCoroutineContext().ensureActive()
             // Connecting to a DIFFERENT device (picker switch without an explicit
             // disconnect, or a real connect right after demo) must not mix the
             // previous battery's samples into the new graph. Reconnects to the
@@ -2882,12 +2890,13 @@ class KableBmsRepository private constructor(
     /** Only for sessions whose native ownership was removed; caller must not hold sessionLock. */
     private suspend fun tearDownRemovedSessionWithHistory(session: ConnectionSession?) {
         if (session == null) return
-        try { session.tearDown() }
-        finally {
-            withContext(kotlinx.coroutines.NonCancellable) {
-                historyTelemetryIngress?.retireNativeAttempt(session.recordingAttempt)
-            }
-        }
+        tearDownRemovedSessionsWithHistory(listOf(session))
+    }
+
+    private suspend fun tearDownRemovedSessionsWithHistory(sessions: List<ConnectionSession>) {
+        completeDetachedSessionCleanup(sessions, { it.tearDown() }, {
+            historyTelemetryIngress?.retireNativeAttempt(it.recordingAttempt)
+        })
     }
 
     override suspend fun disconnect() {
@@ -2896,10 +2905,12 @@ class KableBmsRepository private constructor(
         // Held under sessionLock so doConnect / onLinkDrop running on another
         // coroutine see this. The lock is taken ONCE for the whole sweep —
         // never nested, it is not reentrant.
+        val disconnectIntent = Any()
         val sessionsToTear: List<ConnectionSession>
         val reconnectsToCancel: List<Job>
         val demoToCancel: Job?
         sessionLock.withLock {
+            connectionIntent = disconnectIntent
             userInitiatedDisconnect = true
             val current = links
             sessionsToTear = current.mapNotNull { it.session }
@@ -2925,16 +2936,32 @@ class KableBmsRepository private constructor(
         }
         try {
             beforeHistoryDisconnectForTest?.invoke()
-            reconnectsToCancel.forEach { it.cancel() }
-            demoToCancel?.cancel()
-            sessionsToTear.forEach { it.tearDown() }
         } finally {
-            // Native disconnect intent was already accepted under sessionLock. Its recording
-            // must finish even if a screen closes while native teardown is suspended.
+            // All of these owners were detached above. Even an already cancelled caller
+            // must complete their cleanup and the accepted disconnect's final state.
             withContext(kotlinx.coroutines.NonCancellable) {
-                historyTelemetryIngress?.disconnectNative { userInitiatedDisconnect && links.isEmpty() }
+                reconnectsToCancel.forEach { it.cancel() }
+                demoToCancel?.cancel()
+                try {
+                    completeDetachedSessionCleanup(sessionsToTear, { it.tearDown() })
+                } finally {
+                    try {
+                        historyTelemetryIngress?.disconnectNative {
+                            connectionIntent === disconnectIntent && userInitiatedDisconnect && links.isEmpty()
+                        }
+                    } finally {
+                        finishAcceptedDisconnect(disconnectIntent)
+                    }
+                }
             }
         }
+    }
+
+    /** An earlier revision reset state unconditionally after off-lock native joins.
+     * A delayed disconnect could erase a newer connection or stop its service.
+     */
+    private suspend fun finishAcceptedDisconnect(disconnectIntent: Any) = sessionLock.withLock {
+        if (connectionIntent !== disconnectIntent || !userInitiatedDisconnect || links.isNotEmpty()) return@withLock
         _activeData.value = BmsData()
         _activeVehicleData.value = VehicleData()
         // Reset alongside _activeVehicleData, same reason as that field's
@@ -2952,15 +2979,9 @@ class KableBmsRepository private constructor(
         primaryPackProtocol = null
         clearControllerConfigSources()
         _activeMotion.value = ControllerData()
-        // Fresh acquisition: the block above has already released the lock,
-        // and tearDown() must not run while holding it. The funnel closes
-        // beside the orchestrator: every session was torn down (observe loops
-        // joined) above, so no sample can hit the closed channel, and closing
-        // does not suspend — teardown cannot deadlock here.
-        sessionLock.withLock {
-            vehicleConnection = null
-            closeSampleFunnelLocked()
-        }
+        // Native jobs were joined outside sessionLock. Closing the funnel is nonblocking.
+        vehicleConnection = null
+        closeSampleFunnelLocked()
         _activeVehicle.value = null
         synchronized(linkStateLock) {
             protocolDiagnosticsByAddress.clear()
