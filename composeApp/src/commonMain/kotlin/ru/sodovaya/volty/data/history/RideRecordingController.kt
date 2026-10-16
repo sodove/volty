@@ -53,6 +53,41 @@ class RideRecordingController(
     private var nextGeneration = 0L
     private var recovered = false
 
+    internal suspend fun sourceUnavailable(connectionGeneration: Long, sourceIds: Set<String>, tick: HistoryTick): Boolean =
+        changeSourceAvailability(connectionGeneration, sourceIds, tick, available = false)
+
+    internal suspend fun sourceReady(connectionGeneration: Long, sourceIds: Set<String>, tick: HistoryTick): Boolean =
+        changeSourceAvailability(connectionGeneration, sourceIds, tick, available = true)
+
+    /** Physical-attempt owner qualifies the event; this control qualifies its recording registry.
+     * Only the affected prefix drains. The global gate and GPS capability remain unchanged.
+     */
+    private suspend fun changeSourceAvailability(connectionGeneration: Long, sourceIds: Set<String>,
+        tick: HistoryTick, available: Boolean): Boolean = controls.withLock {
+        val snapshot = sourceIds.toSet()
+        val owner = admission.value ?: return@withLock false
+        val ride = owner.intent.ride ?: return@withLock false
+        if (snapshot.isEmpty() || snapshot.any { it !in owner.sources } ||
+            connectionGeneration != owner.intent.connectionGeneration || !owner.intent.linkConnected ||
+            historyAxisEpochMillis(ride.started, tick) == null) return@withLock false
+        withContext(NonCancellable) {
+            val blocked = owner.gate.blockedSources(snapshot)
+            val changed = if (available) blocked else snapshot - blocked
+            if (changed.isEmpty()) return@withContext false
+            val last = owner.gate.closeSources(changed)
+            val boundaryTick = if (last != null && last.elapsedMillis > tick.elapsedMillis) last else tick
+            val reservation = owner.gate.reserveBoundary(boundaryTick, changed) ?: return@withContext false
+            try {
+                offerMarkers(owner, changed.map { source -> HistoryMarker(boundaryTick,
+                    if (available) HistoryMarkerKind.CONNECTED else HistoryMarkerKind.BLE_GAP, source) })
+            } catch (error: Exception) {
+                recordTelemetryFailure(owner, error::class.simpleName ?: "SourceBoundaryFailure")
+                throw error
+            } finally { reservation.release() }
+            if (available) owner.gate.reopenSources(changed) else true
+        }
+    }
+
     /** Null retains an active same-vehicle registry; explicit empty starts a GPS-only segment.
      * A new ride never inherits a retired registry. IDs must encode physical/calibration identity.
      */
@@ -115,7 +150,8 @@ class RideRecordingController(
         val ride = owner.intent.ride ?: return null
         if (context.gate !== owner.gate || context.generation != owner.generation || context.rideId != ride.id ||
             sourceId !in owner.sources || !acceptsRecordingTick(owner.intent, context.connectionGeneration, tick) ||
-            historyAxisEpochMillis(ride.started, tick) == null || !owner.gate.reserve(tick)) return null
+            historyAxisEpochMillis(ride.started, tick) == null) return null
+        val reservation = owner.gate.reserveTelemetry(tick, setOf(sourceId)) ?: return null
         return QueuedHistoryTelemetry(onOffer = { batch ->
             // Admission may now be closed. This exact previously reserved prefix still belongs
             // to the captured owner; no later owner can begin until its reservation is released.
@@ -128,7 +164,7 @@ class RideRecordingController(
                 recordTelemetryFailure(owner, error::class.simpleName ?: "QueuedTelemetryFailure")
                 throw error
             }
-        }, onDiscard = { recordTelemetryFailure(owner, "IngressLoss") }, onRelease = owner.gate::release)
+        }, onDiscard = { recordTelemetryFailure(owner, "IngressLoss") }, onRelease = reservation::release)
     }
 
     internal fun captureTelemetryRecording(): CapturedHistoryRecording? {
@@ -194,7 +230,10 @@ class RideRecordingController(
                 historyAxisEpochMillis(ride.started, it.tick) == null }) return HistoryOffer.RETIRED
         if (!owner.intent.linkConnected || connectionGeneration != owner.intent.connectionGeneration) return HistoryOffer.RETIRED
         val latest = batch.samples.maxByOrNull { it.tick.elapsedMillis }?.tick ?: owner.last
-        if (!owner.gate.reserve(latest)) return HistoryOffer.RETIRED
+        val sourceIds = batch.samples.map { it.key.sourceId }.toSet()
+        val reservation = if (sourceIds.isEmpty()) null else
+            owner.gate.reserveTelemetry(latest, sourceIds) ?: return HistoryOffer.RETIRED
+        if (sourceIds.isEmpty() && !owner.gate.reserve(latest)) return HistoryOffer.RETIRED
         // Earlier CAS-only reservation could be overtaken by finish before this send returned.
         try { return writer.offer(owner.generation, batch) }
         catch (error: Exception) {
@@ -204,7 +243,7 @@ class RideRecordingController(
             recordTelemetryFailure(owner, type)
             throw error
         }
-        finally { owner.gate.release() }
+        finally { if (reservation == null) owner.gate.release() else reservation.release() }
     }
 
     internal fun captureGpsRecording(): CapturedHistoryGpsRecording? {

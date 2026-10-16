@@ -34,7 +34,8 @@ class HistoryRecordingConnectionsTest {
         private var ids = 0
         val controller = RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++ids}" }, { 0 })
         val connections = HistoryRecordingConnections(controller) { HistoryTick(10000 + ++time, time, 1) }
-        fun markers() = writer.offers.flatMap { it.markers }.map { it.kind }
+        fun markers() = writer.offers.flatMap { it.markers }.filter { it.sourceId == null }.map { it.kind }
+        fun scoped() = writer.offers.flatMap { it.markers }.filter { it.sourceId != null }
         fun offer(source: String): HistoryOffer {
             val context = controller.captureTelemetryRecording() ?: return HistoryOffer.RETIRED
             return controller.offerTelemetry(context, HistoryBatch(context.rideId,
@@ -62,7 +63,7 @@ class HistoryRecordingConnectionsTest {
         assertEquals(listOf(HistoryMarkerKind.CONNECTED), f.markers())
     }
 
-    @Test fun onlyLastLostOpensGapAndReconnectKeepsRideAndFullRegistry() = runTest {
+    @Test fun onlyLastLostOpensGlobalGapAndReconnectKeepsRideAndFullRegistry() = runTest {
         val f = Fixture(); val c = f.connections; val s = c.install("bike", plan)
         val a = assertNotNull(c.newAttempt(s, "battery-link")); val b = assertNotNull(c.newAttempt(s, "motor-link"))
         c.ready(a); c.ready(b)
@@ -184,5 +185,83 @@ class HistoryRecordingConnectionsTest {
             assertEquals(listOf(HistoryMarkerKind.CONNECTED, HistoryMarkerKind.BLE_GAP), f.markers())
             assertTrue(f.writer.ends.isEmpty())
         } finally { gate.complete(Unit); preparing.cancelAndJoin(); loss?.cancelAndJoin() }
+    }
+
+    @Test fun partial_physical_loss_scopes_the_gap_and_keeps_peer_and_gps_owner() = runTest {
+        val f = Fixture(); val c = f.connections; val s = c.install("bike", plan)
+        val a = assertNotNull(c.newAttempt(s, "battery-link")); val b = assertNotNull(c.newAttempt(s, "motor-link"))
+        c.ready(a); c.ready(b)
+        val context = assertNotNull(f.controller.captureTelemetryRecording())
+        val gps = assertNotNull(f.controller.captureGpsRecording())
+        assertTrue(c.lost(a))
+        assertEquals(listOf("pack"), f.scoped().map { it.sourceId })
+        assertEquals(listOf(HistoryMarkerKind.BLE_GAP), f.scoped().map { it.kind })
+        assertEquals(HistoryOffer.RETIRED, f.offer("pack"))
+        assertEquals(HistoryOffer.ACCEPTED, f.offer("motor"))
+        assertSame(context.gate, assertNotNull(f.controller.captureTelemetryRecording()).gate)
+        assertSame(gps.identity, assertNotNull(f.controller.captureGpsRecording()).identity)
+        assertEquals(listOf(HistoryMarkerKind.CONNECTED), f.markers())
+        assertFalse(c.lost(a)); assertEquals(1, f.scoped().size)
+    }
+
+    @Test fun replacing_a_physical_attempt_retires_and_reopens_all_of_its_own_sources_once() = runTest {
+        val f = Fixture(); val c = f.connections
+        val extra = battery.copy(id = "second-pack")
+        val s = c.install("bike", mapOf("battery-link" to listOf(battery, extra), "motor-link" to listOf(motor)))
+        val a = assertNotNull(c.newAttempt(s, "battery-link")); val b = assertNotNull(c.newAttempt(s, "motor-link"))
+        c.ready(a); c.ready(b)
+        val replacement = assertNotNull(c.newAttempt(s, "battery-link"))
+        assertEquals(setOf("pack", "second-pack"), f.scoped().map { it.sourceId }.toSet())
+        assertTrue(f.scoped().all { it.kind == HistoryMarkerKind.BLE_GAP })
+        assertEquals(HistoryOffer.RETIRED, f.offer("pack"))
+        assertEquals(HistoryOffer.RETIRED, f.offer("second-pack"))
+        assertEquals(HistoryOffer.ACCEPTED, f.offer("motor"))
+        assertTrue(c.ready(replacement)); assertTrue(c.ready(replacement))
+        assertEquals(setOf("pack", "second-pack"), f.scoped().filter { it.kind == HistoryMarkerKind.CONNECTED }.map { it.sourceId }.toSet())
+        assertEquals(4, f.scoped().size)
+        assertEquals(HistoryOffer.ACCEPTED, f.offer("pack"))
+        assertEquals(HistoryOffer.ACCEPTED, f.offer("second-pack"))
+        assertFalse(c.ready(a)); assertFalse(c.lost(a)); assertEquals(4, f.scoped().size)
+    }
+
+    @Test fun stale_physical_events_cannot_close_an_already_reopened_source() = runTest {
+        val f = Fixture(); val c = f.connections; val s = c.install("bike", plan)
+        val a = assertNotNull(c.newAttempt(s, "battery-link")); val b = assertNotNull(c.newAttempt(s, "motor-link"))
+        c.ready(a); c.ready(b)
+        val replacement = assertNotNull(c.newAttempt(s, "battery-link")); c.ready(replacement)
+        assertEquals(2, f.scoped().size)
+        assertFalse(c.lost(a)); assertFalse(c.ready(a))
+        assertEquals(2, f.scoped().size)
+        assertEquals(HistoryOffer.ACCEPTED, f.offer("pack"))
+        assertTrue(c.lost(replacement))
+        assertEquals(3, f.scoped().size)
+        assertEquals(HistoryOffer.RETIRED, f.offer("pack"))
+        assertEquals(HistoryOffer.ACCEPTED, f.offer("motor"))
+    }
+
+    @Test fun never_ready_physical_attempt_cannot_fabricate_a_source_gap() = runTest {
+        val f = Fixture(); val c = f.connections; val s = c.install("bike", plan)
+        val a = assertNotNull(c.newAttempt(s, "battery-link")); val b = assertNotNull(c.newAttempt(s, "motor-link"))
+        c.ready(b)
+        assertTrue(c.lost(a)); assertTrue(f.scoped().isEmpty())
+        assertEquals(1, f.writer.begins.size)
+        val next = assertNotNull(c.newAttempt(s, "battery-link")); assertTrue(c.ready(next))
+        assertTrue(f.scoped().isEmpty())
+        assertEquals(HistoryOffer.ACCEPTED, f.offer("pack"))
+    }
+
+    @Test fun last_ready_physical_loss_keeps_its_existing_whole_vehicle_gap_semantics() = runTest {
+        val f = Fixture(); val c = f.connections; val s = c.install("bike", plan)
+        val a = assertNotNull(c.newAttempt(s, "battery-link")); val b = assertNotNull(c.newAttempt(s, "motor-link"))
+        c.ready(a)
+        val gps = assertNotNull(f.controller.captureGpsRecording())
+        assertTrue(c.lost(a))
+        assertNull(f.controller.captureTelemetryRecording())
+        assertEquals(listOf(HistoryMarkerKind.CONNECTED, HistoryMarkerKind.BLE_GAP), f.markers())
+        assertTrue(f.scoped().isEmpty())
+        assertTrue(c.ready(b))
+        assertSame(gps.identity, assertNotNull(f.controller.captureGpsRecording()).identity)
+        assertEquals(1, f.writer.begins.size)
+        assertTrue(f.scoped().isEmpty())
     }
 }

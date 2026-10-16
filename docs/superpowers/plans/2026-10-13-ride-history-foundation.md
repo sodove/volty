@@ -708,3 +708,21 @@ Migration18.sqm adds nullable sourceId to HistoryMarkerV2 (18.db ->19.db), retai
 old global markers without inference. Native emission and source-specific accepted
 queue barriers remain a separate next step before activation; this storage contract
 alone does not qualify physical link loss or activate the recorder.
+
+Task7 native source-prefix checkpoint (2026-10-16): the recording admission gate
+tracks pending receipts and accepted fact/control bounds per registered source,
+while global finish still owns all telemetry and GPS reservations. Partial loss
+fences and drains only the affected source prefix before offering scoped BLE_GAP;
+healthy queued/direct telemetry and GPS continue under the same recording gate.
+Positive writes CONNECTED before reopening numeric intake. Failed positives retain
+the fence; accepted negatives finish despite caller cancellation. Once-only frozen
+source tickets survive consume/discard races and mutable caller collections.
+
+The connection owner freezes source groups per exact physical attempt. Partial
+ready/lost uses scoped controls; first ready/last lost retains global semantics.
+Never-ready attempts cannot invent source outages, duplicate/stale attempts cannot
+close a successor. Source-local boundaries follow their own accepted prefix/control
+floor, while finish follows the greatest fact from every source/GPS. This is tested
+through common native ingestion/repository seams, not physical BLE/device acceptance.
+Gateway/alias/aggregate planning, bounded app runtime startup/one-writer activation,
+manual UI/legacy retirement and native/performance acceptance still keep Task7 open.

@@ -24,7 +24,8 @@ internal class HistoryRecordingConnections(
 ) {
     internal class Selection internal constructor()
     internal class Attempt internal constructor()
-    private class LinkAttempt(val capability: Attempt, var ready: Boolean = false, var retired: Boolean = false)
+    private class LinkAttempt(val capability: Attempt, val sourceIds: Set<String>,
+        var ready: Boolean = false, var retired: Boolean = false)
     private class Selected(
         val capability: Selection,
         val vehicleId: String,
@@ -72,7 +73,8 @@ internal class HistoryRecordingConnections(
         val current = selected?.takeIf { it.capability === selection } ?: return@control null
         if (linkId !in current.links) return@control null
         current.attempts[linkId]?.let { retire(current, it) }
-        LinkAttempt(Attempt()).also { current.attempts[linkId] = it }.capability
+        LinkAttempt(Attempt(), checkNotNull(current.links[linkId]).map { it.id }.toSet())
+            .also { current.attempts[linkId] = it }.capability
     }
 
     /** Call from preparation, before native observation starts. Return follows durable begin ACK. */
@@ -83,6 +85,8 @@ internal class HistoryRecordingConnections(
         if (link.ready) return@control true
         if (!current.hasReady()) {
             controller.execute(RecordingInput.Connected(current.vehicleId, current.generation, tick()), current.sources)
+        } else {
+            controller.sourceReady(current.generation, link.sourceIds, tick())
         }
         link.ready = true
         true
@@ -126,6 +130,8 @@ internal class HistoryRecordingConnections(
         if (link.retired) return
         if (link.ready && current.attempts.values.count { it.ready && !it.retired } == 1) {
             controller.execute(RecordingInput.LinkLost(current.generation, tick()))
+        } else if (link.ready) {
+            controller.sourceUnavailable(current.generation, link.sourceIds, tick())
         }
         link.ready = false
         link.retired = true

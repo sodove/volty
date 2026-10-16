@@ -129,8 +129,14 @@ class HistoryRecordingWriterIntegrationTest {
             assertEquals(listOf(-100.0, -300.0), store.samples("ride", HistorySeriesKey("pack", "power_w"), range, null).items.map { it.value })
             assertEquals(listOf(200.0), store.samples("ride", HistorySeriesKey("motor", "controller_power_w"), range, null).items.map { it.value })
             assertEquals(listOf(gps), store.gps("ride", range, null).items)
-            val markers = store.markers("ride", range).map { it.kind }
+            val recordedMarkers = store.markers("ride", range)
+            assertEquals(listOf(HistoryMarker(tick(20), HistoryMarkerKind.BLE_GAP, "pack")),
+                recordedMarkers.filter { it.sourceId != null })
+            val markers = recordedMarkers.filter { it.sourceId == null }.map { it.kind }
             assertEquals(1, markers.count { it == HistoryMarkerKind.BLE_GAP })
+            assertEquals(listOf(tick(30)), recordedMarkers.filter {
+                it.sourceId == null && it.kind == HistoryMarkerKind.BLE_GAP
+            }.map { it.tick })
             assertEquals(1, markers.count { it == HistoryMarkerKind.VEHICLE_SWITCH })
             assertEquals(listOf("ride"), store.rides(null).items.map { it.id })
             assertEquals(listOf(true, false), demands)
