@@ -9,6 +9,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import ru.sodovaya.volty.data.bms.vesc.VescBmsValues
+import ru.sodovaya.volty.data.bms.vesc.VescBmsFrame
 import ru.sodovaya.volty.data.bms.vesc.VescCan
 import ru.sodovaya.volty.data.bms.vesc.VescFrameAccumulator
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
@@ -19,6 +20,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryMetric
 import ru.sodovaya.volty.domain.model.TelemetryReading
 import ru.sodovaya.volty.domain.model.TelemetryRole
 import ru.sodovaya.volty.domain.model.TelemetryUnknown
@@ -807,6 +809,7 @@ class VescGatewayProtocol(
      */
     @Volatile private var tripBaselineKm: Map<Int, Float> = emptyMap()
     private var historyTripBaselineKm: Map<Int, Float> = emptyMap()
+    private var historyBmsCellSpan: Map<Int, Int> = emptyMap()
 
     // ---- the request plan, built once ---------------------------------
 
@@ -1077,6 +1080,7 @@ class VescGatewayProtocol(
         expectedOpcode = VescBmsValues.OPCODE_BMS_GET_VALUES,
         consume = { payload ->
             val frame = VescBmsValues.decode(payload)
+            if (frame != null) observeCachedBmsReply(p, frame)
             // `can_id == 0xFF` is the firmware's "no BMS data yet" sentinel and
             // the whole frame is then the zeroed default, not a reading — the
             // decoder flags it precisely so a consumer can drop it. We are that
@@ -1123,6 +1127,30 @@ class VescGatewayProtocol(
         // battery down: `onContentlessBms` is driven BY the request, so a pack
         // that stopped being asked would stop being derived at all.
     )
+
+    /** A reply proves cache availability, not fresh BMS acquisition. The native
+     * bms.c serializer sends m_values without field ages. Neither a valid CAN ID
+     * nor changed bytes certifies those ages or the producer's current/counter
+     * policy. Numeric recording needs an explicit age-bearing producer contract.
+     */
+    private fun observeCachedBmsReply(source: GatewaySource, frame: VescBmsFrame) {
+        val previous = historyBmsCellSpan[source.globalIndex] ?: 0
+        val span = if (frame.noBmsDataYet) previous else maxOf(previous, frame.cellVoltages.size)
+        if (!source.derived) historyBmsCellSpan = historyBmsCellSpan + (source.globalIndex to span)
+        observeTelemetry(TelemetryOrigin.BATTERY, packs.indexOf(source),
+            if (source.derived) TelemetryRole.DERIVED else TelemetryRole.CONTRIBUTOR) {
+            val reason = if (frame.noBmsDataYet) TelemetryUnknown.UNAVAILABLE else TelemetryUnknown.PARTIAL_SOURCE
+            buildList {
+                for (metric in listOf(TelemetryMetric.SOC, TelemetryMetric.VOLTAGE,
+                    TelemetryMetric.CURRENT, TelemetryMetric.POWER)) add(TelemetryReading(metric, null, reason))
+                if (!source.derived) {
+                    for (metric in listOf(TelemetryMetric.BATTERY_TEMPERATURE, TelemetryMetric.CELL_MIN,
+                        TelemetryMetric.CELL_MAX, TelemetryMetric.CELL_DELTA)) add(TelemetryReading(metric, null, reason))
+                    repeat(span) { add(TelemetryReading(TelemetryMetric.CELL, null, reason, it)) }
+                }
+            }
+        }
+    }
 
     /**
      * One cycle in which [slot]'s `COMM_BMS_GET_VALUES` produced no reading —
@@ -1676,6 +1704,7 @@ class VescGatewayProtocol(
         overlays = emptyMap()
         tripBaselineKm = emptyMap()
         historyTripBaselineKm = emptyMap()
+        historyBmsCellSpan = emptyMap()
         // "Re-probe on reconnect, always." A node's refusal is evidence about
         // the session it was collected in and nothing more: the next connection
         // may be a different vehicle, or the same one with the uBox now awake,

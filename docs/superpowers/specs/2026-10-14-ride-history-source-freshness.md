@@ -1336,3 +1336,32 @@ promotion/downshift on Android34+, background suspension/restart, permission cha
 and native provider teardown still require device checks. New recording runtime,
 production ingress activation, legacy recorder retirement and Vescape screens are
 not activated by these bindings alone.
+
+## Gateway cached BMS absence boundary (2026-10-17)
+
+Re-read the local nyxdash `bms.c` COMM_BMS_GET_VALUES serializer and ANT bridge.
+The reply serializes cached m_values without acquisition timestamps or individual
+field ages. CAN identity, complete cells and changing payload bytes cannot certify
+fresh measurements. update_time exists in firmware but is not sent in this reply.
+
+The optional gateway history observer now emits PARTIAL_SOURCE absence for a
+structurally valid BMS cache response, including zero-valued cached fields. A
+no-data sentinel emits UNAVAILABLE. Malformed or unsolicited replies publish no
+observation. Physical battery slots use their local pack index, independently of
+vehicle-global indices; each retains its maximum declared cell span until reset,
+so a shrinking layout or no-data response invalidates previous cell series.
+Virtual slots retain DERIVED role and emit only SOC/voltage/current/power absence,
+never physical cell or temperature series. Observer errors are contained and
+counted; existing live decoding, current conversion and fallback stay unchanged.
+
+Retraction: the raw iIn property header still claimed charge-positive current,
+contradicting the measured nyxdash conversion documented lower in that same file.
+The header now explicitly defers to producer policy; no sign conversion changed.
+Firmware assigns remaining Ah to ah_cnt, not a generic lifetime counter.
+
+This adds explicit absence evidence, not numeric hosted-BMS qualification. Default
+source planning still rejects hosted/derived gateway packs and physical aliases.
+An age-bearing producer contract and aggregate/alias admission remain required;
+no polling change, new BLE command, production activation or field proof follows
+from these decoder tests. Earlier 'gateway observations pending' statements are
+superseded only for this conservative cache-response boundary.

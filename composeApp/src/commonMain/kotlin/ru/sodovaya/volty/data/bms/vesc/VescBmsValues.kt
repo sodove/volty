@@ -71,7 +71,10 @@ data class VescBmsFrame(
      * to 0. A UI must bind to [vChargeIfReporting] instead.
      */
     val vCharge: Float,
-    /** Pack current, A. **Positive means charging** (spec §10.4). */
+    /** Raw pack current, A. Retraction: the former charge-positive claim from
+     * spec §10.4 contradicted the measured nyxdash ANT bridge. Sign is producer
+     * dependent; [toBmsData] documents that measured producer's conversion.
+     */
     val iIn: Float,
     /** Pack current as measured by the BMS IC, A. Same sign convention as [iIn]. */
     val iInIc: Float,

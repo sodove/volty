@@ -896,3 +896,15 @@ or backgrounding; close() remains the abrupt scope-cancellation path. Default
 production remains legacy while source qualification, native/performance acceptance
 and screen integration remain open. Phone driver acknowledgement is not established
 by these common tests.
+
+Task7 gateway cache-response checkpoint (2026-10-17): actual valid BMS replies now
+reach the optional history observer as typed absence, because the serializer does
+not transmit acquisition time or field ages. PARTIAL_SOURCE covers cache replies;
+UNAVAILABLE covers no-data sentinel. Malformed/unsolicited responses emit nothing.
+Local physical pack/cell-span ownership and DERIVED role stay distinct. Shrinking
+layouts invalidate previous physical cell indices until reset; virtual sources
+never claim physical cells or temperature. Callback failures cannot break live
+telemetry. Existing dashboard projection, polling and measured current conversion
+are unchanged. This does not admit numeric cached BMS measurements or activate
+hosted/derived gateway source plans. Firmware/provenance and alias/aggregate gates
+remain separate from recording lifecycle readiness.
