@@ -695,3 +695,16 @@ Common issued-action and repository-seam tests exercise these cancellation and
 successor paths; real Kable/phone teardown is not thereby verified. Existing
 best-effort Peripheral.disconnect exception behavior is unchanged. Runtime
 activation, other Task7 gates and screen port remain open.
+
+Task7 source-boundary storage checkpoint in progress (2026-10-16): BLE_GAP and
+CONNECTED can carry an optional registered source identity; null retains existing
+whole-recording meaning. Source-local continuity is indexed independently of global
+boundaries. Lost peers do not erase healthy energy, split healthy overviews/pages,
+flush unrelated detail or change peer bucket completeness. Scope survives storage,
+row-based receipt replay and series reads; invalid source appends roll back atomically.
+Marker source text participates in bounded writer memory accounting. A scoped v3
+fingerprint includes provider/scope fields; unscoped v1/v2 encodings remain exact.
+Migration18.sqm adds nullable sourceId to HistoryMarkerV2 (18.db ->19.db), retaining
+old global markers without inference. Native emission and source-specific accepted
+queue barriers remain a separate next step before activation; this storage contract
+alone does not qualify physical link loss or activate the recorder.

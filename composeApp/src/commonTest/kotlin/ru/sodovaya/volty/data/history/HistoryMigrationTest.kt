@@ -10,6 +10,38 @@ import java.nio.file.Files
 import kotlin.test.*
 
 class HistoryMigrationTest {
+    @Test fun realVersion18GlobalMarkerReceiptSurvivesUpgradeAndNewMarkersKeepScope() = runTest {
+        val snapshot = listOf(File("src/commonMain/sqldelight/databases/18.db"),
+            File("composeApp/src/commonMain/sqldelight/databases/18.db")).firstOrNull { it.isFile }
+        assertNotNull(snapshot)
+        val copy = Files.createTempFile("history-v18-scope-", ".db").toFile()
+        try {
+            snapshot.copyTo(copy, overwrite = true)
+            val driver = JdbcSqliteDriver("jdbc:sqlite:${copy.absolutePath}")
+            try {
+                val db = VoltyDatabase(driver)
+                db.rideHistoryV2Queries.insertRide("ride", "bike", 10000, 100, 1, "RECORDING")
+                db.rideHistorySourceQueries.insertSource("ride", "pack", "BATTERY", "A")
+                driver.execute(null, "INSERT INTO HistoryMarkerV2(rideId,sequence,epochMillis,elapsedMillis,clockGeneration,kind) VALUES('ride',0,10000,100,1,'BLE_GAP')", 0)
+                db.rideHistoryV2Queries.advanceSequence(1, 10000, 100, "ride")
+                db.rideHistoryReceiptQueries.insertReceipt("ride", "old", 0, 1,
+                    "5ec83716f3523449e455c25a86d3a30f6e0d6937249429eb47940a40ca57572f")
+                VoltyDatabase.Schema.migrate(driver, 18, VoltyDatabase.Schema.version)
+                val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver))
+                val marker = HistoryMarker(HistoryTick(10000, 100, 1), HistoryMarkerKind.BLE_GAP)
+                val range = HistoryRange(10000, 10000)
+                assertEquals(listOf(marker), store.markers("ride", range))
+                store.append(HistoryBatch("ride", emptyList(), emptyList(), listOf(marker), "old"))
+                val scoped = marker.copy(sourceId = "pack")
+                store.append(HistoryBatch("ride", emptyList(), emptyList(), listOf(scoped), "new"))
+                assertEquals(listOf(marker, scoped), store.markers("ride", range))
+                assertFailsWith<IllegalArgumentException> {
+                    store.append(HistoryBatch("ride", emptyList(), emptyList(), listOf(scoped), "old"))
+                }
+            } finally { driver.close() }
+        } finally { copy.delete() }
+    }
+
     @Test fun realVersion17GpsAndV1ReceiptRemainUnknownProviderAndReplayableAfterUpgrade() = runTest {
         val snapshot = listOf(File("src/commonMain/sqldelight/databases/17.db"),
             File("composeApp/src/commonMain/sqldelight/databases/17.db")).firstOrNull { it.isFile }

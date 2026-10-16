@@ -11,13 +11,21 @@ internal fun requireSingleHistoryKey(samples: List<HistorySample>) {
 internal class HistoryContinuityIndex(markers: List<HistoryMarker>, private val maxIntervalMillis: Long = 2000) {
     init { require(maxIntervalMillis > 0) }
     private val boundaries = markers.filter { it.kind != HistoryMarkerKind.GPS_GAP }
-        .groupBy { it.tick.clockGeneration }.mapValues { (_, rows) -> rows.sortedBy { it.tick.elapsedMillis } }
+        .groupBy { it.tick.clockGeneration to it.sourceId }
+        .mapValues { (_, rows) -> rows.sortedBy { it.tick.elapsedMillis } }
     fun breakTick(previous: HistorySample, next: HistorySample): HistoryTick? {
         if (previous.unknown != null || next.unknown != null) return next.tick
         if (clockBoundary(previous.tick, next.tick)) return next.tick
         val delta = next.tick.elapsedMillis - previous.tick.elapsedMillis
         if (delta > maxIntervalMillis) return next.tick
-        val rows = boundaries[next.tick.clockGeneration] ?: return null
+        val global = firstBoundary(boundaries[next.tick.clockGeneration to null], previous, next)
+        val scoped = firstBoundary(boundaries[next.tick.clockGeneration to next.key.sourceId], previous, next)
+        return if (global == null) scoped
+            else if (scoped == null || global.elapsedMillis <= scoped.elapsedMillis) global else scoped
+    }
+
+    private fun firstBoundary(rows: List<HistoryMarker>?, previous: HistorySample, next: HistorySample): HistoryTick? {
+        if (rows == null) return null
         var low = 0
         var high = rows.size
         while (low < high) {

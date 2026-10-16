@@ -35,8 +35,9 @@ class DefaultHistoryReadRepository(
         require(maxPoints in 3..600)
         val origin = ride(rideId)?.started ?: return emptySeries(key, null)
         if (!available(rideId, key)) return emptySeries(key, origin)
-        val markers = read { store.markers(rideId, range) }.toList()
-        check(markers.size <= PAGE_SIZE) { "History marker read exceeded its bound" }
+        val allMarkers = read { store.markers(rideId, range) }.toList()
+        check(allMarkers.size <= PAGE_SIZE) { "History marker read exceeded its bound" }
+        val markers = allMarkers.filter { it.sourceId == null || it.sourceId == key.sourceId }
         val overview = HistoryOverviewAccumulator(markers, maxPoints)
         var after: HistoryCursor? = null
         var previousAxis: Long? = null

@@ -10,6 +10,7 @@ internal fun HistoryBatch.retainedBytes(): Long {
     var bytes = 128L + rideId.length.toLong() * 4
     samples.forEach { bytes += 256L + it.key.sourceId.length.toLong() * 4 + it.key.metricId.length.toLong() * 4 }
     bytes += gps.size.toLong() * 192 + markers.size.toLong() * 128
+    markers.forEach { bytes += (it.sourceId?.length?.toLong() ?: 0L) * 4 }
     receiptId?.let { bytes += it.length.toLong() * 4 }
     buckets.forEach {
         // Includes the bucket, up to two peak samples, their keys and raw timestamps.

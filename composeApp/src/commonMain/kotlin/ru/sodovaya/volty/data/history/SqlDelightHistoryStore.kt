@@ -69,9 +69,10 @@ class SqlDelightHistoryStore(
                     t.clockGeneration, fix.lat, fix.lon, fix.accuracyMeters, fix.heading, fix.provider?.name)
             }
             batch.markers.forEach { marker ->
+                require(marker.sourceId == null || marker.sourceId in sources) { "Unregistered marker source" }
                 val t = marker.tick
                 markerQueries.insertMarker(batch.rideId, admit(t), t.epochMillis,
-                    t.elapsedMillis, t.clockGeneration, marker.kind.name)
+                    t.elapsedMillis, t.clockGeneration, marker.kind.name, marker.sourceId)
             }
             bucketStorage.append(batch, origin, sources)?.let {
                 if (it.elapsedMillis >= last.elapsedMillis) last = it
@@ -120,7 +121,7 @@ class SqlDelightHistoryStore(
             val epoch = row.lastEpochMillis ?: row.startedEpochMillis
             val elapsed = row.lastElapsedMillis ?: row.startedElapsedMillis
             markerQueries.insertMarker(row.id, row.nextSequence, epoch, elapsed,
-                row.clockGeneration, HistoryMarkerKind.INTERRUPTED.name)
+                row.clockGeneration, HistoryMarkerKind.INTERRUPTED.name, null)
             rides.finishRide(epoch, elapsed, row.clockGeneration, HistoryRideStatus.INTERRUPTED.name, row.id)
         }
         return open.size

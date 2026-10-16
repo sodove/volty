@@ -54,7 +54,7 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         val minimum = listOfNotNull(summary.minimum, values.minOrNull()).minOrNull()
         val maximum = listOfNotNull(summary.maximum, values.maxOrNull()).maxOrNull()
         val energy = summary.energyWh?.takeIf { it.isFinite() }
-        val gap = database.rideHistoryMarkerQueries.hasEvidenceGap(rideId, bounds.first, bounds.last).executeAsOne()
+        val gap = database.rideHistoryMarkerQueries.hasEvidenceGap(rideId, bounds.first, bounds.last, key.sourceId).executeAsOne()
         return HistoryStats(minimum, maximum, energy, ride.status != HistoryRideStatus.INTERRUPTED && summary.complete == 1L && !gap &&
             !detail.truncated && detail.items.none { it.value == null } &&
             (summary.energyWh == null || energy != null))
@@ -101,7 +101,7 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         val bounds = bounds(origin, range) ?: return emptyList()
         val rows = database.rideHistoryMarkerQueries.markersForRide(rideId, bounds.first, bounds.last, 20001).executeAsList()
         check(rows.size <= 20000) { "Marker range exceeds read bound; narrow the range" }
-        return rows.map { HistoryMarker(HistoryTick(it.epochMillis, it.elapsedMillis, it.clockGeneration), HistoryMarkerKind.valueOf(it.kind)) }
+        return rows.map { HistoryMarker(HistoryTick(it.epochMillis, it.elapsedMillis, it.clockGeneration), HistoryMarkerKind.valueOf(it.kind), it.sourceId) }
     }
 
     private fun origin(id: String) = database.rideHistoryV2Queries.getRide(id).executeAsOneOrNull()?.toHistoryRide()?.started

@@ -26,6 +26,80 @@ class SqlDelightHistoryStoreTest {
     }
     @AfterTest fun closeDrivers() { drivers.forEach { it.close() } }
 
+    @Test fun sourceScopedMarkersRoundTripAndExactReceiptRetriesKeepTheirScope() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val markers = listOf(HistoryMarker(tick(10), HistoryMarkerKind.BLE_GAP, "pack"),
+            HistoryMarker(tick(20), HistoryMarkerKind.CONNECTED, "pack"))
+        val batch = HistoryBatch("ride", emptyList(), emptyList(), markers, "scoped")
+        store.append(batch)
+        assertEquals(markers, store.markers("ride", range))
+        store.append(batch)
+        assertEquals(markers, store.markers("ride", range))
+        assertFailsWith<IllegalArgumentException> {
+            store.append(batch.copy(markers = markers.map { it.copy(sourceId = null) }))
+        }
+    }
+
+    @Test fun sourceScopedGapCannotMakeHealthyPeerSqlStatisticsIncomplete() = runTest {
+        val (_, store) = fixture()
+        val ride = HistoryRide("ride", "bike", origin, null, HistoryRideStatus.RECORDING)
+        val sources = listOf("pack", "peer").map { HistorySource(it, HistorySourceKind.BATTERY, it) }
+        store.begin(ride, sources)
+        val raw = listOf("pack", "peer").flatMap { id -> listOf(0L, 200L).map {
+            HistorySample(tick(it), HistorySeriesKey(id, "power_w"), 100.0)
+        } }
+        val gap = HistoryMarker(tick(100), HistoryMarkerKind.BLE_GAP, "pack")
+        val projected = HistoryRecordingProjection(ride, sources).prepare(
+            HistoryBatch("ride", raw, emptyList(), listOf(gap), "scoped-projection"), true).batch
+        assertTrue(projected.buckets.single { it.key.sourceId == "peer" }.complete)
+        assertFalse(projected.buckets.single { it.key.sourceId == "pack" }.complete)
+        store.append(projected); store.finish("ride", tick(200), HistoryRideStatus.COMPLETED)
+        assertTrue(store.stats("ride", HistorySeriesKey("peer", "power_w"), range).complete)
+        assertFalse(store.stats("ride", HistorySeriesKey("pack", "power_w"), range).complete)
+    }
+
+    @Test fun seriesReadsOnlyExposeItsOwnScopedAndGlobalBoundaries() = runTest {
+        val (_, store) = fixture()
+        store.begin(HistoryRide("ride", "bike", origin, null, HistoryRideStatus.RECORDING),
+            listOf("pack", "peer").map { HistorySource(it, HistorySourceKind.BATTERY, it) })
+        val rows = listOf("pack", "peer").flatMap { id -> listOf(0L, 200L).map {
+            HistorySample(tick(it), HistorySeriesKey(id, "current_a"), 7.0)
+        } }
+        val scoped = HistoryMarker(tick(100), HistoryMarkerKind.BLE_GAP, "pack")
+        store.append(HistoryBatch("ride", rows, emptyList(), listOf(scoped)))
+        val reader = DefaultHistoryReadRepository(store)
+        assertTrue(reader.series("ride", key.copy(sourceId = "peer"), range).markers.isEmpty())
+        assertEquals(listOf(scoped), reader.series("ride", key, range).markers)
+        val global = scoped.copy(sourceId = null)
+        store.append(HistoryBatch("ride", emptyList(), emptyList(), listOf(global)))
+        assertEquals(listOf(global), reader.series("ride", key.copy(sourceId = "peer"), range).markers)
+    }
+
+    @Test fun oldRowBasedReceiptReplaysExactSourceScopeAndRejectsAScopeChange() = runTest {
+        val (driver, store) = fixture(); begin(store)
+        val marker = HistoryMarker(tick(10), HistoryMarkerKind.BLE_GAP, "pack")
+        val batch = HistoryBatch("ride", emptyList(), emptyList(), listOf(marker), "row-receipt")
+        store.append(batch)
+        driver.execute(null, "UPDATE HistoryBatchReceiptV2 SET fingerprint=NULL WHERE rideId='ride'", 0)
+        store.append(batch)
+        assertEquals(listOf(marker), store.markers("ride", range))
+        assertFailsWith<IllegalArgumentException> {
+            store.append(batch.copy(markers = listOf(marker.copy(sourceId = null))))
+        }
+    }
+
+    @Test fun foreignScopedMarkerRollsBackAnAlreadyInsertedValidSample() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val point = HistorySample(tick(10), key, 7.0)
+        val invalid = HistoryBatch("ride", listOf(point), emptyList(),
+            listOf(HistoryMarker(tick(20), HistoryMarkerKind.BLE_GAP, "foreign")), "invalid")
+        assertFailsWith<IllegalArgumentException> { store.append(invalid) }
+        assertTrue(store.samples("ride", key, range, null).items.isEmpty())
+        assertTrue(store.markers("ride", range).isEmpty())
+        store.append(invalid.copy(markers = emptyList()))
+        assertEquals(listOf(point), store.samples("ride", key, range, null).items)
+    }
+
     @Test fun applicationHistoryBindingsShareOneStoreWithoutDispatcherRegistration() = runTest {
         val (driver, _) = fixture()
         val app = org.koin.dsl.koinApplication {

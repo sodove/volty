@@ -63,6 +63,7 @@ class HistoryBucketAccumulator(
 
     fun mark(marker: HistoryMarker): HistoryBucket? {
         require(historyAxisEpochMillis(origin, marker.tick) != null)
+        if (marker.sourceId != null && marker.sourceId != key.sourceId) return null
         val old = state ?: return null
         val breaks = when (marker.kind) {
             HistoryMarkerKind.BLE_GAP, HistoryMarkerKind.CLOCK_CHANGE,

@@ -37,9 +37,15 @@ internal actual fun historyBatchFingerprint(batch: HistoryBatch): String {
         number(value.value)
         text(value.unknown?.name.orEmpty())
     }
-    // Existing all-unknown-provider receipts keep their exact durable v1 identity.
-    val includesGpsProvider = batch.gps.any { it.provider != null }
-    text(if (includesGpsProvider) "history-batch-v2-gps-provider" else "history-batch-v1")
+    // Unscoped receipts retain their exact v1/v2 identity. The scoped format
+    // always encodes GPS providers, including unknown, to keep one unambiguous v3 layout.
+    val includesSourceScope = batch.markers.any { it.sourceId != null }
+    val includesGpsProvider = includesSourceScope || batch.gps.any { it.provider != null }
+    text(when {
+        includesSourceScope -> "history-batch-v3-source-scope"
+        includesGpsProvider -> "history-batch-v2-gps-provider"
+        else -> "history-batch-v1"
+    })
     text(batch.rideId)
     out.writeInt(batch.samples.size)
     batch.samples.forEach(::sample)
@@ -53,7 +59,10 @@ internal actual fun historyBatchFingerprint(batch: HistoryBatch): String {
         if (includesGpsProvider) text(it.provider?.name.orEmpty())
     }
     out.writeInt(batch.markers.size)
-    batch.markers.forEach { tick(it.tick); text(it.kind.name) }
+    batch.markers.forEach {
+        tick(it.tick); text(it.kind.name)
+        if (includesSourceScope) text(it.sourceId.orEmpty())
+    }
     out.writeInt(batch.buckets.size)
     batch.buckets.forEach {
         key(it.key)

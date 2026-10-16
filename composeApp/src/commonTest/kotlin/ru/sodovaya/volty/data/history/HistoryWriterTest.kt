@@ -9,6 +9,21 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryWriterTest {
+    @Test fun largeScopedMarkerCannotBypassRetainedMemoryCapacity() = runTest {
+        val store = Store()
+        val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow())
+        val id = "p".repeat(1_100_000)
+        try {
+            writer.begin(7, ride, listOf(HistorySource(id, HistorySourceKind.BATTERY, "A")))
+            val marker = HistoryMarker(tick, HistoryMarkerKind.BLE_GAP, id)
+            assertEquals(HistoryOffer.OVERFLOW, writer.offer(7,
+                HistoryBatch(ride.id, emptyList(), emptyList(), listOf(marker))))
+            writer.flush()
+            assertTrue(store.batches.flatMap { it.markers }.none { it.sourceId == id })
+            assertTrue(store.batches.flatMap { it.markers }.any { it.kind == HistoryMarkerKind.OVERFLOW })
+        } finally { writer.close() }
+    }
+
     private val tick = HistoryTick(10000, 100, 1)
     private val ride = HistoryRide("ride", "bike", tick, null, HistoryRideStatus.RECORDING)
     private val sources = listOf(HistorySource("pack", HistorySourceKind.BATTERY, "A"))

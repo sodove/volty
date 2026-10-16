@@ -38,7 +38,10 @@ internal class HistoryRecordingProjection(
             require(lastTicks[sample.key]?.elapsedMillis?.let { it <= sample.tick.elapsedMillis } != false)
             lastTicks[sample.key] = sample.tick
         }
-        batch.markers.forEach { require(historyAxisEpochMillis(ride.started, it.tick) != null) }
+        batch.markers.forEach {
+            require(historyAxisEpochMillis(ride.started, it.tick) != null)
+            require(it.sourceId == null || it.sourceId in sourceKinds) { "Unregistered marker source" }
+        }
         batch.gps.forEach { require(historyAxisEpochMillis(ride.started, it.tick) != null) }
         val detail = mutableListOf<HistorySample>()
         val summaries = linkedMapOf<Pair<HistorySeriesKey, Long>, HistoryBucket>()
@@ -47,9 +50,11 @@ internal class HistoryRecordingProjection(
         val markers = batch.markers.sortedBy { it.tick.elapsedMillis }
         fun mark(marker: HistoryMarker) {
             if (marker.kind == HistoryMarkerKind.GPS_GAP) return
-            series.values.forEach {
-                detail += it.detail.flush()
-                it.summary.mark(marker)?.let(::retain)
+            series.forEach { (key, value) ->
+                if (marker.sourceId == null || marker.sourceId == key.sourceId) {
+                    detail += value.detail.flush()
+                    value.summary.mark(marker)?.let(::retain)
+                }
             }
         }
         batch.samples.sortedBy { it.tick.elapsedMillis }.forEach { sample ->

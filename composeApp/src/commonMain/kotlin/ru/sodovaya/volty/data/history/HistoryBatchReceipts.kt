@@ -27,7 +27,7 @@ internal class HistoryBatchReceipts(private val database: VoltyDatabase) {
         }
         val markers = database.rideHistoryMarkerQueries.markersForReceipt(batch.rideId,
             receipt.firstSequence, receipt.nextSequence).executeAsList().map {
-            HistoryMarker(HistoryTick(it.epochMillis, it.elapsedMillis, it.clockGeneration), HistoryMarkerKind.valueOf(it.kind))
+            HistoryMarker(HistoryTick(it.epochMillis, it.elapsedMillis, it.clockGeneration), HistoryMarkerKind.valueOf(it.kind), it.sourceId)
         }
         require(samples.size == batch.samples.size && samples.zip(batch.samples).all { (a, b) ->
             a.tick == b.tick && a.key == b.key && a.unknown == b.unknown && sameReading(a.value, b.value)

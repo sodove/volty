@@ -97,7 +97,13 @@ enum class HistoryMarkerKind {
     INTERRUPTED,
 }
 
-data class HistoryMarker(val tick: HistoryTick, val kind: HistoryMarkerKind)
+/** Null source retains the whole-recording meaning of existing durable markers. */
+data class HistoryMarker(val tick: HistoryTick, val kind: HistoryMarkerKind, val sourceId: String? = null) {
+    init {
+        require(sourceId == null || (sourceId.isNotBlank() &&
+            (kind == HistoryMarkerKind.BLE_GAP || kind == HistoryMarkerKind.CONNECTED)))
+    }
+}
 
 data class HistoryRange(val startEpochMillis: Long, val endEpochMillis: Long) {
     init {
