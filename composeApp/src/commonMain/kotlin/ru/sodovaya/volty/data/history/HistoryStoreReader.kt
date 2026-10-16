@@ -49,14 +49,17 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         val summary = database.rideHistoryBucketQueries.rangeStats(bounds.first, bounds.last,
             rideId, key.sourceId, key.metricId, key.cellIndex?.toLong() ?: -1).executeAsOne()
         if (summary.bucketCount == 0L) return unknown
-        val detail = samples(rideId, key, range, null, 20000)
-        val values = detail.items.mapNotNull { it.value }
-        val minimum = listOfNotNull(summary.minimum, values.minOrNull()).minOrNull()
-        val maximum = listOfNotNull(summary.maximum, values.maxOrNull()).maxOrNull()
+        // Retraction: a single detail page made healthy long rides incomplete
+        // and omitted explicit tail extrema. Reduce the full indexed range to
+        // one SQL row instead of materializing every detail sample in memory.
+        val detail = database.rideHistorySampleQueries.rangeDetailStats(rideId, key.sourceId,
+            key.metricId, key.cellIndex?.toLong() ?: -1, bounds.first, bounds.last).executeAsOne()
+        val minimum = listOfNotNull(summary.minimum, detail.minimum).minOrNull()
+        val maximum = listOfNotNull(summary.maximum, detail.maximum).maxOrNull()
         val energy = summary.energyWh?.takeIf { it.isFinite() }
         val gap = database.rideHistoryMarkerQueries.hasEvidenceGap(rideId, bounds.first, bounds.last, key.sourceId).executeAsOne()
         return HistoryStats(minimum, maximum, energy, ride.status != HistoryRideStatus.INTERRUPTED && summary.complete == 1L && !gap &&
-            !detail.truncated && detail.items.none { it.value == null } &&
+            detail.unknownCount == 0L &&
             (summary.energyWh == null || energy != null))
     }
 

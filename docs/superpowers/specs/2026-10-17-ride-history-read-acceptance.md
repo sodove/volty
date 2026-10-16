@@ -44,8 +44,14 @@ runtime. Fresh h367 full verification: 4,157 tests / 425 XML and actual migratio
 
 ## Remaining acceptance
 
-Long-run buffered/projected recording, Android storage latency and memory,
+Android long-run recording, storage latency and memory,
 foreground/provider acknowledgement, real device reconnect/acquisition, and
 rendered chart/map performance require their own evidence. This read fixture does
 not qualify hosted gateway cache ages, automatic alias handover or whole-vehicle
 aggregate validity. Those gates and the approved screen port remain open.
+
+Update: the earlier read checkpoint listed buffered/projected long-run acceptance
+as wholly pending. A subsequent desktop writer fixture now covers that layer and
+found a real statistics pagination defect; see
+[long-recording acceptance](2026-10-17-ride-history-long-recording-acceptance.md).
+Native acquisition and performance remain separate gates.

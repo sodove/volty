@@ -28,6 +28,12 @@ AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed
 AND (:afterElapsed IS NULL OR elapsedMillis > :afterElapsed OR (elapsedMillis = :afterElapsed AND sequence > :afterSequence))
 ORDER BY elapsedMillis, sequence LIMIT :pageSize;
 
+rangeDetailStats:
+SELECT MIN(reading) AS minimum, MAX(reading) AS maximum, COUNT(unknownReason) AS unknownCount
+FROM HistorySampleV2
+WHERE rideId = :rideId AND sourceId = :sourceId AND metricId = :metricId AND cellIndex = :cellIndex
+AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed;
+
 deleteSamples:
 DELETE FROM HistorySampleV2 WHERE rideId = :rideId;
 

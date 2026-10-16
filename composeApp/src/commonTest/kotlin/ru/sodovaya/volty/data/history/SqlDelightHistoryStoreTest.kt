@@ -114,6 +114,33 @@ class SqlDelightHistoryStoreTest {
         } finally { app.close() }
     }
 
+    @Test fun summaryStatsIncludeEarnedDetailExtremumBeyondFirstPage() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val point = HistorySample(origin, key, -1.0)
+        // Deliberately incoherent with producer habits: certified prefix plus
+        // an additional raw tail. Reading must consider all explicit evidence.
+        val prefix = List(20000) { point }
+        val bucket = HistoryBucket(key, 0, origin, origin, point, point, null, 20000, true)
+        store.append(HistoryBatch("ride", prefix + point.copy(value = -5.0), emptyList(), emptyList(),
+            "tail-extremum", listOf(bucket)))
+        assertNotNull(store.samples("ride", key, range, null).next)
+        val stats = store.stats("ride", key, range)
+        assertEquals(-5.0, stats.minimum); assertEquals(-1.0, stats.maximum)
+    }
+
+    @Test fun summaryStatsCannotIgnoreUnknownDetailTailBeyondFirstPage() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val point = HistorySample(origin, key, -1.0)
+        val prefix = List(20000) { point }
+        val bucket = HistoryBucket(key, 0, origin, origin, point, point, null, 20000, true)
+        val absent = HistorySample(origin, key, null, HistoryUnknownReason.PARTIAL_SOURCE)
+        store.append(HistoryBatch("ride", prefix + absent, emptyList(), emptyList(), "tail-unknown", listOf(bucket)))
+        assertNotNull(store.samples("ride", key, range, null).next)
+        val stats = store.stats("ride", key, range)
+        assertEquals(-1.0, stats.minimum); assertEquals(-1.0, stats.maximum)
+        assertFalse(stats.complete, "Removing the page-truncated check alone would hide this unknown tail")
+    }
+
     @Test fun processClockPreparationRecoversAtLastCommitAndUsesGreatestGeneration() = runTest {
         val (_, store) = fixture()
         begin(store)

@@ -962,3 +962,13 @@ whole desktop/JDBC fixture time, not isolated query latency or Android performan
 See specs/2026-10-17-ride-history-read-acceptance.md for exact evidence and limits.
 Long-run projected writer, native storage/foreground/acquisition and UI performance
 remain separate acceptance gates. No production behavior changed in this checkpoint.
+
+Task8 long projected-recording checkpoint (2026-10-17): a real buffered/projected
+writer plus SQLite two-hour10Hz fixture commits144002events without drops/failure,
+retains a100ms peak under61graph points, and verifies full energy/independent late
+partial-cell quality beyond one20000-row detail page. It found a real stats defect:
+a healthy complete summary became incomplete at the page limit, and explicit raw
+tail extrema were ignored. Stats now use SQL MIN/MAX/COUNT over the full selected
+range, returning one row within the existing transaction. Unknown tail evidence
+still prevents completeness; source/metric/cell/gap/summary guards remain. No schema
+change or Android performance claim. See specs/2026-10-17-ride-history-long-recording-acceptance.md.
