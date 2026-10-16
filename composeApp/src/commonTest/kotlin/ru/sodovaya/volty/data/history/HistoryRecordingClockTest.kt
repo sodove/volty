@@ -3,6 +3,10 @@ package ru.sodovaya.volty.data.history
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import ru.sodovaya.volty.domain.history.HistoryTick
@@ -11,6 +15,68 @@ import kotlin.test.*
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class HistoryRecordingClockTest {
+    @Test fun recoveryDeadlineLeavesClockUnavailableAndAllowsFreshRetry() = runTest {
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        val clock = HistoryRecordingClock({ calls++; if (calls == 1) release.await(); 9L }, { 1L }, { 2L }, 100)
+        val attempt = backgroundScope.async { runCatching { clock.prepare() } }
+        try {
+            runCurrent(); assertEquals(1, calls)
+            advanceTimeBy(100); runCurrent()
+            assertTrue(attempt.isCompleted, "Preparation must not indefinitely hold native startup")
+            assertIs<TimeoutCancellationException>(attempt.await().exceptionOrNull())
+            assertFailsWith<IllegalStateException> { clock.readTick() }
+            clock.prepare()
+            assertEquals(2, calls)
+            assertEquals(9L, clock.readTick().clockGeneration)
+        } finally { release.complete(Unit); attempt.cancelAndJoin() }
+    }
+
+    @Test fun waiterDeadlineIncludesMutexWaitAndCannotCancelOriginalRecovery() = runTest {
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        val clock = HistoryRecordingClock({
+            calls++; withContext(NonCancellable) { release.await() }; 10L
+        }, { 1L }, { 2L }, 100)
+        val first = backgroundScope.async { runCatching { clock.prepare() } }
+        var waiter: kotlinx.coroutines.Deferred<Result<Unit>>? = null
+        try {
+            runCurrent(); assertEquals(1, calls)
+            advanceTimeBy(20)
+            waiter = backgroundScope.async { runCatching { clock.prepare() } }
+            runCurrent(); advanceTimeBy(100); runCurrent()
+            assertTrue(waiter.isCompleted, "A queued caller needs its own finite deadline")
+            assertIs<TimeoutCancellationException>(waiter.await().exceptionOrNull())
+            assertEquals(1, calls, "A waiter cannot start parallel database recovery")
+            assertFalse(first.isCompleted, "Original native cleanup still owns its noncancellable work")
+        } finally { release.complete(Unit); first.cancelAndJoin(); waiter?.cancelAndJoin() }
+        assertFailsWith<IllegalStateException> { clock.readTick() }
+        clock.prepare()
+        assertEquals(2, calls)
+        assertEquals(10L, clock.readTick().clockGeneration)
+    }
+
+    @Test fun lateNoncancellableRecoveryAcknowledgementCannotPublishExpiredClock() = runTest {
+        val release = CompletableDeferred<Unit>()
+        val clock = HistoryRecordingClock({ withContext(NonCancellable) { release.await() }; 11L }, { 1L }, { 2L }, 100)
+        val attempt = backgroundScope.async { runCatching { clock.prepare() } }
+        try {
+            runCurrent(); advanceTimeBy(101); runCurrent()
+            assertFailsWith<IllegalStateException> { clock.readTick() }
+            release.complete(Unit); runCurrent()
+            assertIs<TimeoutCancellationException>(attempt.await().exceptionOrNull())
+            assertFailsWith<IllegalStateException> { clock.readTick() }
+        } finally { release.complete(Unit); attempt.cancelAndJoin() }
+        clock.prepare()
+        assertEquals(11L, clock.readTick().clockGeneration)
+    }
+
+    @Test fun preparationRequiresPositiveDeadline() {
+        for (budget in listOf(0L, -1L)) assertFailsWith<IllegalArgumentException> {
+            HistoryRecordingClock({ 1L }, { 1L }, { 1L }, budget)
+        }
+    }
+
     @Test fun ticksUseNativeBootElapsedAndPreserveWallChangesAfterSinglePreparation() = runTest {
         var wall = 10000L
         var bootElapsed = 987654L

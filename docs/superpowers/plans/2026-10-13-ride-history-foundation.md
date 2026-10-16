@@ -740,3 +740,11 @@ current/power, VALUES does not erase distance or virtual SOC. Explicit absence
 within the actual family stays typed. SQLite integration checks separate network
 current, exact local power endpoints and complete energy through mixed replies.
 Gateway/alias/aggregate qualification, runtime activation and screen port remain open.
+
+Task7 clock-preparation deadline checkpoint (2026-10-16): preparation has a
+10-second cooperative deadline including mutex wait, with a smaller injected
+budget in tests. Timeout/cancellation never publishes an expired clock; retries
+remain serialized and possible after original recovery completes. An independently
+expired waiter cannot abort the original database cleanup or start parallel recovery.
+This does not forcibly interrupt blocking JDBC/native IO; it fences late positive
+acknowledgement. App runtime readiness/legacy retirement and activation remain open.
