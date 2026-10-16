@@ -748,3 +748,16 @@ remain serialized and possible after original recovery completes. An independent
 expired waiter cannot abort the original database cleanup or start parallel recovery.
 This does not forcibly interrupt blocking JDBC/native IO; it fences late positive
 acknowledgement. App runtime readiness/legacy retirement and activation remain open.
+
+Task7 forwarded-controller source-plan checkpoint (2026-10-16): the native planner
+now accepts controller-only VESC gateway links with explicit unique target CAN IDs
+0..254, matching profile ownership, no derived/hosted pack slots and an external
+profile battery. Physical and REPORTED_CAN identities follow the reporter endpoint,
+not mutable local/global ordering. Physical calibration comes from each controller;
+changing one motor cannot rename a peer or a reported-current source.
+
+The actual native protocol factory, serial SETUP/VALUES polling and history adapter
+are checked together for two forwarded nodes, independent local currents/power and
+VALUES geometry. Existing decoder identity checks remain in force. Mixed unqualified
+native targets, hosted/derived gateway packs and aliases remain rejected; this does
+not activate recording or establish hosted BMS age/producer semantics.
