@@ -80,6 +80,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.map
 import org.maplibre.android.offline.OfflineManager
 
 val androidModule = module {
@@ -111,6 +112,27 @@ val androidModule = module {
     single {
         ru.sodovaya.volty.data.history.AndroidHistoryLocationForegroundController(androidContext(), get(),
             get(named(HISTORY_LOCATION_DEMAND)))
+    }
+    // Inert assembly binding: no prepare(), writer, GPS or service launch at resolution.
+    // Repository activation must await prepare before sealing its recorder choice.
+    single {
+        val store = get<ru.sodovaya.volty.data.history.SqlDelightHistoryStore>()
+        val foreground = get<ru.sodovaya.volty.data.history.HistoryLocationForegroundAuthority>()
+        val native = get<ru.sodovaya.volty.data.history.AndroidHistoryLocationForegroundController>()
+        val demand = get<ru.sodovaya.volty.data.location.LocationDemandCoordinator>(named(HISTORY_LOCATION_DEMAND))
+        val service = get<ServiceController>()
+        ru.sodovaya.volty.data.history.HistoryRecordingRuntime(
+            clock = get(), dispatcher = Dispatchers.IO,
+            createWriter = { ru.sodovaya.volty.data.history.BufferedHistoryWriter(store, Dispatchers.IO, projectRecording = true) },
+            locations = get<RideLocationRepository>().state, foreground = foreground,
+            setServiceEnabled = service::setRecordingEnabled,
+            createLocationSession = { scope, recording ->
+                ru.sodovaya.volty.data.history.HistoryLocationCapture(scope, Dispatchers.Main,
+                    recording, foreground, demand, native::launch)
+            },
+            newId = { java.util.UUID.randomUUID().toString() },
+            retryOpportunities = native.resumeOpportunities.map { Unit },
+        )
     }
     single<SocialCredentialStore> { AndroidSocialCredentialStore(androidContext()) }
     single(named(NEARBY_HTTP_CLIENT)) {

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.domain.location.LocationConsumer
 import ru.sodovaya.volty.domain.location.RideLocationState
@@ -108,6 +109,7 @@ internal class HistoryGpsRecorder(
     }
 
     fun close() { job.cancel() }
+    suspend fun closeAndJoin() { job.cancelAndJoin() }
 }
 
 private data class HistoryGpsInput(val status: RideLocationStatus, val admissionOpen: Boolean)

@@ -827,3 +827,24 @@ recording. Successful repeated close is idempotent. This closes the native ingre
 part of shutdown only; whole-runtime clock/bootstrap/DI, GPS observer termination,
 service release and writer disposal still need assembly. Production remains on the
 legacy recorder until those readiness and source-qualification gates are met.
+
+Task7 app-owned runtime assembly checkpoint (2026-10-16): a serialized common
+HistoryRecordingRuntime now prepares the shared recovery clock before constructing
+one writer, controller, managed ingress and actual GPS observer. Concurrent prepare
+calls share the same binding. Failed recovery allocates no writer; failed writer
+factory may retry with the already prepared clock. Closing during preparation
+prevents publication. Screen cancellation does not own the runtime supervisor.
+
+Foreground opportunities reconcile current demand through the controller. Shutdown
+stops and joins retry/GPS observation, terminally drains accepted native receipts,
+requires original location cleanup acknowledgement, joins the worker scope, and
+then disposes the writer. Failed durable finish, native removal or writer disposal
+retains original resources for terminal retry; a closing runtime cannot reopen.
+Even a writer whose rollback fails before full assembly remains explicitly owned.
+
+Android DI now supplies an inert runtime binding with the projected buffered writer,
+shared location state/foreground authority, dedicated history demand coordinator,
+queued Main native session factory and recording service retention. Resolution does
+not prepare or launch recording. Repository startup gating/installation, complete
+app-owner shutdown integration, source qualification and device acceptance remain
+open; the production repository still chooses the legacy recorder by default.
