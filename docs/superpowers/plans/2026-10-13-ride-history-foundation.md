@@ -941,3 +941,14 @@ Unmanaged default planning, simultaneous aliases, Begode aliases and hosted/deri
 gateway caches remain conservative. This adds explicit single-path support, not an
 automatic BLE chooser or finished direct-to-gateway handover. Nonalias IDs and wire
 behavior remain unchanged; production activation/native acceptance/screens stay open.
+
+Task8 application reader binding checkpoint (2026-10-17): AppModule now lazily
+registers one SqlDelightHistoryReadRepository instance bound to HistoryReadRepository.
+It borrows the existing application database and default bounded read configuration;
+old RideHistoryRepository/UI and recorder bindings remain unchanged. A real isolated
+Koin AppModule plus SQLite test resolves concrete/interface to the same instance,
+reads both storage formats with canonical legacy power sign, and verifies that
+reading does not recover/end an open v2 ride or delete legacy rows. No Android/BLE/
+location/recording runtime is needed to resolve and use this reader. This makes the
+foundation read contract available to future screens; it does not activate those
+screens, new recording, or claim phone/performance acceptance.
