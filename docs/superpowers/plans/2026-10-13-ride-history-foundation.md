@@ -952,3 +952,13 @@ reading does not recover/end an open v2 ride or delete legacy rows. No Android/B
 location/recording runtime is needed to resolve and use this reader. This makes the
 foundation read contract available to future screens; it does not activate those
 screens, new recording, or claim phone/performance acceptance.
+
+Task8 long-read acceptance checkpoint (2026-10-17): the existing two-hour real
+SQLite fixture now includes brief 64km/h/-4200W peaks and a20-second partial cell
+while healthy peers and earned zero remain intact. Its8keys/4sources/57608rows
+stay bounded to<=61overview points/key with7201rawrows/key; gaps, raw wall jump
+and equal-time pagination controls still pass. Fresh h368 case duration1.022s is
+whole desktop/JDBC fixture time, not isolated query latency or Android performance.
+See specs/2026-10-17-ride-history-read-acceptance.md for exact evidence and limits.
+Long-run projected writer, native storage/foreground/acquisition and UI performance
+remain separate acceptance gates. No production behavior changed in this checkpoint.

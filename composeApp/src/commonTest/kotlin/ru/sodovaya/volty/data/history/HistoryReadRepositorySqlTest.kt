@@ -48,7 +48,7 @@ class HistoryReadRepositorySqlTest {
         assertEquals(HistoryStats(null, null, null, false), repository.stats("ride", key, range))
     }
 
-    @Test fun twoHourMultiSourceReadKeepsCellIdentityGapsAndRawWallJumpWithoutLiveData() = runTest {
+    @Test fun twoHourMultiSourceReadKeepsPeaksPartialCellsGapsAndRawWallJumpWithoutLiveData() = runTest {
         val store = fixture()
         val sources = listOf(
             HistorySource("controller-a", HistorySourceKind.CONTROLLER, "Front"),
@@ -67,7 +67,15 @@ class HistoryReadRepositorySqlTest {
         // Deliberately distinct sources/physical cells, not eight copies of one aggregate.
         for (start in 0..7200 step 128) {
             val samples = (start..minOf(start + 127, 7200)).flatMap { second ->
-                keys.mapIndexed { index, key -> HistorySample(tick(second), key, values[index]) }
+                keys.mapIndexed { index, key -> when {
+                    index == 0 && second == 1234 -> HistorySample(tick(second), key, 64.0)
+                    index == 2 && second == 4321 -> HistorySample(tick(second), key, -4200.0)
+                    // One cell becomes unavailable while every other source stays
+                    // live. Complete contributors alone cannot expose contamination.
+                    index == 7 && second in 2700..2719 ->
+                        HistorySample(tick(second), key, null, HistoryUnknownReason.PARTIAL_SOURCE)
+                    else -> HistorySample(tick(second), key, values[index])
+                } }
             }
             store.append(HistoryBatch("ride", samples, emptyList(), emptyList()))
         }
@@ -91,7 +99,17 @@ class HistoryReadRepositorySqlTest {
             assertEquals(origin, result.origin)
             assertTrue(result.samples.size <= 61)
             assertFalse(result.truncated)
-            assertEquals(setOf(values[index]), result.samples.mapNotNull { it.value }.toSet())
+            val earnedValues = when (index) {
+                0 -> setOf(values[index], 64.0)
+                2 -> setOf(values[index], -4200.0)
+                else -> setOf(values[index])
+            }
+            assertEquals(earnedValues, result.samples.mapNotNull { it.value }.toSet())
+            val partial = result.samples.filter { it.unknown == HistoryUnknownReason.PARTIAL_SOURCE }
+            if (index == 7) {
+                assertTrue(partial.isNotEmpty())
+                assertTrue(partial.all { it.tick.elapsedMillis in tick(2700).elapsedMillis..tick(2719).elapsedMillis })
+            } else assertTrue(partial.isEmpty(), "One missing cell must not poison a healthy contributor")
             assertTrue(result.samples.all { it.key == key })
             assertEquals(tick(7200), result.samples.last().tick)
             assertTrue(result.samples.any { it.unknown == HistoryUnknownReason.GAP && it.tick == gap.tick })
