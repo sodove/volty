@@ -1,15 +1,23 @@
 package ru.sodovaya.volty.domain.model
 
 enum class TelemetryOrigin { BATTERY, CONTROLLER }
-/** DERIVED names a virtual battery, not canonical unit/geometry conversion of a physical controller field. */
-enum class TelemetryRole { CONTRIBUTOR, ASSEMBLY, DERIVED }
+/** DERIVED names a virtual battery. REPORTED_CAN is a reporter's network view, not a physical contributor. */
+enum class TelemetryRole { CONTRIBUTOR, ASSEMBLY, DERIVED, REPORTED_CAN }
+
+internal fun requireTelemetryRole(origin: TelemetryOrigin, role: TelemetryRole) {
+    require(when (role) {
+        TelemetryRole.CONTRIBUTOR -> true
+        TelemetryRole.ASSEMBLY, TelemetryRole.DERIVED -> origin == TelemetryOrigin.BATTERY
+        TelemetryRole.REPORTED_CAN -> origin == TelemetryOrigin.CONTROLLER
+    })
+}
 
 internal fun requireTelemetryAddress(origin: TelemetryOrigin, localIndex: Int,
     role: TelemetryRole, assemblyIndex: Int?) {
     require(localIndex >= 0)
     require((role == TelemetryRole.ASSEMBLY) == (assemblyIndex != null))
     require(assemblyIndex == null || assemblyIndex >= 0)
-    require(role == TelemetryRole.CONTRIBUTOR || origin == TelemetryOrigin.BATTERY)
+    requireTelemetryRole(origin, role)
 }
 enum class TelemetryUnknown { UNAVAILABLE, INVALID_VALUE, PARTIAL_SOURCE }
 

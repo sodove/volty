@@ -20,6 +20,7 @@ import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryReading
+import ru.sodovaya.volty.domain.model.TelemetryRole
 import ru.sodovaya.volty.domain.model.TelemetryUnknown
 
 /**
@@ -1059,6 +1060,12 @@ class VescGatewayProtocol(
         } else null
         observeTelemetry(TelemetryOrigin.CONTROLLER, controllers.indexOf(source)) {
             val readings = observedVescController(decoded, setup, trip)
+            if (attributed) readings else readings.map {
+                TelemetryReading(it.metric, null, TelemetryUnknown.PARTIAL_SOURCE, it.cellIndex)
+            }
+        }
+        if (setup) observeTelemetry(TelemetryOrigin.CONTROLLER, controllers.indexOf(source), TelemetryRole.REPORTED_CAN) {
+            val readings = observedVescCanCurrents(decoded)
             if (attributed) readings else readings.map {
                 TelemetryReading(it.metric, null, TelemetryUnknown.PARTIAL_SOURCE, it.cellIndex)
             }

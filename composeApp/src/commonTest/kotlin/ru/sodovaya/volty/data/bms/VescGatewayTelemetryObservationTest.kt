@@ -45,20 +45,20 @@ class VescGatewayTelemetryObservationTest {
 
     @Test fun localIndicesAreNotGlobalIndicesAndValuesNeverBorrowSetupOverlays() = runTest {
         val p = protocol(listOf(GatewaySource(7, 41), GatewaySource(2, 42)))
-        val events = mutableListOf<TelemetryObservation>(); p.telemetryObserver = { events += it }
+        val events = mutableListOf<TelemetryObservation>(); p.telemetryObserver = { if (it.role == TelemetryRole.CONTRIBUTOR) events += it }
         val issued = cycle(p) { id, op -> reply(op, id, if (id == 41) 0 else -100) }
         assertEquals(listOf(41 to 47, 42 to 47, 41 to 4, 42 to 4), issued)
         assertEquals(listOf(0, 1, 0, 1), events.map { it.localIndex })
         assertTrue(events.all { it.origin == TelemetryOrigin.CONTROLLER })
-        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, events[0].reading(TelemetryMetric.CONTROLLER_BATTERY_CURRENT).unknown)
+        assertTrue(events[0].readings.none { it.metric == TelemetryMetric.CONTROLLER_BATTERY_CURRENT })
         assertEquals(0.0, events[2].reading(TelemetryMetric.CONTROLLER_BATTERY_CURRENT).value)
         assertEquals(-1.0, events[3].reading(TelemetryMetric.CONTROLLER_BATTERY_CURRENT).value)
-        assertEquals(TelemetryUnknown.UNAVAILABLE, events[2].reading(TelemetryMetric.ODOMETER).unknown)
+        assertTrue(events[2].readings.none { it.metric == TelemetryMetric.ODOMETER })
     }
 
     @Test fun missingOrWrongCanIdentityInvalidatesFactsWithoutAdvancingTripBaseline() = runTest {
         val p = protocol(listOf(GatewaySource(9, 41)))
-        val events = mutableListOf<TelemetryObservation>(); p.telemetryObserver = { events += it }
+        val events = mutableListOf<TelemetryObservation>(); p.telemetryObserver = { if (it.role == TelemetryRole.CONTRIBUTOR) events += it }
         assertEquals(2, cycle(p) { _, op -> reply(op, if (op == 47) 42 else null, 9900, 900000) }.size)
         assertEquals(2, events.size)
         assertTrue(events.flatMap { it.readings }.all { it.value == null && it.unknown == TelemetryUnknown.PARTIAL_SOURCE })
@@ -71,7 +71,7 @@ class VescGatewayTelemetryObservationTest {
 
     @Test fun nativeLocalControllerNeedsNoCanTrailerAndResetRestartsHistoryDistance() = runTest {
         val p = protocol(listOf(GatewaySource(8)))
-        val events = mutableListOf<TelemetryObservation>(); p.telemetryObserver = { events += it }
+        val events = mutableListOf<TelemetryObservation>(); p.telemetryObserver = { if (it.role == TelemetryRole.CONTRIBUTOR) events += it }
         cycle(p) { _, op -> reply(op, distance = 1000000) }
         cycle(p) { _, op -> reply(op, distance = 1200000) }
         assertEquals(4, events.size)
@@ -84,7 +84,7 @@ class VescGatewayTelemetryObservationTest {
 
     @Test fun mixedNativeAndForwardedControllersCannotAttributeLateCanReplyToNative() = runTest {
         val p = protocol(listOf(GatewaySource(7), GatewaySource(2, 41)))
-        val events = mutableListOf<TelemetryObservation>(); p.telemetryObserver = { events += it }
+        val events = mutableListOf<TelemetryObservation>(); p.telemetryObserver = { if (it.role == TelemetryRole.CONTRIBUTOR) events += it }
         val issued = cycle(p) { _, op -> reply(op, 41, 9900, 900000) }
         assertEquals(listOf(null to 47, 41 to 47, null to 4, 41 to 4), issued)
         val native = events.filter { it.localIndex == 0 }

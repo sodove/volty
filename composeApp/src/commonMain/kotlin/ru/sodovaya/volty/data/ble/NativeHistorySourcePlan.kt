@@ -45,7 +45,7 @@ internal fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?): Map
         val key = HistoryTelemetrySource(origin, local, role, assembly)
         val id = "native-history-v1:" + encodeIdentity(listOf(spec.address.uppercase(), spec.protocolKind.name,
             origin.name, local.toString(), role.name, assembly?.toString().orEmpty(),
-            if (origin == TelemetryOrigin.CONTROLLER || role == TelemetryRole.DERIVED) calibration else ""))
+            if ((origin == TelemetryOrigin.CONTROLLER && role == TelemetryRole.CONTRIBUTOR) || role == TelemetryRole.DERIVED) calibration else ""))
         result[key] = HistorySource(id, historySourceKindForTelemetry(origin, role), label)
     }
     when (spec.protocolKind) {
@@ -69,6 +69,7 @@ internal fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?): Map
             val derived = controller.providesDerivedBattery || profile.packs.isEmpty()
             require(spec.ownedPacks.size == if (derived) 1 else 0)
             add(TelemetryOrigin.CONTROLLER, 0, controller.label)
+            add(TelemetryOrigin.CONTROLLER, 0, "${controller.label} · CAN", TelemetryRole.REPORTED_CAN)
             if (derived) add(TelemetryOrigin.BATTERY, 0, controller.label, TelemetryRole.DERIVED)
         }
         ProtocolKind.VESC_BMS, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,

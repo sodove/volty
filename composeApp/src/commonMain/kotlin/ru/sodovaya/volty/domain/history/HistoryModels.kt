@@ -11,7 +11,7 @@ data class HistoryTick(
     }
 }
 
-enum class HistorySourceKind { VEHICLE_BATTERY, VEHICLE_MOTION, BATTERY, CONTROLLER, BATTERY_ASSEMBLY, DERIVED_BATTERY }
+enum class HistorySourceKind { VEHICLE_BATTERY, VEHICLE_MOTION, BATTERY, CONTROLLER, BATTERY_ASSEMBLY, DERIVED_BATTERY, REPORTED_CAN }
 
 data class HistorySeriesKey(
     val sourceId: String,

@@ -22,10 +22,13 @@ class HistorySessionTelemetryCaptureTest {
         override fun reset() {}
         override fun onNotification(data: ByteArray) {
             decodes++
-            data.forEach { value -> observeTelemetry(TelemetryOrigin.BATTERY, 0, role,
+            data.forEach { value -> observeTelemetry(if (role == TelemetryRole.REPORTED_CAN) TelemetryOrigin.CONTROLLER else TelemetryOrigin.BATTERY, 0, role,
                 if (role == TelemetryRole.ASSEMBLY) 0 else null) {
-                listOf(TelemetryReading.measured(if (role == TelemetryRole.ASSEMBLY)
-                    TelemetryMetric.BATTERY_TEMPERATURE else TelemetryMetric.CURRENT, value.toDouble()))
+                listOf(TelemetryReading.measured(when (role) {
+                    TelemetryRole.ASSEMBLY -> TelemetryMetric.BATTERY_TEMPERATURE
+                    TelemetryRole.REPORTED_CAN -> TelemetryMetric.MOTOR_CURRENT
+                    else -> TelemetryMetric.CURRENT
+                }, value.toDouble()))
             } }
         }
     }
@@ -63,20 +66,22 @@ class HistorySessionTelemetryCaptureTest {
         val writer = Writer(); val c = controller(writer); val p = Emitter()
         val assembly = source.copy(id = "section-a", kind = HistorySourceKind.BATTERY_ASSEMBLY)
         val virtual = source.copy(id = "virtual-a", kind = HistorySourceKind.DERIVED_BATTERY)
-        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source, assembly, virtual))
+        val reporter = source.copy(id = "reporter-a", kind = HistorySourceKind.REPORTED_CAN)
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source, assembly, virtual, reporter))
         val bindings = mapOf(key to source,
             key.copy(role = TelemetryRole.ASSEMBLY, assemblyIndex = 0) to assembly,
-            key.copy(role = TelemetryRole.DERIVED) to virtual)
+            key.copy(role = TelemetryRole.DERIVED) to virtual,
+            HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, 0, TelemetryRole.REPORTED_CAN) to reporter)
         val received = mutableListOf<CapturedHistoryTelemetry>()
         val capture = historySessionTelemetryCapture(p, "attempt", c, { tick() }, { true }, bindings) { received += it }
         for (role in TelemetryRole.entries) {
             p.role = role; capture.processNotification(byteArrayOf(0))
             assertEquals(HistoryOffer.ACCEPTED, received.last().offer(c) { true })
         }
-        assertEquals(listOf("pack-a", "section-a", "virtual-a"), writer.samples.map { it.samples.single().key.sourceId })
-        assertEquals(listOf("current_a", "battery_temperature_c", "current_a"), writer.samples.map { it.samples.single().key.metricId })
+        assertEquals(listOf("pack-a", "section-a", "virtual-a", "reporter-a"), writer.samples.map { it.samples.single().key.sourceId })
+        assertEquals(listOf("current_a", "battery_temperature_c", "current_a", "motor_current_a"), writer.samples.map { it.samples.single().key.metricId })
         assertTrue(writer.samples.all { it.samples.single().value == 0.0 })
-        assertEquals(3, p.decodes)
+        assertEquals(4, p.decodes)
     }
 
     @Test fun unmappedRolesCannotBorrowContributorBindingsOrQualifyContributorClockLoss() = runTest {

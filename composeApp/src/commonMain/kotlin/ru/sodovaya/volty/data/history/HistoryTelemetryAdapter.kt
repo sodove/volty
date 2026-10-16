@@ -5,10 +5,11 @@ import ru.sodovaya.volty.domain.model.TelemetryObservation
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryUnknown
 import ru.sodovaya.volty.domain.model.TelemetryRole
+import ru.sodovaya.volty.domain.model.requireTelemetryRole
 
 /** Role qualification precedes metric permission; a label cannot turn an auxiliary source into a pack. */
 internal fun historySourceKindForTelemetry(origin: TelemetryOrigin, role: TelemetryRole): HistorySourceKind {
-    require(role == TelemetryRole.CONTRIBUTOR || origin == TelemetryOrigin.BATTERY)
+    requireTelemetryRole(origin, role)
     return when (role) {
         TelemetryRole.CONTRIBUTOR -> when (origin) {
             TelemetryOrigin.BATTERY -> HistorySourceKind.BATTERY
@@ -16,6 +17,7 @@ internal fun historySourceKindForTelemetry(origin: TelemetryOrigin, role: Teleme
         }
         TelemetryRole.ASSEMBLY -> HistorySourceKind.BATTERY_ASSEMBLY
         TelemetryRole.DERIVED -> HistorySourceKind.DERIVED_BATTERY
+        TelemetryRole.REPORTED_CAN -> HistorySourceKind.REPORTED_CAN
     }
 }
 

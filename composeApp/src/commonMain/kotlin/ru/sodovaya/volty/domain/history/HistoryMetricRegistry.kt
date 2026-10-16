@@ -10,6 +10,7 @@ data class HistoryMetricDescriptor(
 object HistoryMetricRegistry {
     private val batterySources = setOf(HistorySourceKind.BATTERY, HistorySourceKind.VEHICLE_BATTERY)
     private val motionSources = setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.VEHICLE_MOTION)
+    private val motionCurrentSources = motionSources + HistorySourceKind.REPORTED_CAN
     private val individualBattery = setOf(HistorySourceKind.BATTERY)
     private val virtualBattery = batterySources + HistorySourceKind.DERIVED_BATTERY
     private val assemblyTemperature = batterySources + HistorySourceKind.BATTERY_ASSEMBLY
@@ -29,8 +30,8 @@ object HistoryMetricRegistry {
         HistoryMetricDescriptor("cell_v", HistoryUnit.VOLT, HistoryMetricGroup.CELL, individualBattery, indexedByCell = true),
         HistoryMetricDescriptor("speed_kmh", HistoryUnit.KMH, HistoryMetricGroup.MOVEMENT, motionSources),
         HistoryMetricDescriptor("duty_percent", HistoryUnit.PERCENT, HistoryMetricGroup.CONTROLLER, motionSources),
-        HistoryMetricDescriptor("motor_current_a", HistoryUnit.AMP, HistoryMetricGroup.CONTROLLER, motionSources),
-        HistoryMetricDescriptor("battery_current_a", HistoryUnit.AMP, HistoryMetricGroup.CONTROLLER, motionSources),
+        HistoryMetricDescriptor("motor_current_a", HistoryUnit.AMP, HistoryMetricGroup.CONTROLLER, motionCurrentSources),
+        HistoryMetricDescriptor("battery_current_a", HistoryUnit.AMP, HistoryMetricGroup.CONTROLLER, motionCurrentSources),
         HistoryMetricDescriptor("input_voltage_v", HistoryUnit.VOLT, HistoryMetricGroup.CONTROLLER, motionSources),
         HistoryMetricDescriptor("controller_power_w", HistoryUnit.WATT, HistoryMetricGroup.CONTROLLER, motionSources,
             consumptionMultiplier = 1.0),

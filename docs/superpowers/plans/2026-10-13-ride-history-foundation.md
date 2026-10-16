@@ -726,3 +726,17 @@ floor, while finish follows the greatest fact from every source/GPS. This is tes
 through common native ingestion/repository seams, not physical BLE/device acceptance.
 Gateway/alias/aggregate planning, bounded app runtime startup/one-writer activation,
 manual UI/legacy retirement and native/performance acceptance still keep Task7 open.
+
+Task7 reported-CAN checkpoint (2026-10-16): SETUP network motor/input currents
+have their own REPORTED_CAN role/source kind, bound to the reporting endpoint.
+Only these two current quantities are permitted; a local voltage cannot establish
+network power or energy. Direct source plans freeze that extra identity without
+wheel-geometry calibration; physical/virtual calibrated identities remain unchanged.
+Gateway observations also preserve reporter scope and require verified reply CAN ID,
+but this does not yet admit gateway native source plans or certify hosted BMS age.
+
+Actual query families emit only their own fields: SETUP does not erase local
+current/power, VALUES does not erase distance or virtual SOC. Explicit absence
+within the actual family stays typed. SQLite integration checks separate network
+current, exact local power endpoints and complete energy through mixed replies.
+Gateway/alias/aggregate qualification, runtime activation and screen port remain open.

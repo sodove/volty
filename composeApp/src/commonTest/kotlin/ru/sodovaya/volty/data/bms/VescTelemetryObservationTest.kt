@@ -7,7 +7,7 @@ import kotlin.test.*
 
 class VescTelemetryObservationTest {
     private fun capture(protocol: VescProtocol, origin: TelemetryOrigin? = TelemetryOrigin.CONTROLLER) = mutableListOf<TelemetryObservation>().also { events ->
-        protocol.telemetryObserver = { if (origin == null || it.origin == origin) events += it }
+        protocol.telemetryObserver = { if (origin == null || (it.origin == origin && (origin != TelemetryOrigin.CONTROLLER || it.role == TelemetryRole.CONTRIBUTOR))) events += it }
     }
     private fun TelemetryObservation.read(metric: TelemetryMetric) = readings.single { it.metric == metric }
     private fun values(current: Int = 1000) = VescPacket.frame(VescTestFrames.valuesPayload(currentInRaw = current, vInRaw = 500))
@@ -23,9 +23,9 @@ class VescTelemetryObservationTest {
         assertTrue(batteries.all { it.role == TelemetryRole.DERIVED && it.localIndex == 0 && it.assemblyIndex == null })
         assertEquals(listOf(-500.0, -2000.0, -500.0), batteries.map { it.read(TelemetryMetric.POWER).value })
         assertEquals(listOf(-10.0, -40.0, -10.0), batteries.map { it.read(TelemetryMetric.CURRENT).value })
-        assertTrue(batteries.all { it.read(TelemetryMetric.SOC).unknown == TelemetryUnknown.UNAVAILABLE })
+        assertTrue(batteries.all { b -> b.readings.none { it.metric == TelemetryMetric.SOC } })
         assertTrue(batteries.all { b -> b.readings.map { it.metric }.toSet() == setOf(
-            TelemetryMetric.SOC, TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.POWER) })
+            TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.POWER) })
         assertEquals(listOf(500.0, 2000.0, 500.0), controllers.map { it.read(TelemetryMetric.CONTROLLER_POWER).value })
         assertEquals(-10f, assertNotNull(protocol.latestData()).current)
     }
@@ -37,12 +37,11 @@ class VescTelemetryObservationTest {
         assertEquals(84.0, assertNotNull(setupBattery.read(TelemetryMetric.SOC).value), 0.001)
         assertEquals(78.2, assertNotNull(setupBattery.read(TelemetryMetric.VOLTAGE).value), 0.001)
         for (metric in listOf(TelemetryMetric.CURRENT, TelemetryMetric.POWER)) {
-            assertNull(setupBattery.read(metric).value)
-            assertEquals(TelemetryUnknown.PARTIAL_SOURCE, setupBattery.read(metric).unknown)
+            assertTrue(setupBattery.readings.none { it.metric == metric })
         }
         protocol.onNotification(values())
         assertEquals(2, batteries.size)
-        assertEquals(TelemetryUnknown.UNAVAILABLE, batteries.last().read(TelemetryMetric.SOC).unknown)
+        assertTrue(batteries.last().readings.none { it.metric == TelemetryMetric.SOC })
         assertEquals(-500.0, batteries.last().read(TelemetryMetric.POWER).value)
     }
 
@@ -63,8 +62,10 @@ class VescTelemetryObservationTest {
     @Test fun disabledDerivedBatteryAndUndecodedFramesCannotCreateVirtualObservations() {
         val physical = VescProtocol(deriveBattery = false); val physicalEvents = capture(physical, null)
         physical.onNotification(values()); physical.onNotification(setup())
-        assertEquals(2, physicalEvents.size)
-        assertTrue(physicalEvents.all { it.origin == TelemetryOrigin.CONTROLLER && it.role == TelemetryRole.CONTRIBUTOR })
+        assertEquals(3, physicalEvents.size)
+        assertTrue(physicalEvents.all { it.origin == TelemetryOrigin.CONTROLLER })
+        assertEquals(2, physicalEvents.count { it.role == TelemetryRole.CONTRIBUTOR })
+        assertEquals(1, physicalEvents.count { it.role == TelemetryRole.REPORTED_CAN })
         assertNull(physical.latestData())
         val virtual = VescProtocol(deriveBattery = true); val virtualEvents = capture(virtual, null)
         virtual.onNotification(values().also { it[it.size - 2] = (it[it.size - 2].toInt() xor 1).toByte() })
@@ -90,9 +91,8 @@ class VescTelemetryObservationTest {
     @Test fun plainCountsAndMissingGeometryDoNotBecomeEarnedDistanceOrSpeed() {
         val protocol = VescProtocol(motor = MotorConfig(wheelDiameterMm = 0)); val events = capture(protocol)
         protocol.onNotification(values())
-        for (metric in listOf(TelemetryMetric.SPEED, TelemetryMetric.ODOMETER, TelemetryMetric.TRIP)) {
-            assertEquals(TelemetryUnknown.UNAVAILABLE, events.single().read(metric).unknown)
-        }
+        assertEquals(TelemetryUnknown.UNAVAILABLE, events.single().read(TelemetryMetric.SPEED).unknown)
+        assertTrue(events.single().readings.none { it.metric in setOf(TelemetryMetric.ODOMETER, TelemetryMetric.TRIP) })
         assertEquals(10_000.0, events.single().read(TelemetryMetric.ERPM).value)
         assertNotNull(events.single().read(TelemetryMetric.MOTOR_CURRENT).value)
     }
@@ -102,8 +102,7 @@ class VescTelemetryObservationTest {
         protocol.onNotification(values()); protocol.onNotification(setup())
         val event = events.last()
         for (metric in listOf(TelemetryMetric.MOTOR_CURRENT, TelemetryMetric.CONTROLLER_BATTERY_CURRENT, TelemetryMetric.CONTROLLER_POWER)) {
-            assertNull(event.read(metric).value)
-            assertEquals(TelemetryUnknown.PARTIAL_SOURCE, event.read(metric).unknown)
+            assertTrue(event.readings.none { it.metric == metric })
         }
         assertNotNull(event.read(TelemetryMetric.SPEED).value)
         assertNotNull(event.read(TelemetryMetric.DUTY).value)
@@ -115,7 +114,7 @@ class VescTelemetryObservationTest {
         protocol.onNotification(values()); protocol.onNotification(setup(100_000_000))
         assertEquals(0.0, events.last().read(TelemetryMetric.TRIP).value)
         protocol.onNotification(values())
-        assertEquals(TelemetryUnknown.UNAVAILABLE, events.last().read(TelemetryMetric.TRIP).unknown)
+        assertTrue(events.last().readings.none { it.metric == TelemetryMetric.TRIP })
         protocol.onNotification(setup(101_000_000))
         assertEquals(1.0, events.last().read(TelemetryMetric.TRIP).value)
         protocol.reset(); protocol.onNotification(setup(110_000_000))

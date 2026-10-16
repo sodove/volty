@@ -17,6 +17,37 @@ class NativeHistorySourcePlanTest {
     private fun controller(index: Int = 7) = Controller(index, "ESC", ControllerType.VESC, address,
         motor = MotorConfig(15, 254, 1f))
 
+    @Test fun plain_controller_plan_declares_distinct_reporter_scope_without_a_virtual_pack() {
+        val c = controller()
+        val external = pack().copy(bmsAddress = "AA:BB:CC:DD:EE:02")
+        val spec = LinkSpec(address, ProtocolKind.VESC, emptyList(), listOf(OwnedSource(7)))
+        val sources = nativeHistorySourcesForLink(spec, vehicle(listOf(external), listOf(c)))
+        val physical = sources.getValue(HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, 0))
+        val reported = assertNotNull(sources[HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, 0, TelemetryRole.REPORTED_CAN)])
+        assertEquals(HistorySourceKind.CONTROLLER, physical.kind)
+        assertEquals(HistorySourceKind.REPORTED_CAN, reported.kind)
+        assertNotEquals(physical.id, reported.id)
+        assertEquals(setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.REPORTED_CAN), sources.values.map { it.kind }.toSet())
+    }
+
+    @Test fun reported_network_identity_tracks_reporter_address_but_not_wheel_geometry_or_profile_slots() {
+        val c = controller()
+        val external = pack().copy(bmsAddress = "AA:BB:CC:DD:EE:02")
+        val spec = LinkSpec(address, ProtocolKind.VESC, emptyList(), listOf(OwnedSource(7)))
+        val first = nativeHistorySourcesForLink(spec, vehicle(listOf(external), listOf(c)))
+        val key = HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, 0, TelemetryRole.REPORTED_CAN)
+        val reported = assertNotNull(first[key])
+        val renamed = c.copy(index = 80, label = "Renamed", address = address.lowercase(), motor = c.motor.copy(gearRatio = 2f))
+        val changed = nativeHistorySourcesForLink(spec.copy(address = address.lowercase(), ownedControllers = listOf(OwnedSource(80))),
+            vehicle(listOf(external), listOf(renamed)))
+        assertEquals(reported.id, changed.getValue(key).id)
+        val physicalKey = HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, 0)
+        assertNotEquals(first.getValue(physicalKey).id, changed.getValue(physicalKey).id)
+        val moved = c.copy(address = "AA:BB:CC:DD:EE:03")
+        val other = nativeHistorySourcesForLink(spec.copy(address = moved.address), vehicle(listOf(external), listOf(moved)))
+        assertNotEquals(reported.id, other.getValue(key).id)
+    }
+
     @Test fun directBatteryIdentityIgnoresProfileLabelsIndicesAndAddressCase() {
         val protocolIds = mutableSetOf<String>()
         for (type in listOf(BmsType.JK_BMS, BmsType.JBD_BMS, BmsType.ANT_BMS, BmsType.DALY_BMS)) {
@@ -39,17 +70,17 @@ class NativeHistorySourcePlanTest {
     @Test fun plainControllerAndVirtualRailHaveStableSeparateCalibratedIdentities() {
         val c = controller(); val spec = LinkSpec(address, ProtocolKind.VESC, listOf(OwnedSource(11)), listOf(OwnedSource(7)))
         val first = nativeHistorySourcesForLink(spec, vehicle(emptyList(), listOf(c)))
-        assertEquals(setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.DERIVED_BATTERY), first.values.map { it.kind }.toSet())
-        assertEquals(2, first.values.map { it.id }.distinct().size)
+        assertEquals(setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.DERIVED_BATTERY, HistorySourceKind.REPORTED_CAN), first.values.map { it.kind }.toSet())
+        assertEquals(3, first.values.map { it.id }.distinct().size)
         val renamed = c.copy(index = 80, label = "Renamed")
         val newSpec = spec.copy(ownedPacks = listOf(OwnedSource(99)), ownedControllers = listOf(OwnedSource(80)))
         val second = nativeHistorySourcesForLink(newSpec, vehicle(emptyList(), listOf(renamed)))
         assertEquals(first.mapValues { it.value.id }, second.mapValues { it.value.id })
         val recalibrated = nativeHistorySourcesForLink(spec, vehicle(emptyList(), listOf(c.copy(motor = c.motor.copy(gearRatio = 2f)))))
-        assertTrue(first.keys.all { first.getValue(it).id != recalibrated.getValue(it).id })
+        assertTrue(first.keys.filter { it.role != TelemetryRole.REPORTED_CAN }.all { first.getValue(it).id != recalibrated.getValue(it).id })
         val externalPack = pack().copy(bmsAddress = "AA:BB:CC:DD:EE:02")
         val noVirtual = nativeHistorySourcesForLink(spec.copy(ownedPacks = emptyList()), vehicle(listOf(externalPack), listOf(c)))
-        assertEquals(listOf(HistorySourceKind.CONTROLLER), noVirtual.values.map { it.kind })
+        assertEquals(setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.REPORTED_CAN), noVirtual.values.map { it.kind }.toSet())
         val explicitVirtual = nativeHistorySourcesForLink(spec, vehicle(listOf(externalPack), listOf(c.copy(providesDerivedBattery = true))))
         assertEquals(first.mapValues { it.value.id }, explicitVirtual.mapValues { it.value.id })
     }

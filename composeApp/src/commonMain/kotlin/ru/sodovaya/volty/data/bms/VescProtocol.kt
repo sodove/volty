@@ -219,6 +219,9 @@ class VescProtocol(
                     (decoded.odometerKm - observedBaseline).coerceAtLeast(0f)
                 } else null
                 observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedVescController(decoded, setup, observedTrip) }
+                if (setup) observeTelemetry(TelemetryOrigin.CONTROLLER, 0, TelemetryRole.REPORTED_CAN) {
+                    observedVescCanCurrents(decoded)
+                }
                 if (deriveBattery) observeTelemetry(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED) {
                     observedVescDerivedBattery(decoded, setup)
                 }
