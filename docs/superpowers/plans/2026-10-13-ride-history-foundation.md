@@ -802,3 +802,14 @@ retry. Cleanup failure cannot mask the original launch error or lose that origin
 session; the cleanup error remains suppressed on the original exception. The
 runtime retry binding must also reconcile controller demand diagnostics, rather
 than treating adapter retry alone as full runtime recovery.
+
+Task7 controller-coordinated demand retry checkpoint (2026-10-16): native
+foreground/permission opportunities can reconcile demand through the controller's
+serialized controls. Retry uses the current owner, including BLE-gap recording;
+a completed Stop retries only the negative release. Successful submission clears
+controller demand diagnostics, repeated failure preserves telemetry admission.
+Queued retries observe the state after durable Stop rather than a stale positive.
+A retained owner with fenced intake after failed durable finish cannot be reopened
+or have its failure bypassed by GPS retry. No new ride, recovery or clock read is
+issued. The app runtime must bind its opportunities to this coordinated retry;
+production runtime assembly/activation and native acceptance remain open.

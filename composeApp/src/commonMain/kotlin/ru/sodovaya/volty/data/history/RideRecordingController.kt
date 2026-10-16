@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -52,6 +54,21 @@ class RideRecordingController(
     private var owned: Owner? = null
     private var nextGeneration = 0L
     private var recovered = false
+
+    /** Foreground/permission opportunity: reconcile current intent, not a delayed ride snapshot. */
+    internal suspend fun retryDemand() {
+        currentCoroutineContext().ensureActive()
+        controls.withLock {
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable) {
+                // A failed durable finish still owns its writer/service obligation. Its
+                // intake is fenced; retrying GPS cannot reopen it or clear that failure.
+                if (owned != null && admission.value == null) return@withContext
+                requestDemand(owned != null)
+            }
+        }
+        currentCoroutineContext().ensureActive()
+    }
 
     internal suspend fun sourceUnavailable(connectionGeneration: Long, sourceIds: Set<String>, tick: HistoryTick): Boolean =
         changeSourceAvailability(connectionGeneration, sourceIds, tick, available = false)
