@@ -781,3 +781,24 @@ recording beside the new owner. Existing default legacy start/finish remains
 covered through real repository/demo transitions; a pre-seal choice may be revised.
 This establishes exclusive startup choice, not production full-stream activation,
 new runtime bootstrap readiness or complete legacy shutdown/retirement acceptance.
+
+Task7 recording/GPS demand adapter checkpoint (2026-10-16): a runtime-owned
+HistoryRecordingGpsDemand connects recording policy to service retention and one
+asynchronous HistoryLocationCapture session. The controller publishes its opaque
+GPS identity before enabling demand; the adapter compares identity, generation
+and ride ID, and retains that session through BLE gaps. It never waits for native
+startup ACK under recording controls. Optional GPS/service failure leaves telemetry
+owned, and Stop still releases service policy.
+
+Replacement must acknowledge original cleanup first. Failed cleanup retains the
+original object for retry; negative policy releases service demand even on failure,
+while native retention independently protects held registrations. Expired positives
+recheck ownership after cleanup and service/factory reentry; a reserved stale session
+is closed before start. Foreground/permission opportunities may retry desired state.
+Runtime assembly must release false on shutdown. This adapter is not yet production
+DI activation, phone-native proof, a bounded whole-runtime bootstrap or screen UI.
+Synchronous start failure also retires the reserved native session before a fresh
+retry. Cleanup failure cannot mask the original launch error or lose that original
+session; the cleanup error remains suppressed on the original exception. The
+runtime retry binding must also reconcile controller demand diagnostics, rather
+than treating adapter retry alone as full runtime recovery.

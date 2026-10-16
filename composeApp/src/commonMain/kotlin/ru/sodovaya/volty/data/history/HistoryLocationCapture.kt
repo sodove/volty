@@ -30,7 +30,7 @@ internal class HistoryLocationCapture(
     private val demand: LocationDemandCoordinator,
     private val launch: suspend (HistoryLocationForegroundTicket) -> Boolean,
     private val startupTimeoutMillis: Long = 10_000,
-) {
+) : HistoryRecordingLocationSession {
     init {
         require(startupTimeoutMillis > 0)
         require(demand.isFor(LocationConsumer.HISTORY_RECORDING)) { "History requires its own location consumer" }
@@ -40,7 +40,7 @@ internal class HistoryLocationCapture(
     private val positives = SupervisorJob(lifetime)
     private val positiveScope = CoroutineScope(scope.coroutineContext + positives)
     private val mutableState = MutableStateFlow(HistoryLocationCaptureState())
-    val state = mutableState.asStateFlow()
+    override val state = mutableState.asStateFlow()
     private val nativeTicket = demand.newTicket()
     private val cleanup = Mutex()
     private val startLock = Any()
@@ -57,7 +57,7 @@ internal class HistoryLocationCapture(
         }
     }
 
-    fun start(): Deferred<Boolean> {
+    override fun start(): Deferred<Boolean> {
         // A completed receipt describes the old activation; a NEW call after retirement
         // must not reuse that historical success or launch another native request.
         if (!state.value.wanted) return CompletableDeferred(false)
@@ -141,7 +141,7 @@ internal class HistoryLocationCapture(
         }
     }
 
-    suspend fun close(): Boolean {
+    override suspend fun close(): Boolean {
         fence(ticket, null)
         return withContext(NonCancellable + queued) {
             val released = releaseNative()
