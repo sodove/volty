@@ -12,13 +12,22 @@ internal fun nativeLinkController(spec: LinkSpec, vehicle: Vehicle?): Controller
 internal fun nativeLinkCellCount(spec: LinkSpec, vehicle: Vehicle?): Int? =
     spec.ownedPacks.firstOrNull()?.globalIndex?.let { index -> vehicle?.packs?.firstOrNull { it.index == index }?.cellCount }
 
+/** Managed selection only: caller must first validate the complete physical plan.
+ * One selected direct alias path is safe; this cannot authorize concurrent paths.
+ */
+internal fun nativeHistorySourcesForSelectedLink(spec: LinkSpec, vehicle: Vehicle?): Map<HistoryTelemetrySource, HistorySource> =
+    nativeHistorySourcesForLink(spec, vehicle, singlePathAliases = true)
+
 /**
  * Direct, non-aliased native sources and explicit forwarded VESC controllers.
  * Hosted/derived gateway packs and physical aliases still need qualified plans;
  * rejecting them is not a claim that their live links fail.
  * Native branch/role identity is independent of UI labels and global slot order.
  */
-internal fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?): Map<HistoryTelemetrySource, HistorySource> {
+internal fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?): Map<HistoryTelemetrySource, HistorySource> =
+    nativeHistorySourcesForLink(spec, vehicle, singlePathAliases = false)
+
+private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singlePathAliases: Boolean): Map<HistoryTelemetrySource, HistorySource> {
     val profile = requireNotNull(vehicle) { "Recording needs an owned vehicle" }
     require(spec.address.isNotBlank())
     require(profile.packs.map { it.index }.distinct().size == profile.packs.size)
@@ -31,7 +40,12 @@ internal fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?): Map
     val controllers = spec.ownedControllers.map { owned -> profile.controllers.singleOrNull { it.index == owned.globalIndex } }
     packs.filterNotNull().forEach {
         require(it.canId == null && it.bmsAddress.equals(spec.address, ignoreCase = true) && it.bmsType.protocolKind() == spec.protocolKind)
-        require(it.aliasGroup == null) { "Aliased recording needs physical-path admission" }
+        if (it.aliasGroup != null) {
+            require(singlePathAliases && it.aliasGroup.isNotBlank() && spec.ownedPacks.size == 1 &&
+                spec.protocolKind in setOf(ProtocolKind.ANT, ProtocolKind.JBD, ProtocolKind.JK, ProtocolKind.DALY)) {
+                "Aliased recording needs qualified single-path admission"
+            }
+        }
     }
     controllers.forEach {
         require(it != null && it.canId == null && it.address.equals(spec.address, ignoreCase = true) && it.controllerType.protocolKind() == spec.protocolKind)
@@ -41,10 +55,15 @@ internal fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?): Map
         motor.gearRatio.toRawBits().toString(),
         if (spec.protocolKind == ProtocolKind.BEGODE) nativeLinkCellCount(spec, profile)?.toString().orEmpty() else ""))
     val result = linkedMapOf<HistoryTelemetrySource, HistorySource>()
+    val physicalAlias = packs.singleOrNull()?.aliasGroup
     fun add(origin: TelemetryOrigin, local: Int, label: String,
         role: TelemetryRole = TelemetryRole.CONTRIBUTOR, assembly: Int? = null) {
         val key = HistoryTelemetrySource(origin, local, role, assembly)
-        val id = "native-history-v1:" + encodeIdentity(listOf(spec.address.uppercase(), spec.protocolKind.name,
+        // Preserve producer policy in the identity: changing protocol cannot
+        // silently reinterpret a continuous series of the same physical pack.
+        val id = if (physicalAlias != null) "native-alias-history-v1:" +
+            encodeIdentity(listOf(profile.id, physicalAlias, spec.protocolKind.name))
+        else "native-history-v1:" + encodeIdentity(listOf(spec.address.uppercase(), spec.protocolKind.name,
             origin.name, local.toString(), role.name, assembly?.toString().orEmpty(),
             if ((origin == TelemetryOrigin.CONTROLLER && role == TelemetryRole.CONTRIBUTOR) || role == TelemetryRole.DERIVED) calibration else ""))
         result[key] = HistorySource(id, historySourceKindForTelemetry(origin, role), label)

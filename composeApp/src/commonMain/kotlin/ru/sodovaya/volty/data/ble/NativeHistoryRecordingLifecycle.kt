@@ -88,7 +88,7 @@ internal class NativeHistoryRecordingLifecycle(
         var failed = false
         val links = if (vehicle == null || vehicle.isGuest || vehicle.isDemo) emptyList() else try {
             val installed = specs.toList()
-            requireUniquePhysicalOwnership(installed, vehicle)
+            requireUniquePhysicalOwnership(vehicleId, installed, vehicle)
             installed.map { Link(it, sources(it, vehicle).toMap()) }.also { planned ->
                 val ids = planned.flatMap { it.binding.values }.map { it.id }
                 require(ids.distinct().size == ids.size) { "Duplicate physical source binding" }
@@ -111,7 +111,7 @@ internal class NativeHistoryRecordingLifecycle(
      * one installed path. Dormant profile alternatives do not own a recording.
      * Slot namespaces are independent: pack 0 and controller 0 are not aliases.
      */
-    private fun requireUniquePhysicalOwnership(specs: List<LinkSpec>, vehicle: Vehicle) {
+    private fun requireUniquePhysicalOwnership(vehicleId: String, specs: List<LinkSpec>, vehicle: Vehicle) {
         val addresses = specs.map { it.address.uppercase() }
         require(addresses.distinct().size == addresses.size) { "Duplicate physical BLE endpoint" }
         val packs = specs.flatMap { it.ownedPacks }.map { it.globalIndex }
@@ -120,6 +120,7 @@ internal class NativeHistoryRecordingLifecycle(
         require(controllers.distinct().size == controllers.size) { "Duplicate physical controller slot" }
         val installedPacks = packs.toSet()
         val aliases = vehicle.packs.filter { it.index in installedPacks }.mapNotNull { it.aliasGroup }
+        if (aliases.isNotEmpty()) require(vehicle.id == vehicleId) { "Alias namespace does not match selected vehicle" }
         require(aliases.all { it.isNotBlank() }) { "Blank physical alias identity" }
         require(aliases.distinct().size == aliases.size) { "Multiple recording paths for one physical battery" }
     }

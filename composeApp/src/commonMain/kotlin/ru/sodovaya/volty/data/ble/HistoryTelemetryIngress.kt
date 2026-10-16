@@ -21,7 +21,7 @@ internal data class HistoryTelemetryIngressDiagnostics(
 internal class HistoryTelemetryIngress(
     private val controller: RideRecordingController,
     private val readTick: () -> HistoryTick,
-    private val sources: (LinkSpec, Vehicle?) -> Map<HistoryTelemetrySource, HistorySource> = ::nativeHistorySourcesForLink,
+    private val sources: ((LinkSpec, Vehicle?) -> Map<HistoryTelemetrySource, HistorySource>)? = null,
     private val prepareRecording: (suspend (LinkSpec, Vehicle?, List<HistorySource>) -> Unit)? = null,
     manageConnections: Boolean = false,
 ) {
@@ -29,7 +29,8 @@ internal class HistoryTelemetryIngress(
     val diagnostics: StateFlow<HistoryTelemetryIngressDiagnostics> = mutableDiagnostics
 
     init { require(!manageConnections || prepareRecording == null) { "Choose one recording lifecycle owner" } }
-    private val nativeLifecycle = if (manageConnections) NativeHistoryRecordingLifecycle(controller, readTick, sources) {
+    private val nativeLifecycle = if (manageConnections) NativeHistoryRecordingLifecycle(controller, readTick,
+        sources ?: ::nativeHistorySourcesForSelectedLink) {
         mutableDiagnostics.update { it.copy(setupFailures = increment(it.setupFailures),
             lastFailure = HistoryTelemetryIngressFailure.SETUP) }
     } else null
@@ -50,7 +51,7 @@ internal class HistoryTelemetryIngress(
         return try {
             val native = nativeLifecycle?.binding(spec, protocol, ownership::isCurrent)
             if (nativeLifecycle != null && native == null) return null
-            val binding = native?.sources ?: sources(spec, vehicle).toMap()
+            val binding = native?.sources ?: (sources?.invoke(spec, vehicle) ?: nativeHistorySourcesForLink(spec, vehicle)).toMap()
             val preparation = native?.prepare ?: prepareRecording?.let { start -> suspend {
                 try { start(spec, vehicle, binding.values.toList()) }
                 catch (cancel: CancellationException) { throw cancel }

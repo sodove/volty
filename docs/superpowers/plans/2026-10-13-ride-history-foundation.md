@@ -930,3 +930,14 @@ Old callbacks cannot write or mark successor loss after handover, even with reus
 public IDs/protocol identity. Live decoding and original queued receipts remain
 usable. This does not complete cross-alias source selection/qualification or enable
 the production recorder; native/performance acceptance and screens remain open.
+
+Task7 selected direct alias checkpoint (2026-10-17): default managed ingress can
+record one explicitly installed ANT/JBD/JK/Daly physical alias path after full
+selection validation. Vehicle/group/protocol identity survives endpoint, slot and
+label changes. Same-policy selected-path replacement retains one ride/GPS identity
+with accepted-prefix drain and BLE_GAP; a producer protocol change splits the source
+registry with SOURCE_CHANGE. Profile/selection vehicle namespace must match.
+Unmanaged default planning, simultaneous aliases, Begode aliases and hosted/derived
+gateway caches remain conservative. This adds explicit single-path support, not an
+automatic BLE chooser or finished direct-to-gateway handover. Nonalias IDs and wire
+behavior remain unchanged; production activation/native acceptance/screens stay open.

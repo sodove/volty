@@ -1412,3 +1412,30 @@ Same public ride/source IDs or protocol object cannot reopen an old capability.
 No BLE command, poll cadence, SQLite schema or production activation changed.
 This is a prerequisite for alias handover, not implementation of cross-alias
 producer admission, physical-source identity merging or gateway cache freshness.
+
+## One explicitly selected direct alias path (2026-10-17)
+
+The default managed ingress now uses a selection-qualified planner after whole-plan
+physical validation. One installed direct ANT/JBD/JK/Daly alias path can record;
+dormant profile alternatives, including an unqualified gateway path, do not own
+recording. Unmanaged per-link planning remains conservative and rejects aliases.
+Injected source planners retain their explicit policy. A selected alias must belong
+to the same vehicle ID as the profile that namespaces it.
+
+Source IDs encode vehicle ID, opaque aliasGroup and qualified protocol policy with
+length prefixes. Labels, global slots and BLE addresses do not redefine that
+identity. Switching selected endpoints with the same qualified protocol retains one
+ride, source series and GPS identity, drains the old accepted prefix and preserves
+an explicit BLE_GAP. Old still-live decoders cannot publish after the switch.
+Ordinary nonalias source IDs are unchanged. A protocol-policy change gets a different
+source ID and SOURCE_CHANGE/ride boundary; it cannot silently merge different
+producer interpretations merely because the physical alias tag matches.
+
+This supersedes the blanket 'default planner rejects all aliases' status only for
+managed, explicitly single-selected direct paths. Two installed alias paths remain
+rejected, as do Begode multi-branch aliases and hosted/derived gateway cache plans.
+No BLE path is automatically chosen, disconnected or reconnected. This does not
+complete the rider's ANT-to-cached-gateway handover or establish numeric cache
+freshness. Tests cover actual default planner/managed ingress/control/queue flow;
+existing protocol-decode tests provide separate wire qualification. Phone behavior
+and production recorder activation remain unclaimed.
