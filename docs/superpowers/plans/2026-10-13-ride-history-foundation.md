@@ -813,3 +813,17 @@ A retained owner with fenced intake after failed durable finish cannot be reopen
 or have its failure bypassed by GPS retry. No new ride, recovery or clock read is
 issued. The app runtime must bind its opportunities to this coordinated retry;
 production runtime assembly/activation and native acceptance remain open.
+
+Task7 terminal native-lifecycle checkpoint (2026-10-16): runtime shutdown now
+has a distinct terminal close operation. It fences future native captures,
+preparations, plan installations and captured manual controls before waiting for
+the lifecycle mutex. Accepted native queue receipts retain their original owner,
+and durable finish waits until they are processed or explicitly discarded.
+Already submitted close completes independently of caller cancellation.
+
+Durable finish failure propagates to the runtime caller and retains the original
+selection for retry; it cannot silently authorize writer destruction or reopen
+recording. Successful repeated close is idempotent. This closes the native ingress
+part of shutdown only; whole-runtime clock/bootstrap/DI, GPS observer termination,
+service release and writer disposal still need assembly. Production remains on the
+legacy recorder until those readiness and source-qualification gates are met.

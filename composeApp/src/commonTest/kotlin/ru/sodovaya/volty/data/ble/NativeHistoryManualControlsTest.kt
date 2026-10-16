@@ -17,10 +17,11 @@ class NativeHistoryManualControlsTest {
         val begins = mutableListOf<String>()
         val ends = mutableListOf<String?>()
         var finishGate: CompletableDeferred<Unit>? = null
+        var failFinish = false
         override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) { begins += ride.id }
         override fun offer(generation: Long, batch: HistoryBatch) = HistoryOffer.ACCEPTED
         override suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String?) {
-            ends += rideId; finishGate?.await()
+            ends += rideId; finishGate?.await(); check(!failFinish) { "database unavailable" }
         }
         override suspend fun flush() = Unit
         override suspend fun delete(rideId: String) = Unit
@@ -41,6 +42,89 @@ class NativeHistoryManualControlsTest {
             { _, _ -> mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source) }, { failures++ })
         suspend fun install() = lifecycle.install("bike", listOf(spec), vehicle) { owns }
         suspend fun ready(protocol: Any) = assertNotNull(lifecycle.binding(spec, protocol) { owns }).prepare()
+    }
+
+    @Test fun terminalCloseEndsOwnedRideAndPermanentlyRevokesCapturedControls() = runTest {
+        val f = Fixture(); f.install(); f.ready(Any())
+        val controls = assertNotNull(f.lifecycle.manualControls())
+        val pending = assertNotNull(f.lifecycle.binding(f.spec, Any()) { true })
+        f.lifecycle.close()
+        assertNull(f.controller.state.value.intent.ride)
+        assertEquals(listOf<String?>("ride-1"), f.writer.ends)
+        assertNull(f.lifecycle.manualControls())
+        assertNull(f.lifecycle.binding(f.spec, Any()) { true })
+        assertFalse(controls.start()); assertFalse(controls.stop("ride-1"))
+        assertFailsWith<IllegalStateException> { pending.prepare() }
+        f.install()
+        assertNull(f.lifecycle.manualControls())
+        f.lifecycle.close()
+        assertEquals(listOf("ride-1"), f.writer.begins)
+        assertEquals(listOf<String?>("ride-1"), f.writer.ends)
+    }
+
+    @Test fun closeBeforeInstallationIsStillTerminal() = runTest {
+        val f = Fixture(); f.lifecycle.close(); f.install()
+        assertNull(f.lifecycle.manualControls())
+        assertNull(f.lifecycle.binding(f.spec, Any()) { true })
+        assertTrue(f.writer.begins.isEmpty()); assertTrue(f.writer.ends.isEmpty())
+    }
+
+    @Test fun failedDurableCloseSurfacesErrorAndRetainsOriginalFinishForRetry() = runTest {
+        val f = Fixture(); f.install(); f.ready(Any()); f.writer.failFinish = true
+        assertFailsWith<IllegalStateException> { f.lifecycle.close() }
+        assertEquals("ride-1", f.controller.state.value.intent.ride?.id)
+        assertNull(f.controller.captureTelemetryRecording())
+        assertNull(f.lifecycle.manualControls())
+        f.install(); assertNull(f.lifecycle.binding(f.spec, Any()) { true })
+        f.writer.failFinish = false; f.lifecycle.close(); f.lifecycle.close()
+        assertNull(f.controller.state.value.intent.ride)
+        assertEquals(listOf<String?>("ride-1", "ride-1"), f.writer.ends)
+        assertEquals(listOf("ride-1"), f.writer.begins)
+    }
+
+    @Test fun acceptedTerminalCloseCompletesAfterCallerCancellation() = runTest {
+        val f = Fixture(); f.install(); f.ready(Any())
+        val release = CompletableDeferred<Unit>(); f.writer.finishGate = release
+        val close = backgroundScope.launch { f.lifecycle.close() }
+        try {
+            runCurrent(); assertEquals(listOf<String?>("ride-1"), f.writer.ends)
+            close.cancel(); runCurrent(); assertFalse(close.isCompleted)
+            assertNull(f.lifecycle.binding(f.spec, Any()) { true })
+        } finally { release.complete(Unit); close.cancelAndJoin() }
+        assertNull(f.controller.state.value.intent.ride)
+    }
+
+    @Test fun queuedTerminalCloseFencesRestartWhilePriorStopAwaitsDatabase() = runTest {
+        val f = Fixture(); f.install(); f.ready(Any())
+        val controls = assertNotNull(f.lifecycle.manualControls())
+        val release = CompletableDeferred<Unit>(); f.writer.finishGate = release
+        val stop = backgroundScope.async { controls.stop("ride-1") }
+        var close: Job? = null
+        var restart: Deferred<Boolean>? = null
+        try {
+            runCurrent(); assertEquals(listOf<String?>("ride-1"), f.writer.ends)
+            restart = backgroundScope.async { controls.start() }; runCurrent()
+            close = backgroundScope.launch { f.lifecycle.close() }; runCurrent()
+            assertFalse(close.isCompleted)
+            assertNull(f.lifecycle.binding(f.spec, Any()) { true })
+            release.complete(Unit); assertTrue(stop.await()); close.join()
+            assertFalse(restart.await())
+            assertEquals(listOf("ride-1"), f.writer.begins)
+        } finally { release.complete(Unit); stop.cancelAndJoin(); close?.cancelAndJoin(); restart?.cancelAndJoin() }
+    }
+
+    @Test fun precancelledCloseDoesNotRevokeLiveOwner() = runTest {
+        val f = Fixture(); f.install(); f.ready(Any())
+        var entered = false
+        val cancelled = backgroundScope.launch {
+            entered = true
+            currentCoroutineContext().cancel()
+            f.lifecycle.close()
+        }
+        runCurrent(); cancelled.join(); assertTrue(entered)
+        assertNotNull(f.lifecycle.manualControls()); assertNotNull(f.lifecycle.binding(f.spec, Any()) { true })
+        assertEquals("ride-1", f.controller.state.value.intent.ride?.id)
+        assertTrue(f.writer.ends.isEmpty()); f.lifecycle.disconnect { true }
     }
 
     @Test fun controlsRequireOwnedQualifiedSelectionAndAReadyAttemptToStart() = runTest {

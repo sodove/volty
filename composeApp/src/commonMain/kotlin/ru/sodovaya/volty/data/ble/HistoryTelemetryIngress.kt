@@ -39,10 +39,12 @@ internal class HistoryTelemetryIngress(
     }
     suspend fun retireNativeAttempt(protocol: Any) { nativeLifecycle?.retire(protocol) }
     suspend fun disconnectNative(ownsDisconnect: () -> Boolean) { nativeLifecycle?.disconnect(ownsDisconnect) }
+    suspend fun closeNative() { nativeLifecycle?.close() }
     fun manualControls(): NativeHistoryRecordingLifecycle.ManualControls? = nativeLifecycle?.manualControls()
 
     fun capture(protocol: BmsProtocol, sessionId: String, spec: LinkSpec, vehicle: Vehicle?,
         ownership: SampleSessionOwnership, channel: SendChannel<Sample>): SessionTelemetryCapture? {
+        if (nativeLifecycle?.isAccepting == false) return null
         // Capture before the planner: control may replace this ride while setup runs.
         val recording = controller.captureTelemetryRecording()
         return try {
@@ -58,7 +60,7 @@ internal class HistoryTelemetryIngress(
                     throw error
                 }
             } }
-            historySessionTelemetryCapture(protocol, sessionId, controller, readTick, ownership::isCurrent,
+            historySessionTelemetryCapture(protocol, sessionId, controller, readTick, { ownership.isCurrent() && nativeLifecycle?.isAccepting != false },
                 binding, preparation) { telemetry ->
                 val queued = if (nativeLifecycle != null) controller.reserveQueuedTelemetry(
                     telemetry.recording, telemetry.tick, telemetry.source.id) ?: return@historySessionTelemetryCapture else null

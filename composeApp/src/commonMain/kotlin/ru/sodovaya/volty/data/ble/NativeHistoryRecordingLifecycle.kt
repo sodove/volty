@@ -33,7 +33,7 @@ internal class NativeHistoryRecordingLifecycle(
      */
     fun manualControls(): ManualControls? {
         val captured = plan ?: return null
-        if (captured.links.isEmpty() || !captured.owns()) return null
+        if (!isAccepting || captured.links.isEmpty() || !captured.owns()) return null
         return ManualControls(
             begin = { manualControl(captured) { connections.start(captured.selection) } },
             end = { rideId -> manualControl(captured) { connections.stop(captured.selection, rideId) } },
@@ -42,7 +42,7 @@ internal class NativeHistoryRecordingLifecycle(
 
     private suspend fun manualControl(captured: Plan, action: suspend () -> Boolean): Boolean = try {
         control {
-            if (plan !== captured || !captured.owns()) false else action()
+            if (!isAccepting || plan !== captured || !captured.owns()) false else action()
         }
     } catch (cancel: CancellationException) { throw cancel }
     catch (_: Exception) { onFailure(); false }
@@ -57,7 +57,29 @@ internal class NativeHistoryRecordingLifecycle(
     private val controls = Mutex()
     @Volatile private var plan: Plan? = null
 
+    @Volatile private var closing = false
+    val isAccepting: Boolean get() = !closing
+
+    /** Terminal runtime shutdown, unlike a reconnectable native disconnect.
+     * Fence positives before waiting for controls; accepted queue receipts retain
+     * their original ownership and drain inside the controller's durable finish.
+     * Failure propagates and retains the original plan for a later close retry.
+     */
+    suspend fun close() {
+        currentCoroutineContext().ensureActive()
+        withContext(NonCancellable) {
+            closing = true
+            controls.withLock {
+                val current = plan ?: return@withLock
+                check(connections.disconnect(current.selection)) { "Recording selection retired before close" }
+                plan = null
+            }
+        }
+        currentCoroutineContext().ensureActive()
+    }
+
     suspend fun install(vehicleId: String, specs: List<LinkSpec>, vehicle: Vehicle?, ownsPlan: () -> Boolean) {
+        if (!isAccepting) return
         // No IO: copy the installed decoder plan before any capture can observe it.
         // Unsupported/guest/demo selections must retire old GPS but cannot auto-start a fake ride.
         var failed = false
@@ -69,7 +91,7 @@ internal class NativeHistoryRecordingLifecycle(
         } catch (cancel: CancellationException) { throw cancel }
         catch (_: Exception) { failed = true; emptyList() }
         safeControl {
-            if (!ownsPlan()) return@safeControl
+            if (!isAccepting || !ownsPlan()) return@safeControl
             val selection = connections.install(vehicleId, links.mapIndexed { index, link ->
                 index.toString() to link.binding.values.toList()
             }.toMap())
@@ -81,14 +103,14 @@ internal class NativeHistoryRecordingLifecycle(
     /** Read-only immutable snapshot; native ownership still fences every notification. */
     fun binding(spec: LinkSpec, protocol: Any, ownsAttempt: () -> Boolean): Binding? {
         val captured = plan ?: return null
-        if (!captured.owns()) return null
+        if (!isAccepting || !captured.owns()) return null
         val index = captured.links.indexOfFirst { it.spec === spec }
         if (index < 0) return null
         val link = captured.links[index]
         return Binding(link.binding) {
             val ready = try {
                 control {
-                    if (plan !== captured || !captured.owns() || !ownsAttempt()) return@control false
+                    if (!isAccepting || plan !== captured || !captured.owns() || !ownsAttempt()) return@control false
                     val capability = connections.newAttempt(captured.selection, index.toString()) ?: return@control false
                     // Retain before durable begin so cancellation/failed setup can retire exactly it.
                     captured.attempts[index] = Attempt(protocol, capability)

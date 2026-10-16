@@ -60,6 +60,38 @@ class KableBmsRepositoryHistoryFunnelTest {
         return RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++n}" }, { 0 })
     }
 
+    @Test fun terminalRuntimeCloseFencesNewCaptureButDrainsAlreadyAcceptedNativeReceipt() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer)
+        val spec = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
+        var now = tick(); val protocol = Emitter()
+        val ingress = HistoryTelemetryIngress(c, { now },
+            { _, _ -> mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source) }, manageConnections = true)
+        val channel = sampleFunnelChannel(4)
+        ingress.installNativePlan("bike", listOf(spec), vehicle()) { true }
+        val capture = assertNotNull(ingress.capture(protocol, "attempt", spec, vehicle(), SampleSessionOwnership { true }, channel))
+        assertTrue(capture.prepareForObservation())
+        now = tick(20); assertTrue(capture.processNotification(byteArrayOf(7)))
+        val accepted = assertIs<HistoryTelemetrySample>(channel.tryReceive().getOrNull())
+        now = tick(10)
+        val close = backgroundScope.async { ingress.closeNative() }
+        try {
+            runCurrent(); assertFalse(close.isCompleted)
+            assertFalse(capture.processNotification(byteArrayOf(9)))
+            assertEquals(1, protocol.decodes)
+            assertNull(ingress.capture(Emitter(), "late", spec, vehicle(), SampleSessionOwnership { true }, channel))
+            assertNull(ingress.manualControls())
+            assertEquals(HistoryOffer.ACCEPTED, accepted.consume())
+            close.await()
+            assertEquals(listOf(7.0), writer.samples.flatMap { it.samples }.map { it.value })
+            assertEquals(listOf(HistoryRideStatus.COMPLETED), writer.statuses)
+            assertNull(c.state.value.intent.ride)
+            ingress.installNativePlan("bike", listOf(spec), vehicle()) { true }
+            assertNull(ingress.manualControls()); ingress.closeNative()
+            assertEquals(1, writer.begins.size)
+            assertEquals(1, writer.statuses.size)
+        } finally { accepted.discard(); channel.cancel(); close.cancel(); runCurrent() }
+    }
+
     @Test fun managedQueuedPrefixIsProcessedOrQualifiedBeforeNativeDisconnectReturns() = kotlinx.coroutines.test.runTest {
         for (discard in listOf(false, true)) {
             val writer = Writer(); val c = controller(writer); val spec = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
