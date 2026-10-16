@@ -158,7 +158,12 @@ class KableBmsRepository private constructor(
     internal var beforeHistoryDisconnectForTest: (suspend () -> Unit)? = null
 
     private suspend fun sealHistoryTelemetryConfiguration() = sessionLock.withLock {
+        if (historyTelemetryConfigurationSealed) return@withLock
         historyTelemetryConfigurationSealed = true
+        // Choose before any connected state is published. A configured full-stream
+        // owner must never also feed the old aggregate recorder, even if a particular
+        // source plan is unsupported. Reconnect cannot silently switch this choice.
+        if (historyTelemetryIngress == null) rideTelemetryRecorder.start()
     }
 
     internal suspend fun sealHistoryTelemetryConfigurationForTest() = sealHistoryTelemetryConfiguration()
@@ -462,7 +467,7 @@ class KableBmsRepository private constructor(
         motionSamples = { window -> motionSamples(window) },
         history = rideHistoryRepository,
         context = coroutineContext
-    ).also { it.start() }
+    )
 
     /** Lock guarding session swap + the userInitiatedDisconnect flag. */
     private val sessionLock = Mutex()

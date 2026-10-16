@@ -771,3 +771,13 @@ does not override manual Stop. An accepted Stop completes independently of scree
 cancellation. Empty/unsupported selections expose no controls, and the unmanaged
 ingress cannot bypass the lifecycle owner. This prepares the UI binding; actual
 buttons, app runtime activation and legacy recorder retirement remain open.
+
+Task7 recorder-choice checkpoint (2026-10-16): the repository no longer starts
+the legacy aggregate recorder unconditionally in its constructor. The first
+connection seals the startup configuration and starts legacy recording only when
+no full-stream ingress was installed. That choice stays immutable across later
+connections. An unsupported new source plan cannot silently reactivate legacy
+recording beside the new owner. Existing default legacy start/finish remains
+covered through real repository/demo transitions; a pre-seal choice may be revised.
+This establishes exclusive startup choice, not production full-stream activation,
+new runtime bootstrap readiness or complete legacy shutdown/retirement acceptance.

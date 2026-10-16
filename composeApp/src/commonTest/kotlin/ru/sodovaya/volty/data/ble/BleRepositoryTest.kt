@@ -51,6 +51,7 @@ internal fun bleRepositoryTest(
     serviceStart: () -> Unit = {},
     serviceStop: () -> Unit = {},
     bleAdapterStateProvider: BleAdapterStateProvider = BleAdapterStateProvider { true },
+    rideHistoryRepository: ru.sodovaya.volty.domain.repository.RideHistoryRepository = ru.sodovaya.volty.domain.repository.NoOpRideHistoryRepository,
     body: suspend TestScope.(KableBmsRepository) -> Unit
 ): TestResult = runTest {
     val repo = KableBmsRepository.forTesting(
@@ -59,6 +60,7 @@ internal fun bleRepositoryTest(
         serviceStop = serviceStop,
         coroutineContext = StandardTestDispatcher(testScheduler),
         bleAdapterStateProvider = bleAdapterStateProvider,
+        rideHistoryRepository = rideHistoryRepository,
     )
     try {
         body(repo)
