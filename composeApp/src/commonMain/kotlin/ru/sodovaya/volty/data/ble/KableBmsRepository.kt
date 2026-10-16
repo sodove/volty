@@ -2,6 +2,8 @@ package ru.sodovaya.volty.data.ble
 
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.CompletableDeferred
 
 import com.juul.kable.Peripheral
 import com.juul.kable.Scanner
@@ -147,6 +149,7 @@ class KableBmsRepository private constructor(
     private val rideHistoryRepository: RideHistoryRepository,
     private val bleAdapterStateProvider: BleAdapterStateProvider,
     private val historyStartup: (suspend () -> HistoryTelemetryIngress)? = null,
+    private val historyShutdown: (suspend () -> Unit)? = null,
 ) : BmsRepository, CanDiscovery, ControllerConfigSource, BleDiagnosticsRepository {
 
     private val diagnosticBuffer = BleDiagnosticBuffer()
@@ -156,22 +159,31 @@ class KableBmsRepository private constructor(
 
     // Guarded by sessionLock, sealed before any initial connection preparation.
     private var historyTelemetryConfigurationSealed = false
+    internal var beforeHistorySampleConsumeForTest: (suspend () -> Unit)? = null
     internal var beforeHistoryDisconnectForTest: (suspend () -> Unit)? = null
 
     private val historyStartupLock = Mutex()
+    private val recordingShutdownLock = Mutex()
+    @Volatile private var recordingShutdownRequested = false
+    // Acknowledged phases are retained across failure; guarded by recordingShutdownLock.
+    private var recordingShutdownAcknowledged = false
+    private var bleShutdownAcknowledged = false
+    private var recordingShutdownComplete = false
+    // Accepted disconnects may own detached native sessions outside sessionLock.
+    private val pendingDisconnects = mutableSetOf<AcceptedDisconnect>()
 
     private suspend fun sealHistoryTelemetryConfiguration() = historyStartupLock.withLock {
         currentCoroutineContext().ensureActive()
-        scope.ensureActive()
+        ensureConnectionAllowed()
         if (sessionLock.withLock { historyTelemetryConfigurationSealed }) return@withLock
         // DB recovery/native preparation must never hold the BLE session mutex.
         // Failed or cancelled preparation remains retryable, with no legacy fallback.
         val prepared = historyStartup?.invoke()
         currentCoroutineContext().ensureActive()
-        scope.ensureActive()
+        ensureConnectionAllowed()
         sessionLock.withLock {
             currentCoroutineContext().ensureActive()
-            scope.ensureActive()
+            ensureConnectionAllowed()
             if (historyStartup != null) historyTelemetryIngress = checkNotNull(prepared)
             historyTelemetryConfigurationSealed = true
             // One immutable recorder choice across unsupported sources and reconnects.
@@ -179,10 +191,15 @@ class KableBmsRepository private constructor(
         }
     }
 
+    private fun ensureConnectionAllowed() {
+        scope.ensureActive()
+        if (recordingShutdownRequested) throw kotlinx.coroutines.CancellationException("Recording runtime is shutting down")
+    }
+
     private suspend fun prepareConnectionIntent(): Any {
         currentCoroutineContext().ensureActive()
         val intent = sessionLock.withLock {
-            scope.ensureActive()
+            ensureConnectionAllowed()
             Any().also { connectionIntent = it }
         }
         sealHistoryTelemetryConfiguration()
@@ -190,7 +207,7 @@ class KableBmsRepository private constructor(
     }
 
     private suspend fun publishConnectionFailure(intent: Any, reason: String) = sessionLock.withLock {
-        if (scope.isActive && connectionIntent === intent) _connectionState.value = ConnectionState.Failed(reason)
+        if (scope.isActive && !recordingShutdownRequested && connectionIntent === intent) _connectionState.value = ConnectionState.Failed(reason)
     }
 
     internal suspend fun sealHistoryTelemetryConfigurationForTest() = sealHistoryTelemetryConfiguration()
@@ -207,7 +224,7 @@ class KableBmsRepository private constructor(
 
     private suspend fun prepareHistoryForInstalledLinks(installed: List<PackLink>, vehicleId: String, vehicle: Vehicle?) {
         historyTelemetryIngress?.installNativePlan(vehicleId, installed.map { it.spec }, vehicle) {
-            !userInitiatedDisconnect && installed.any { planned -> links.any { it === planned } }
+            !recordingShutdownRequested && !userInitiatedDisconnect && installed.any { planned -> links.any { it === planned } }
         }
     }
 
@@ -252,7 +269,7 @@ class KableBmsRepository private constructor(
         historyRuntime: ru.sodovaya.volty.data.history.HistoryRecordingRuntime,
     ) : this(vehicleRepository, { serviceController.start() }, { serviceController.stop() },
         Dispatchers.Default, rideHistoryRepository, bleAdapterStateProvider,
-        historyStartup = { historyRuntime.prepare().ingress })
+        historyStartup = { historyRuntime.prepare().ingress }, historyShutdown = historyRuntime::close)
 
     internal companion object {
         /**
@@ -428,6 +445,7 @@ class KableBmsRepository private constructor(
             rideHistoryRepository: RideHistoryRepository = NoOpRideHistoryRepository,
             bleAdapterStateProvider: BleAdapterStateProvider = BleAdapterStateProvider { true },
             historyStartup: (suspend () -> HistoryTelemetryIngress)? = null,
+            historyShutdown: (suspend () -> Unit)? = null,
         ): KableBmsRepository = KableBmsRepository(
             vehicleRepository = vehicleRepository,
             serviceStart = serviceStart,
@@ -436,6 +454,7 @@ class KableBmsRepository private constructor(
             rideHistoryRepository = rideHistoryRepository,
             bleAdapterStateProvider = bleAdapterStateProvider,
             historyStartup = historyStartup,
+            historyShutdown = historyShutdown,
         )
     }
 
@@ -1053,7 +1072,7 @@ class KableBmsRepository private constructor(
             // Detach under the lock, then join outside: session callbacks/queued
             // history must be able to acquire sessionLock while teardown waits.
             val outgoingHistory = sessionLock.withLock {
-                scope.ensureActive()
+                ensureConnectionAllowed()
                 if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 val outgoing = links.mapNotNull { it.session }
                 userInitiatedDisconnect = false
@@ -1107,15 +1126,15 @@ class KableBmsRepository private constructor(
             }
             publishActiveDiagnosticLinks()
             sessionLock.withLock {
-                scope.ensureActive()
+                ensureConnectionAllowed()
                 if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 _activeVehicle.value = demoVehicle
             }
             historyTelemetryIngress?.installNativePlan(demoVehicle.id, emptyList(), demoVehicle) {
-                scope.isActive && connectionIntent === intent && !userInitiatedDisconnect && _activeVehicle.value === demoVehicle
+                scope.isActive && !recordingShutdownRequested && connectionIntent === intent && !userInitiatedDisconnect && _activeVehicle.value === demoVehicle
             }
             sessionLock.withLock {
-                scope.ensureActive()
+                ensureConnectionAllowed()
                 if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 ringBuffer.clear()
                 motionRingBuffer.clear()
@@ -1694,6 +1713,7 @@ class KableBmsRepository private constructor(
             try {
                 for (sample in channel) {
                     try {
+                        if (sample is HistoryTelemetrySample) beforeHistorySampleConsumeForTest?.invoke()
                         sessionLock.withLock transaction@ {
                             // Pipeline ownership, every publish, and every handoff
                             // decision are one transaction with pipeline replacement.
@@ -2207,7 +2227,7 @@ class KableBmsRepository private constructor(
         reason: String? = null
     ): Boolean {
         val becameConnected = synchronized(linkStateLock) {
-            if (!scope.isActive) return@synchronized false
+            if (!scope.isActive || recordingShutdownRequested) return@synchronized false
             link.status = status
             link.reconnectAttempt = attempt
             if (reason != null) link.lastReason = reason
@@ -2384,7 +2404,7 @@ class KableBmsRepository private constructor(
         )
         if (unavailableReason != null) {
             sessionLock.withLock {
-                scope.ensureActive()
+                ensureConnectionAllowed()
                 if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 _connectionState.value = ConnectionState.Failed(unavailableReason)
             }
@@ -2406,7 +2426,7 @@ class KableBmsRepository private constructor(
             // be reached from a stack the loop owns); they stop on their own
             // via the link-identity guard once the new list is installed.
             val outgoingHistory = sessionLock.withLock {
-                scope.ensureActive()
+                ensureConnectionAllowed()
                 if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 val outgoing = links.mapNotNull { it.session }
                 userInitiatedDisconnect = false
@@ -2429,7 +2449,7 @@ class KableBmsRepository private constructor(
             // [address] — and the only one that does not throw when the
             // previously active vehicle stores no packs.
             sessionLock.withLock {
-                scope.ensureActive()
+                ensureConnectionAllowed()
                 if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 val previousAddress = _activeVehicle.value?.primaryAddress
                 if (previousAddress != null && previousAddress != address) {
@@ -2472,7 +2492,7 @@ class KableBmsRepository private constructor(
             // is fine — the consumer runs undispatched only to its first
             // channel receive, before any sample transaction takes the lock.
             sessionLock.withLock {
-                scope.ensureActive()
+                ensureConnectionAllowed()
                 if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 val channel = sampleFunnelChannel()
                 vehicleConnection = orchestrator
@@ -2565,7 +2585,7 @@ class KableBmsRepository private constructor(
         link: PackLink,
         isReconnectAttempt: Boolean
     ): Result<Unit> {
-        scope.ensureActive()
+        ensureConnectionAllowed()
         var historyProtocol: Any? = null
         var completed = false
         val vehicle = link.vehicle
@@ -2707,7 +2727,7 @@ class KableBmsRepository private constructor(
             // Install the session under the lock so a racing disconnect()
             // can't see a partially-set state.
             sessionLock.withLock {
-                scope.ensureActive()
+                ensureConnectionAllowed()
                 if (userInitiatedDisconnect) {
                     // Someone called disconnect() while we were preparing —
                     // honour it: don't even attempt to bring the link up.
@@ -2728,7 +2748,7 @@ class KableBmsRepository private constructor(
             }
 
             val connectResult = session.connect()
-            scope.ensureActive()
+            ensureConnectionAllowed()
             if (connectResult.isFailure) {
                 val err = connectResult.exceptionOrNull()?.message ?: "Connection failed"
                 setLinkState(link, LinkStatus.FAILED, reason = err)
@@ -2972,22 +2992,28 @@ class KableBmsRepository private constructor(
         })
     }
 
-    override suspend fun disconnect() {
-        // Atomically: flag the intent, take every link (sessions + reconnect
-        // loops) out of the shared state, clear vehicle, set Disconnected.
-        // Held under sessionLock so doConnect / onLinkDrop running on another
-        // coroutine see this. The lock is taken ONCE for the whole sweep —
-        // never nested, it is not reentrant.
-        val disconnectIntent = Any()
-        val sessionsToTear: List<ConnectionSession>
-        val reconnectsToCancel: List<Job>
-        val demoToCancel: Job?
-        sessionLock.withLock {
+    private class AcceptedDisconnect(
+        val intent: Any, val sessions: List<ConnectionSession>, val reconnects: List<Job>,
+        val demo: Job?, cleanup: suspend (AcceptedDisconnect) -> Unit,
+    ) {
+        val receipt = CompletableDeferred<Result<Unit>>()
+        val cleanupOwner = SessionTeardownOwner { cleanup(this) }
+    }
+
+    override suspend fun disconnect() = disconnect(allowDuringShutdown = false)
+
+    private suspend fun disconnect(allowDuringShutdown: Boolean) {
+        // Admission and terminal-shutdown delegation share the same mutex: a
+        // negative is either already accepted with its original resources, or
+        // joins shutdown without independently releasing its BLE service early.
+        val accepted = sessionLock.withLock {
+            if (recordingShutdownRequested && !allowDuringShutdown) return@withLock null
+            val disconnectIntent = Any()
             connectionIntent = disconnectIntent
             userInitiatedDisconnect = true
             val current = links
-            sessionsToTear = current.mapNotNull { it.session }
-            reconnectsToCancel = current.mapNotNull { it.reconnectJob }
+            val sessionsToTear = current.mapNotNull { it.session }
+            val reconnectsToCancel = current.mapNotNull { it.reconnectJob }
             for (l in current) {
                 l.session = null
                 l.reconnectJob = null
@@ -3001,33 +3027,63 @@ class KableBmsRepository private constructor(
             // The hold-down belongs to the plan it damps: carried into a new
             // connection it would refuse that connection's FIRST release.
             lastReRaiseAtMsByGateway = emptyMap()
-            demoToCancel = demoJob
+            val demoToCancel = demoJob
             demoJob = null
-            // Forget the target so a later [onAppResumed] doesn't try to
-            // resurrect a connection the user explicitly closed.
+            // Forget the target so a later onAppResumed cannot resurrect it.
             lastConnectionTarget = null
+            AcceptedDisconnect(disconnectIntent, sessionsToTear, reconnectsToCancel, demoToCancel,
+                ::cleanupAcceptedDisconnect).also { pendingDisconnects += it }
         }
+        if (accepted == null) { shutdownRecordingRuntime(); return }
         try {
             beforeHistoryDisconnectForTest?.invoke()
         } finally {
-            // All of these owners were detached above. Even an already cancelled caller
-            // must complete their cleanup and the accepted disconnect's final state.
+            // The caller's cancellation is not a failed native cleanup ACK. Keep
+            // this original capability (including detached sessions) until success.
             withContext(kotlinx.coroutines.NonCancellable) {
-                reconnectsToCancel.forEach { it.cancel() }
-                demoToCancel?.cancel()
-                try {
-                    completeDetachedSessionCleanup(sessionsToTear, { it.tearDown() })
-                } finally {
-                    try {
-                        historyTelemetryIngress?.disconnectNative {
-                            connectionIntent === disconnectIntent && userInitiatedDisconnect && links.isEmpty()
-                        }
-                    } finally {
-                        finishAcceptedDisconnect(disconnectIntent)
-                    }
-                }
+                val outcome = runCatching { releaseAcceptedDisconnect(accepted) }
+                accepted.receipt.complete(outcome) // Outside sessionLock.
+                outcome.getOrThrow()
             }
         }
+    }
+
+    private suspend fun cleanupAcceptedDisconnect(accepted: AcceptedDisconnect) {
+        accepted.reconnects.forEach { it.cancel() }
+        accepted.demo?.cancel()
+        try {
+            completeDetachedSessionCleanup(accepted.sessions, { it.tearDown() })
+        } finally {
+            try {
+                historyTelemetryIngress?.disconnectNative {
+                    connectionIntent === accepted.intent && userInitiatedDisconnect && links.isEmpty()
+                }
+            } finally {
+                finishAcceptedDisconnect(accepted.intent)
+            }
+        }
+    }
+
+    private suspend fun releaseAcceptedDisconnect(accepted: AcceptedDisconnect) {
+        accepted.cleanupOwner.run()
+        // Retirement alone is not completion. Failed cleanup retains the exact
+        // original session objects; their own teardown owners also retain ACKs.
+        sessionLock.withLock { pendingDisconnects -= accepted }
+    }
+
+    private suspend fun awaitAcceptedDisconnects(): Boolean {
+        // Terminal admission fenced new ordinary negatives: they join shutdown.
+        val accepted = sessionLock.withLock { pendingDisconnects.toList() }
+        var currentNegativeAcknowledged = false
+        for (owner in accepted) {
+            if (owner.receipt.isCompleted) {
+                // An earlier attempt already reported failure; this shutdown may
+                // retry its ORIGINAL cleanup capability, not a new empty detach.
+                if (owner.receipt.await().isFailure) releaseAcceptedDisconnect(owner)
+            } else owner.receipt.await().getOrThrow()
+            if (sessionLock.withLock { connectionIntent === owner.intent }) currentNegativeAcknowledged = true
+        }
+        return currentNegativeAcknowledged
     }
 
     /** An earlier revision reset state unconditionally after off-lock native joins.
@@ -3504,6 +3560,39 @@ class KableBmsRepository private constructor(
         // introduced this enum entry (see the vehicle-platform-A-foundation
         // plan) — a later part wires the real protocol in.
         BmsType.VESC_BMS -> error("VESC BMS protocol decode is not implemented yet")
+    }
+
+    /** App-owner native disposal, called outside this repository's own jobs.
+     * Keep the funnel and its original sample ownership alive until recording ACK.
+     * Activity destruction/backgrounding must not call this terminal operation.
+     */
+    internal suspend fun shutdownRecordingRuntime() {
+        currentCoroutineContext().ensureActive()
+        val stopRecording = checkNotNull(historyShutdown) { "Native recording shutdown owner is required" }
+        withContext(kotlinx.coroutines.NonCancellable) {
+            sessionLock.withLock {
+                if (!recordingShutdownRequested) {
+                    recordingShutdownRequested = true
+                    // Retraction: rotating connectionIntent here invalidated a prior
+                    // accepted disconnect's cleanup. The terminal positive guards
+                    // suffice; preserve all original sample and negative owners.
+                }
+            }
+            recordingShutdownLock.withLock {
+                if (recordingShutdownComplete) return@withLock
+                if (!recordingShutdownAcknowledged) {
+                    stopRecording()
+                    recordingShutdownAcknowledged = true
+                }
+                if (!bleShutdownAcknowledged) {
+                    if (!awaitAcceptedDisconnects()) disconnect(allowDuringShutdown = true)
+                    bleShutdownAcknowledged = true
+                }
+                scope.coroutineContext[Job]?.cancelAndJoin()
+                recordingShutdownComplete = true
+            }
+        }
+        currentCoroutineContext().ensureActive()
     }
 
     fun close() {

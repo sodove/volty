@@ -869,3 +869,30 @@ existing installed-link state seams. No phone/strict cross-thread shutdown proof
 claimed. The default AppModule still uses the legacy constructor: app-owner ordered
 shutdown, remaining source qualification and native/performance acceptance are
 required before final activation. Screen migration remains separate and unfinished.
+
+Task7 native app-owner shutdown checkpoint (2026-10-17): the native runtime
+constructor now carries an explicit terminal shutdown callback. Its app-owned
+shutdown API fences new connections while keeping the original BLE funnel alive,
+awaits recording/native-location/writer acknowledgement, waits accepted BLE
+teardowns, disconnects remaining BLE/service demand and joins the repository scope.
+Caller cancellation after admission cannot abandon shutdown. Completed phases are
+retained across failures; concurrent shutdown requests share the same owner.
+
+Retraction of the first shutdown draft: rotating connectionIntent at the terminal
+fence could invalidate a previously accepted disconnect's final negative. The
+terminal flag alone now fences positives. Existing ordinary disconnects retain
+immutable detached session captures and receipts; shutdown waits outside sessionLock.
+New ordinary disconnects after the fence join the terminal owner atomically.
+Failed cleanup retains the original capture and serialized SessionTeardownOwner
+until acknowledgement, allowing retry of the original sessions instead of an empty
+new disconnect. A current negative acknowledgement avoids duplicate release.
+
+Tests deliberately hold an accepted history observation inside the real Unconfined
+consumer, then release it only after shutdown starts. The measured fact precedes
+durable finish acknowledgement, writer disposal and BLE service release. Retry,
+cancellation, concurrent shutdown/ordinary disconnect and failed-service release
+are covered. The API is for native app-owner disposal, never Activity destruction
+or backgrounding; close() remains the abrupt scope-cancellation path. Default
+production remains legacy while source qualification, native/performance acceptance
+and screen integration remain open. Phone driver acknowledgement is not established
+by these common tests.
