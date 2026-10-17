@@ -1498,3 +1498,19 @@ tests is not new wire evidence; the real decoder test supplies that boundary.
 Earlier blanket gateway-alias rejections are superseded only for explicit managed
 selection with this cache-absence producer policy. Production activation, native
 phone acceptance, aggregate qualification and automatic path choice remain open.
+
+Selected-path round-trip acceptance (2026-10-17): two additional managed lifecycle
+fixtures confirm existing behavior without further production changes. A direct
+->cache->direct round trip drains accepted unknown cache observations before finish.
+The exact original direct spec and protocol object are reused, but both retired
+captures remain unable to issue history. The new binding records the restored
+numerical producer under a new ride/GPS capability; prior earned/unknown samples
+retain their original source IDs and order.
+
+A hosted-cache ->CAN42 cache path change for the same physical alias retains its
+one producer registry, ride and GPS capability after draining the accepted prefix.
+The test distinguishes the old UNAVAILABLE receipt from the new PARTIAL_SOURCE
+receipt, verifies BLE_GAP without SOURCE_CHANGE, and excludes late old observations.
+Dormant alternatives and physical live ownership remain present to isolate history
+rights. These fixtures qualify explicit selection transitions and are not automatic
+path selection, real-device reconnect, numeric cache freshness or BLE wire proof.
