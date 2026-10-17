@@ -20,6 +20,7 @@ internal class NativeHistoryRecordingLifecycle(
     readTick: () -> HistoryTick,
     private val sources: (LinkSpec, Vehicle?) -> Map<HistoryTelemetrySource, HistorySource>,
     private val onFailure: () -> Unit,
+    private val selectPhysicalPaths: Boolean = false,
 ) {
     internal class ManualControls internal constructor(
         private val begin: suspend () -> Boolean,
@@ -89,7 +90,11 @@ internal class NativeHistoryRecordingLifecycle(
         val links = if (vehicle == null || vehicle.isGuest || vehicle.isDemo) emptyList() else try {
             val installed = specs.toList()
             requireUniquePhysicalOwnership(vehicleId, installed, vehicle)
-            installed.map { Link(it, sources(it, vehicle).toMap()) }.also { planned ->
+            val qualified = installed.map { sources(it, vehicle).toMap() }
+            val selected = if (selectPhysicalPaths) nativeHistoryPhysicalPaths(installed, vehicle, qualified) else qualified
+            installed.mapIndexedNotNull { index, spec ->
+                selected[index].takeIf { it.isNotEmpty() }?.let { Link(spec, it) }
+            }.also { planned ->
                 val ids = planned.flatMap { it.binding.values }.map { it.id }
                 require(ids.distinct().size == ids.size) { "Duplicate physical source binding" }
             }
@@ -106,9 +111,9 @@ internal class NativeHistoryRecordingLifecycle(
         }
     }
 
-    /** Per-path source IDs cannot certify physical uniqueness. Until alias
-     * handover has its own recording admission, a physical pack may have only
-     * one installed path. Dormant profile alternatives do not own a recording.
+    /** Per-path source IDs cannot certify physical uniqueness. Only the default
+     * qualified chooser may accept multiple installed paths and filter them to
+     * one recording source per alias. Custom per-link planners remain strict.
      * Slot namespaces are independent: pack 0 and controller 0 are not aliases.
      */
     private fun requireUniquePhysicalOwnership(vehicleId: String, specs: List<LinkSpec>, vehicle: Vehicle) {
@@ -122,7 +127,7 @@ internal class NativeHistoryRecordingLifecycle(
         val aliases = vehicle.packs.filter { it.index in installedPacks }.mapNotNull { it.aliasGroup }
         if (aliases.isNotEmpty()) require(vehicle.id == vehicleId) { "Alias namespace does not match selected vehicle" }
         require(aliases.all { it.isNotBlank() }) { "Blank physical alias identity" }
-        require(aliases.distinct().size == aliases.size) { "Multiple recording paths for one physical battery" }
+        require(selectPhysicalPaths || aliases.distinct().size == aliases.size) { "Multiple recording paths for one physical battery" }
     }
 
     /** Read-only immutable snapshot; native ownership still fences every notification. */

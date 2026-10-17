@@ -997,3 +997,15 @@ unknown cache readings out of the direct series. Real gateway decoder tests reta
 earned controller values and independent unknown-only cache cells. This adds
 explicit selected-path capability, not automatic alias choice or numeric cache
 freshness; native/product activation and screens remain open.
+
+Task7 complete native profile selection checkpoint (2026-10-17): the default
+managed planner now chooses one qualified battery observation binding per physical
+alias from the actual complete BLE plan. Earned direct producers take priority over
+unaged cache sources, with deterministic endpoint tie-breaks. Native specs/local
+indices and live handoff are preserved; gateway controllers remain recorded when
+its redundant battery binding is omitted. Direct loss produces a source gap while
+controllers/GPS continue. Cache-only selected plans still work. Custom/unmanaged
+planners and whole endpoint/global-slot/namespace guards retain strict boundaries.
+Actual Kable repository installation/funnel/disconnect is covered. This removes
+blanket history rejection for configured alternatives; it does not certify numeric
+cache freshness, unsupported decoders, native acceptance or product cutover.

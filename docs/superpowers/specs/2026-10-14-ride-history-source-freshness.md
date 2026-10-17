@@ -1514,3 +1514,39 @@ receipt, verifies BLE_GAP without SOURCE_CHANGE, and excludes late old observati
 Dormant alternatives and physical live ownership remain present to isolate history
 rights. These fixtures qualify explicit selection transitions and are not automatic
 path selection, real-device reconnect, numeric cache freshness or BLE wire proof.
+
+## Complete native profile: one recording path per alias (2026-10-17)
+
+Retraction: rejecting every native plan containing two configured alias paths was
+safe for explicit single-path fixtures but prevented history for the actual BLE
+repository's full profile. The BLE plan intentionally contains direct and gateway
+paths. Default managed history now qualifies the full immutable decoder maps and
+chooses one recording battery binding per physical alias before registry install.
+Earned direct ANT/JBD/JK/Daly producers take priority over cache-absence producers;
+equivalent paths use stable endpoint/protocol ordering, not list/slot order.
+
+The choice filters observation bindings only. Exact native LinkSpec objects, local
+indices, controller/reporter sources, polling and live alias handoff stay intact.
+An unselected battery-only link has no recording binding and cannot start history
+by itself. A gateway whose battery binding is omitted still records its qualified
+controllers. If the chosen direct path drops/yields, source-scoped BLE_GAP remains;
+healthy controllers and GPS retain the ride. Unaged cached bytes do not authorize
+numerical failover. When only a cache path is installed, its typed absence policy
+remains available. Replacing the complete installed selection retains the existing
+registry/policy compatibility and accepted-prefix rules.
+
+Global physical endpoint and pack/controller slot uniqueness, nonblank aliases and
+selected-vehicle namespace are checked before producer qualification. Custom
+per-link planners retain strict duplicate-alias rejection: only the built-in
+qualified chooser has this permission. Unmanaged planning stays strict. Existing
+unsupported producers/native targets still fail qualification; no claim of universal
+hardware/native activation follows from this change.
+
+New default-managed tests cover stable same-protocol alternatives in reversed
+orders, direct/cache observation filtering with controller survival after direct
+retirement, and the actual KableBmsRepository complete-profile install/funnel plus
+durable disconnect. Distinct BMS current_a and controller speed_kmh reach one ride;
+cache readings are excluded and setup does not fail. Real decoder cache-only tests
+continue to cover unknown fields. This supersedes earlier concurrent-installed-path
+rejection only for default qualified selection; concurrent battery recording is
+still forbidden. Dynamic freshness-based failover requires earned producer evidence.

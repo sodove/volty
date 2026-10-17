@@ -35,14 +35,20 @@ class NativeHistorySelectedAliasTest {
         override suspend fun delete(rideId: String) = Unit
         override suspend fun close() = Unit
     }
-    private class CacheEmitter(private val reason: TelemetryUnknown = TelemetryUnknown.PARTIAL_SOURCE) : BmsProtocol() {
+    private class CacheEmitter(private val reason: TelemetryUnknown = TelemetryUnknown.PARTIAL_SOURCE,
+        private val withController: Boolean = false) : BmsProtocol() {
         override val uuids = BmsUuids("service", "notify", "write")
         override fun handshakeCommands() = emptyList<ByteArray>()
         override fun pollCommands() = emptyList<ByteArray>()
         override fun latestData(packIndex: Int): BmsData? = null
         override fun reset() = Unit
-        override fun onNotification(data: ByteArray) = observeTelemetry(TelemetryOrigin.BATTERY, 0) {
-            listOf(TelemetryReading(TelemetryMetric.CURRENT, null, reason))
+        override fun onNotification(data: ByteArray) {
+            observeTelemetry(TelemetryOrigin.BATTERY, 0) {
+                listOf(TelemetryReading(TelemetryMetric.CURRENT, null, reason))
+            }
+            if (withController) observeTelemetry(TelemetryOrigin.CONTROLLER, 0) {
+                listOf(TelemetryReading.measured(TelemetryMetric.SPEED, 9.0))
+            }
         }
     }
     private val a = Pack(3, "Direct A", BmsType.ANT_BMS, "AA", aliasGroup = "physical-pack")
@@ -198,13 +204,13 @@ class NativeHistorySelectedAliasTest {
         } finally { accepted?.discard(); f.channel.cancel(); switch?.cancelAndJoin() }
     }
 
-    @Test fun cacheAliasStillRequiresUniqueInstalledPhysicalPathAndVehicleNamespace() = runTest {
-        for (variant in 0..2) {
+    @Test fun cacheAliasStillRequiresUsableGroupAndMatchingVehicleNamespace() = runTest {
+        for (variant in 1..2) {
             val f = Fixture(); val pack = if (variant == 2) cached.copy(aliasGroup = " ") else cached
             val profile = cacheVehicle(pack); val link = cacheSpec(pack)
             try {
                 f.ingress.installNativePlan(if (variant == 1) "other-bike" else profile.id,
-                    if (variant == 0) listOf(spec(a), link) else listOf(link), profile) { true }
+                    listOf(link), profile) { true }
                 assertNull(f.capture(link, profile, CacheEmitter()))
                 assertNull(f.ingress.manualControls()); assertTrue(f.writer.begins.isEmpty())
                 assertEquals(1L, f.ingress.diagnostics.value.setupFailures)
@@ -283,12 +289,72 @@ class NativeHistorySelectedAliasTest {
         } finally { f.channel.cancel() }
     }
 
-    @Test fun twoInstalledAliasPathsRemainRejectedByWholePlanAdmission() = runTest {
-        val f = Fixture(); val profile = vehicle(); val first = spec(a); val second = spec(b)
+    @Test fun installedDirectAlternativesSelectOneStablePhysicalPathRegardlessOfPlanOrder() = runTest {
+        for (reverse in listOf(false, true)) {
+            val f = Fixture(); val profile = vehicle(); val first = spec(a); val second = spec(b)
+            try {
+                f.ingress.installNativePlan(profile.id, if (reverse) listOf(second, first) else listOf(first, second), profile) { true }
+                val selected = assertNotNull(f.capture(first, profile)); assertTrue(selected.prepareForObservation())
+                assertNull(f.capture(second, profile))
+                assertTrue(selected.processNotification(byteArrayOf(11))); f.consume()
+                assertEquals(1, f.writer.begins.single().second.size)
+                assertEquals(11.0, f.writer.batches.flatMap { it.samples }.single().value)
+                assertEquals(0L, f.ingress.diagnostics.value.setupFailures)
+            } finally { f.channel.cancel() }
+        }
+    }
+
+    @Test fun installedDirectAndCachePathsRecordOneBatteryWithoutDroppingGatewayControllers() = runTest {
+        val f = Fixture(); val profile = cacheVehicle(); val direct = spec(a); val cache = cacheSpec()
+        val directProtocol = Emitter()
         try {
-            f.ingress.installNativePlan(profile.id, listOf(first, second), profile) { true }
-            assertNull(f.capture(first, profile)); assertNull(f.capture(second, profile))
-            assertEquals(1L, f.ingress.diagnostics.value.setupFailures); assertTrue(f.writer.begins.isEmpty())
+            f.ingress.installNativePlan(profile.id, listOf(cache, direct), profile) { true }
+            val battery = assertNotNull(f.capture(direct, profile, directProtocol))
+            val gateway = assertNotNull(f.capture(cache, profile, CacheEmitter(withController = true)))
+            assertTrue(gateway.prepareForObservation()); assertTrue(battery.prepareForObservation())
+            val gps = assertNotNull(f.controller.captureGpsRecording())
+            assertTrue(battery.processNotification(byteArrayOf(11))); f.consume()
+            assertTrue(gateway.processNotification(byteArrayOf(1))); f.consume()
+            assertNull(f.channel.tryReceive().getOrNull())
+            val sources = f.writer.begins.single().second
+            assertEquals(3, sources.size)
+            val physical = sources.single { it.kind == HistorySourceKind.BATTERY }.id
+            val motor = sources.single { it.kind == HistorySourceKind.CONTROLLER }.id
+            assertEquals(listOf(physical, motor), f.writer.batches.flatMap { it.samples }.map { it.key.sourceId })
+            // The live repository may yield the direct link to its head unit.
+            // Cache availability does not make its numbers earned history.
+            f.ingress.retireNativeAttempt(directProtocol)
+            assertTrue(battery.processNotification(byteArrayOf(12)))
+            assertTrue(gateway.processNotification(byteArrayOf(1))); f.consume()
+            assertNull(f.channel.tryReceive().getOrNull())
+            assertEquals(listOf<Double?>(11.0, 9.0, 9.0), f.writer.batches.flatMap { it.samples }.map { it.value })
+            assertEquals(1, f.writer.begins.size); assertTrue(f.writer.finishes.isEmpty())
+            assertTrue(f.writer.batches.flatMap { it.markers }.any { it.kind == HistoryMarkerKind.BLE_GAP })
+            assertSame(gps.identity, assertNotNull(f.controller.captureGpsRecording()).identity)
+            assertEquals(0L, f.ingress.diagnostics.value.setupFailures)
+        } finally { f.channel.cancel() }
+    }
+
+    @Test fun repositoryInstallsItsCompleteNativeAliasPlanWithOneBatteryRecorder() = bleRepositoryTest { repo ->
+        val f = Fixture(); val profile = cacheVehicle()
+        try {
+            repo.configureHistoryTelemetryIngress(f.ingress)
+            repo.installLinksForTest(profile, a.bmsAddress, a.bmsType)
+            repo.prepareInstalledHistoryForTest()
+            val battery = assertNotNull(repo.historyTelemetryCaptureForTest(Emitter(), a.bmsAddress, SampleSessionOwnership { true }))
+            val gateway = assertNotNull(repo.historyTelemetryCaptureForTest(CacheEmitter(withController = true), cached.bmsAddress,
+                SampleSessionOwnership { true }))
+            assertTrue(battery.prepareForObservation()); assertTrue(gateway.prepareForObservation())
+            assertTrue(battery.processNotification(byteArrayOf(11)))
+            assertTrue(gateway.processNotification(byteArrayOf(1)))
+            runCurrent()
+            assertEquals(3, f.writer.begins.single().second.size)
+            assertEquals(listOf<Double?>(11.0, 9.0), f.writer.batches.flatMap { it.samples }.map { it.value })
+            assertEquals(setOf("current_a", "speed_kmh"), f.writer.batches.flatMap { it.samples }.map { it.key.metricId }.toSet())
+            assertEquals(0L, f.ingress.diagnostics.value.setupFailures)
+            repo.disconnect()
+            assertEquals(listOf<String?>("ride-1"), f.writer.finishes)
+            assertNull(f.controller.captureGpsRecording())
         } finally { f.channel.cancel() }
     }
 

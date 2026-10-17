@@ -30,10 +30,10 @@ internal class HistoryTelemetryIngress(
 
     init { require(!manageConnections || prepareRecording == null) { "Choose one recording lifecycle owner" } }
     private val nativeLifecycle = if (manageConnections) NativeHistoryRecordingLifecycle(controller, readTick,
-        sources ?: ::nativeHistorySourcesForSelectedLink) {
+        sources ?: ::nativeHistorySourcesForSelectedLink, onFailure = {
         mutableDiagnostics.update { it.copy(setupFailures = increment(it.setupFailures),
             lastFailure = HistoryTelemetryIngressFailure.SETUP) }
-    } else null
+    }, selectPhysicalPaths = sources == null) else null
 
     suspend fun installNativePlan(vehicleId: String, specs: List<LinkSpec>, vehicle: Vehicle?, ownsPlan: () -> Boolean) {
         nativeLifecycle?.install(vehicleId, specs, vehicle, ownsPlan)
