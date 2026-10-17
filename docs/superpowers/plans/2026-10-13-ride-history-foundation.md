@@ -981,3 +981,10 @@ source identities. Ambiguous endpoints, profile mismatches, aliased/virtual pack
 and unknown native controller targets remain rejected. This supersedes the earlier
 blanket hosted-pack rejection only for that conservative shape. Numeric gateway
 freshness, alias handover, native acceptance and product activation remain open.
+
+Task7 mapping guard follow-up (2026-10-17): use the actual vescGatewayPacks result
+under native first-controller/profile derive policy. An enabled derived-battery
+flag does not forbid an otherwise valid physical BMS cache slot: native construction
+suppresses that fallback. Actual virtual slots still reject; cache/controller IDs
+and evidence policy remain unchanged. Two regression cases cover stable mapping and
+real decoder/poll/adapter behavior with the flag ON, retaining absent-slot negatives.

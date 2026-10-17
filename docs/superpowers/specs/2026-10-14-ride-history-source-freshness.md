@@ -1459,3 +1459,13 @@ battery fields and independent cell scopes, with no observer lookup failures.
 Existing BMS decoder tests cover no-data, shrinking cells and malformed replies.
 No native Android acquisition, automatic alias handover, wire/poll behavior change
 or production recorder activation follows from this checkpoint.
+
+Mixed mapping follow-up (2026-10-17): the initial guard also rejected any controller
+with providesDerivedBattery ON. That was overbroad: native construction suppresses
+a fallback when a real BMS slot is already owned. Planning now computes exactly the
+native first-controller/profile derive choice and passes it to vescGatewayPacks,
+rejecting actual derived slots rather than the boolean alone. Real hosted/forwarded
+cache slots retain identical source IDs and typed-absence behavior with the flag
+ON/OFF. Missing/synthetic owned slots still reject when they would derive a pack.
+Actual factory/poll/adapter tests exercise both settings. No constructor or polling
+behavior changed; numeric virtual/gateway battery recording remains unqualified.

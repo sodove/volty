@@ -106,9 +106,11 @@ private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singl
  */
 private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle): Map<HistoryTelemetrySource, HistorySource> {
     require(spec.protocolKind == ProtocolKind.VESC && spec.ownedControllers.isNotEmpty())
-    // The native constructor derives a fallback pack when the profile has no pack,
-    // or the first controller requests it. Neither slot is qualified by this plan.
-    require(profile.packs.isNotEmpty())
+    // Match native construction, including its first-controller/profile fallback.
+    // A real owned BMS slot suppresses that fallback even when the flag is ON.
+    val deriveBattery = nativeLinkController(spec, profile)?.providesDerivedBattery == true || profile.packs.isEmpty()
+    val packs = vescGatewayPacks(spec, deriveBattery)
+    require(packs.none { it.derived }) { "Derived gateway recording is not qualified" }
     require(spec.ownedControllers.all { it.canId != null && it.canId in 0..254 &&
         (it.kind == null || it.kind == ProtocolKind.VESC) })
     require(spec.ownedControllers.map { it.canId }.distinct().size == spec.ownedControllers.size)
@@ -116,7 +118,7 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle):
     spec.ownedControllers.forEachIndexed { local, owned ->
         val controller = requireNotNull(profile.controllers.singleOrNull { it.index == owned.globalIndex })
         require(controller.controllerType == ControllerType.VESC && controller.canId == owned.canId &&
-            controller.address.equals(spec.address, ignoreCase = true) && !controller.providesDerivedBattery)
+            controller.address.equals(spec.address, ignoreCase = true))
         val motor = controller.motor
         val calibration = encodeIdentity(listOf(motor.polePairs.toString(), motor.wheelDiameterMm.toString(),
             motor.gearRatio.toRawBits().toString()))
@@ -130,9 +132,7 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle):
                 if (role == TelemetryRole.REPORTED_CAN) "${controller.label} · CAN" else controller.label)
         }
     }
-    // Reuse native construction's slot order. Derived fallback is excluded above
-    // by the nonempty profile and each controller's providesDerivedBattery guard.
-    val packs = vescGatewayPacks(spec, deriveBattery = false)
+    // Reuse native construction's slot order, after excluding actual virtual slots.
     require(packs.map { it.canId }.distinct().size == packs.size)
     packs.forEachIndexed { local, endpoint ->
         val owned = spec.ownedPacks[local]

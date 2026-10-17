@@ -63,9 +63,28 @@ class NativeHistoryMixedGatewayPlanTest {
         bad.forEach { (link, owner) -> assertFailsWith<IllegalArgumentException> { nativeHistorySourcesForLink(link, owner) } }
     }
 
-    @Test fun nativeMixedDecoderRecordsEarnedControllerValuesButOnlyTypedUnknownCacheFields() = runTest {
-        val link = spec(); val plan = nativeHistorySourcesForLink(link, vehicle())
-        val protocol = assertIs<VescGatewayProtocol>(controllerMotionProtocol(ProtocolKind.VESC, false,
+    @Test fun realHostedSlotsDoNotBecomeVirtualWhenDerivedBatteryIsEnabled() {
+        val profile = vehicle().copy(controllers = listOf(controller.copy(providesDerivedBattery = true)))
+        val first = nativeHistorySourcesForLink(spec(), vehicle())
+        assertEquals(first, nativeHistorySourcesForLink(spec(), profile))
+        // Without a real owned slot, the same flag WOULD construct a fallback.
+        assertFailsWith<IllegalArgumentException> {
+            nativeHistorySourcesForLink(spec().copy(ownedPacks = emptyList()), profile)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            nativeHistorySourcesForLink(spec().copy(ownedPacks = listOf(OwnedSource(99))), profile)
+        }
+    }
+
+    @Test fun nativeMixedDecoderRecordsEarnedControllerValuesButOnlyTypedUnknownCacheFields() = verifyNativeMixedDecoder(false)
+
+    @Test fun nativeFactoryHonorsRealHostedSlotsEvenWithDerivedChoiceOn() = verifyNativeMixedDecoder(true)
+
+    private fun verifyNativeMixedDecoder(deriveBattery: Boolean) = runTest {
+        val link = spec()
+        val profile = vehicle().copy(controllers = listOf(controller.copy(providesDerivedBattery = deriveBattery)))
+        val plan = nativeHistorySourcesForLink(link, profile)
+        val protocol = assertIs<VescGatewayProtocol>(controllerMotionProtocol(ProtocolKind.VESC, deriveBattery,
             controller.motor, link))
         val samples = mutableListOf<HistorySample>()
         protocol.telemetryObserver = { event ->
