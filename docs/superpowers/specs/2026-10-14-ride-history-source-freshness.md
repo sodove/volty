@@ -1439,3 +1439,23 @@ complete the rider's ANT-to-cached-gateway handover or establish numeric cache
 freshness. Tests cover actual default planner/managed ingress/control/queue flow;
 existing protocol-decode tests provide separate wire qualification. Phone behavior
 and production recorder activation remain unclaimed.
+
+## Mixed gateway cache-absence admission (2026-10-17)
+
+The earlier default-plan rejection above is superseded for a narrow mixed shape:
+explicit-CAN VESC controllers can now coexist with explicit, nonaliased physical
+VESC_BMS slots. Each pack must match its stored global slot, endpoint CAN ID,
+protocol and BLE address; duplicate pack endpoints are rejected. The planner uses
+vescGatewayPacks, the same native slot mapping as construction. Local controller
+targets without known CAN identity and derived gateway packs remain unqualified.
+
+Controller IDs and numeric evidence stay unchanged. Hosted and forwarded BMS
+sources use separate native-gateway-cache-unknown-v1 policy IDs, stable under slot
+reordering/renaming, with endpoint changes producing new IDs. These sources admit
+the existing decoder's typed PARTIAL_SOURCE/UNAVAILABLE observations only; they do
+not certify numeric freshness or merge with a direct BMS alias. The actual native
+factory/poll/adapter test observes earned controller power alongside unknown-only
+battery fields and independent cell scopes, with no observer lookup failures.
+Existing BMS decoder tests cover no-data, shrinking cells and malformed replies.
+No native Android acquisition, automatic alias handover, wire/poll behavior change
+or production recorder activation follows from this checkpoint.

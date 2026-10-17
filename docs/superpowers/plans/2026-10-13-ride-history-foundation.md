@@ -972,3 +972,12 @@ tail extrema were ignored. Stats now use SQL MIN/MAX/COUNT over the full selecte
 range, returning one row within the existing transaction. Unknown tail evidence
 still prevents completeness; source/metric/cell/gap/summary guards remain. No schema
 change or Android performance claim. See specs/2026-10-17-ride-history-long-recording-acceptance.md.
+
+Task7 mixed gateway checkpoint (2026-10-17): explicit forwarded controllers can
+record alongside nonaliased physical VESC_BMS slots with typed cache-absence
+observations. Shared native pack mapping preserves local scopes; policy-specific
+cache IDs survive slot/label reordering without borrowing direct/derived numeric
+source identities. Ambiguous endpoints, profile mismatches, aliased/virtual packs
+and unknown native controller targets remain rejected. This supersedes the earlier
+blanket hosted-pack rejection only for that conservative shape. Numeric gateway
+freshness, alias handover, native acceptance and product activation remain open.

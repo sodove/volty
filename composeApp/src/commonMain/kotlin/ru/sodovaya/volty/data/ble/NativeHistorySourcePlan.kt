@@ -20,8 +20,8 @@ internal fun nativeHistorySourcesForSelectedLink(spec: LinkSpec, vehicle: Vehicl
 
 /**
  * Direct, non-aliased native sources and explicit forwarded VESC controllers.
- * Hosted/derived gateway packs and physical aliases still need qualified plans;
- * rejecting them is not a claim that their live links fail.
+ * Gateway BMS cache sources carry typed absence only; numeric freshness is not
+ * certified. Derived gateway packs and physical aliases still need qualification.
  * Native branch/role identity is independent of UI labels and global slot order.
  */
 internal fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?): Map<HistoryTelemetrySource, HistorySource> =
@@ -99,12 +99,13 @@ private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singl
     return result.toMap()
 }
 
-/** Explicit controller-only gateway plan. Local targets without a known native CAN ID
- * cannot be certified by the gateway decoder on a mixed link. Hosted/virtual pack
- * freshness and producer policies are separate; none can borrow these identities.
+/** Explicit forwarded controllers plus optional physical BMS cache sources.
+ * Local controller targets without a known native CAN ID remain unqualified.
+ * Cache identities certify only the decoder's typed absence policy, never numeric
+ * freshness, and cannot borrow a direct battery's identity or a virtual slot.
  */
 private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle): Map<HistoryTelemetrySource, HistorySource> {
-    require(spec.protocolKind == ProtocolKind.VESC && spec.ownedPacks.isEmpty() && spec.ownedControllers.isNotEmpty())
+    require(spec.protocolKind == ProtocolKind.VESC && spec.ownedControllers.isNotEmpty())
     // The native constructor derives a fallback pack when the profile has no pack,
     // or the first controller requests it. Neither slot is qualified by this plan.
     require(profile.packs.isNotEmpty())
@@ -128,6 +129,23 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle):
             result[key] = HistorySource(id, historySourceKindForTelemetry(key.origin, role),
                 if (role == TelemetryRole.REPORTED_CAN) "${controller.label} · CAN" else controller.label)
         }
+    }
+    // Reuse native construction's slot order. Derived fallback is excluded above
+    // by the nonempty profile and each controller's providesDerivedBattery guard.
+    val packs = vescGatewayPacks(spec, deriveBattery = false)
+    require(packs.map { it.canId }.distinct().size == packs.size)
+    packs.forEachIndexed { local, endpoint ->
+        val owned = spec.ownedPacks[local]
+        require(owned.kind == ProtocolKind.VESC_BMS && (endpoint.canId == null || endpoint.canId in 0..254))
+        val pack = requireNotNull(profile.packs.singleOrNull { it.index == endpoint.globalIndex })
+        require(pack.bmsType == BmsType.VESC_BMS && pack.canId == endpoint.canId &&
+            pack.bmsAddress.equals(spec.address, ignoreCase = true) && pack.aliasGroup == null)
+        val key = HistoryTelemetrySource(TelemetryOrigin.BATTERY, local)
+        // Explicit policy version prevents a future numeric producer from
+        // silently continuing the cache-absence series under the same source ID.
+        val id = "native-gateway-cache-unknown-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
+            spec.protocolKind.name, endpoint.canId?.toString() ?: "host"))
+        result[key] = HistorySource(id, historySourceKindForTelemetry(key.origin, key.role), pack.label)
     }
     return result.toMap()
 }
