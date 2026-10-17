@@ -22,6 +22,7 @@ class HistoryCatalogComponentTest {
         override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries = error("No series preload")
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryPage<HistoryGpsFix> = error("No GPS preload")
         override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats = error("No stats preload")
+        override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage = error("No route preload")
     }
     private fun TestScope.component(repo: Repo, lifecycle: LifecycleRegistry = LifecycleRegistry(Lifecycle.State.RESUMED)) =
         HistoryCatalogComponent(DefaultComponentContext(lifecycle), backgroundScope, repo)
@@ -95,6 +96,18 @@ class HistoryCatalogComponentTest {
             c.refresh(); runCurrent()
             assertEquals(listOf("a", "b"), c.state.value.rides.map { it.id }); assertEquals(HistoryReadError.STORAGE, c.state.value.error)
             assertFalse(c.state.value.refreshing)
+        } finally { c.close() }
+    }
+
+    @Test fun consumingFinalContinuationClearsResolvedPageTruncation() = runTest {
+        val repo = Repo { before -> if (before == null) HistoryPage(listOf(ride("a")), cursor, true)
+            else HistoryPage(listOf(ride("b")), null, false) }
+        val c = component(repo)
+        try {
+            c.refresh(); runCurrent(); assertTrue(c.state.value.truncated)
+            c.loadOlder(); runCurrent()
+            assertEquals(listOf("a", "b"), c.state.value.rides.map { it.id })
+            assertFalse(c.state.value.hasMore); assertFalse(c.state.value.truncated)
         } finally { c.close() }
     }
 

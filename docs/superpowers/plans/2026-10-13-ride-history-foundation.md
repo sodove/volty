@@ -1009,3 +1009,12 @@ planners and whole endpoint/global-slot/namespace guards retain strict boundarie
 Actual Kable repository installation/funnel/disconnect is covered. This removes
 blanket history rejection for configured alternatives; it does not certify numeric
 cache freshness, unsupported decoders, native acceptance or product cutover.
+
+Task8 route-read contract checkpoint (2026-10-17): the unified reader now exposes
+an atomic HistoryRoutePage(origin/GPS page/range markers) needed by the history
+map independently of selected telemetry metrics. SqlDelightStore reads all three
+under one transaction; no schema change. Legacy has no recorded route; an
+unsupported custom store reports absence of this capability rather than splitting
+GPS/marker reads. Parent/route UI owners use existing stable catalog/detail readers
+and preserve bounded paging/typed errors/lifecycle retirement. This prepares the
+planned screen composition without product recorder/UI activation or native proof.

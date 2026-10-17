@@ -119,6 +119,24 @@ class SqlDelightHistoryReadRepositoryTest {
         assertEquals(1, f.db.ridePointRowQueries.selectByRide("same").executeAsList().size)
     }
 
+    @Test fun routeSnapshotCarriesStoredOriginFixesAndGapFactsOnlyFromItsStorageFormat() = runTest {
+        val f = fixture(); f.old("old"); f.old("same")
+        val origin = f.current("same")
+        val fix = HistoryGpsFix(origin.copy(epochMillis = start + 100, elapsedMillis = origin.elapsedMillis + 100), 55.0, 60.0, 2.0, null)
+        val markers = listOf(HistoryMarker(fix.tick, HistoryMarkerKind.GPS_GAP),
+            HistoryMarker(fix.tick, HistoryMarkerKind.BLE_GAP, source.id))
+        f.store.append(HistoryBatch("same", emptyList(), listOf(fix), markers))
+        val snapshot = f.reader.route("same", range)
+        assertEquals(origin, snapshot.origin); assertEquals(listOf(fix), snapshot.fixes.items)
+        assertEquals(markers, snapshot.markers); assertNull(snapshot.fixes.next)
+        val narrowed = f.reader.route("same", HistoryRange(start + 101, start + 1000))
+        assertTrue(narrowed.fixes.items.isEmpty()); assertTrue(narrowed.markers.isEmpty())
+        for (id in listOf("old", "missing")) {
+            val empty = f.reader.route(id, range)
+            assertNull(empty.origin); assertTrue(empty.fixes.items.isEmpty()); assertTrue(empty.markers.isEmpty())
+        }
+    }
+
     @Test fun catalogFractionalTimesMatchTheCursorAndLegacyEndMetadata() = runTest {
         val f = fixture()
         f.db.rideRowQueries.insert("old", "bike", "2026-10-13T03:00:00.999999999+03:00", "2026-10-13T00:00:01.999999999Z")

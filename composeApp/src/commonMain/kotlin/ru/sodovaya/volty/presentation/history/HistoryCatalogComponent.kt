@@ -65,7 +65,7 @@ class HistoryCatalogComponent(
                 val current = mutableState.value
                 mutableState.value = current.copy(rides = rows.values.toList(), nextCursor = page.next,
                     loaded = true, refreshing = false, loadingOlder = false,
-                    truncated = page.truncated || (append && current.truncated), error = null)
+                    truncated = page.truncated, error = null)
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (_: Exception) {

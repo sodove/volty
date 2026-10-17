@@ -1,0 +1,121 @@
+package ru.sodovaya.volty.presentation.history
+
+import com.arkivanov.decompose.ComponentContext
+import com.arkivanov.essenty.lifecycle.doOnDestroy
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
+import ru.sodovaya.volty.domain.history.*
+
+interface HistoryComponent {
+    val state: StateFlow<HistoryUiState>
+    fun refresh()
+    fun loadOlder()
+    fun openRide(id: String)
+    fun showCharts()
+    fun loadSourceMetrics(sourceId: String)
+    fun addMetric(key: HistorySeriesKey)
+    fun removeMetric(key: HistorySeriesKey)
+    fun moveMetric(key: HistorySeriesKey, index: Int)
+    fun selectTime(epochMillis: Long?)
+    fun selectRange(range: HistoryRange)
+    fun loadMoreRoute()
+    fun retryRoute()
+    fun back()
+}
+
+/** One screen selection and cursor. Child read owners share its UI dispatcher
+ * and lifecycle; catalog errors and reads do not replace selected detail/route.
+ */
+class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: CoroutineScope,
+    repository: HistoryReadRepository, readTick: () -> HistoryTick, private val onBack: () -> Unit) : HistoryComponent {
+    private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
+    private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
+    private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
+    private val detail = HistoryDetailComponent(componentContext, scope, repository, readTick)
+    private val route = HistoryRouteComponent(componentContext, scope, repository)
+    private val mutableState = MutableStateFlow(HistoryUiState())
+    override val state = mutableState.asStateFlow()
+    private var selectedRideId: String? = null
+    private var selection = Any()
+
+    init {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            catalog.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(catalog = it) }
+        }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) { detail.state.collect(::onDetail) }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            route.state.collect { next ->
+                val current = mutableState.value
+                if (lifetime.isActive && selectedRideId != null && next.rideId == selectedRideId && next.range == current.detail.range)
+                    mutableState.value = current.copy(route = next)
+            }
+        }
+        componentContext.lifecycle.doOnDestroy { close() }
+    }
+
+    private fun onDetail(next: HistoryDetailState) {
+        if (!lifetime.isActive || selectedRideId == null || next.rideId != selectedRideId) return
+        val captured = selection
+        val ride = next.ride; val range = next.range
+        val needsRoute = ride != null && range != null && (route.state.value.rideId != ride.id || route.state.value.range != range)
+        val current = mutableState.value
+        mutableState.value = current.copy(detail = next, route = if (needsRoute)
+            HistoryRouteState(rideId = ride?.id, range = range, loading = true) else current.route)
+        // UI publication can synchronously choose another ride or leave history.
+        if (lifetime.isActive && selection === captured && needsRoute) route.open(checkNotNull(ride), checkNotNull(range))
+    }
+
+    override fun refresh() { if (lifetime.isActive) catalog.refresh() }
+    override fun loadOlder() { if (lifetime.isActive) catalog.loadOlder() }
+
+    override fun openRide(id: String) {
+        if (!lifetime.isActive) return
+        require(id.isNotBlank())
+        selectedRideId = id; selection = Any()
+        val captured = selection
+        mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE, selectedRideId = id,
+            detail = HistoryDetailState(rideId = id, loading = true), route = HistoryRouteState())
+        if (!lifetime.isActive || selection !== captured) return
+        route.clear()
+        if (lifetime.isActive && selection === captured) detail.openRide(id)
+    }
+
+    override fun showCharts() = withSelection {
+        if (mutableState.value.detail.ride != null) mutableState.value = mutableState.value.copy(destination = HistoryDestination.CHARTS)
+    }
+    override fun loadSourceMetrics(sourceId: String) = withSelection { detail.loadSourceMetrics(sourceId) }
+    override fun addMetric(key: HistorySeriesKey) = withSelection { detail.addMetric(key) }
+    override fun removeMetric(key: HistorySeriesKey) = withSelection { detail.removeMetric(key) }
+    override fun moveMetric(key: HistorySeriesKey, index: Int) = withSelection { detail.moveMetric(key, index) }
+    override fun selectTime(epochMillis: Long?) = withSelection { detail.selectTime(epochMillis) }
+    override fun selectRange(range: HistoryRange) = withSelection { detail.selectRange(range) }
+    override fun loadMoreRoute() = withSelection { route.loadMore() }
+    override fun retryRoute() = withSelection { route.retry() }
+
+    private fun withSelection(action: () -> Unit) {
+        if (lifetime.isActive && selectedRideId != null) action()
+    }
+
+    override fun back() {
+        if (!lifetime.isActive) return
+        when (mutableState.value.destination) {
+            HistoryDestination.CHARTS -> mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE)
+            HistoryDestination.CATALOG -> onBack()
+            HistoryDestination.RIDE -> {
+                selectedRideId = null; selection = Any()
+                val captured = selection
+                mutableState.value = mutableState.value.copy(destination = HistoryDestination.CATALOG, selectedRideId = null,
+                    detail = HistoryDetailState(), route = HistoryRouteState())
+                if (lifetime.isActive && selection === captured) { detail.clear(); route.clear() }
+            }
+        }
+    }
+
+    fun close() {
+        selection = Any(); selectedRideId = null
+        catalog.close(); detail.close(); route.close(); lifetime.cancel()
+    }
+}

@@ -52,6 +52,8 @@ class SqlDelightHistoryReadRepository(
         reader(rideId).gps(rideId, range, after)
     override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats =
         reader(rideId).stats(rideId, key, range)
+    override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage =
+        reader(rideId).route(rideId, range, after)
 
     /** Choose once for the request. Empty/unavailable v2 data never borrows old data. */
     private suspend fun reader(rideId: String): HistoryReadRepository =

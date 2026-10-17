@@ -73,6 +73,13 @@ class DefaultHistoryReadRepository(
         if (ride(rideId) == null || !available(rideId, key)) HistoryStats(null, null, null, false)
         else read { store.stats(rideId, key, range) }
 
+    override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
+        val snapshot = read { store.route(rideId, range, after, PAGE_SIZE) }
+        check(snapshot.fixes.items.size <= PAGE_SIZE && snapshot.markers.size <= PAGE_SIZE) { "Route snapshot exceeds read bounds" }
+        check(snapshot.origin != null || (snapshot.fixes.items.isEmpty() && snapshot.markers.isEmpty() && snapshot.fixes.next == null))
+        return snapshot.copy(fixes = snapshot.fixes.copy(items = snapshot.fixes.items.toList()), markers = snapshot.markers.toList())
+    }
+
     private suspend fun available(rideId: String, key: HistorySeriesKey): Boolean {
         val descriptor = HistoryMetricRegistry.descriptor(key.metricId) ?: return false
         if (descriptor.indexedByCell != (key.cellIndex != null)) return false

@@ -28,6 +28,7 @@ class HistoryDetailComponentTest {
         override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys = error("No eager metric metadata")
         override suspend fun rides(before: HistoryCursor?) = error("Detail never preloads catalog")
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?) = error("No route preload in detail reader")
+        override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage = error("No route preload in detail reader")
     }
     private fun TestScope.component(repo: Repo, lifecycle: LifecycleRegistry = LifecycleRegistry(Lifecycle.State.RESUMED)) =
         HistoryDetailComponent(DefaultComponentContext(lifecycle), backgroundScope, repo, { HistoryTick(9000, 8010, 1) })

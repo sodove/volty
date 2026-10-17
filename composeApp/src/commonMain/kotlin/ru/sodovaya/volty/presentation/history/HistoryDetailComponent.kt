@@ -251,6 +251,14 @@ class HistoryDetailComponent(
         sourceJobs.clear()
     }
 
+    fun clear() {
+        if (!lifetime.isActive) return
+        retireReads()
+        retireSourceReads()
+        availableRange = null
+        mutableState.value = HistoryDetailState()
+    }
+
     fun close() {
         retireReads()
         retireSourceReads()

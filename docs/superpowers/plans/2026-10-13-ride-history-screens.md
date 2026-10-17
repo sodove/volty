@@ -338,3 +338,56 @@ history component composes catalog/detail owners; do not duplicate their read
 ownership logic. Task1 remains open for parent navigation/selection composition,
 route paging, shared cursor policy and back/fullscreen restoration; visual port,
 native acceptance and later screen-plan tasks remain required.
+
+## Parent screen and recorded route ownership (2026-10-17)
+
+Task1 now has HistoryComponent/DefaultHistoryComponent composing existing catalog,
+detail and new route read owners under one parent/lifecycle. Its HistoryUiState
+keeps list/detail/route loading and typed errors independent, with one selected
+ride, shared detail range/cursor and Catalog/Ride/Charts navigation. Fullscreen
+back preserves metrics/range/cursor; returning to catalog retires pending detail
+and route reads. Selection publication is guarded against synchronous reentry;
+late old ride/route responses cannot replace a newer selected screen.
+
+HistoryReadRepository.route returns HistoryRoutePage: recorded origin, bounded GPS
+page and range markers from one storage snapshot. SqlDelightHistoryStore reads
+these inside one database transaction, without schema changes. The unified reader
+preserves format precedence; legacy/missing routes do not borrow live coordinates.
+Custom stores without atomic route support fail explicitly. Route ownership checks
+origin/range/order and stored numeric cursors, preserves equal-time fixes, exposes
+retry and truncation/cap status and retains at most8pages of20000fixes by default.
+A narrowed range starts a new budget. It never starts location acquisition or
+preloads telemetry series. Real SQLite coverage verifies origin/GPS/global and
+source marker contents and range/legacy/missing behavior; transaction scope is
+reviewed code evidence, not an artificially forced concurrency-race test.
+
+Task1 remains open for cursor-value continuity/cadence policy and final screen
+rendering/restoration; Tasks2–8 remain required. These are original Kotlin read
+owners, not a claimed Vescape visual/source port or product navigation cutover.
+Native recording activation/acceptance and full visual/map/favorites/media/export
+requirements remain unchanged. Compose appearance/gestures/animations must still
+be verified on Android.
+
+## Shared cursor and read-quality checkpoint (2026-10-17)
+
+HistoryCursorPolicy now returns a recent earned PAST sample on the stable chart
+axis within caller-supplied cadence. It never interpolates or picks a future point.
+Unknown observations win ambiguous equal-time ties; zero remains earned. Relevant
+source/global boundaries block holding a number across a gap, while GPS outages
+and other sources' scoped gaps do not erase healthy telemetry. V2 uses monotonic
+axis mapping through raw wall jumps; legacy uses its recorded wall timestamps.
+An omitted overview tail cannot become an extended cursor value. Invalid key/order/
+clock metadata and overflowing age fail closed. Exact stored timestamps remain
+usable even at a boundary; holding across a coincident gap is blocked.
+
+Also corrected two observed UI-quality contracts: an empty truncated snapshot does
+not prove no route exists, and completing the last catalog continuation clears
+resolved page truncation. Earlier cursor-policy-pending status is superseded for
+the pure policy only. The actual chart/map renderers still need to consume it.
+
+HistoryState.kt holds the composed state. Ruling: the planned HistoryRequestOwner
+helper is superseded by existing catalog/detail/route request tokens plus parent
+selection fencing, already exercised by late-response and synchronous-publication
+tests. Do not add a second unused request manager. State/navigation/read logic is
+implemented; actual visual port, map scene, persistence/native rendering acceptance
+and all later plan tasks remain required, with no partial product cutover claimed.

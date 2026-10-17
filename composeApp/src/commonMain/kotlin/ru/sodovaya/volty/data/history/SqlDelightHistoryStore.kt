@@ -144,6 +144,12 @@ class SqlDelightHistoryStore(
     override suspend fun markers(rideId: String, range: HistoryRange): List<HistoryMarker> = withContext(dispatcher) {
         reader.markers(rideId, range)
     }
+    override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryRoutePage = withContext(dispatcher) {
+        database.transactionWithResult {
+            val origin = rides.getRide(rideId).executeAsOneOrNull()?.toHistoryRide()?.started
+            HistoryRoutePage(origin, reader.gps(rideId, range, after, limit), reader.markers(rideId, range))
+        }
+    }
     override suspend fun buckets(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistoryBucket> = withContext(dispatcher) {
         reader.buckets(rideId, key, range, after, limit)
     }

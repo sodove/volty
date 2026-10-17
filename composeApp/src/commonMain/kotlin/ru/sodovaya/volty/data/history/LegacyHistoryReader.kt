@@ -95,6 +95,10 @@ class LegacyHistoryReader(provider: VoltyDatabaseProvider,
         currentCoroutineContext().ensureActive()
         return HistoryStats(null, null, null, false)
     }
+    override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
+        currentCoroutineContext().ensureActive()
+        return HistoryRoutePage(null, HistoryPage(emptyList(), null, false), emptyList())
+    }
     suspend fun load(rideId: String, limit: Int = 20000): LegacyHistorySnapshot? = withContext(dispatcher) {
         require(limit in 1..20000)
         database.transactionWithResult {

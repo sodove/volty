@@ -13,6 +13,9 @@ data class HistorySeries(
 /** Recorded keys for one expanded source group, never a guessed dense cell range. */
 data class HistoryRecordedKeys(val keys: List<HistorySeriesKey>, val truncated: Boolean)
 
+/** One storage snapshot: route coordinates cannot outlive their recorded gap facts. */
+data class HistoryRoutePage(val origin: HistoryTick?, val fixes: HistoryPage<HistoryGpsFix>, val markers: List<HistoryMarker>)
+
 interface HistoryReadRepository {
     suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int = 20000): HistoryRecordedKeys
     suspend fun rides(before: HistoryCursor? = null): HistoryPage<HistoryRide>
@@ -21,5 +24,6 @@ interface HistoryReadRepository {
     suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int = 600): HistorySeries
     /** Keep the cursor even for equal-time fixes; narrowing the range cannot replace it. */
     suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor? = null): HistoryPage<HistoryGpsFix>
+    suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor? = null): HistoryRoutePage
     suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats
 }
