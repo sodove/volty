@@ -1469,3 +1469,32 @@ cache slots retain identical source IDs and typed-absence behavior with the flag
 ON/OFF. Missing/synthetic owned slots still reject when they would derive a pack.
 Actual factory/poll/adapter tests exercise both settings. No constructor or polling
 behavior changed; numeric virtual/gateway battery recording remains unqualified.
+
+## Selected physical cache alias policy (2026-10-17)
+
+Managed recording now admits an explicitly selected physical VESC_BMS alias path
+behind an otherwise qualified gateway. Whole-plan validation still runs first:
+one installed path per alias, nonblank group identity and matching selected
+vehicle namespace. Dormant direct alternatives do not own observations. Unmanaged
+source planning remains strict; unknown native controller targets and derived
+packs retain their previous rejection.
+
+Selected cache aliases use native-alias-gateway-cache-unknown-v1 plus vehicle/group
+identity. Slot, endpoint and label changes cannot masquerade as another physical
+battery; vehicle/group changes do change identity. This namespace is deliberately
+separate from direct numerical producer IDs. Selecting direct BMS then gateway
+cache drains accepted direct facts, finishes the old ride with SOURCE_CHANGE and
+opens a new producer registry/GPS capability. Late old native observations cannot
+enter that new registry. It does not assert cache numeric freshness or automatic
+selection/reconnect handover. Same-policy explicit path replacement retains the
+existing connection-owner rules.
+
+The actual native factory/poll/adapter test covers two independently aliased cache
+slots: controller power remains earned, cells remain unknown-only, local scopes
+match the installed decoder and no observer lookup fails. Managed lifecycle tests
+separately exercise receipt drain, late old observation fencing, policy split and
+physical uniqueness/namespace guards. The fake absence emitter in those lifecycle
+tests is not new wire evidence; the real decoder test supplies that boundary.
+Earlier blanket gateway-alias rejections are superseded only for explicit managed
+selection with this cache-absence producer policy. Production activation, native
+phone acceptance, aggregate qualification and automatic path choice remain open.

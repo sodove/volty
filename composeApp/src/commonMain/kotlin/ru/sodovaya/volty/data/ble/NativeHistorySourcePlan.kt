@@ -13,7 +13,8 @@ internal fun nativeLinkCellCount(spec: LinkSpec, vehicle: Vehicle?): Int? =
     spec.ownedPacks.firstOrNull()?.globalIndex?.let { index -> vehicle?.packs?.firstOrNull { it.index == index }?.cellCount }
 
 /** Managed selection only: caller must first validate the complete physical plan.
- * One selected direct alias path is safe; this cannot authorize concurrent paths.
+ * One selected path per alias is safe; this cannot authorize concurrent paths.
+ * Gateway aliases retain their separate cache-absence producer policy.
  */
 internal fun nativeHistorySourcesForSelectedLink(spec: LinkSpec, vehicle: Vehicle?): Map<HistoryTelemetrySource, HistorySource> =
     nativeHistorySourcesForLink(spec, vehicle, singlePathAliases = true)
@@ -34,7 +35,7 @@ private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singl
     require(profile.controllers.map { it.index }.distinct().size == profile.controllers.size)
     require(spec.ownedPacks.map { it.globalIndex }.distinct().size == spec.ownedPacks.size)
     require(spec.ownedControllers.map { it.globalIndex }.distinct().size == spec.ownedControllers.size)
-    if (spec.isGatewayLink) return nativeHistoryForwardedControllers(spec, profile)
+    if (spec.isGatewayLink) return nativeHistoryForwardedControllers(spec, profile, singlePathAliases)
     require((spec.ownedPacks + spec.ownedControllers).all { it.canId == null && (it.kind == null || it.kind == spec.protocolKind) })
     val packs = spec.ownedPacks.map { owned -> profile.packs.singleOrNull { it.index == owned.globalIndex } }
     val controllers = spec.ownedControllers.map { owned -> profile.controllers.singleOrNull { it.index == owned.globalIndex } }
@@ -104,7 +105,7 @@ private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singl
  * Cache identities certify only the decoder's typed absence policy, never numeric
  * freshness, and cannot borrow a direct battery's identity or a virtual slot.
  */
-private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle): Map<HistoryTelemetrySource, HistorySource> {
+private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle, singlePathAliases: Boolean): Map<HistoryTelemetrySource, HistorySource> {
     require(spec.protocolKind == ProtocolKind.VESC && spec.ownedControllers.isNotEmpty())
     // Match native construction, including its first-controller/profile fallback.
     // A real owned BMS slot suppresses that fallback even when the flag is ON.
@@ -139,11 +140,16 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle):
         require(owned.kind == ProtocolKind.VESC_BMS && (endpoint.canId == null || endpoint.canId in 0..254))
         val pack = requireNotNull(profile.packs.singleOrNull { it.index == endpoint.globalIndex })
         require(pack.bmsType == BmsType.VESC_BMS && pack.canId == endpoint.canId &&
-            pack.bmsAddress.equals(spec.address, ignoreCase = true) && pack.aliasGroup == null)
+            pack.bmsAddress.equals(spec.address, ignoreCase = true))
+        val alias = pack.aliasGroup
+        require(alias == null || (singlePathAliases && alias.isNotBlank())) {
+            "Aliased recording needs qualified single-path admission"
+        }
         val key = HistoryTelemetrySource(TelemetryOrigin.BATTERY, local)
         // Explicit policy version prevents a future numeric producer from
         // silently continuing the cache-absence series under the same source ID.
-        val id = "native-gateway-cache-unknown-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
+        val id = if (alias != null) "native-alias-gateway-cache-unknown-v1:" + encodeIdentity(listOf(profile.id, alias))
+        else "native-gateway-cache-unknown-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
             spec.protocolKind.name, endpoint.canId?.toString() ?: "host"))
         result[key] = HistorySource(id, historySourceKindForTelemetry(key.origin, key.role), pack.label)
     }

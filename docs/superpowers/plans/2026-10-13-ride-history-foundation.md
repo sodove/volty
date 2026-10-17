@@ -988,3 +988,12 @@ flag does not forbid an otherwise valid physical BMS cache slot: native construc
 suppresses that fallback. Actual virtual slots still reject; cache/controller IDs
 and evidence policy remain unchanged. Two regression cases cover stable mapping and
 real decoder/poll/adapter behavior with the flag ON, retaining absent-slot negatives.
+
+Task7 selected cache-alias checkpoint (2026-10-17): managed whole-plan admission can
+select one physical cache path per alias with vehicle/group/policy identity. Strict
+unmanaged and concurrent-path rejection remain. Direct numerical producer to cache
+absence selection drains old facts and splits the ride via SOURCE_CHANGE, keeping
+unknown cache readings out of the direct series. Real gateway decoder tests retain
+earned controller values and independent unknown-only cache cells. This adds
+explicit selected-path capability, not automatic alias choice or numeric cache
+freshness; native/product activation and screens remain open.

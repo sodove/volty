@@ -80,10 +80,14 @@ class NativeHistoryMixedGatewayPlanTest {
 
     @Test fun nativeFactoryHonorsRealHostedSlotsEvenWithDerivedChoiceOn() = verifyNativeMixedDecoder(true)
 
-    private fun verifyNativeMixedDecoder(deriveBattery: Boolean) = runTest {
+    @Test fun selectedCacheAliasesUseRealDecoderUnknownsAndKeepEarnedControllerValues() = verifyNativeMixedDecoder(false, aliases = true)
+
+    private fun verifyNativeMixedDecoder(deriveBattery: Boolean, aliases: Boolean = false) = runTest {
         val link = spec()
-        val profile = vehicle().copy(controllers = listOf(controller.copy(providesDerivedBattery = deriveBattery)))
-        val plan = nativeHistorySourcesForLink(link, profile)
+        val profile = vehicle().let { original -> original.copy(
+            packs = original.packs.mapIndexed { index, pack -> if (aliases) pack.copy(aliasGroup = "physical-$index") else pack },
+            controllers = listOf(controller.copy(providesDerivedBattery = deriveBattery))) }
+        val plan = if (aliases) nativeHistorySourcesForSelectedLink(link, profile) else nativeHistorySourcesForLink(link, profile)
         val protocol = assertIs<VescGatewayProtocol>(controllerMotionProtocol(ProtocolKind.VESC, deriveBattery,
             controller.motor, link))
         val samples = mutableListOf<HistorySample>()
