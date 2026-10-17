@@ -319,3 +319,22 @@ Task1 remains open for catalog pagination, route read ownership, shared cursor
 sample policy, back/fullscreen restoration and final screen composition. The
 foundation acceptance prerequisite remains in force. No Vescape source/assets
 or complete screen port are claimed by this preparation checkpoint.
+
+## Catalog-owner preparation checkpoint (2026-10-17)
+
+Task1 now also has original Kotlin HistoryCatalogComponent alongside the existing
+HistoryDetailComponent. It explicitly pages the unified legacy/v2 reader without
+preloading sources, metric/cell series, stats or GPS. A single request token owns
+refresh/older reads, fences late noncancellable responses and synchronous StateFlow
+reentry, and retires with the parent or Decompose lifecycle. Overlapping IDs update
+metadata without duplicate rows; failed reads retain displayed rows/cursor for
+retry. Repeated continuation cursors report typed storage failure instead of an
+implicit loop. Truncated-read evidence remains separate from hasMore pagination.
+
+Ruling: this extends the earlier read-owner preparation against stable foundation
+interfaces while native/product activation remains gated. It imports no Vescape
+source/assets and does not activate a second history UI. The eventual one parent
+history component composes catalog/detail owners; do not duplicate their read
+ownership logic. Task1 remains open for parent navigation/selection composition,
+route paging, shared cursor policy and back/fullscreen restoration; visual port,
+native acceptance and later screen-plan tasks remain required.
