@@ -168,9 +168,7 @@ class HistoryDetailComponent(
         if (!lifetime.isActive) return
         val current = mutableState.value
         if (key !in current.selectedKeys) return
-        val keys = (current.selectedKeys - key).toMutableList()
-        keys.add(index.coerceIn(0, keys.size), key)
-        mutableState.value = current.copy(selectedKeys = keys.toList())
+        mutableState.value = current.copy(selectedKeys = reorderHistoryMetric(current.selectedKeys, key, index))
     }
 
     fun selectRange(range: HistoryRange) {

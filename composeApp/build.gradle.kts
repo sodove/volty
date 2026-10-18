@@ -192,6 +192,8 @@ android {
     }
 
     namespace = "ru.sodovaya.volty"
+    // Native UI acceptance fixture is declared only in the debug manifest.
+    sourceSets.getByName("debug").manifest.srcFile("src/androidDebug/AndroidManifest.xml")
     compileSdk = 36
 
     buildFeatures {
