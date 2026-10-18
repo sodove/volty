@@ -3,10 +3,12 @@ package ru.sodovaya.volty.debug
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -21,8 +23,11 @@ import ru.sodovaya.volty.presentation.common.VoltyTheme
 import ru.sodovaya.volty.presentation.history.*
 import ru.sodovaya.volty.presentation.map.*
 import volty.composeapp.generated.resources.*
+import org.koin.android.ext.android.getKoin
 
-/** Native rendering/input fixture only. No recording, BLE, GPS or user database.
+/** Native rendering/input fixture. Earlier revisions used synthetic data only;
+ * the explicit stored=true mode now reads existing closed rides through app DI.
+ * Neither mode writes recordings or starts BLE/location. Synthetic is default.
  * This source/manifest belongs exclusively to the Android debug variant.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -30,12 +35,29 @@ class HistoryUiProbeActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, ProbeReader(), { origin }, ::finish)
-        owner.openRide("fixture")
+        val stored = intent.getBooleanExtra("stored", false)
+        val catalog = stored || intent.getBooleanExtra("catalog", false)
+        val repository = if (stored) getKoin().get<HistoryReadRepository>() else ProbeReader()
+        val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
+            { if (stored) error("Stored debug probe supports closed rides only") else origin }, ::finish)
+        if (catalog) owner.refresh() else owner.openRide("fixture")
         setContent {
             VoltyTheme {
                 val state by owner.state.collectAsState()
                 var drawer by remember { mutableStateOf(true) }
+                if (catalog) {
+                    BackHandler(enabled = state.destination != HistoryDestination.CATALOG) { owner.back() }
+                    if (state.destination == HistoryDestination.CATALOG) {
+                        Scaffold(topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_title)) },
+                            navigationIcon = { IconButton(onClick = owner::back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }) }) { padding ->
+                            HistoryRideList(state.catalog, state.selectedRideId, owner::openRide, owner::refresh, owner::loadOlder,
+                                Modifier.fillMaxSize().padding(padding),
+                                vehicleNames = if (stored) emptyMap() else mapOf("fixture-vehicle-0" to "Scooter", "fixture-vehicle-1" to "Bicycle", "fixture-vehicle-2" to "Wheel"),
+                                previews = if (stored) emptyMap() else state.catalog.rides.filter { it.status != HistoryRideStatus.LEGACY }.associate { it.id to previewSegments })
+                        }
+                    } else MapProbe(owner, state)
+                    return@VoltyTheme
+                }
                 if (intent.getBooleanExtra("map", false)) {
                     MapProbe(owner, state)
                     return@VoltyTheme
@@ -54,22 +76,22 @@ class HistoryUiProbeActivity : ComponentActivity() {
 
     @Composable
     private fun MapProbe(owner: HistoryComponent, state: HistoryUiState) {
-        val identity = remember { HistoryMapIdentity("fixture", 1) }
-        val history = remember(state.route.fixes, state.route.markers, state.detail.cursorEpochMillis) {
-            historyMapScene(identity, origin, state.route.fixes, state.route.markers, state.detail.cursorEpochMillis, 1000)
+        val identity = remember(state.selectedRideId) { HistoryMapIdentity(state.selectedRideId ?: "fixture", 1) }
+        val rideOrigin = state.detail.ride?.started ?: origin
+        val history = remember(identity, rideOrigin, state.route.fixes, state.route.markers, state.detail.cursorEpochMillis) {
+            historyMapScene(identity, rideOrigin, state.route.fixes, state.route.markers, state.detail.cursorEpochMillis, 1000)
         }
         val density = LocalDensity.current
         val insets = with(density) { HistoryMapInsets(24.dp.roundToPx(), 48.dp.roundToPx(), 24.dp.roundToPx(), 144.dp.roundToPx()) }
-        val fit = remember(insets) { MapCameraRequest.FitHistory(1, identity, insets, reduceMotion = true) }
+        val fit = remember(identity, insets) { MapCameraRequest.FitHistory(1, identity, insets, reduceMotion = true) }
         Box(Modifier.fillMaxSize()) {
             PlatformRideMapLayer(historyMapNavigationScene(history, fit), darkTheme = true, onCameraGesture = {}, modifier = Modifier.fillMaxSize())
             Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding(), tonalElevation = 3.dp) {
                 Column(Modifier.padding(16.dp)) {
                     Text("GPS · ${history.segments.size} segments · ${state.detail.cursorEpochMillis ?: "—"}")
                     val range = state.detail.range
-                    if (range != null) Slider(value = (state.detail.cursorEpochMillis ?: range.startEpochMillis).toFloat(),
-                        onValueChange = { owner.selectTime(it.toLong()) },
-                        valueRange = range.startEpochMillis.toFloat()..range.endEpochMillis.toFloat())
+                    if (range != null) Slider(value = historyTimeFraction(range, state.detail.cursorEpochMillis ?: range.startEpochMillis) ?: 0f,
+                        onValueChange = { fraction -> historyTimeAtFraction(range, fraction)?.let(owner::selectTime) })
                 }
             }
         }
@@ -78,8 +100,14 @@ class HistoryUiProbeActivity : ComponentActivity() {
     private class ProbeReader : HistoryReadRepository {
         private val sources = listOf(HistorySource("fixture-a", HistorySourceKind.BATTERY, "Pack"),
             HistorySource("fixture-b", HistorySourceKind.BATTERY, "Pack"))
-        override suspend fun ride(rideId: String) = HistoryRide(rideId, "fixture", origin, origin.copy(epochMillis = 5000, elapsedMillis = 4010), HistoryRideStatus.COMPLETED)
-        override suspend fun rides(before: HistoryCursor?) = HistoryPage(listOf(ride("fixture")), null, false)
+        override suspend fun ride(rideId: String) = HistoryRide(rideId, "fixture-vehicle-${rideId.hashCode().mod(3)}", origin,
+            origin.copy(epochMillis = 5000, elapsedMillis = 4010), if (rideId.endsWith("-3")) HistoryRideStatus.LEGACY else HistoryRideStatus.COMPLETED)
+        override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> {
+            val start = before?.stableId?.removePrefix("fixture-")?.toIntOrNull()?.plus(1) ?: 0
+            val rows = (start until minOf(start + 20, 24)).map { ride("fixture-$it") }
+            val next = if (start + rows.size < 24) HistoryCursor(1000, rows.last().id) else null
+            return HistoryPage(rows, next, next != null)
+        }
         override suspend fun sources(rideId: String) = sources
         override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
             val keys = listOf("voltage_v", "current_a", "power_w").map { HistorySeriesKey(sourceId, it) } +
@@ -99,5 +127,10 @@ class HistoryUiProbeActivity : ComponentActivity() {
         }
     }
 
-    private companion object { val origin = HistoryTick(1000, 10, 1) }
+    private companion object {
+        val origin = HistoryTick(1000, 10, 1)
+        val previewSegments = listOf(HistoryMapSegment(listOf(
+            HistoryGpsFix(origin,56.838,60.600,3.0,null), HistoryGpsFix(origin,56.840,60.603,3.0,null))),
+            HistoryMapSegment(listOf(HistoryGpsFix(origin,56.843,60.610,3.0,null), HistoryGpsFix(origin,56.845,60.611,3.0,null))))
+    }
 }

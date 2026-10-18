@@ -15,6 +15,23 @@ Pinned source: [`vescape-app/vescape` at `2527c346bbdb25d4e018fdd68e916621e20fac
 
 The source package's license is taken from its `package.json`; the GPLv3 text is in its root `LICENSE`. The candidate scan found no additional per-file notices to enumerate. Preserve the package-level license and attribution evidence for any material actually transferred, and record the transferred files and changes in the source-provenance record.
 
+## Imported UI adaptations
+
+### 2026-10-18 transfer record
+
+Retraction of earlier dated "no Vescape source imported yet" status below: the
+first direct UI adaptations now live in
+`composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/history/ported/`.
+`HistoryRideCard.kt` adapts pinned `HistoryRideRow.tsx`; `HistoryRoutePreview.kt`
+adapts pinned `RouteSparkline.tsx`. Each carries GPL-3.0-or-later/source attribution.
+The adjacent README enumerates changes and the adjacent LICENSE copies upstream
+verbatim (SHA-256 `230184F60BAE2FEAF244F10A8BAC053C8FF33A183BCC365B4D8B876D2B7F4809`).
+The package author is Kacper Kozak; no unverified file-level copyright year is
+invented. Source-shaped row/Canvas visuals are transferred, not upstream telemetry
+storage, tiles, gallery scanning, logos or other assets. This supersedes the old
+import status only; the inventory's unresolved distribution/dependency conclusions
+are not silently upgraded by per-file license labels.
+
 ## Direct runtime modules
 
 The runtime set below comes from `composeApp/build.gradle.kts` common/Android main source sets and the corresponding aliases in `gradle/libs.versions.toml`. License names and URLs are copied from the cached POMs, not inferred from repository descriptions. Cache root on the inspected machine: `C:\Users\sodovaya\git\volty\.gradle-user\caches\modules-2\files-2.1`. Each reference below is relative to that root and names the exact cached POM.

@@ -3,3 +3,5 @@
 # only thing standing between a checkout and a silently corrupted snapshot —
 # which would turn the migration verifier into a source of false failures.
 *.db binary
+# Keep the pinned upstream license byte-identical on Windows checkouts.
+composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/history/ported/LICENSE text eol=lf
