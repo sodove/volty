@@ -11,6 +11,9 @@ These Kotlin/Compose files adapt Vescape's UI at pinned revision
 Both adaptations are marked `GPL-3.0-or-later`, matching upstream `package.json`.
 `LICENSE` is a verbatim copy of upstream's GNU GPL version 3 text (SHA-256
 `230184F60BAE2FEAF244F10A8BAC053C8FF33A183BCC365B4D8B876D2B7F4809`).
+Retraction: the initial LF-only Git rule normalized this upstream CRLF file in
+the Git blob. The scoped rule now disables conversion so its original bytes,
+not just its license text, are preserved across commits and checkouts.
 The source pin, package-author evidence and dependency audit are recorded in
 `docs/third-party/vescape-history.md` at the repository root.
 
