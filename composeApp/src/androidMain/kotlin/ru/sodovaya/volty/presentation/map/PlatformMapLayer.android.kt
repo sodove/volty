@@ -15,7 +15,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -75,6 +74,8 @@ import org.maplibre.android.style.sources.GeoJsonSource
 import ru.sodovaya.volty.domain.location.RideLocationFix
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
+import ru.sodovaya.volty.presentation.history.HistoryMapScene
+import ru.sodovaya.volty.domain.history.HistoryGpsFix
 import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.sin
@@ -95,6 +96,12 @@ private const val COMPLETED_ROUTE_SOURCE_ID = "volty-route-completed-source"
 private const val COMPLETED_ROUTE_LAYER_ID = "volty-route-completed-layer"
 private const val DESTINATION_SOURCE_ID = "volty-destination-source"
 private const val DESTINATION_LAYER_ID = "volty-destination-layer"
+private const val HISTORY_ROUTE_SOURCE_ID = "volty-history-route-source"
+private const val HISTORY_ROUTE_LAYER_ID = "volty-history-route-layer"
+private const val HISTORY_POINTS_SOURCE_ID = "volty-history-points-source"
+private const val HISTORY_POINTS_LAYER_ID = "volty-history-points-layer"
+private const val HISTORY_CURSOR_SOURCE_ID = "volty-history-cursor-source"
+private const val HISTORY_CURSOR_LAYER_ID = "volty-history-cursor-layer"
 private const val MAX_TRAIL_POINTS = 240
 
 /** Keeps the native GL surface and its loaded style alive between tab changes. */
@@ -171,7 +178,7 @@ private fun AndroidMapLibreView(
     val lifecycleOwner = LocalLifecycleOwner.current
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember(cacheKey) { mutableStateOf(false) }
-    var lastCameraSequence by remember(cacheKey) { mutableLongStateOf(Long.MIN_VALUE) }
+    var lastCameraRequest by remember(cacheKey) { mutableStateOf<MapCameraRequest?>(null) }
     val latestScene = rememberUpdatedState(scene)
     val latestGestureCallback = rememberUpdatedState(onCameraGesture)
     val motionEstimator = remember(cacheKey) { RideMapMotionEstimator() }
@@ -197,7 +204,7 @@ private fun AndroidMapLibreView(
         readyMap.setStyle(Style.Builder().fromUri(targetStyleUrl)) { style ->
             LegacyBuildingLayer.add(style)
             configureStyle(style, darkTheme)
-            lastCameraSequence = Long.MIN_VALUE
+            lastCameraRequest = null
             if (defaultRideMapCameraPolicy.appliesWithoutTarget) {
                 readyMap.moveCamera(
                     CameraUpdateFactory.newCameraPosition(
@@ -244,12 +251,12 @@ private fun AndroidMapLibreView(
         onDispose { readyMap.removeOnCameraMoveStartedListener(listener) }
     }
 
-    LaunchedEffect(map, styleReady, latestScene.value.cameraRequest?.sequence) {
+    LaunchedEffect(map, styleReady, latestScene.value.cameraRequest) {
         val readyMap = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
         val request = latestScene.value.cameraRequest ?: return@LaunchedEffect
-        if (request.sequence == lastCameraSequence) return@LaunchedEffect
-        if (request is MapCameraRequest.FitAlternatives || request is MapCameraRequest.FitParticipants) {
+        if (sameMapCameraCommand(lastCameraRequest, request) || !mapCameraRequestApplies(latestScene.value, request)) return@LaunchedEffect
+        if (request is MapCameraRequest.FitAlternatives || request is MapCameraRequest.FitParticipants || request is MapCameraRequest.FitHistory) {
             var frames = 0
             while ((readyMap.width <= 0 || readyMap.height <= 0) && frames < 120) {
                 withFrameNanos { }
@@ -257,18 +264,26 @@ private fun AndroidMapLibreView(
             }
             if (readyMap.width <= 0 || readyMap.height <= 0) return@LaunchedEffect
         }
+        // A frame wait may outlive the scene that issued this command.
+        if (latestScene.value.cameraRequest != request || !mapCameraRequestApplies(latestScene.value, request)) return@LaunchedEffect
         when (request) {
+            is MapCameraRequest.FitHistory -> fitHistory(readyMap, checkNotNull(latestScene.value.history), request)
             is MapCameraRequest.FitAlternatives -> fitAlternatives(readyMap, request.points)
             is MapCameraRequest.FitParticipants -> fitAlternatives(readyMap, request.points)
             is MapCameraRequest.Recenter -> recenter(readyMap, request.fix)
             is MapCameraRequest.FollowFix -> Unit
         }
-        lastCameraSequence = request.sequence
+        lastCameraRequest = request
     }
 
-    LaunchedEffect(map, styleReady) {
+    LaunchedEffect(map, styleReady, latestScene.value.history != null) {
         val readyMap = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
+        if (latestScene.value.history != null) {
+            updateOwnGeoJson(readyMap, null)
+            updateTrailGeoJson(readyMap, emptyList(), System.currentTimeMillis())
+            return@LaunchedEffect // Recorded fixes never enter the live motion predictor.
+        }
         var lastFrameNanos = Long.MIN_VALUE
         var lastFixKey: FixRenderKey? = null
         var lastTrail: List<NavigationTrailPoint>? = null
@@ -337,17 +352,34 @@ private fun AndroidMapLibreView(
         }
     }
 
-    LaunchedEffect(map, styleReady, latestScene.value.routes, latestScene.value.destination) {
+    LaunchedEffect(map, styleReady, latestScene.value.routes, latestScene.value.destination, latestScene.value.history != null) {
         val readyMap = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
-        updateRouteGeoJson(readyMap, latestScene.value.routes)
-        updateDestinationGeoJson(readyMap, latestScene.value.destination)
+        val current = latestScene.value
+        updateRouteGeoJson(readyMap, if (current.history == null) current.routes else emptyList())
+        updateDestinationGeoJson(readyMap, if (current.history == null) current.destination else null)
     }
 
-    LaunchedEffect(map, styleReady, latestScene.value.participantMarkers) {
+    LaunchedEffect(map, styleReady, latestScene.value.participantMarkers, latestScene.value.history != null) {
         val readyMap = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
-        updateMarkerGeoJson(readyMap, latestScene.value.participantMarkers)
+        updateMarkerGeoJson(readyMap, if (latestScene.value.history == null) latestScene.value.participantMarkers else emptyList())
+    }
+
+    LaunchedEffect(map, styleReady, latestScene.value.history?.segments) {
+        val readyMap = map ?: return@LaunchedEffect
+        if (styleReady) updateHistoryRouteGeoJson(readyMap, latestScene.value.history)
+    }
+    LaunchedEffect(map, styleReady, latestScene.value.history?.startFix, latestScene.value.history?.endFix, latestScene.value.history?.gapFixes) {
+        val readyMap = map ?: return@LaunchedEffect
+        if (styleReady) updateHistoryAnchorsGeoJson(readyMap, latestScene.value.history)
+    }
+    LaunchedEffect(map, styleReady, latestScene.value.history?.selectedFix) {
+        val readyMap = map ?: return@LaunchedEffect
+        if (styleReady) readyMap.style?.getSourceAs<GeoJsonSource>(HISTORY_CURSOR_SOURCE_ID)?.setGeoJson(
+            FeatureCollection.fromFeatures(listOfNotNull(latestScene.value.history?.selectedFix?.let {
+                Feature.fromGeometry(Point.fromLngLat(it.lon, it.lat))
+            })))
     }
 
     Box(modifier = modifier.background(ComposeColor(0xFF07131E))) {
@@ -443,6 +475,19 @@ private fun recenter(map: MapLibreMap, fix: RideLocationFix) {
     )
 }
 
+private fun fitHistory(map: MapLibreMap, scene: HistoryMapScene, request: MapCameraRequest.FitHistory) {
+    val padding = historyFitPadding(map.width.toInt(), map.height.toInt(), request.insets) ?: return
+    val points = scene.segments.flatMap { it.fixes }.map { LatLng(it.lat, it.lon) }.distinct()
+    if (points.isEmpty()) return
+    val update = if (points.size == 1) CameraUpdateFactory.newCameraPosition(
+        CameraPosition.Builder(map.cameraPosition).target(points.single()).zoom(15.0).tilt(0.0).bearing(0.0).build())
+    else {
+        val bounds = LatLngBounds.Builder().also { builder -> points.forEach(builder::include) }.build()
+        CameraUpdateFactory.newLatLngBounds(bounds, 0.0, 0.0, padding.left, padding.top, padding.right, padding.bottom)
+    }
+    if (request.reduceMotion) map.moveCamera(update) else map.animateCamera(update)
+}
+
 @Composable
 private fun MapTopBottomBlur(hazeState: HazeState, modifier: Modifier = Modifier) {
     Box(modifier = modifier) {
@@ -486,6 +531,19 @@ private fun MapBlurBand(modifier: Modifier) {
 }
 
 private fun configureStyle(style: Style, darkTheme: Boolean) {
+    // Neutral until an earned metric color scale is supplied. Missing data is not zero.
+    addLineSourceAndLayer(style, HISTORY_ROUTE_SOURCE_ID, HISTORY_ROUTE_LAYER_ID, "#94A8B8", 5f, 0.95f)
+    if (style.getSource(HISTORY_POINTS_SOURCE_ID) == null) style.addSource(GeoJsonSource(HISTORY_POINTS_SOURCE_ID, emptyFeatureCollection()))
+    if (style.getLayer(HISTORY_POINTS_LAYER_ID) == null) style.addLayer(
+        CircleLayer(HISTORY_POINTS_LAYER_ID, HISTORY_POINTS_SOURCE_ID).withProperties(
+            circleColor(Expression.switchCase(
+                Expression.eq(Expression.get("role"), "gap"), Expression.color(Color.parseColor("#FFB454")),
+                Expression.color(Color.parseColor("#94A8B8")))),
+            circleRadius(7f), circleStrokeColor(Color.WHITE), circleStrokeWidth(2f)))
+    if (style.getSource(HISTORY_CURSOR_SOURCE_ID) == null) style.addSource(GeoJsonSource(HISTORY_CURSOR_SOURCE_ID, emptyFeatureCollection()))
+    if (style.getLayer(HISTORY_CURSOR_LAYER_ID) == null) style.addLayer(
+        CircleLayer(HISTORY_CURSOR_LAYER_ID, HISTORY_CURSOR_SOURCE_ID).withProperties(
+            circleColor(Color.parseColor("#39B9FF")), circleRadius(8f), circleStrokeColor(Color.WHITE), circleStrokeWidth(2f)))
     addLineSourceAndLayer(style, TRAIL_SOURCE_ID, TRAIL_LAYER_ID, "#D16AFF", 3.2f, Expression.get("opacity"))
     addLineSourceAndLayer(style, INACTIVE_ROUTE_SOURCE_ID, INACTIVE_ROUTE_LAYER_ID, "#8496A1", 4.0f, 0.50f)
     addLineSourceAndLayer(style, SELECTED_ROUTE_SOURCE_ID, SELECTED_ROUTE_LAYER_ID, "#39B9FF", 6.0f, 0.96f)
@@ -623,6 +681,26 @@ private fun updateDestinationGeoJson(map: MapLibreMap, destination: GeoCoordinat
             FeatureCollection.fromFeatures(listOf(Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude))))
         } ?: emptyFeatureCollection(),
     )
+}
+
+private fun updateHistoryRouteGeoJson(map: MapLibreMap, scene: HistoryMapScene?) {
+    val style = map.style ?: return
+    style.getSourceAs<GeoJsonSource>(HISTORY_ROUTE_SOURCE_ID)?.setGeoJson(FeatureCollection.fromFeatures(
+        scene?.segments.orEmpty().filter { it.fixes.size >= 2 }.map { segment ->
+            Feature.fromGeometry(LineString.fromLngLats(segment.fixes.map { Point.fromLngLat(it.lon, it.lat) }))
+        }))
+}
+
+private fun updateHistoryAnchorsGeoJson(map: MapLibreMap, scene: HistoryMapScene?) {
+    val style = map.style ?: return
+    val points = mutableListOf<Feature>()
+    fun point(fix: HistoryGpsFix?, role: String) {
+        if (fix != null) points += Feature.fromGeometry(Point.fromLngLat(fix.lon, fix.lat)).apply { addStringProperty("role", role) }
+    }
+    // These are loaded-portion endpoints, not invented full-trip start/finish claims.
+    point(scene?.startFix, "endpoint"); point(scene?.endFix, "endpoint")
+    scene?.gapFixes?.forEach { point(it, "gap") }
+    style.getSourceAs<GeoJsonSource>(HISTORY_POINTS_SOURCE_ID)?.setGeoJson(FeatureCollection.fromFeatures(points))
 }
 
 private fun updateMarkerGeoJson(map: MapLibreMap, markers: List<ParticipantMarker>) {
