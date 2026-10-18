@@ -9,4 +9,5 @@ data class HistoryUiState(
     val catalog: HistoryCatalogState = HistoryCatalogState(),
     val detail: HistoryDetailState = HistoryDetailState(),
     val route: HistoryRouteState = HistoryRouteState(),
+    val previews: HistoryPreviewsState = HistoryPreviewsState(),
 )

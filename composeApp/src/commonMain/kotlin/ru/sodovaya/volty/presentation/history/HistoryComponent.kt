@@ -23,6 +23,8 @@ interface HistoryComponent {
     fun selectRange(range: HistoryRange)
     fun loadMoreRoute()
     fun retryRoute()
+    fun setVisibleRides(ids: List<String>)
+    fun retryPreview(id: String)
     fun back()
 }
 
@@ -36,16 +38,28 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
     private val detail = HistoryDetailComponent(componentContext, scope, repository, readTick)
     private val route = HistoryRouteComponent(componentContext, scope, repository)
+    private val previews = HistoryPreviewComponent(componentContext, scope, repository, PREVIEW_GPS_SILENCE_MILLIS)
     private val mutableState = MutableStateFlow(HistoryUiState())
     override val state = mutableState.asStateFlow()
     private var selectedRideId: String? = null
     private var selection = Any()
+    private var previewRevision = 0L
+    private var visiblePreviewIds = emptyList<String>()
+    private var catalogIntent = Any()
 
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
-            catalog.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(catalog = it) }
+            catalog.state.collect { next ->
+                if (lifetime.isActive) {
+                    mutableState.value = mutableState.value.copy(catalog = next)
+                    syncVisiblePreviews()
+                }
+            }
         }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { detail.state.collect(::onDetail) }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            previews.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(previews = it) }
+        }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             route.state.collect { next ->
                 val current = mutableState.value
@@ -68,8 +82,14 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         if (lifetime.isActive && selection === captured && needsRoute) route.open(checkNotNull(ride), checkNotNull(range))
     }
 
-    override fun refresh() { if (lifetime.isActive) catalog.refresh() }
-    override fun loadOlder() { if (lifetime.isActive) catalog.loadOlder() }
+    override fun refresh() {
+        if (!lifetime.isActive) return
+        val captured = Any(); catalogIntent = captured
+        previewRevision = if (previewRevision == Long.MAX_VALUE) 0 else previewRevision + 1
+        syncVisiblePreviews()
+        if (lifetime.isActive && catalogIntent === captured) catalog.refresh()
+    }
+    override fun loadOlder() { if (lifetime.isActive) { catalogIntent = Any(); catalog.loadOlder() } }
 
     override fun openRide(id: String) {
         if (!lifetime.isActive) return
@@ -94,6 +114,18 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     override fun selectRange(range: HistoryRange) = withSelection { detail.selectRange(range) }
     override fun loadMoreRoute() = withSelection { route.loadMore() }
     override fun retryRoute() = withSelection { route.retry() }
+    override fun setVisibleRides(ids: List<String>) {
+        if (!lifetime.isActive) return
+        visiblePreviewIds = ids.distinct().take(20)
+        syncVisiblePreviews()
+    }
+    override fun retryPreview(id: String) { if (lifetime.isActive) previews.retry(id) }
+
+    private fun syncVisiblePreviews() {
+        if (!lifetime.isActive) return
+        val models = mutableState.value.catalog.rides.associateBy { it.id }
+        previews.setVisible(visiblePreviewIds.mapNotNull(models::get), previewRevision)
+    }
 
     private fun withSelection(action: () -> Unit) {
         if (lifetime.isActive && selectedRideId != null) action()
@@ -115,7 +147,10 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     }
 
     fun close() {
-        selection = Any(); selectedRideId = null
-        catalog.close(); detail.close(); route.close(); lifetime.cancel()
+        selection = Any(); catalogIntent = Any(); selectedRideId = null
+        catalog.close(); detail.close(); route.close(); previews.close(); lifetime.cancel()
     }
 }
+
+// Display-only silence bound; explicit recorded GPS/continuity markers always veto a bridge.
+private const val PREVIEW_GPS_SILENCE_MILLIS = 5_000L

@@ -6,6 +6,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -44,6 +45,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
         setContent {
             VoltyTheme {
                 val state by owner.state.collectAsState()
+                val catalogListState = rememberLazyListState()
                 var drawer by remember { mutableStateOf(true) }
                 if (catalog) {
                     BackHandler(enabled = state.destination != HistoryDestination.CATALOG) { owner.back() }
@@ -53,7 +55,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
                             HistoryRideList(state.catalog, state.selectedRideId, owner::openRide, owner::refresh, owner::loadOlder,
                                 Modifier.fillMaxSize().padding(padding),
                                 vehicleNames = if (stored) emptyMap() else mapOf("fixture-vehicle-0" to "Scooter", "fixture-vehicle-1" to "Bicycle", "fixture-vehicle-2" to "Wheel"),
-                                previews = if (stored) emptyMap() else state.catalog.rides.filter { it.status != HistoryRideStatus.LEGACY }.associate { it.id to previewSegments })
+                                previews = state.previews, onVisibleChanged = owner::setVisibleRides, onRetryPreview = owner::retryPreview,
+                                listState = catalogListState)
                         }
                     } else MapProbe(owner, state)
                     return@VoltyTheme
@@ -98,6 +101,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
     }
 
     private class ProbeReader : HistoryReadRepository {
+        private val failedReads = mutableSetOf<String>()
         private val sources = listOf(HistorySource("fixture-a", HistorySourceKind.BATTERY, "Pack"),
             HistorySource("fixture-b", HistorySourceKind.BATTERY, "Pack"))
         override suspend fun ride(rideId: String) = HistoryRide(rideId, "fixture-vehicle-${rideId.hashCode().mod(3)}", origin,
@@ -119,18 +123,18 @@ class HistoryUiProbeActivity : ComponentActivity() {
         override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) = HistoryStats(null, null, null, false)
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?) = HistoryPage<HistoryGpsFix>(emptyList(), null, false)
         override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
+            if (rideId.endsWith("-7") && failedReads.add(rideId)) error("Synthetic one-shot route read failure")
             fun fix(time: Long, lat: Double, lon: Double) = HistoryGpsFix(HistoryTick(time, time - 990, 1), lat, lon, 3.0, null)
             val fixes = listOf(fix(1000, 56.838, 60.600), fix(1500, 56.839, 60.603), fix(2000, 56.840, 60.603),
                 fix(3000, 56.843, 60.610), fix(3500, 56.844, 60.612), fix(4000, 56.845, 60.611))
-            return HistoryRoutePage(origin, HistoryPage(fixes, null, false),
+            val partial = rideId.endsWith("-5") && after == null
+            val rows = if (after == null) fixes else listOf(fix(4500,56.846,60.613))
+            return HistoryRoutePage(origin, HistoryPage(rows, if (partial) HistoryCursor(4000,"6") else null, partial),
                 listOf(HistoryMarker(HistoryTick(2500, 1510, 1), HistoryMarkerKind.GPS_GAP)))
         }
     }
 
     private companion object {
         val origin = HistoryTick(1000, 10, 1)
-        val previewSegments = listOf(HistoryMapSegment(listOf(
-            HistoryGpsFix(origin,56.838,60.600,3.0,null), HistoryGpsFix(origin,56.840,60.603,3.0,null))),
-            HistoryMapSegment(listOf(HistoryGpsFix(origin,56.843,60.610,3.0,null), HistoryGpsFix(origin,56.845,60.611,3.0,null))))
     }
 }

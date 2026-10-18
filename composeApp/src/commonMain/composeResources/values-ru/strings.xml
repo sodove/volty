@@ -992,6 +992,9 @@
     <string name="history_load_older">Показать более ранние</string>
     <string name="history_refresh">Обновить</string>
     <string name="history_catalog_partial">Показана только часть истории поездок</string>
+    <string name="history_preview_loading">Загрузка превью маршрута</string>
+    <string name="history_preview_partial">Маршрут показан не полностью</string>
+    <string name="history_preview_unavailable">Превью маршрута недоступно</string>
     <string name="history_metrics_title">Показатели</string>
     <string name="history_metric_search">Найти показатель или источник</string>
     <string name="history_metrics_hint">Разверните источник, чтобы выбрать сохранённые показатели.</string>

@@ -130,6 +130,28 @@ class HistoryComponentTest {
         }
     }
 
+    @Test fun visiblePreviewIdsUseCurrentCatalogAndRefreshRetiresRemovedRows() = runTest {
+        val repo = object : Repo() {
+            override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> {
+                catalogReads++
+                return HistoryPage(listOf(this@HistoryComponentTest.ride(if (catalogReads == 1) "a" else "b")
+                    .copy(status = HistoryRideStatus.LEGACY)), null, false)
+            }
+        }
+        val c = component(repo)
+        try {
+            c.refresh(); runCurrent(); c.setVisibleRides(listOf("unknown","a","a")); runCurrent()
+            assertEquals(setOf("a"), c.state.value.previews.previews.keys)
+            assertTrue(repo.routeReads.isEmpty()); assertTrue(repo.detailReads.isEmpty())
+            c.refresh(); runCurrent()
+            assertEquals(listOf("b"),c.state.value.catalog.rides.map { it.id })
+            assertTrue(c.state.value.previews.previews.isEmpty())
+            c.setVisibleRides(listOf("b")); runCurrent(); assertEquals(setOf("b"),c.state.value.previews.previews.keys)
+            c.close(); val before = c.state.value; c.setVisibleRides(listOf("a")); c.retryPreview("b"); c.refresh(); runCurrent()
+            assertEquals(before,c.state.value)
+        } finally { c.close() }
+    }
+
     @Test fun synchronousSelectionObserverCannotStartSupersededDetailOrRoute() = runTest {
         val repo = Repo(); val c = component(repo); var replaced = false
         val observer = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {

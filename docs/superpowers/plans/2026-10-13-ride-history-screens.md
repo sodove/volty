@@ -63,14 +63,14 @@ interface HistoryComponent {
 }
 ```
 
-- [ ] RED with fake HistoryReadRepository Deferred gates: openA/openB/finishB/
+- [x] RED with fake HistoryReadRepository Deferred gates: openA/openB/finishB/
   finishA leaves B; close lifecycle while A pending produces no state afterward.
   Add a stored key returns its series, removes/reorders preserve cursor/range.
-- [ ] Implement DefaultHistoryComponent(ComponentContext, parentScope,
+- [x] Implement DefaultHistoryComponent(ComponentContext, parentScope,
   HistoryReadRepository, registry, onBack) with one request-generation owner.
   Own all jobs via parent and doOnDestroy; no GlobalScope. Separate list and detail
   error/loading; expand state with typed localized errors rather than exception text.
-- [ ] Cursor policy returns a usable sample only within the source cadence and
+- [x] Cursor policy returns a usable sample only within the source cadence and
   same continuity segment. Define `historyCursorSample(series: HistorySeries,
   epochMillis: Long, maxAgeMillis: Long): HistorySample?`.
   ```kotlin
@@ -81,9 +81,13 @@ interface HistoryComponent {
     assertNull(historyCursorSample(series, 100000, 1000))
   }
   ```
-- [ ] Add range/cursor restoration tests on back/fullscreen, empty unavailable
+- [x] Add range/cursor restoration tests on back/fullscreen, empty unavailable
   series, legacy noGPS, tie-break timestamps and paged older-list loading.
-- [ ] Focused RED/GREEN/full suite; commit component/policy.
+- [x] Focused RED/GREEN/full suite; commit component/policy.
+
+Checkpoint: `a0b88673` owns the shared selection/range/cursor and atomic route
+read composition. Subsequent preview ownership adds no eager source/series read.
+This completes the component task, not production root/recorder activation.
 
 ## Task2 — metric drawer for contributors and cells
 
@@ -98,7 +102,7 @@ fun historyMetricOptions(options: List<HistoryMetricOption>, query: String): Lis
 fun reorderHistoryMetric(keys: List<HistorySeriesKey>, key: HistorySeriesKey, index: Int): List<HistorySeriesKey>
 ```
 
-- [ ] RED for search by source/cell name, duplicate aggregate/contributor titles,
+- [x] RED for search by source/cell name, duplicate aggregate/contributor titles,
   selected unavailable key, reorder clamp, 1000-cell fixture.
   ```kotlin
   @Test fun cellSearchPreservesSourceIdentity() {
@@ -107,15 +111,19 @@ fun reorderHistoryMetric(keys: List<HistorySeriesKey>, key: HistorySeriesKey, in
     assertEquals(listOf(b), historyMetricOptions(listOf(a, b), "Battery B"))
   }
   ```
-- [ ] Port selection structure to ModalBottomSheet with search, grouped headers
+- [x] Port selection structure to ModalBottomSheet with search, grouped headers
   Movement/Controllers/Batteries/Cells, source subgroups, availability labels and
   selected-list reorder/remove. Use stable source/metric/cell keys, LazyColumn.
   Search local text state synchronously; include imePadding, preserve editor cursor.
   No per-cell full-trip preload: load selected/visible series only.
 - [ ] Persist chosen metric presets by source-kind/metric, resolve recorded IDs
   per ride; never auto-rebind BatteryA to BatteryB because their display names match.
-- [ ] Verify drawer on emulator portrait/landscape/keyboard and no-long-bar layout;
+- [x] Verify drawer on emulator portrait/landscape/keyboard and no-long-bar layout;
   common tests assert policy only. Full suite, commit drawer.
+
+Checkpoint: `8801f773`; native evidence and limits are recorded in
+`../specs/2026-10-18-history-metric-drawer-acceptance.md`. Persistent presets remain
+open, so Task2 as a whole is not complete.
 
 ## Task3 — historical map scene, cursor and animation
 
@@ -131,7 +139,7 @@ data class HistoryMapScene(val segments: List<HistoryMapSegment>, val selectedFi
 fun historyMapScene(gps: List<HistoryGpsFix>, markers: List<HistoryMarker>, cursorEpochMillis: Long?, generation: Long, metric: HistorySeries? = null): HistoryMapScene
 ```
 
-- [ ] RED for two routes divided by GPS_GAP: two segments, no line bridge;
+- [x] RED for two routes divided by GPS_GAP: two segments, no line bridge;
   noGPS yields empty segments/selectedFix=null. Distant cursor point remains null.
   ```kotlin
   @Test fun legacyRideHasNoInventedRoute() {
@@ -152,6 +160,12 @@ fun historyMapScene(gps: List<HistoryGpsFix>, markers: List<HistoryMarker>, curs
   natively at near/far zoom, allgap and offline styles.
 - [ ] Full suite/native visual evidence, commit map adapter.
 
+Partial checkpoint: `eaa8b429` implements the neutral historical layer, recent
+recorded cursor, loaded-portion endpoints/gaps and fenced camera requests on the
+existing retained map. Evidence is in `../specs/2026-10-18-history-map-acceptance.md`.
+Metric coloring, full screen/camera integration and the remaining native cases
+stay open; the partial adapter commit does not check off those requirements.
+
 ## Task4 — route previews and history list
 
 **Files:** Create `presentation/history/HistoryRoutePreview.kt`, `HistoryRideList.kt`,
@@ -163,7 +177,7 @@ test `HistoryRoutePreviewPolicyTest.kt`, `HistoryPreviewCacheTest.kt`.
 in foundation facade with extrema/segment-safe read and its tests.
 **Produces:** Cached preview image + Canvas route fallback, paged ride drawer.
 
-- [ ] RED using pure `historyPreviewPath(gps: List<HistoryGpsFix>, width: Double,
+- [x] RED using pure `historyPreviewPath(gps: List<HistoryGpsFix>, width: Double,
   height: Double): List<Pair<Double, Double>>` on zero-area bounds, crossing
   longitude wrap and gaps. Empty input returns empty path, no native map allocation.
 - [ ] Port Vescape thumbnail/layout/tile-cache approach. Key caches by ride ID,
@@ -177,6 +191,15 @@ in foundation facade with extrema/segment-safe read and its tests.
   requests, cancel retired reads, cache invalidation after trim/delete. Native
   verify fast long-list scroll without growing MapView count.
 - [ ] Full suite/native evidence, commit previews/list.
+
+Partial checkpoint: `073e2696` ports the first GPL-attributed Vescape card/Canvas
+UI; `74d22153` preserves the original license bytes. The catalog reads existing
+legacy data on API34; evidence is in `../specs/2026-10-18-history-catalog-acceptance.md`.
+Visible preview reads and bounded geometry caching continue in the execution
+ledger. Source previews use the existing bounded atomic route page with an
+explicit incomplete flag when data/segments are omitted; this does not claim a
+new full-route SQL summary, tile/image cache, name/distance/date-group/favorite
+binding or production root activation.
 
 ## Task5 — full history home, summary and fullscreen charts
 

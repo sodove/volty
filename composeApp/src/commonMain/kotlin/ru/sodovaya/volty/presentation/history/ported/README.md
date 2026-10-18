@@ -5,7 +5,7 @@ These Kotlin/Compose files adapt Vescape's UI at pinned revision
 
 | Kotlin file | Original source | Changes |
 |---|---|---|
-| `HistoryRideCard.kt` | `src/modules/history/components/HistoryRideRow.tsx` | Compose Surface/Row, Volty theme and typography, content may grow with system font size, recorded segmented preview input. Keeps the 86-wide preview, 88-high row minimum, 12-radius card, labels and chevron hierarchy. |
+| `HistoryRideCard.kt` | `src/modules/history/components/HistoryRideRow.tsx` | Compose Surface/Row, Volty theme and typography, content may grow with system font size, recorded segmented preview input with loading/error/retry/partial states. Keeps the 86-wide preview, 88-high row minimum, 12-radius card, labels and chevron hierarchy. |
 | `HistoryRoutePreview.kt` | `src/modules/history/components/RouteSparkline.tsx` | Compose Canvas instead of Skia, separate paths for GPS segments, neutral loaded-point marks, route-only fallback. Tile/cache rendering is not ported yet. Projection comes from Volty's independently tested policy. |
 
 Both adaptations are marked `GPL-3.0-or-later`, matching upstream `package.json`.
