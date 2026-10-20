@@ -152,9 +152,37 @@ class RadioAudioPipelineTest {
     @Test
     fun neverOverflows() {
         val loud = ShortArray(RADIO_FRAME_SAMPLES) { Short.MAX_VALUE }
-        val mixed = RadioMixer.mix(List(9) { loud })
-        assertTrue(mixed.all { it <= Short.MAX_VALUE && it > 24576 })
-        val negative = RadioMixer.mix(List(9) { ShortArray(RADIO_FRAME_SAMPLES) { Short.MIN_VALUE } })
-        assertTrue(negative.all { it >= Short.MIN_VALUE && it < -24576 })
+        assertTrue(RadioMixer.mix(List(9) { loud }).all { it == Short.MAX_VALUE })
+        val low = ShortArray(RADIO_FRAME_SAMPLES) { Short.MIN_VALUE }
+        assertTrue(RadioMixer.mix(List(9) { low }).all { it == Short.MIN_VALUE })
+    }
+
+    @Test
+    fun kneeCompressesAboveThreshold() {
+        assertTrue(RadioMixer.mix(listOf(frameOf(20000), frameOf(20000))).all { it.toInt() == 28432 })
+        assertTrue(RadioMixer.mix(listOf(frameOf(-20000), frameOf(-20000))).all { it.toInt() == -28432 })
+    }
+
+    @Test
+    fun rePrimesAfterDraining() {
+        val buffer = RadioJitterBuffer(targetFrames = 3)
+        repeat(3) { buffer.push(it.toLong(), frameOf(1, it)) }
+        repeat(3) { assertNotNull(buffer.pop()) }
+        assertNull(buffer.pop())
+        buffer.push(3, frameOf(1, 3))
+        assertNull(buffer.pop())
+        buffer.push(4, frameOf(1, 4))
+        buffer.push(5, frameOf(1, 5))
+        assertEquals(listOf(3, 4, 5), List(3) { buffer.pop()!![0].toInt() })
+    }
+
+    @Test
+    fun newBurstAfterGapOfTwoInjectsNoPhantom() {
+        val buffer = RadioJitterBuffer(targetFrames = 3)
+        repeat(3) { buffer.push(it.toLong(), frameOf(1000, it)) }
+        repeat(3) { buffer.pop() }
+        assertNull(buffer.pop())
+        repeat(3) { buffer.push(4L + it, frameOf(1000, 4 + it)) }
+        assertEquals(listOf(4, 5, 6), List(3) { buffer.pop()!![0].toInt() })
     }
 }

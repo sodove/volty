@@ -25,7 +25,13 @@ class RadioJitterBuffer(private val targetFrames: Int = 3, private val maxFrames
             if (frames.size < targetFrames) return null
             started = true
         }
-        if (frames.isEmpty()) return null
+        if (frames.isEmpty()) {
+            // Drained: the next talk burst must prime to targetFrames again and start clean.
+            started = false
+            lastSeq = null
+            lastFrame = null
+            return null
+        }
         val last = lastSeq
         val oldest = frames.firstKey()
         if (last == null || oldest == last + 1) return take(oldest)
