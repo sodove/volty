@@ -4,6 +4,9 @@ package ru.sodovaya.volty.domain.radio
  * Whether the auto-join poll may try to join a radio right now. Only from Idle, only while the app
  * is visible (ruling R20: Android 14+ refuses a microphone service started from the background),
  * only with every permission granted, and not within [suppressedUntilMillis] of a manual leave.
+ *
+ * Never while [serverVoiceActive]: joining disconnects the server voice (they are exclusive), so
+ * an auto-join over a call the rider just started would undo it every poll.
  */
 fun shouldAutoJoin(
     enabled: Boolean,
@@ -12,7 +15,9 @@ fun shouldAutoJoin(
     permitted: Boolean,
     nowMillis: Long,
     suppressedUntilMillis: Long,
-): Boolean = enabled && state == RadioState.Idle && visible && permitted && nowMillis >= suppressedUntilMillis
+    serverVoiceActive: Boolean,
+): Boolean = enabled && state == RadioState.Idle && visible && permitted && nowMillis >= suppressedUntilMillis &&
+    !serverVoiceActive
 
 private const val MIC = "android.permission.RECORD_AUDIO"
 private const val NEARBY_WIFI = "android.permission.NEARBY_WIFI_DEVICES"

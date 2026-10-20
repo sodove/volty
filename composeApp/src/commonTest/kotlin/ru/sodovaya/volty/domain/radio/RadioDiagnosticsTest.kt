@@ -39,6 +39,63 @@ class RadioDiagnosticsTest {
     }
 
     @Test
+    fun formatsHubLoad() {
+        val text = RadioDiagnostics(
+            RadioRole.HUB, RadioMode.BALANCED, emptyList(), 90, 88, 60_000,
+            load = RadioLoad(
+                tickMaxMillis = 23.4,
+                tickP95Millis = 2.0,
+                lateTicks = 3,
+                droppedEncodes = 1,
+                rejectedInbound = 7,
+                decodeFailures = 2,
+                jitterDepthFrames = mapOf(3 to 4, 1 to 2),
+            ),
+        ).format()
+        val lines = text.lines()
+        assertTrue("tick max=23.4ms p95=2.0ms late(>20ms)=3" in lines, text)
+        assertTrue("dropped_encodes=1" in lines, text)
+        assertTrue("rejected_inbound=7" in lines, text)
+        assertTrue("decode_failures=2" in lines, text)
+        assertTrue("jitter_frames slot1=2 slot3=4" in lines, text)
+    }
+
+    @Test
+    fun unmeasuredLoadIsNotAPrintedZero() {
+        val none = RadioDiagnostics(RadioRole.HUB, null, emptyList(), null, null, 0).format()
+        assertTrue("tick max=n/a p95=n/a late(>20ms)=n/a" in none.lines(), none)
+        val empty = RadioDiagnostics(
+            RadioRole.CLIENT, null, emptyList(), null, null, 0,
+            load = RadioLoad(null, null, 0, 0, 0, 0, emptyMap()),
+        ).format()
+        assertTrue("tick max=n/a p95=n/a late(>20ms)=0" in empty.lines(), empty)
+        assertTrue("jitter_frames n/a" in empty.lines(), empty)
+    }
+
+    @Test
+    fun tickStatsMaxP95AndLate() {
+        val stats = RadioTickStats()
+        assertNull(stats.maxMillis())
+        assertNull(stats.p95Millis())
+        repeat(94) { stats.record(1_000_000) } // 1 ms
+        repeat(5) { stats.record(5_000_000) } // 5 ms
+        stats.record(25_000_000) // one late tick
+        assertEquals(25.0, stats.maxMillis())
+        assertEquals(5.0, stats.p95Millis())
+        assertEquals(1L, stats.lateTicks)
+        stats.record(20_000_000) // exactly one frame is not late
+        assertEquals(1L, stats.lateTicks)
+    }
+
+    @Test
+    fun tickStatsP95BeyondTheHistogramIsTheMax() {
+        val stats = RadioTickStats()
+        repeat(10) { stats.record(400_000_000) } // 400 ms: a stalled thread
+        assertEquals(400.0, stats.p95Millis())
+        assertEquals(10L, stats.lateTicks)
+    }
+
+    @Test
     fun lossPercentFromGaps() {
         val counter = RadioLossCounter()
         assertNull(counter.lossPercent())

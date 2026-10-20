@@ -94,6 +94,9 @@ class RadioClientSession(
         return out
     }
 
+    /** Frames of the hub's mix buffered right now (diagnostics). */
+    val jitterDepth: Int get() = jitter.depth
+
     fun playback(): ShortArray? =
         if (phase == RadioClientPhase.CONNECTED) jitter.pop() else null
 

@@ -183,4 +183,20 @@ class NearbyRadioPanelStateTest {
         assertEquals(RadioTitle.LOST, line(RadioState.Lost(c, 1)))
         assertNull(radioStatusTitle(panel(RadioState.Hub(c), roster, supported = false)))
     }
+
+    @Test
+    fun notificationSaysWhatThePanelSays() {
+        // I5: the foreground notification never counts people the radio has not heard.
+        assertEquals(RadioTitle.STARTING, radioNotificationTitle(RadioState.Starting(c), emptyList()))
+        assertEquals(RadioTitle.STARTING, radioNotificationTitle(RadioState.Hub(c), emptyList()))
+        assertEquals(RadioTitle.CONNECTING, radioNotificationTitle(RadioState.Client(c, RadioClientPhase.JOINING), emptyList()))
+        // A stale roster must not turn a connecting client into "N people".
+        assertEquals(RadioTitle.CONNECTING, radioNotificationTitle(RadioState.Client(c, RadioClientPhase.JOINING), roster))
+        assertEquals(RadioTitle.LOST, radioNotificationTitle(RadioState.Lost(c, 1), roster))
+        assertEquals(RadioTitle.MEMBERS, radioNotificationTitle(RadioState.Hub(c), roster))
+        assertEquals(RadioTitle.MEMBERS, radioNotificationTitle(RadioState.Client(c, RadioClientPhase.CONNECTED), roster))
+        // Idle/Error for the few ms before the service stops: never a member count.
+        assertEquals(RadioTitle.STARTING, radioNotificationTitle(RadioState.Idle, roster))
+        assertEquals(RadioTitle.STARTING, radioNotificationTitle(RadioState.Error(c, RadioError.FULL), roster))
+    }
 }

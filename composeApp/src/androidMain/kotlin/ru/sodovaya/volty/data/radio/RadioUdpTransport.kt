@@ -6,6 +6,7 @@ import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
@@ -23,7 +24,9 @@ import ru.sodovaya.volty.domain.radio.RadioMode
  *   the group owner's address on that port.
  * - Codecs live here (ruling R11): one frame encoder per destination address (the hub sends a
  *   different mix to every client) and one frame decoder per (source address, packet session).
- *   All are rebuilt when [mode] changes. Lost frames are not decoded here; the jitter buffer conceals.
+ *   Encoders are rebuilt when [mode] changes. Decoders do not follow [mode] at all (M1): each picks
+ *   PCM or Opus by the payload's length, so a mode switch never garbles the packets still in
+ *   flight in the old mode. Lost frames are not decoded here; the jitter buffer conceals.
  * - Header seq / nonce rules live in [RadioWireMapper]; encode failures are dropped and counted,
  *   never thrown (ruling R13).
  * - [send] is non-blocking: it encodes on the caller's thread (cheap) and queues the bytes for a
@@ -71,7 +74,7 @@ class RadioUdpTransport(
     private val encoders = HashMap<String, RadioFrameEncoder>()
     private val decoders = HashMap<Pair<String, Int>, RadioFrameDecoder>()
     private var encoderMode: RadioMode? = null
-    private var decoderMode: RadioMode? = null
+    private val decodeFailureCount = AtomicLong(0)
 
     private val mapper = RadioWireMapper(
         codec = codec,
@@ -84,6 +87,9 @@ class RadioUdpTransport(
 
     /** Datagrams that failed to encode and were dropped. */
     val droppedEncodes: Long get() = mapper.droppedEncodes
+
+    /** Opus payloads the decoders rejected (each concealed as a lost frame). */
+    val decodeFailures: Long get() = decodeFailureCount.get()
 
     /** Datagrams received that failed authentication, replay or parsing. */
     @Volatile
@@ -121,13 +127,13 @@ class RadioUdpTransport(
         return encoders.getOrPut(peer.host) { RadioFrameCodecs.encoder(m) }
     }
 
+    /** Receiver thread only. */
     private fun decoderFor(peer: RadioAddress, packetSession: Int): RadioFrameDecoder {
-        val m = mode()
-        if (m != decoderMode) {
-            decoders.clear()
-            decoderMode = m
-        }
-        return decoders.getOrPut(peer.host to packetSession) { RadioFrameCodecs.decoder(m) }
+        val key = peer.host to packetSession
+        decoders[key]?.let { return it }
+        // Streams end without notice (rejoins draw a new session): bound the map instead of tracking them.
+        if (decoders.size >= MAX_DECODERS) decoders.clear()
+        return RadioFrameCodecs.streamDecoder { decodeFailureCount.incrementAndGet() }.also { decoders[key] = it }
     }
 
     /** Called once, on the receiver thread, when the socket is dead or keeps failing; never after [close]. */
@@ -193,6 +199,7 @@ class RadioUdpTransport(
         private const val OUTBOUND_CAPACITY = 128
         private const val MAX_SOCKET_ERRORS = 10
         private const val RECEIVE_BACKOFF_MILLIS = 50L
+        private const val MAX_DECODERS = 64
     }
 }
 

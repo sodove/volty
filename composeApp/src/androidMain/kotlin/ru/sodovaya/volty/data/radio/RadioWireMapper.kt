@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.radio
 
 import java.nio.ByteBuffer
+import java.security.SecureRandom
 import java.util.concurrent.atomic.AtomicLong
 import ru.sodovaya.volty.domain.radio.RadioAddress
 import ru.sodovaya.volty.domain.radio.RadioDatagram
@@ -21,6 +22,11 @@ import ru.sodovaya.volty.domain.radio.RadioRosterEntry as DomainRosterEntry
  * Identity: `Hello.streamId` and `Roster.hubStreamId` are the sender's header [session];
  * `Audio.slot` and `Bye.slot` are the header sender field.
  *
+ * The counter starts at a SecureRandom point in [0, 2^62) (I7 of the final review), not at 0: the
+ * session is only 32 random bits, so if two senders ever drew the same session, counters that
+ * both start at 0 would collide on their very first packets; random starts make that negligible.
+ * 2^62 leaves room to count for the life of the universe without wrapping into negative seqs.
+ *
  * Thread-safety: [encode] and [decode] may run on different threads; the counter is atomic.
  *
  * @param ownSender header sender used for Hello (client slot, or 255 while unassigned); Audio and
@@ -37,7 +43,7 @@ class RadioWireMapper(
     private val decodeFrame: (RadioAddress, Int, ByteArray) -> ShortArray,
     private val replayGuard: RadioReplayGuard = RadioReplayGuard(),
 ) {
-    private val headerSeq = AtomicLong(0)
+    private val headerSeq = AtomicLong(SecureRandom().nextLong() ushr 2)
     private val dropped = AtomicLong(0)
 
     /** Messages that could not be encoded (size or range checks) and were dropped. */

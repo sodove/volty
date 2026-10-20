@@ -24,7 +24,9 @@ import ru.sodovaya.volty.domain.radio.RadioClientSession
 import ru.sodovaya.volty.domain.radio.RadioController
 import ru.sodovaya.volty.domain.radio.RadioDatagram
 import ru.sodovaya.volty.domain.radio.RadioDiagnostics
+import ru.sodovaya.volty.domain.radio.RadioLoad
 import ru.sodovaya.volty.domain.radio.RadioLossCounter
+import ru.sodovaya.volty.domain.radio.RadioTickStats
 import ru.sodovaya.volty.domain.radio.RadioMemberStat
 import ru.sodovaya.volty.domain.radio.RadioMessage
 import ru.sodovaya.volty.domain.radio.RadioRole
@@ -74,7 +76,7 @@ class RecordingRadioLink(val android: AndroidRadioLink) : RadioLink {
         android.leave()
     }
 
-    override fun radioNearby(community: String): Boolean = android.radioNearby(community)
+    override suspend fun radioNearby(community: String): Boolean = android.radioNearby(community)
 }
 
 /**
@@ -88,8 +90,11 @@ class RecordingRadioLink(val android: AndroidRadioLink) : RadioLink {
  * audio tick, and only the audio thread calls `receive` / `tick`.
  *
  * Restart rule: a run is kept while consecutive states are the same kind for the same community;
- * `Starting` and `Lost` -> `Client` rebuild the transport (a new Wi-Fi attach may have a new
- * address) and the session, with a fresh stream id (rulings R8/R15).
+ * `Starting` and `Lost` -> `Client(JOINING)` rebuild the transport (a new Wi-Fi attach may have a
+ * new address) and the session, with a fresh stream id (rulings R8/R15). `Lost` ->
+ * `Client(CONNECTED)` keeps the run: that transition comes from the kept run's own session hearing
+ * the hub again over the old link (I2). A run's asynchronous reports (phase, socket or audio
+ * failure) reach the controller only while that run is still the current one.
  *
  * Framework threads, sockets, audio and services cannot be unit-tested in this repo; verified only
  * on a device.
@@ -106,6 +111,8 @@ class RadioRuntime(
     private val autoJoin: () -> Boolean = { false },
     /** True while one of the app's activities is resumed (ruling R20). */
     private val appVisible: () -> Boolean = { false },
+    /** True while this phone's ordinary server voice is connected or connecting (I1: never auto-join over it). */
+    private val serverVoiceActive: () -> Boolean = { false },
 ) {
     private val app = context.applicationContext ?: context
     private val _members = MutableStateFlow<List<RadioMember>>(emptyList())
@@ -184,7 +191,7 @@ class RadioRuntime(
         }
 
     private fun mayAutoJoin(): Boolean =
-        shouldAutoJoin(autoJoin(), controller.state.value, appVisible(), scanPermitted(), clock(), autoJoinSuppressedUntil)
+        shouldAutoJoin(autoJoin(), controller.state.value, appVisible(), scanPermitted(), clock(), autoJoinSuppressedUntil, serverVoiceActive())
 
     /** One auto-join check: looks for a cached server's radio and joins the first one seen. */
     private suspend fun pollAutoJoin() {
@@ -192,7 +199,7 @@ class RadioRuntime(
         val who = identity() ?: return
         val hit = link.android.radioNearbyAny(keys.communities(who.userId)) ?: return
         // The scan and the key read suspended: the rider may have started something meanwhile.
-        if (mayAutoJoin()) controller.join(who.userId, hit)
+        if (mayAutoJoin()) controller.join(who.userId, hit, auto = true)
     }
 
     private fun onState(before: RadioState, state: RadioState) {
@@ -206,9 +213,10 @@ class RadioRuntime(
                 stopRun()
                 ensureService()
             }
-            // Keep the run (and its audio) while the controller re-attaches Wi-Fi. This does NOT
-            // recover by itself: a Lost -> Client(JOINING) transition always rebuilds the transport and
-            // session below, because the P2P interface address may have changed.
+            // Keep the run (and its audio) while the controller re-attaches Wi-Fi. If the old link
+            // comes back by itself the run's session reports CONNECTED and the run is kept; a
+            // Lost -> Client(JOINING) transition (a fresh attach) rebuilds the transport and session
+            // below, because the P2P interface address may have changed.
             is RadioState.Lost -> ensureService()
             is RadioState.Hub -> {
                 if (!ensureService()) return
@@ -217,7 +225,13 @@ class RadioRuntime(
             }
             is RadioState.Client -> {
                 if (!ensureService()) return
-                val sameRun = before is RadioState.Client && before.community == state.community && active != null
+                // Lost -> Client(CONNECTED) comes from the kept run's own session hearing the hub again
+                // over the old link (I2): that run is fine and is kept. Lost -> Client(JOINING) is a fresh
+                // Wi-Fi attach and rebuilds.
+                val recovered = before is RadioState.Lost && before.community == state.community &&
+                    state.phase == RadioClientPhase.CONNECTED
+                val sameRun = ((before is RadioState.Client && before.community == state.community) || recovered) &&
+                    active != null
                 if (!sameRun) startRun(state.community, hub = false)
             }
         }
@@ -305,6 +319,12 @@ class RadioRuntime(
         @Volatile
         private var lossSnapshot: Map<Int, Int?> = emptyMap()
 
+        /** Tick durations; audio thread only, published as [loadSnapshot] (I6). */
+        private val tickStats = RadioTickStats()
+
+        @Volatile
+        private var loadSnapshot: RadioLoad? = null
+
         // Audio thread only from here on.
         private var hubSession: RadioHubSession? = null
         private var clientSession: RadioClientSession? = null
@@ -347,7 +367,7 @@ class RadioRuntime(
                 bindFailed = true
                 return false
             }
-            t.onFailure = { scope.launch { controller.onRuntimeFailure(RadioError.WIFI_FAILED) } }
+            t.onFailure = { scope.launch { if (active === this@Run) controller.onRuntimeFailure(RadioError.WIFI_FAILED) } }
             transport = t
             if (isHub) {
                 hubSession = RadioHubSession(who.userId, who.name, mode, hubStreamId = t.session)
@@ -355,7 +375,8 @@ class RadioRuntime(
                 clientSession = RadioClientSession(who.userId, who.name, streamId = t.session)
             }
             ioScope.launch { t.inbound.collect { post(Inbox.Net(it)) } }
-            if (!io.start(onFailure = { scope.launch { controller.onRuntimeFailure(RadioError.AUDIO_UNAVAILABLE) } }, onFrame = ::tick)) {
+            val audioFailed = { scope.launch { if (active === this@Run) controller.onRuntimeFailure(RadioError.AUDIO_UNAVAILABLE) } }
+            if (!io.start(onFailure = { audioFailed() }, onFrame = ::tick)) {
                 stop()
                 return false
             }
@@ -369,8 +390,17 @@ class RadioRuntime(
             ioScope.cancel()
         }
 
-        /** Runs on the audio thread once per 20 ms mic frame. */
+        /** Runs on the audio thread once per 20 ms mic frame; measures how long the work takes. */
         private fun tick(mic: ShortArray) {
+            val started = System.nanoTime()
+            try {
+                work(mic)
+            } finally {
+                tickStats.record(System.nanoTime() - started)
+            }
+        }
+
+        private fun work(mic: ShortArray) {
             val t = transport ?: return
             val now = clock()
             val hubS = hubSession
@@ -409,7 +439,8 @@ class RadioRuntime(
             val phase = session.phase
             if (phase == lastPhase) return
             lastPhase = phase
-            scope.launch { controller.onClientPhase(phase) }
+            // Only the current run speaks for the radio: a stopped run's late report must not move a newer one.
+            scope.launch { if (active === this@Run) controller.onClientPhase(phase) }
         }
 
         /** Main thread: what this run has measured so far. Everyone on the radio, this phone included. */
@@ -425,17 +456,30 @@ class RadioRuntime(
                 batteryStartPercent = batteryStart,
                 batteryNowPercent = batteryPercent(),
                 elapsedMillis = clock() - startedAt,
+                load = loadSnapshot,
             )
         }
 
         private fun publish(hubS: RadioHubSession?, clientS: RadioClientSession?) {
             lossSnapshot = losses.mapValues { it.value.lossPercent() }
+            val t = transport
+            loadSnapshot = RadioLoad(
+                tickMaxMillis = tickStats.maxMillis(),
+                tickP95Millis = tickStats.p95Millis(),
+                lateTicks = tickStats.lateTicks,
+                droppedEncodes = t?.droppedEncodes ?: 0,
+                rejectedInbound = t?.rejectedInbound ?: 0,
+                decodeFailures = t?.decodeFailures ?: 0,
+                // The hub buffers per client slot; a client has one buffer, the hub's mix (slot 0).
+                jitterDepthFrames = hubS?.jitterDepths ?: clientS?.let { mapOf(0 to it.jitterDepth) }.orEmpty(),
+            )
             _activeMode.value = if (hubS != null) mode else clientS?.mode
             if (hubS != null) {
                 val me = RadioMember(0, who.userId, who.name, clock(), null)
                 _members.value = listOf(me) + hubS.members
             } else if (clientS != null) {
-                _members.value = clientS.roster
+                // A lost client has not heard anyone for seconds: its old roster is not a number it has earned.
+                _members.value = if (clientS.phase == RadioClientPhase.LOST) emptyList() else clientS.roster
                 _rttMillis.value = clientS.rttMillis
             }
         }

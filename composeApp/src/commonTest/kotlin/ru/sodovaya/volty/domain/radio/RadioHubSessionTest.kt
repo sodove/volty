@@ -34,6 +34,16 @@ class RadioHubSessionTest {
     }
 
     @Test
+    fun jitterDepthPerClientSlot() {
+        val hub = RadioHubSession("hub", "Hub")
+        hub.joinAt(1)
+        hub.joinAt(2)
+        for (s in 0L..2L) hub.receive(audio(1, 1, s, tone(100)), 0)
+        hub.receive(audio(2, 2, 0, tone(100)), 0)
+        assertEquals(mapOf(1 to 3, 2 to 1), hub.jitterDepths)
+    }
+
+    @Test
     fun tenthClientGetsFull() {
         val hub = RadioHubSession("hub", "Hub")
         for (n in 1..9) hub.joinAt(n)

@@ -13,9 +13,11 @@ import android.net.wifi.p2p.WifiP2pGroup
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
+import android.os.SystemClock
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,6 +35,10 @@ import ru.sodovaya.volty.domain.radio.RadioDuplicateDecision
 import ru.sodovaya.volty.domain.radio.RadioKeyStore
 import ru.sodovaya.volty.domain.radio.RadioLink
 import ru.sodovaya.volty.domain.radio.RadioLinkResult
+import ru.sodovaya.volty.domain.radio.RadioScanFilter
+import ru.sodovaya.volty.domain.radio.RadioScanResult
+import ru.sodovaya.volty.domain.radio.radioJoinBudgets
+import ru.sodovaya.volty.domain.radio.reusableRadioAttachment
 
 /**
  * Wi-Fi Direct implementation of [RadioLink]. The group's network name and passphrase come from
@@ -60,7 +66,15 @@ import ru.sodovaya.volty.domain.radio.RadioLinkResult
  * unverified until then: that `connect()` with only a network name and passphrase finds a group
  * on a given vendor's Wi-Fi stack, how a join to an absent group fails (callback error versus
  * silence), and that a P2P group's scan BSSID matches the owner's device address (the locally
- * administered bit is normalised away, see [normalizeMac]).
+ * administered bit is normalised away, see [RadioScanFilter.normalizeMac]).
+ *
+ * Final-review fixes (device-only, compile-verified):
+ * - I2: [join] first asks whether this phone is still a client of one of the community's groups and
+ *   reuses that attachment; otherwise it clears any leftover attachment before connecting.
+ * - I3: today's network name gets the whole join budget except in the first 6 h after UTC midnight
+ *   ([radioJoinBudgets]).
+ * - I4: every scan decision uses only results of the scan it started ([RadioScanFilter.fresh]),
+ *   skips the round when the scan request is refused, and never counts this phone's own group.
  */
 class AndroidRadioLink(
     context: Context,
@@ -83,6 +97,10 @@ class AndroidRadioLink(
 
     @Volatile
     private var ownInterface: String? = null
+
+    /** This phone's P2P device address while it hosts (a scan must never see it as another hub). */
+    @Volatile
+    private var ownHubAddress: String? = null
 
     @Volatile
     private var duplicateJob: Job? = null
@@ -107,6 +125,7 @@ class AndroidRadioLink(
             return RadioLinkResult.Failed("group not formed")
         }
         ownInterface = group.`interface`
+        ownHubAddress = group.owner?.deviceAddress
         startDuplicateWatch(community, today.networkName, group)
         return RadioLinkResult.Hosting(port)
     }
@@ -115,12 +134,22 @@ class AndroidRadioLink(
         if (!supported) return RadioLinkResult.Unsupported
         val (m, ch) = ready() ?: return RadioLinkResult.Failed("Wi-Fi Direct unavailable")
         val candidates = credentials(community) ?: return RadioLinkResult.Failed("no radio key")
-        val deadline = clock() + timeoutMillis
-        for ((index, c) in candidates.withIndex()) {
+        // I2: still a client of one of our groups (the hub came back by itself during Lost): keep it.
+        reuseAttachment(m, ch, candidates.map { it.networkName })?.let { return it }
+        // Otherwise a leftover attachment or half-open attempt would make connect() fail or join the
+        // wrong group: clear both first ("nothing to clear" is a failure we ignore).
+        p2p { m.cancelConnect(ch, it) }
+        p2p { m.removeGroup(ch, it) }
+        ownInterface = null
+        val start = clock()
+        val deadline = start + timeoutMillis
+        val budgets = radioJoinBudgets(start, timeoutMillis)
+        for ((index, c) in candidates.take(budgets.size).withIndex()) {
             val remaining = deadline - clock()
             if (remaining <= 0) break
-            // Earlier candidates get an even share so yesterday's name is still tried.
-            val budget = remaining / (candidates.size - index)
+            // The last name tried may use what an earlier one left (a refused connect returns at once).
+            val budget = if (index == budgets.lastIndex) remaining else minOf(budgets[index], remaining)
+            if (budget <= 0) continue
             val config = WifiP2pConfig.Builder().setNetworkName(c.networkName).setPassphrase(c.passphrase).build()
             val failure = p2p { m.connect(ch, config, it) }
             if (failure == WifiP2pManager.P2P_UNSUPPORTED) return RadioLinkResult.Unsupported
@@ -154,6 +183,7 @@ class AndroidRadioLink(
         duplicateJob?.cancel()
         duplicateJob = null
         ownInterface = null
+        ownHubAddress = null
         if (!supported) return
         val (m, ch) = ready() ?: return
         p2p { m.cancelConnect(ch, it) }
@@ -161,31 +191,108 @@ class AndroidRadioLink(
     }
 
     /** True when a scan sees this community's radio; a thin wrapper over [radioNearbyAny]. */
-    override fun radioNearby(community: String): Boolean = radioNearbyAny(listOf(community)) != null
+    override suspend fun radioNearby(community: String): Boolean = radioNearbyAny(listOf(community)) != null
 
     /**
-     * Does ONE scan request and ONE read of the results and returns the first of [communities]
-     * whose network name is in them, or null (also when scanning is not permitted or names are not
-     * known yet). Names are derived from the key store on a miss or a new UTC day: that is
-     * asynchronous, so the first call after a cold start returns null and a later poll hits.
+     * Does ONE scan, waits for its results, and returns the first of [communities] whose network
+     * name the scan saw, or null (also when scanning is not permitted or was refused, or names are
+     * not known yet). Only names [join] would actually try count: yesterday's only in the first
+     * hours after UTC midnight, or auto-join would chase a hub it never tries to connect to.
+     * Names are derived from the key store on a miss or a new UTC day: that is asynchronous, so the
+     * first call after a cold start returns null and a later poll hits.
      */
-    @SuppressLint("MissingPermission")
-    fun radioNearbyAny(communities: List<String>): String? {
+    suspend fun radioNearbyAny(communities: List<String>): String? {
         if (!supported || communities.isEmpty() || !scanPermissionGranted()) return null
-        val day = clock() / DAY_MILLIS
-        val known = communities.mapNotNull { c -> names.get(c, day)?.let { c to it } }
+        val now = clock()
+        val day = now / DAY_MILLIS
+        // How many day-keyed names join tries right now (budgets of any total have that many parts).
+        val tried = radioJoinBudgets(now, 1).size
+        // The cached set keeps candidate order (today, yesterday): it is built with toSet().
+        val known = communities.mapNotNull { c -> names.get(c, day)?.let { c to it.take(tried) } }
         communities.filter { c -> known.none { it.first == c } }.forEach(::warmNames)
         if (known.isEmpty()) return null
+        val seen = freshScan(ownBssids())?.mapNotNullTo(HashSet()) { it.ssid } ?: return null
+        return known.firstOrNull { (_, n) -> n.any { it in seen } }?.first
+    }
+
+    /**
+     * Starts one scan and returns only what that scan saw (I4), minus this phone's own group
+     * interface; null when the scan request is refused (throttled: Android allows a few scans per
+     * two minutes) or scanning is not permitted, in which case the caller decides nothing this round.
+     * Waits for the system's scan-results broadcast, up to [SCAN_WAIT_MILLIS].
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun freshScan(own: Set<String>): List<RadioScanResult>? {
         val w = wifi ?: return null
-        return try {
+        if (!scanPermissionGranted()) return null
+        val done = CompletableDeferred<Unit>()
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                done.complete(Unit)
+            }
+        }
+        register(receiver, IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION))
+        try {
+            val startedAt = SystemClock.elapsedRealtime()
             @Suppress("DEPRECATION")
-            w.startScan()
-            val seen = w.scanResults.mapTo(HashSet()) { it.SSID }
-            known.firstOrNull { (_, n) -> n.any { it in seen } }?.first
+            if (!w.startScan()) return null
+            withTimeoutOrNull(SCAN_WAIT_MILLIS) { done.await() }
+            val results = w.scanResults.map { RadioScanResult(it.SSID, it.BSSID, it.timestamp) }
+            return RadioScanFilter.fresh(results, startedAt, own)
         } catch (_: SecurityException) {
-            null
+            return null
+        } finally {
+            runCatching { app.unregisterReceiver(receiver) }
         }
     }
+
+    /** This phone's own addresses as a scan could show them: the hub's device address and the group interface's MAC. */
+    private fun ownBssids(): Set<String> = buildSet {
+        ownHubAddress?.takeUnless(RadioDuplicateDecision::isAddressUnknown)?.let(::add)
+        val name = ownInterface ?: return@buildSet
+        val mac = runCatching { NetworkInterface.getByName(name)?.hardwareAddress }.getOrNull() ?: return@buildSet
+        mac.joinToString(":") { "%02x".format(it) }.takeUnless(RadioDuplicateDecision::isAddressUnknown)?.let(::add)
+    }
+
+    private fun register(receiver: BroadcastReceiver, filter: IntentFilter) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            app.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            app.registerReceiver(receiver, filter)
+        }
+    }
+
+    /**
+     * I2: when this phone is already a client of a formed group with one of [candidateNames] and
+     * its P2P interface has an address, that attachment is the join result; no connect() needed.
+     */
+    private suspend fun reuseAttachment(
+        m: WifiP2pManager,
+        ch: WifiP2pManager.Channel,
+        candidateNames: List<String>,
+    ): RadioLinkResult? {
+        val info = withTimeoutOrNull(INFO_TIMEOUT_MILLIS) { requestConnection(m, ch) } ?: return null
+        val group = withTimeoutOrNull(INFO_TIMEOUT_MILLIS) { requestGroup(m, ch) }
+        val host = reusableRadioAttachment(
+            info.groupFormed, info.isGroupOwner, info.groupOwnerAddress?.hostAddress, group?.networkName, candidateNames,
+        ) ?: return null
+        ownInterface = group?.`interface`
+        if (awaitLocalAddress(INFO_TIMEOUT_MILLIS) == null) {
+            ownInterface = null
+            return null
+        }
+        return RadioLinkResult.Joined(RadioAddress(host, port))
+    }
+
+    @SuppressLint("MissingPermission")
+    private suspend fun requestConnection(m: WifiP2pManager, ch: WifiP2pManager.Channel): WifiP2pInfo? =
+        suspendCancellableCoroutine { c ->
+            try {
+                m.requestConnectionInfo(ch) { if (c.isActive) c.resumeWith(Result.success(it)) }
+            } catch (_: SecurityException) {
+                if (c.isActive) c.resumeWith(Result.success(null))
+            }
+        }
 
     /** Whether radioNearby* and duplicate detection can scan; the UI asks for ACCESS_FINE_LOCATION when false. */
     fun scanPermissionGranted(): Boolean =
@@ -334,12 +441,7 @@ class AndroidRadioLink(
                         override fun onReceive(context: Context?, intent: Intent?) = check()
                     }
                     receiver = r
-                    val filter = IntentFilter(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        app.registerReceiver(r, filter, Context.RECEIVER_NOT_EXPORTED)
-                    } else {
-                        app.registerReceiver(r, filter)
-                    }
+                    register(r, IntentFilter(WifiP2pManager.WIFI_P2P_CONNECTION_CHANGED_ACTION))
                     check() // already connected before the receiver existed
                 }
             }
@@ -351,7 +453,7 @@ class AndroidRadioLink(
     private fun startDuplicateWatch(community: String, hostedName: String, group: WifiP2pGroup) {
         duplicateJob?.cancel()
         val rawOwn = group.owner?.deviceAddress
-        val own = if (RadioDuplicateDecision.isAddressUnknown(rawOwn)) rawOwn else normalizeMac(rawOwn!!)
+        val own = if (RadioDuplicateDecision.isAddressUnknown(rawOwn)) rawOwn else RadioScanFilter.normalizeMac(rawOwn!!)
         val members = group.clientList?.size ?: 0
         lateinit var self: Job
         self = scope.launch {
@@ -370,21 +472,14 @@ class AndroidRadioLink(
         duplicateJob = self
     }
 
-    /** BSSID (normalised) of another access point with our group's name, or null; also null when scanning is unavailable. */
-    @SuppressLint("MissingPermission")
-    private fun foreignHub(hostedName: String, own: String?): String? {
-        val w = wifi ?: return null
-        if (!scanPermissionGranted()) return null
-        return try {
-            @Suppress("DEPRECATION")
-            w.startScan()
-            w.scanResults.filter { it.SSID == hostedName }
-                .mapNotNull { it.BSSID?.let(::normalizeMac) }
-                .firstOrNull { it != own }
-        } catch (_: SecurityException) {
-            null
-        }
-    }
+    /**
+     * BSSID (normalised) of another access point with our group's name seen by a fresh scan, or
+     * null; also null when scanning is unavailable or the scan was refused (no decision this round).
+     */
+    private suspend fun foreignHub(hostedName: String, own: String?): String? =
+        freshScan(ownBssids())?.filter { it.ssid == hostedName }
+            ?.mapNotNull { it.bssid?.let(RadioScanFilter::normalizeMac) }
+            ?.firstOrNull { it != own }
 
     private companion object {
         const val GROUP_FORMATION_MILLIS = 5_000L
@@ -393,16 +488,7 @@ class AndroidRadioLink(
         const val DUPLICATE_SCAN_MILLIS = 30_000L
         const val DUPLICATE_BACKOFF_MILLIS = 30_000L
         const val DAY_MILLIS = 86_400_000L
-
-        /**
-         * A P2P group's interface address is the owner's device address with the locally
-         * administered bit (0x02 of the first octet) set; clearing it on both sides makes the two
-         * comparable and keeps [RadioDuplicateRule] deterministic.
-         */
-        fun normalizeMac(mac: String): String {
-            val lower = mac.lowercase()
-            val first = lower.substringBefore(':').toIntOrNull(16) ?: return lower
-            return "%02x".format(first and 0x02.inv()) + lower.substring(lower.indexOf(':'))
-        }
+        const val SCAN_WAIT_MILLIS = 10_000L
+        const val INFO_TIMEOUT_MILLIS = 2_000L
     }
 }

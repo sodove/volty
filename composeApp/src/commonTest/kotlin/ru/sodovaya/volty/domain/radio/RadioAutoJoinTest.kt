@@ -13,7 +13,8 @@ class RadioAutoJoinTest {
         permitted: Boolean = true,
         now: Long = 1_000,
         suppressedUntil: Long = 0,
-    ) = shouldAutoJoin(enabled, state, visible, permitted, now, suppressedUntil)
+        serverVoice: Boolean = false,
+    ) = shouldAutoJoin(enabled, state, visible, permitted, now, suppressedUntil, serverVoice)
 
     @Test
     fun joinsOnlyWhenEnabledIdleVisiblePermitted() {
@@ -25,6 +26,13 @@ class RadioAutoJoinTest {
         assertFalse(ok(state = RadioState.Starting("c")))
         assertFalse(ok(state = RadioState.Error("c", RadioError.NOT_FOUND)))
         assertFalse(ok(state = RadioState.Lost("c", 5)))
+    }
+
+    @Test
+    fun autoJoinNeverWhileServerVoiceActive() {
+        // Joining would disconnect the server voice the rider just started: a ping-pong (I1).
+        assertFalse(ok(serverVoice = true))
+        assertTrue(ok(serverVoice = false))
     }
 
     @Test

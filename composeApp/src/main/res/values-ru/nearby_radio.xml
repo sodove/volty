@@ -2,4 +2,6 @@
     <string name="nearby_radio_channel">Рация без интернета</string>
     <string name="nearby_radio_notification_people">Рация: %1$d чел.</string>
     <string name="nearby_radio_notification_leave">Выйти</string>
+    <string name="nearby_radio_notification_connecting">Подключение…</string>
+    <string name="nearby_radio_notification_lost">Рация потеряна</string>
 </resources>

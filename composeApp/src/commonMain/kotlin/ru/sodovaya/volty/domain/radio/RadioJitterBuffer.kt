@@ -17,6 +17,9 @@ class RadioJitterBuffer(private val targetFrames: Int = 3, private val maxFrames
     private var highWater: Long? = null
     private var lastFrame: ShortArray? = null
 
+    /** Frames buffered and not yet played. */
+    val depth: Int get() = frames.size
+
     fun push(seq: Long, frame: ShortArray) {
         val played = highWater
         if (played != null && seq <= played) return

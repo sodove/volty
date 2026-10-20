@@ -40,6 +40,16 @@ class RadioClientSessionTest {
         mode.wire, echo, hubStream,
     )
 
+    @Test
+    fun jitterDepthCountsBufferedHubFrames() {
+        val s = session()
+        s.receive(roster(), 0)
+        assertEquals(0, s.jitterDepth)
+        s.receive(RadioMessage.Audio(0, 0, frameOf(1)), 0)
+        s.receive(RadioMessage.Audio(0, 1, frameOf(2)), 0)
+        assertEquals(2, s.jitterDepth)
+    }
+
     /** Connected session with a built noise floor; its clock ends at about 2 s, hub last heard at 10 ms. */
     private fun connected(): RadioClientSession {
         val s = session()

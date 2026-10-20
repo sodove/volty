@@ -49,7 +49,7 @@ class RadioControllerTest {
             return tracked { joinResult }
         }
         override suspend fun leave() { tracked { calls += "leave" } }
-        override fun radioNearby(community: String): Boolean = false
+        override suspend fun radioNearby(community: String): Boolean = false
         fun count(name: String) = calls.count { it == name }
     }
 
@@ -89,7 +89,7 @@ class RadioControllerTest {
         r.controller.raise("a", "c")
         runCurrent()
         assertEquals(0, r.link.count("host"))
-        assertEquals(listOf(5_000L), r.link.joinTimeouts)
+        assertEquals(listOf(8_000L), r.link.joinTimeouts)
         assertEquals(RadioState.Client("c", RadioClientPhase.JOINING), r.controller.state.value)
     }
 
@@ -464,5 +464,95 @@ class RadioControllerTest {
         runCurrent()
         assertEquals(listOf("join", "host", "leave", "join", "host"), r.link.calls)
         assertEquals(RadioState.Hub("c"), r.controller.state.value)
+    }
+
+    @Test
+    fun connectedWhileLostRecoversWithoutRejoin() = runTest {
+        val r = rig()
+        becomeLost(r)
+        val joinsBefore = r.link.count("join")
+        assertEquals(true, joinsBefore >= 1)
+        // The kept run's session heard the hub again: the old link is fine, no new join needed.
+        r.controller.onClientPhase(RadioClientPhase.CONNECTED)
+        runCurrent()
+        assertEquals(RadioState.Client("c", RadioClientPhase.CONNECTED), r.controller.state.value)
+        advanceTimeBy(200_000)
+        runCurrent()
+        assertEquals(joinsBefore, r.link.count("join"), "the rejoin loop must stop")
+        assertEquals(0, r.link.count("leave"))
+        assertEquals(RadioState.Client("c", RadioClientPhase.CONNECTED), r.controller.state.value)
+    }
+
+    @Test
+    fun lostAgainBeforeEverConnectingKeepsTheFirstWindow() = runTest {
+        // The link can report Joined (e.g. an attachment that is still formed, I2) while the hub stays
+        // silent: Joined -> LOST must not open a fresh 120 s window each time, or Lost never ends.
+        val r = rig()
+        becomeLost(r)
+        r.link.joinResult = RadioLinkResult.Joined(hub)
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals(RadioState.Client("c", RadioClientPhase.JOINING), r.controller.state.value)
+        r.link.joinResult = RadioLinkResult.NotFound
+        advanceTimeBy(50_000)
+        r.controller.onClientPhase(RadioClientPhase.LOST)
+        runCurrent()
+        assertEquals(RadioState.Lost("c", 120_000), r.controller.state.value)
+        // Once the hub was really heard again, a later loss gets a full window of its own.
+        r.link.joinResult = RadioLinkResult.Joined(hub)
+        advanceTimeBy(2_000)
+        runCurrent()
+        r.controller.onClientPhase(RadioClientPhase.CONNECTED)
+        advanceTimeBy(10_000)
+        r.link.joinResult = RadioLinkResult.NotFound
+        r.controller.onClientPhase(RadioClientPhase.LOST)
+        runCurrent()
+        assertEquals(RadioState.Lost("c", currentTime + 120_000), r.controller.state.value)
+    }
+
+    @Test
+    fun wifiFailureWhileLostIsLeftToTheRejoinWindow() = runTest {
+        val r = rig()
+        becomeLost(r)
+        r.controller.onRuntimeFailure(RadioError.WIFI_FAILED)
+        runCurrent()
+        assertEquals(RadioState.Lost("c", 120_000), r.controller.state.value)
+        assertEquals(0, r.link.count("leave"))
+        val joins = r.link.count("join")
+        advanceTimeBy(10_000)
+        runCurrent()
+        assertEquals(true, r.link.count("join") > joins, "rejoin keeps going")
+        // Any other runtime failure still ends the radio.
+        r.controller.onRuntimeFailure(RadioError.AUDIO_UNAVAILABLE)
+        runCurrent()
+        assertEquals(RadioState.Error("c", RadioError.AUDIO_UNAVAILABLE), r.controller.state.value)
+    }
+
+    @Test
+    fun failedAutoJoinReturnsSilentlyToIdle() = runTest {
+        val r = rig()
+        r.controller.join("a", "c", auto = true) // NotFound
+        runCurrent()
+        assertEquals(listOf("join"), r.link.calls)
+        assertEquals(RadioState.Idle, r.controller.state.value)
+        r.link.joinResult = RadioLinkResult.Failed("x")
+        r.controller.join("a", "c", auto = true)
+        runCurrent()
+        assertEquals(RadioState.Idle, r.controller.state.value)
+        r.link.joinResult = RadioLinkResult.Joined(hub)
+        r.controller.join("a", "c", auto = true)
+        runCurrent()
+        assertEquals(RadioState.Client("c", RadioClientPhase.JOINING), r.controller.state.value)
+    }
+
+    @Test
+    fun autoJoinWithoutKeyIsSilentButUserJoinIsNot() = runTest {
+        val r = rig(stored = null)
+        r.controller.join("a", "c", auto = true)
+        runCurrent()
+        assertEquals(RadioState.Idle, r.controller.state.value)
+        r.controller.join("a", "c")
+        runCurrent()
+        assertEquals(RadioState.Error("c", RadioError.NO_KEY), r.controller.state.value)
     }
 }

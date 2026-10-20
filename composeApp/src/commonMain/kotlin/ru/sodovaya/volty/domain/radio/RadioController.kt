@@ -33,7 +33,7 @@ interface RadioLink {
     var onDuplicateHub: ((community: String) -> Unit)?
 
     /** True when the last scan saw this community's radio. */
-    fun radioNearby(community: String): Boolean
+    suspend fun radioNearby(community: String): Boolean
 }
 
 /** The ordinary server voice, which is exclusive with the radio. */
@@ -96,6 +96,13 @@ class RadioController(
     private var community: String? = null
     private var actor: String? = null
     private var keyFetchedAt: Long = 0
+
+    /**
+     * The rejoin deadline of a loss that has not ended in a heard hub yet. A rejoin that reports
+     * Joined but never reaches CONNECTED and is lost again keeps this deadline, so Lost cannot be
+     * renewed forever by a link that attaches to a silent hub.
+     */
+    private var unresolvedLossUntil: Long? = null
     private var generation = 0
     private val linkLock = Mutex()
 
@@ -134,14 +141,21 @@ class RadioController(
         }
     }
 
-    /** Allowed from Idle, Error or Lost; ignored otherwise. */
-    fun join(actor: String, community: String) {
+    /**
+     * Allowed from Idle, Error or Lost; ignored otherwise.
+     *
+     * [auto] marks a join started by the auto-join poll rather than the rider: a failure of that one
+     * (no key, not found, Wi-Fi refused) returns silently to Idle, because nobody asked for it and an
+     * error card appearing out of nowhere every poll would be noise. The next poll simply tries again.
+     */
+    fun join(actor: String, community: String, auto: Boolean = false) {
         if (!canStart()) return
-        start(actor, community) { g ->
+        start(actor, community, auto) { g ->
             when (val r = linked { link.join(community, JOIN_TIMEOUT_MILLIS) }) {
                 is RadioLinkResult.Joined -> put(g, RadioState.Client(community, RadioClientPhase.JOINING))
-                RadioLinkResult.NotFound -> put(g, RadioState.Error(community, notFoundReason()))
-                else -> fail(g, community, r)
+                RadioLinkResult.NotFound ->
+                    if (auto) quietIdle(g) else put(g, RadioState.Error(community, notFoundReason()))
+                else -> if (auto) quietIdle(g) else fail(g, community, r)
             }
         }
     }
@@ -151,6 +165,7 @@ class RadioController(
         val c = community ?: return
         if (_state.value !is RadioState.Lost) return
         val g = next()
+        forgetLoss()
         _state.value = RadioState.Starting(c)
         job = scope.launch { host(g, c) }
     }
@@ -158,6 +173,7 @@ class RadioController(
     fun leave() {
         if (_state.value == RadioState.Idle) return
         next()
+        forgetLoss()
         community = null
         _state.value = RadioState.Idle
         scope.launch { linked { link.leave() } }
@@ -168,9 +184,17 @@ class RadioController(
         val current = _state.value
         if (current !is RadioState.Client && current !is RadioState.Lost) return
         when {
+            // The run kept through Lost heard its hub again over the old link: Wi-Fi recovered by
+            // itself, so stop the rejoin loop (whose join would tear that link down) and carry on.
+            phase == RadioClientPhase.CONNECTED && current is RadioState.Lost -> {
+                next()
+                unresolvedLossUntil = null
+                _state.value = RadioState.Client(c, RadioClientPhase.CONNECTED)
+            }
             phase == RadioClientPhase.LOST -> {
                 if (current is RadioState.Lost) return
-                val until = clock() + REJOIN_WINDOW_MILLIS
+                val until = unresolvedLossUntil ?: (clock() + REJOIN_WINDOW_MILLIS)
+                unresolvedLossUntil = until
                 val g = next()
                 _state.value = RadioState.Lost(c, until)
                 job = scope.launch { rejoin(g, c, until) }
@@ -180,17 +204,24 @@ class RadioController(
                 _state.value = RadioState.Error(c, RadioError.FULL)
                 scope.launch { linked { link.leave() } }
             }
-            current is RadioState.Client -> _state.value = RadioState.Client(c, phase)
+            current is RadioState.Client -> {
+                if (phase == RadioClientPhase.CONNECTED) unresolvedLossUntil = null
+                _state.value = RadioState.Client(c, phase)
+            }
         }
     }
 
     /**
      * The runtime (audio, service) could not carry the radio. Leaves the link and reports
      * [reason]; ignored when there is nothing running to fail.
+     *
+     * A Wi-Fi failure while [RadioState.Lost] is ignored: the socket dying is what losing the hub
+     * looks like from the inside, and the rejoin window already decides how that ends.
      */
     fun onRuntimeFailure(reason: RadioError) {
         val c = community ?: return
         if (_state.value == RadioState.Idle || _state.value is RadioState.Error) return
+        if (reason == RadioError.WIFI_FAILED && _state.value is RadioState.Lost) return
         next()
         _state.value = RadioState.Error(c, reason)
         scope.launch { linked { link.leave() } }
@@ -211,21 +242,27 @@ class RadioController(
         return ++generation
     }
 
+    /** Any new start, leave or re-raise ends the story of the previous loss. */
+    private fun forgetLoss() {
+        unresolvedLossUntil = null
+    }
+
     private suspend fun <T> linked(block: suspend () -> T): T = linkLock.withLock { block() }
 
     private fun put(g: Int, s: RadioState) {
         if (g == generation) _state.value = s
     }
 
-    private fun start(actor: String, community: String, body: suspend (Int) -> Unit) {
+    private fun start(actor: String, community: String, auto: Boolean = false, body: suspend (Int) -> Unit) {
         val g = next()
+        forgetLoss()
         this.community = community
         this.actor = actor
         _state.value = RadioState.Starting(community)
         job = scope.launch {
             val stored = keys.get(actor, community)
             if (stored == null) {
-                put(g, RadioState.Error(community, RadioError.NO_KEY))
+                if (auto) quietIdle(g) else put(g, RadioState.Error(community, RadioError.NO_KEY))
                 return@launch
             }
             if (g != generation) return@launch
@@ -233,6 +270,13 @@ class RadioController(
             if (serverVoice.isActive()) serverVoice.disconnect()
             body(g)
         }
+    }
+
+    /** A failed auto-join: back to Idle with no error, as if it had never been tried. */
+    private fun quietIdle(g: Int) {
+        if (g != generation) return
+        community = null
+        _state.value = RadioState.Idle
     }
 
     private suspend fun host(g: Int, community: String) {
@@ -273,7 +317,9 @@ class RadioController(
     }
 
     private companion object {
-        const val RAISE_PROBE_MILLIS = 5_000L
+        // Long enough for a whole connect on a slow vendor stack; the link splits it between
+        // today's and (just after UTC midnight) yesterday's network name.
+        const val RAISE_PROBE_MILLIS = 8_000L
         const val JOIN_TIMEOUT_MILLIS = 30_000L
         const val REJOIN_ATTEMPT_MILLIS = 5_000L
         const val REJOIN_PAUSE_MILLIS = 1_000L

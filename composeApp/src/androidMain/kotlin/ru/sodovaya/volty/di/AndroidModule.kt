@@ -262,7 +262,12 @@ val androidModule = module {
         NearbyVoiceController(get(),get(),Dispatchers.Main,{java.util.UUID.randomUUID().toString()},
             prefs::readVoiceAudioPreferences,get<NearbySharingSwitchGuard>(),
             // Lazy lookup: the radio's RadioServerVoice reads this controller back, so no eager cycle.
-            onConversationStarting = { get<ru.sodovaya.volty.domain.radio.RadioController>().onServerVoiceStarted() })
+            // Starting server voice ends the radio AND quiets auto-join, or the next poll would join the
+            // radio again and disconnect this very call (I1).
+            onConversationStarting = {
+                get<ru.sodovaya.volty.data.radio.RadioRuntime>().suppressAutoJoin()
+                get<ru.sodovaya.volty.domain.radio.RadioController>().onServerVoiceStarted()
+            })
     }
     // Offline Wi-Fi radio. The controller and everything that touches it live on one single-threaded
     // scope (main, immediate); the audio thread and sockets are confined inside RadioRuntime.
@@ -304,6 +309,7 @@ val androidModule = module {
             scope = get(named(RADIO_SCOPE)),
             autoJoin = { get<AppPrefs>().radioAutoJoin.value },
             appVisible = { get<ru.sodovaya.volty.data.radio.AppVisibility>().isVisible },
+            serverVoiceActive = { get<ru.sodovaya.volty.domain.radio.RadioServerVoice>().isActive() },
         )
     }
     single { ru.sodovaya.volty.data.radio.AppVisibility() }

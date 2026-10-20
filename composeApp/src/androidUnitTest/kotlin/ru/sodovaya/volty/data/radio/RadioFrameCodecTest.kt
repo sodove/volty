@@ -37,6 +37,30 @@ class RadioFrameCodecTest {
     }
 
     @Test
+    fun streamDecoderPicksTheCodecByPayloadLengthNotByMode() {
+        // M1: across a hub mode switch the last packets of the old mode must still decode.
+        val pcm = ShortArray(RADIO_FRAME_SAMPLES) { ((it * 97) - 15000).toShort() }
+        val opus = RadioFrameCodecs.encoder(RadioMode.BALANCED)
+        val dec = RadioFrameCodecs.streamDecoder()
+        var out = ShortArray(0)
+        repeat(6) { f -> out = dec.decode(opus.encode(tone(f))) }
+        assertTrue(rms(out) > 1000.0, "opus frames decode to the tone, rms ${rms(out)}")
+        assertContentEquals(pcm, dec.decode(RadioFrameCodecs.encoder(RadioMode.LOW_LATENCY).encode(pcm)))
+        repeat(6) { f -> out = dec.decode(opus.encode(tone(6 + f))) }
+        assertTrue(rms(out) > 1000.0, "opus again after pcm, rms ${rms(out)}")
+    }
+
+    @Test
+    fun opusDecodeFailureIsCountedAndConcealed() {
+        var failures = 0
+        val dec = RadioFrameCodecs.streamDecoder { failures++ }
+        // TOC code 3 (arbitrary frame count) with no count byte: an invalid Opus packet.
+        val out = dec.decode(byteArrayOf(0x03))
+        assertEquals(RADIO_FRAME_SAMPLES, out.size)
+        assertEquals(1, failures)
+    }
+
+    @Test
     fun opusBalancedRoundTripPreservesTone() {
         val enc = RadioFrameCodecs.encoder(RadioMode.BALANCED)
         val dec = RadioFrameCodecs.decoder(RadioMode.BALANCED)

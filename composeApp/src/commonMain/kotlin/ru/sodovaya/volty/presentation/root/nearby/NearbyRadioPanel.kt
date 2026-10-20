@@ -116,3 +116,11 @@ private fun errorPanel(reason: RadioError, mode: RadioMode?): RadioPanelState {
  */
 fun radioStatusTitle(panel: RadioPanelState): RadioTitle? =
     panel.title.takeIf { it == RadioTitle.STARTING || it == RadioTitle.CONNECTING || it == RadioTitle.MEMBERS || it == RadioTitle.LOST }
+
+/**
+ * The radio's foreground notification says what the status line says (I5), so it never counts
+ * people the radio has not heard. Idle/Error, which the service only shows for the moment before
+ * it stops, read as "connecting" rather than as a number.
+ */
+fun radioNotificationTitle(state: RadioState, roster: List<RadioMember>): RadioTitle =
+    radioStatusTitle(radioPanelState(state, roster, supported = true)) ?: RadioTitle.STARTING

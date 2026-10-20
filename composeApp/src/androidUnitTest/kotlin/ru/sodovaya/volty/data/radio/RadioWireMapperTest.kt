@@ -3,6 +3,8 @@ package ru.sodovaya.volty.data.radio
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -94,6 +96,30 @@ class RadioWireMapperTest {
         assertEquals(3, got.modeWire)
         assertEquals(99L, got.echoMillis)
         assertEquals(listOf(RadioRosterEntry(2, "u2", "B")), got.entries)
+    }
+
+    @Test
+    fun headerSeqStartsAtARandomPointBelowTwoToThe62() {
+        // I7: a nonce space starting at 0 every time makes (session, seq) collisions far likelier.
+        val firsts = List(2) {
+            val bytes = assertNotNull(mapper(session = 4).encode(RadioDatagram(clients[0], RadioMessage.Full)))
+            assertNotNull(codec.decode(bytes)).seq
+        }
+        assertTrue(firsts[0] != firsts[1], "two mappers started at the same seq ${firsts[0]}")
+        firsts.forEach { assertTrue(it in 0 until (1L shl 62), "seq $it out of range") }
+    }
+
+    @Test
+    fun replayGuardAcceptsALargeFirstSeq() {
+        val guard = RadioReplayGuard()
+        val big = (1L shl 62) - 1
+        assertTrue(guard.accept(1, 9, big))
+        assertTrue(guard.accept(1, 9, big + 1))
+        assertFalse(guard.accept(1, 9, big), "replay")
+        // And end to end through a mapper whose counter starts high.
+        val hub = mapper(session = 3)
+        val client = mapper(session = 5, sender = 1)
+        repeat(3) { assertNotNull(client.decode(clients[0], assertNotNull(hub.encode(RadioDatagram(clients[0], RadioMessage.Full))))) }
     }
 
     @Test

@@ -31,6 +31,29 @@ object RadioFrameCodecs {
 
     fun decoder(mode: RadioMode): RadioFrameDecoder =
         if (mode.opusBitrate == null) PcmDecoder else OpusFrameDecoder()
+
+    /**
+     * The decoder for one inbound stream (M1): the payload's length picks the codec, never the
+     * receiver's idea of the current mode. Exactly one raw PCM frame (640 bytes) is PCM; anything
+     * else is Opus (an Opus frame here is at most [OPUS_MAX_PACKET_BYTES]). So the packets a hub
+     * sent in the old mode around a mode switch still decode instead of turning into noise or
+     * silence. The Opus state is created on the first Opus payload and kept for the stream.
+     * [onDecodeFailure] is called (on the decoding thread) for every Opus payload it rejects.
+     */
+    fun streamDecoder(onDecodeFailure: () -> Unit = {}): RadioFrameDecoder = LengthSelectedDecoder(onDecodeFailure)
+}
+
+private class LengthSelectedDecoder(private val onDecodeFailure: () -> Unit) : RadioFrameDecoder {
+    private var opus: OpusFrameDecoder? = null
+    private var lastWasPcm = false
+
+    override fun decode(payload: ByteArray?): ShortArray {
+        val pcm = if (payload == null) lastWasPcm else payload.size == RADIO_FRAME_SAMPLES * 2
+        lastWasPcm = pcm
+        if (pcm) return PcmDecoder.decode(payload)
+        val d = opus ?: OpusFrameDecoder(onDecodeFailure).also { opus = it }
+        return d.decode(payload)
+    }
 }
 
 private object PcmEncoder : RadioFrameEncoder {
@@ -74,7 +97,7 @@ private class OpusFrameEncoder(bitrate: Int, fec: Boolean) : RadioFrameEncoder {
     }
 }
 
-private class OpusFrameDecoder : RadioFrameDecoder {
+private class OpusFrameDecoder(private val onDecodeFailure: () -> Unit = {}) : RadioFrameDecoder {
     private val dec = OpusDecoder(RADIO_SAMPLE_RATE, 1)
 
     // PLC only: a null payload asks Opus to extrapolate one frame. FEC recovery
@@ -87,6 +110,7 @@ private class OpusFrameDecoder : RadioFrameDecoder {
                 return out
             } catch (e: Exception) {
                 // malformed datagram: treat as lost, never kill the audio thread
+                onDecodeFailure()
             }
         }
         out.fill(0)

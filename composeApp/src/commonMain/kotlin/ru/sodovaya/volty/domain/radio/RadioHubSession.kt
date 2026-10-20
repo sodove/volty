@@ -80,6 +80,10 @@ class RadioHubSession(
     val members: List<RadioMember>
         get() = clients.values.map { RadioMember(it.slot, it.userId, it.name, it.lastSeen, null) }
 
+    /** Frames buffered per client slot right now (diagnostics). */
+    val jitterDepths: Map<Int, Int>
+        get() = clients.values.associate { it.slot to it.jitter.depth }
+
     fun setMode(mode: RadioMode) {
         this.mode = mode
         clients.values.forEach { it.jitter = RadioJitterBuffer(mode.jitterTargetFrames) }
