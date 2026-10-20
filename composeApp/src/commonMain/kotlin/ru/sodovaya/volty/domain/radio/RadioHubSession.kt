@@ -6,7 +6,12 @@ data class RadioAddress(val host: String, val port: Int)
 data class RadioRosterEntry(val slot: Int, val userId: String, val name: String)
 
 sealed interface RadioMessage {
-    data class Hello(val userId: String, val name: String, val sentAtMillis: Long) : RadioMessage
+    data class Hello(
+        val userId: String,
+        val name: String,
+        val sentAtMillis: Long,
+        val streamId: Int,
+    ) : RadioMessage
 
     class Audio(val slot: Int, val seq: Long, val pcm: ShortArray) : RadioMessage {
         override fun equals(other: Any?): Boolean =
@@ -23,6 +28,7 @@ sealed interface RadioMessage {
         val entries: List<RadioRosterEntry>,
         val modeWire: Int,
         val echoMillis: Long?,
+        val hubStreamId: Int,
     ) : RadioMessage
 
     data object Full : RadioMessage
@@ -49,6 +55,7 @@ class RadioHubSession(
     mode: RadioMode = RadioMode.BALANCED,
     private val maxClients: Int = 9,
     private val evictAfterMillis: Long = 3_000,
+    private val hubStreamId: Int = 0,
 ) {
     private class Client(
         val slot: Int,
@@ -57,13 +64,16 @@ class RadioHubSession(
         var name: String,
         var lastSeen: Long,
         var lastHelloSentAt: Long,
+        var streamId: Int,
         var jitter: RadioJitterBuffer,
     ) {
-        var sendSeq = 0L
     }
 
     private var mode = mode
     private val clients = sortedMapOf<Int, Client>()
+    // Next hub-to-client audio seq per userId, kept for the hub's lifetime so a client that
+    // rejoins continues the sequence (its jitter buffer never forgets what it already played).
+    private val sendSeqByUser = mutableMapOf<String, Long>()
     private var ticks = 0L
     private var playback: ShortArray? = null
 
@@ -107,6 +117,11 @@ class RadioHubSession(
                 existing.address = peer
                 existing.jitter = RadioJitterBuffer(mode.jitterTargetFrames)
             }
+            if (existing.streamId != msg.streamId) {
+                // Sender restarted: its seq numbering began again, so the old high-water mark is stale.
+                existing.streamId = msg.streamId
+                existing.jitter = RadioJitterBuffer(mode.jitterTargetFrames)
+            }
             existing.name = msg.name
             existing.lastSeen = now
             existing.lastHelloSentAt = msg.sentAtMillis
@@ -115,7 +130,7 @@ class RadioHubSession(
         val slot = (1..maxClients).firstOrNull { it !in clients }
             ?: return listOf(RadioDatagram(peer, RadioMessage.Full))
         val client = Client(
-            slot, peer, msg.userId, msg.name, now, msg.sentAtMillis,
+            slot, peer, msg.userId, msg.name, now, msg.sentAtMillis, msg.streamId,
             RadioJitterBuffer(mode.jitterTargetFrames),
         )
         clients[slot] = client
@@ -142,12 +157,18 @@ class RadioHubSession(
             if (others.isNotEmpty()) {
                 out += RadioDatagram(
                     client.address,
-                    RadioMessage.Audio(0, client.sendSeq++, RadioMixer.mix(others)),
+                    RadioMessage.Audio(0, nextSeq(client.userId), RadioMixer.mix(others)),
                 )
             }
             if (rosterDue) out += rosterFor(client)
         }
         return out
+    }
+
+    private fun nextSeq(userId: String): Long {
+        val seq = sendSeqByUser[userId] ?: 0L
+        sendSeqByUser[userId] = seq + 1
+        return seq
     }
 
     private fun rosterFor(client: Client): RadioDatagram {
@@ -157,7 +178,7 @@ class RadioHubSession(
         }
         return RadioDatagram(
             client.address,
-            RadioMessage.Roster(entries, mode.wire, client.lastHelloSentAt),
+            RadioMessage.Roster(entries, mode.wire, client.lastHelloSentAt, hubStreamId),
         )
     }
 

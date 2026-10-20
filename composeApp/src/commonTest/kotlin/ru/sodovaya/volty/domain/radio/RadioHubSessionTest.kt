@@ -10,7 +10,7 @@ import kotlin.test.assertTrue
 class RadioHubSessionTest {
     private fun addr(n: Int) = RadioAddress("192.168.49.$n", 5000)
     private fun hello(n: Int, user: String = "u$n", at: Long = 0) =
-        RadioDatagram(addr(n), RadioMessage.Hello(user, "Name$n", at))
+        RadioDatagram(addr(n), RadioMessage.Hello(user, "Name$n", at, 1))
     private fun tone(v: Int) = ShortArray(RADIO_FRAME_SAMPLES) { v.toShort() }
     private fun audio(n: Int, slot: Int, seq: Long, pcm: ShortArray) =
         RadioDatagram(addr(n), RadioMessage.Audio(slot, seq, pcm))
@@ -47,7 +47,7 @@ class RadioHubSessionTest {
         val hub = RadioHubSession("hub", "Hub")
         hub.receive(hello(1, user = "bob"), 0)
         hub.receive(hello(2, user = "carol"), 0)
-        hub.receive(RadioDatagram(addr(7), RadioMessage.Hello("bob", "Bob", 5)), 100)
+        hub.receive(RadioDatagram(addr(7), RadioMessage.Hello("bob", "Bob", 5, 1)), 100)
         assertEquals(listOf(1, 2), hub.members.map { it.slot })
         assertEquals("bob", hub.members.first { it.slot == 1 }.userId)
         // The new address is the one that is served; the old one hears nothing.
@@ -109,8 +109,8 @@ class RadioHubSessionTest {
     @Test
     fun rosterEverySecondEchoesSentAt() {
         val hub = RadioHubSession("hub", "Hub")
-        hub.receive(RadioDatagram(addr(1), RadioMessage.Hello("u1", "N", 777)), 0)
-        hub.receive(RadioDatagram(addr(1), RadioMessage.Hello("u1", "N", 888)), 10)
+        hub.receive(RadioDatagram(addr(1), RadioMessage.Hello("u1", "N", 777, 1)), 0)
+        hub.receive(RadioDatagram(addr(1), RadioMessage.Hello("u1", "N", 888, 1)), 10)
         for (t in 1..49) assertTrue(hub.tick(t * 20L, null).rostersTo(1).isEmpty(), "tick $t")
         val rosters = hub.tick(1_000, null).rostersTo(1)
         assertEquals(1, rosters.size)
@@ -186,5 +186,37 @@ class RadioHubSessionTest {
         hub.tick(20, null)
         assertNull(hub.hubPlayback())
         assertTrue(hub.members.isEmpty())
+    }
+
+    @Test
+    fun rejoinAfterEvictionContinuesSeq() {
+        val hub = RadioHubSession("hub", "Hub")
+        hub.joinAt(1, now = 0)
+        hub.tick(20, tone(1)); val n = hub.tick(40, tone(1)).audioTo(1).single().seq
+        hub.tick(4_000, null)
+        assertTrue(hub.members.isEmpty())
+        hub.joinAt(1, now = 4_010)
+        assertTrue(hub.tick(4_020, tone(1)).audioTo(1).single().seq > n)
+    }
+
+    @Test
+    fun newStreamIdResetsClientBuffer() {
+        val hub = RadioHubSession("hub", "Hub")
+        hub.joinAt(1)
+        for (s in 0L..10L) hub.receive(audio(1, 1, s, tone(700)), 0)
+        for (t in 1..6) hub.tick(t * 20L, null)
+        hub.receive(RadioDatagram(addr(1), RadioMessage.Hello("u1", "Name1", 50, 2)), 200)
+        for (s in 0L..2L) hub.receive(audio(1, 1, s, tone(900)), 200)
+        hub.tick(220, null)
+        assertContentEquals(tone(900), hub.hubPlayback())
+    }
+
+    @Test
+    fun rosterCarriesHubStreamId() {
+        val hub = RadioHubSession("hub", "Hub", hubStreamId = 4242)
+        assertEquals(4242, hub.joinAt(1).rostersTo(1).single().hubStreamId)
+        var seen = false
+        for (t in 1..50) hub.tick(t * 20L, null).rostersTo(1).forEach { seen = true; assertEquals(4242, it.hubStreamId) }
+        assertTrue(seen)
     }
 }
