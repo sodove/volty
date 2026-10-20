@@ -394,4 +394,49 @@ class RadioControllerTest {
         assertEquals(1, r.link.count("leave"))
         assertEquals(RadioState.Error("c", RadioError.FULL), r.controller.state.value)
     }
+
+    @Test
+    fun duplicateHubLeavesAndJoinsExisting() = runTest {
+        val r = rig()
+        r.controller.raise("a", "c")
+        runCurrent()
+        assertEquals(RadioState.Hub("c"), r.controller.state.value)
+        r.link.joinResult = RadioLinkResult.Joined(hub)
+        r.controller.onDuplicateHub()
+        runCurrent()
+        assertEquals(listOf("join", "host", "leave", "join"), r.link.calls)
+        assertEquals(RadioState.Client("c", RadioClientPhase.JOINING), r.controller.state.value)
+    }
+
+    @Test
+    fun duplicateHubIgnoredWhenNotHub() = runTest {
+        val r = rig()
+        r.link.joinResult = RadioLinkResult.Joined(hub)
+        r.controller.onDuplicateHub()
+        runCurrent()
+        assertEquals(emptyList(), r.link.calls)
+        assertEquals(RadioState.Idle, r.controller.state.value)
+        r.controller.join("a", "c")
+        runCurrent()
+        val before = r.link.calls.toList()
+        r.controller.onDuplicateHub()
+        runCurrent()
+        assertEquals(before, r.link.calls)
+        assertEquals(RadioState.Client("c", RadioClientPhase.JOINING), r.controller.state.value)
+    }
+
+    @Test
+    fun runtimeFailureLeavesLinkAndReportsError() = runTest {
+        val r = rig()
+        r.controller.raise("a", "c")
+        runCurrent()
+        r.controller.onRuntimeFailure(RadioError.AUDIO_UNAVAILABLE)
+        runCurrent()
+        assertEquals(RadioState.Error("c", RadioError.AUDIO_UNAVAILABLE), r.controller.state.value)
+        assertEquals(1, r.link.count("leave"))
+        r.controller.onRuntimeFailure(RadioError.WIFI_FAILED)
+        runCurrent()
+        assertEquals(RadioState.Error("c", RadioError.AUDIO_UNAVAILABLE), r.controller.state.value)
+        assertEquals(1, r.link.count("leave"))
+    }
 }

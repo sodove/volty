@@ -83,6 +83,8 @@
             android:foregroundServiceType="microphone" android:exported="false" />
         <service android:name=".data.voice.NearbyVoiceService"
             android:foregroundServiceType="microphone" android:exported="false" />
+        <service android:name=".data.radio.NearbyRadioService"
+            android:foregroundServiceType="microphone|connectedDevice" android:exported="false" />
         <receiver android:name=".data.voice.IncomingCallDeclineReceiver" android:exported="false" />
         <activity android:name=".data.voice.IncomingCallActivity"
             android:exported="false" android:launchMode="singleTop"

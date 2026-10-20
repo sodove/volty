@@ -260,7 +260,49 @@ val androidModule = module {
     single {
         val prefs=get<AppPrefs>()
         NearbyVoiceController(get(),get(),Dispatchers.Main,{java.util.UUID.randomUUID().toString()},
-            prefs::readVoiceAudioPreferences,get<NearbySharingSwitchGuard>())
+            prefs::readVoiceAudioPreferences,get<NearbySharingSwitchGuard>(),
+            // Lazy lookup: the radio's RadioServerVoice reads this controller back, so no eager cycle.
+            onConversationStarting = { get<ru.sodovaya.volty.domain.radio.RadioController>().onServerVoiceStarted() })
+    }
+    // Offline Wi-Fi radio. The controller and everything that touches it live on one single-threaded
+    // scope (main, immediate); the audio thread and sockets are confined inside RadioRuntime.
+    single<ru.sodovaya.volty.domain.radio.RadioKeyStore> { AndroidRadioKeyStore(androidContext()) }
+    single {
+        val repository = get<ru.sodovaya.volty.data.social.DefaultSocialRepository>()
+        ru.sodovaya.volty.data.radio.RecordingRadioLink(
+            ru.sodovaya.volty.data.radio.AndroidRadioLink(
+                androidContext(), get(),
+                actor = { (repository.session.value as? ru.sodovaya.volty.domain.social.SocialSession.Authenticated)?.userId?.value },
+            ),
+        )
+    }
+    single<ru.sodovaya.volty.domain.radio.RadioLink> { get<ru.sodovaya.volty.data.radio.RecordingRadioLink>() }
+    single<ru.sodovaya.volty.domain.radio.RadioServerVoice> {
+        val voice = lazy { get<NearbyVoiceController>() }
+        object : ru.sodovaya.volty.domain.radio.RadioServerVoice {
+            override fun isActive(): Boolean = voice.value.state.value.operation != null
+            override fun disconnect() {
+                val operation = voice.value.state.value.operation ?: return
+                voice.value.disconnect(operation)
+            }
+        }
+    }
+    single(named(RADIO_SCOPE)) { CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate) }
+    single {
+        ru.sodovaya.volty.domain.radio.RadioController(
+            get(), get(), get(), System::currentTimeMillis, get(named(RADIO_SCOPE)),
+        )
+    }
+    single {
+        val repository = get<ru.sodovaya.volty.data.social.DefaultSocialRepository>()
+        ru.sodovaya.volty.data.radio.RadioRuntime(
+            androidContext(), get(), get(), get(),
+            identity = {
+                (repository.session.value as? ru.sodovaya.volty.domain.social.SocialSession.Authenticated)
+                    ?.let { ru.sodovaya.volty.data.radio.RadioIdentity(it.userId.value, it.displayName) }
+            },
+            scope = get(named(RADIO_SCOPE)),
+        )
     }
     single { NearbySharingController(get(),get(),get(),get(),Dispatchers.Main,{java.util.UUID.randomUUID().toString()}) }
     single<ru.sodovaya.volty.presentation.root.nearby.NearbyOperationIds> {
@@ -462,6 +504,7 @@ val androidModule = module {
 
 private const val HISTORY_LOCATION_DEMAND = "history-location-demand"
 private const val OFFLINE_DOWNLOAD_SCOPE = "offline-region-downloads"
+private const val RADIO_SCOPE = "offline-radio"
 private const val OFFLINE_FIRST_NAVIGATION = "offline-first-navigation"
 private const val APP_VERSION_CODE = "app-version-code"
 private const val NEARBY_HTTP_CLIENT = "nearby-http-client"

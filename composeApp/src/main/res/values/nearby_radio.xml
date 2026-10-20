@@ -1,0 +1,5 @@
+<resources>
+    <string name="nearby_radio_channel">Offline radio</string>
+    <string name="nearby_radio_notification_people">Radio: %1$d people</string>
+    <string name="nearby_radio_notification_leave">Leave</string>
+</resources>

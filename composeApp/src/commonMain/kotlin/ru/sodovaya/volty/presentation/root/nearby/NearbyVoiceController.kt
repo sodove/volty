@@ -35,7 +35,9 @@ data class NearbyVoiceView(val pending: NearbyPendingVoiceView?=null,val label: 
 /** All mutations run on the queued process owner. UI supplies explicit permission results and a disposable launcher. */
 internal class NearbyVoiceController(private val repository: DefaultSocialRepository,private val voice: VoiceConversationStartup,
     private val queued: CoroutineDispatcher,private val nextId: ()->String,private val readPreferences: suspend ()->VoiceAudioPreferences,
-    private val switches: NearbyVoiceSwitchGuard) {
+    private val switches: NearbyVoiceSwitchGuard,
+    /** Called just before a server conversation is started; the offline radio uses it to stop itself. */
+    private val onConversationStarting: () -> Unit = {}) {
     private val parent=repository.applicationScope()
     private val root=checkNotNull(parent.coroutineContext[Job])
     init {require(root.isActive && queued.isDispatchNeeded(parent.coroutineContext))}
@@ -182,6 +184,7 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             }
             if(!selected(work) || voice.state.value.operationId!=request.original) return
             if(!boundary.available) {failure=request.account to NearbyVoiceError.NOT_VISIBLE;return}
+            onConversationStarting()
             voice.start(request.account,destination,request.operation,readPreferences=readPreferences,launch=boundary::launchVoice)
             if(!selected(work) || voice.state.value.operationId!=request.operation) return
             committed=request;submitted=true

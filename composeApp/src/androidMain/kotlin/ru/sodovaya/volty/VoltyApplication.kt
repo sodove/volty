@@ -25,6 +25,8 @@ class VoltyApplication : Application() {
         }
         koinApp.koin.get<ru.sodovaya.volty.data.voice.IncomingCallDiscovery>().start()
         koinApp.koin.get<ru.sodovaya.volty.data.nearby.AndroidPushStartup>().start()
+        // Reacts to the offline radio's state (audio, transport, foreground service); no-op below Android 10.
+        koinApp.koin.get<ru.sodovaya.volty.data.radio.RadioRuntime>().attach()
         val alertEngine = koinApp.koin.get<AlertEngine>()
         koinApp.koin.get<OfflineMapPackManager>()
         val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())

@@ -42,7 +42,12 @@ interface RadioServerVoice {
     fun disconnect()
 }
 
-enum class RadioError { UNSUPPORTED_ANDROID, NO_KEY, STALE_KEY, NOT_FOUND, FULL, WIFI_FAILED }
+enum class RadioError {
+    UNSUPPORTED_ANDROID, NO_KEY, STALE_KEY, NOT_FOUND, FULL, WIFI_FAILED,
+
+    /** The runtime could not start audio: microphone not granted, foreground service refused, or the recorder would not open. */
+    AUDIO_UNAVAILABLE,
+}
 
 sealed interface RadioState {
     data object Idle : RadioState
@@ -89,6 +94,7 @@ class RadioController(
 
     private var job: Job? = null
     private var community: String? = null
+    private var actor: String? = null
     private var keyFetchedAt: Long = 0
     private var generation = 0
     private val linkLock = Mutex()
@@ -102,12 +108,29 @@ class RadioController(
     fun raise(actor: String, community: String) {
         if (_state.value is RadioState.Lost) return reRaise()
         if (!canStart()) return
-        start(actor, community) { g ->
-            when (val first = linked { link.join(community, RAISE_PROBE_MILLIS) }) {
-                is RadioLinkResult.Joined -> put(g, RadioState.Client(community, RadioClientPhase.JOINING))
-                RadioLinkResult.NotFound -> host(g, community)
-                else -> fail(g, community, first)
-            }
+        start(actor, community) { g -> raiseBody(g, community) }
+    }
+
+    private suspend fun raiseBody(g: Int, community: String) {
+        when (val first = linked { link.join(community, RAISE_PROBE_MILLIS) }) {
+            is RadioLinkResult.Joined -> put(g, RadioState.Client(community, RadioClientPhase.JOINING))
+            RadioLinkResult.NotFound -> host(g, community)
+            else -> fail(g, community, first)
+        }
+    }
+
+    /**
+     * The link saw a same-name hub from another phone and this hub should give way (ruling R14).
+     * Only meaningful while hosting: leaves through the serialised link path, then repeats the
+     * raise semantics (short join probe, else host) for the same community. Ignored otherwise.
+     */
+    fun onDuplicateHub() {
+        val c = community ?: return
+        val who = actor ?: return
+        if (_state.value != RadioState.Hub(c)) return
+        start(who, c) { g ->
+            linked { link.leave() }
+            raiseBody(g, c)
         }
     }
 
@@ -161,6 +184,18 @@ class RadioController(
         }
     }
 
+    /**
+     * The runtime (audio, service) could not carry the radio. Leaves the link and reports
+     * [reason]; ignored when there is nothing running to fail.
+     */
+    fun onRuntimeFailure(reason: RadioError) {
+        val c = community ?: return
+        if (_state.value == RadioState.Idle || _state.value is RadioState.Error) return
+        next()
+        _state.value = RadioState.Error(c, reason)
+        scope.launch { linked { link.leave() } }
+    }
+
     /** Starting the ordinary server voice ends the radio. */
     fun onServerVoiceStarted() = leave()
 
@@ -185,6 +220,7 @@ class RadioController(
     private fun start(actor: String, community: String, body: suspend (Int) -> Unit) {
         val g = next()
         this.community = community
+        this.actor = actor
         _state.value = RadioState.Starting(community)
         job = scope.launch {
             val stored = keys.get(actor, community)
