@@ -970,6 +970,14 @@
     <string name="nearby_panel_duration_half_hour">30 minutes</string>
     <string name="nearby_panel_duration_two_hours">2 hours</string>
     <string name="nearby_panel_duration_eight_hours">8 hours</string>
+    <string name="nearby_panel_status_count">%1$s · %2$d in channel</string>
+    <string name="nearby_panel_position">Position on the map</string>
+    <string name="nearby_panel_position_visible">Visible to the channel · %1$s</string>
+    <string name="nearby_panel_audio_settings">Microphone and sound</string>
+    <string name="nearby_panel_notice_local_cleanup">releasing location…</string>
+    <string name="nearby_panel_notice_server_cleanup">waiting for the server…</string>
+    <string name="nearby_panel_notice_position">turning on position…</string>
+    <string name="nearby_panel_notice_audio">switching device…</string>
     <string name="nearby_channels_delete">Delete channel</string>
     <string name="nearby_channels_delete_title">Delete channel “%1$s”?</string>
     <string name="nearby_channels_delete_warning">The channel will be permanently deleted. Everyone connected to it will be disconnected.</string>

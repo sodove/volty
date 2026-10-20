@@ -968,6 +968,14 @@
     <string name="nearby_panel_duration_half_hour">30 минут</string>
     <string name="nearby_panel_duration_two_hours">2 часа</string>
     <string name="nearby_panel_duration_eight_hours">8 часов</string>
+    <string name="nearby_panel_status_count">%1$s · в канале: %2$d</string>
+    <string name="nearby_panel_position">Позиция на карте</string>
+    <string name="nearby_panel_position_visible">Видна участникам · %1$s</string>
+    <string name="nearby_panel_audio_settings">Микрофон и звук</string>
+    <string name="nearby_panel_notice_local_cleanup">освобождаем геопозицию…</string>
+    <string name="nearby_panel_notice_server_cleanup">ждём подтверждения сервера…</string>
+    <string name="nearby_panel_notice_position">включаем позицию…</string>
+    <string name="nearby_panel_notice_audio">меняем устройство…</string>
     <string name="nearby_channels_delete">Удалить канал</string>
     <string name="nearby_channels_delete_title">Удалить канал «%1$s»?</string>
     <string name="nearby_channels_delete_warning">Канал будет удалён безвозвратно. Все подключённые участники будут отключены.</string>

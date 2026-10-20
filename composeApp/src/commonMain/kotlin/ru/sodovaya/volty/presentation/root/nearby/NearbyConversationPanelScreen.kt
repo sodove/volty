@@ -3,6 +3,14 @@ package ru.sodovaya.volty.presentation.root.nearby
 import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -61,7 +69,6 @@ internal fun NearbyConversationPanelScreen(
     val panel = nearbyConversationPanel(voice, sharing)
     val roster = nearbyChannelRosterPanel(voice)
     val pending = voice.pending
-    var selectedTtl by remember(voice.operation) { mutableStateOf(ChannelSharingTtl.HALF_HOUR) }
     if (pending != null && pending.confirmationRequired && !pending.confirmed) {
         AlertDialog(
             onDismissRequest = { actions.cancelVoiceRequest(pending.id) },
@@ -99,26 +106,14 @@ internal fun NearbyConversationPanelScreen(
                 .padding(horizontal = if (expanded) 24.dp else 12.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(if (expanded) 12.dp else 4.dp),
         ) {
-            if (voice.operation != null) {
+            if (voice.operation != null && expanded) {
+                ExpandedConversation(voice, sharing, panel, roster, actions)
+            } else if (voice.operation != null) {
                 ConversationHeader(voice, panel.connection)
-                ConversationActions(panel, actions, expanded, onOpenDetails)
+                ConversationActions(panel, actions, expanded = false, onOpenDetails)
+                CollapsedTripRow(panel = panel, actions = actions)
 
-                if (expanded && voice.kind == NearbyConversationKind.CHANNEL) {
-                    ParticipantsSection(roster)
-                }
-
-                SharingCommands(
-                    panel = panel,
-                    actions = actions,
-                    expanded = expanded,
-                    selectedTtl = selectedTtl,
-                    onSelectTtl = { selectedTtl = it },
-                )
-
-                panel.audio?.let { audio ->
-                    NearbyAudioStatus(audio)
-                    if (expanded) NearbyAudioControls(audio, panel.audioEditable, actions)
-                }
+                panel.audio?.let { audio -> NearbyAudioStatus(audio) }
             }
 
             request?.let { original ->
@@ -144,8 +139,10 @@ internal fun NearbyConversationPanelScreen(
                 }
             }
 
-            if (panel.localCleanupPending) Text(stringResource(Res.string.nearby_panel_local_cleanup))
-            if (panel.serverConfirmationPending) Text(stringResource(Res.string.nearby_panel_server_cleanup))
+            // Expanded shows these waits inside its status line instead of separate rows.
+            val inlineNotices = expanded && voice.operation != null
+            if (panel.localCleanupPending && !inlineNotices) Text(stringResource(Res.string.nearby_panel_local_cleanup))
+            if (panel.serverConfirmationPending && !inlineNotices) Text(stringResource(Res.string.nearby_panel_server_cleanup))
             panel.retryTripCleanup?.let { original ->
                 TextButton(onClick = { actions.retryTripCleanup(original) }) {
                     Text(stringResource(Res.string.nearby_retry))
@@ -245,110 +242,174 @@ private fun ConversationActions(
 }
 
 @Composable
-private fun ParticipantsSection(roster: NearbyChannelRosterPanel) {
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(stringResource(Res.string.nearby_panel_participants), style = MaterialTheme.typography.titleSmall)
-        if (roster.known) {
-            Text(
-                stringResource(Res.string.nearby_panel_roster_count, roster.peers.size, roster.connected ?: 0),
-                style = MaterialTheme.typography.bodySmall,
-            )
-            roster.peers.take(12).forEach { row ->
+private fun ExpandedConversation(
+    voice: NearbyVoiceView,
+    sharing: NearbySharingView,
+    panel: NearbyConversationPanelView,
+    roster: NearbyChannelRosterPanel,
+    actions: NearbyConversationPanelActions,
+) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(voice.label, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StatusDot(panel.connection.dotColor())
                 Text(
-                    (roster.profileNames[row.peer.actorId]
-                        ?: stringResource(Res.string.nearby_panel_roster_peer, row.peer.actorId.take(8))) +
-                        " · " + stringResource(
-                            if (row.connected) Res.string.nearby_panel_roster_connected
-                            else Res.string.nearby_panel_roster_connecting,
-                        ),
+                    expandedStatusLine(panel, roster, voice.kind == NearbyConversationKind.CHANNEL),
                     style = MaterialTheme.typography.bodyMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            if (roster.peers.size > 12) {
-                Text(
-                    stringResource(Res.string.nearby_panel_roster_more, roster.peers.size - 12),
-                    style = MaterialTheme.typography.bodySmall,
+        }
+        panel.audio?.let { audio -> AudioSettingsMenu(audio, panel.audioEditable, actions) }
+    }
+    ConversationActions(panel, actions, expanded = true, onOpenDetails = {})
+    panel.audio?.let { audio -> NearbyAudioStatus(audio, showPending = false) }
+    if (voice.kind == NearbyConversationKind.CHANNEL) ParticipantRows(roster)
+    PositionRow(panel, sharing, actions)
+}
+
+@Composable
+private fun expandedStatusLine(panel: NearbyConversationPanelView, roster: NearbyChannelRosterPanel, channel: Boolean): String {
+    val connection = stringResource(panel.connection.message())
+    val base = if (channel && roster.known && panel.connection == NearbyPanelConnection.CONNECTED)
+        stringResource(Res.string.nearby_panel_status_count, connection, roster.peers.size) else connection
+    val notice = when (nearbyPanelNotice(panel)) {
+        NearbyPanelNotice.NONE -> return base
+        NearbyPanelNotice.LOCAL_CLEANUP -> Res.string.nearby_panel_notice_local_cleanup
+        NearbyPanelNotice.SERVER_CLEANUP -> Res.string.nearby_panel_notice_server_cleanup
+        NearbyPanelNotice.PREPARING_POSITION -> Res.string.nearby_panel_notice_position
+        NearbyPanelNotice.AUDIO_CHANGING -> Res.string.nearby_panel_notice_audio
+    }
+    return "$connection · ${stringResource(notice)}"
+}
+
+private val ConnectedGreen = Color(0xFF6FCF7F)
+private val WaitingAmber = Color(0xFFE8C26B)
+
+@Composable
+private fun NearbyPanelConnection.dotColor(): Color = when (this) {
+    NearbyPanelConnection.CONNECTED -> ConnectedGreen
+    NearbyPanelConnection.FAILED -> MaterialTheme.colorScheme.error
+    NearbyPanelConnection.STOPPING, NearbyPanelConnection.HIDDEN -> MaterialTheme.colorScheme.outline
+    NearbyPanelConnection.CONNECTING, NearbyPanelConnection.RECONNECTING -> WaitingAmber
+}
+
+@Composable
+private fun StatusDot(color: Color) {
+    Box(Modifier.size(8.dp).background(color, CircleShape))
+}
+
+@Composable
+private fun ParticipantRows(roster: NearbyChannelRosterPanel) {
+    if (!roster.known) {
+        Text(stringResource(Res.string.nearby_panel_roster_unknown), style = MaterialTheme.typography.bodySmall)
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        roster.peers.take(12).forEach { row ->
+            val name = roster.profileNames[row.peer.actorId]
+                ?: stringResource(Res.string.nearby_panel_roster_peer, row.peer.actorId.take(4))
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Box(
+                    Modifier.size(28.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        name.take(1).uppercase(),
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+                Text(name, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                val status = stringResource(
+                    if (row.connected) Res.string.nearby_panel_roster_connected else Res.string.nearby_panel_roster_connecting,
                 )
+                Box(Modifier.semantics { contentDescription = status }) {
+                    StatusDot(if (row.connected) ConnectedGreen else WaitingAmber)
+                }
             }
-        } else {
-            Text(stringResource(Res.string.nearby_panel_roster_unknown), style = MaterialTheme.typography.bodySmall)
+        }
+        if (roster.peers.size > 12) {
+            Text(stringResource(Res.string.nearby_panel_roster_more, roster.peers.size - 12), style = MaterialTheme.typography.bodySmall)
         }
     }
 }
 
 @Composable
-private fun SharingCommands(
-    panel: NearbyConversationPanelView,
-    actions: NearbyConversationPanelActions,
-    expanded: Boolean,
-    selectedTtl: ChannelSharingTtl,
-    onSelectTtl: (ChannelSharingTtl) -> Unit,
-) {
-    Column(
-        modifier = Modifier.animateContentSize(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (panel.tripActive || panel.tripPreparing || panel.hideTrip != null || panel.cancelTripRequestId != null) {
-            Row(
-                Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                if (panel.tripActive || panel.tripPreparing) {
-                    Text(
-                        stringResource(
-                            if (panel.tripActive) Res.string.nearby_panel_trip_active
-                            else Res.string.nearby_panel_trip_preparing,
-                        ),
-                        modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodySmall,
+private fun PositionRow(panel: NearbyConversationPanelView, sharing: NearbySharingView, actions: NearbyConversationPanelActions) {
+    val row = nearbyPositionRow(panel)
+    if (!row.visible) return
+    var choosingDuration by remember(panel.startTripOperation) { mutableStateOf(false) }
+    HorizontalDivider()
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Icon(Icons.Default.Place, contentDescription = null)
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(Res.string.nearby_panel_position), style = MaterialTheme.typography.bodyLarge)
+            when {
+                panel.tripPreparing -> Text(stringResource(Res.string.nearby_panel_trip_preparing), style = MaterialTheme.typography.bodySmall)
+                panel.tripActive -> Text(
+                    sharing.ttl?.let { stringResource(Res.string.nearby_panel_position_visible, stringResource(it.label())) }
+                        ?: stringResource(Res.string.nearby_panel_trip_active),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+        Box {
+            // Hiding stays one tap and never requires leaving voice.
+            Switch(
+                checked = row.checked,
+                enabled = row.enabled,
+                onCheckedChange = { on ->
+                    if (on) choosingDuration = true
+                    else panel.hideTrip?.let(actions.hideTrip) ?: panel.cancelTripRequestId?.let(actions.cancelSharingRequest)
+                },
+            )
+            DropdownMenu(expanded = choosingDuration, onDismissRequest = { choosingDuration = false }) {
+                ChannelSharingTtl.entries.forEach { ttl ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(ttl.label())) },
+                        onClick = {
+                            choosingDuration = false
+                            panel.startTripOperation?.let { operation -> actions.startTrip(operation, ttl) }
+                        },
                     )
-                } else {
-                    Spacer(Modifier.weight(1f))
-                }
-
-                // Always reachable while sharing: hiding GPS must not require disconnecting voice.
-                panel.hideTrip?.let { original ->
-                    TextButton(onClick = { actions.hideTrip(original) }) {
-                        Text(stringResource(Res.string.nearby_panel_hide_position))
-                    }
-                }
-                panel.cancelTripRequestId?.let { id ->
-                    TextButton(onClick = { actions.cancelSharingRequest(id) }) {
-                        Text(stringResource(Res.string.nearby_panel_hide_position))
-                    }
                 }
             }
         }
+    }
+}
 
-        if (expanded) {
-            panel.startTripOperation?.let { operation ->
-                Text(stringResource(Res.string.nearby_panel_duration), style = MaterialTheme.typography.labelMedium)
-                Row(
-                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    listOf(
-                        ChannelSharingTtl.HALF_HOUR to Res.string.nearby_panel_duration_half_hour,
-                        ChannelSharingTtl.TWO_HOURS to Res.string.nearby_panel_duration_two_hours,
-                        ChannelSharingTtl.EIGHT_HOURS to Res.string.nearby_panel_duration_eight_hours,
-                    ).forEach { (ttl, label) ->
-                        FilterChip(
-                            selected = selectedTtl == ttl,
-                            onClick = { onSelectTtl(ttl) },
-                            label = { Text(stringResource(label)) },
-                        )
-                    }
-                }
-                Button(
-                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp),
-                    onClick = { actions.startTrip(operation, selectedTtl) },
-                ) {
-                    Text(stringResource(Res.string.nearby_panel_share_position))
-                }
-            }
+private fun ChannelSharingTtl.label(): StringResource = when (this) {
+    ChannelSharingTtl.HALF_HOUR -> Res.string.nearby_panel_duration_half_hour
+    ChannelSharingTtl.TWO_HOURS -> Res.string.nearby_panel_duration_two_hours
+    ChannelSharingTtl.EIGHT_HOURS -> Res.string.nearby_panel_duration_eight_hours
+}
+
+/** Collapsed bar keeps its previous behaviour: a visible way to stop sharing position. */
+@Composable
+private fun CollapsedTripRow(panel: NearbyConversationPanelView, actions: NearbyConversationPanelActions) {
+    if (!(panel.tripActive || panel.tripPreparing || panel.hideTrip != null || panel.cancelTripRequestId != null)) return
+    Row(
+        Modifier.fillMaxWidth().animateContentSize(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        if (panel.tripActive || panel.tripPreparing) {
+            Text(
+                stringResource(if (panel.tripActive) Res.string.nearby_panel_trip_active else Res.string.nearby_panel_trip_preparing),
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+        panel.hideTrip?.let { original ->
+            TextButton(onClick = { actions.hideTrip(original) }) { Text(stringResource(Res.string.nearby_panel_hide_position)) }
+        }
+        panel.cancelTripRequestId?.let { id ->
+            TextButton(onClick = { actions.cancelSharingRequest(id) }) { Text(stringResource(Res.string.nearby_panel_hide_position)) }
         }
     }
 }
@@ -392,8 +453,8 @@ private fun NearbySharingError.message(): StringResource = when (this) {
 }
 
 @Composable
-private fun NearbyAudioStatus(original: VoiceConversationAudioState) {
-    if (original.pending != null) {
+private fun NearbyAudioStatus(original: VoiceConversationAudioState, showPending: Boolean = true) {
+    if (showPending && original.pending != null) {
         Text(stringResource(Res.string.nearby_audio_pending), style = MaterialTheme.typography.bodySmall)
     }
     val message = when (original.lastResult) {
@@ -406,50 +467,70 @@ private fun NearbyAudioStatus(original: VoiceConversationAudioState) {
     message?.let { Text(stringResource(it), style = MaterialTheme.typography.bodySmall) }
 }
 
+/** Device choice is rare mid-ride, so it lives behind one icon instead of two always-visible rows. */
 @Composable
-private fun NearbyAudioControls(
+private fun AudioSettingsMenu(
     original: VoiceConversationAudioState,
     enabled: Boolean,
     actions: NearbyConversationPanelActions,
 ) {
-    Text(stringResource(Res.string.nearby_audio_input), style = MaterialTheme.typography.labelMedium)
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        VoiceInputPreference.entries.forEach { input ->
-            FilterChip(
-                selected = original.preferences.input == input,
-                enabled = enabled,
-                onClick = { actions.configureAudio(original, original.preferences.copy(input = input)) },
-                label = {
-                    Text(stringResource(when (input) {
+    var open by remember(original.operation) { mutableStateOf(false) }
+    Box {
+        IconButton(modifier = Modifier.size(48.dp), onClick = { open = true }) {
+            Icon(Icons.Default.Settings, contentDescription = stringResource(Res.string.nearby_panel_audio_settings))
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            MenuSection(Res.string.nearby_audio_input)
+            VoiceInputPreference.entries.forEach { input ->
+                MenuChoice(
+                    label = when (input) {
                         VoiceInputPreference.AUTO -> Res.string.nearby_audio_auto
                         VoiceInputPreference.PHONE -> Res.string.nearby_audio_phone
                         VoiceInputPreference.HEADSET -> Res.string.nearby_audio_headset
-                    }))
-                },
-            )
-        }
-    }
-    Text(stringResource(Res.string.nearby_audio_output), style = MaterialTheme.typography.labelMedium)
-    Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        VoiceOutputPreference.entries.forEach { output ->
-            FilterChip(
-                selected = original.preferences.output == output,
-                enabled = enabled,
-                onClick = { actions.configureAudio(original, original.preferences.copy(output = output)) },
-                label = {
-                    Text(stringResource(when (output) {
+                    },
+                    selected = original.preferences.input == input,
+                    enabled = enabled,
+                ) {
+                    open = false
+                    actions.configureAudio(original, original.preferences.copy(input = input))
+                }
+            }
+            HorizontalDivider()
+            MenuSection(Res.string.nearby_audio_output)
+            VoiceOutputPreference.entries.forEach { output ->
+                MenuChoice(
+                    label = when (output) {
                         VoiceOutputPreference.AUTO -> Res.string.nearby_audio_auto
                         VoiceOutputPreference.HEADSET -> Res.string.nearby_audio_headset
                         VoiceOutputPreference.SPEAKER -> Res.string.nearby_audio_speaker
-                    }))
-                },
-            )
+                    },
+                    selected = original.preferences.output == output,
+                    enabled = enabled,
+                ) {
+                    open = false
+                    actions.configureAudio(original, original.preferences.copy(output = output))
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun MenuSection(title: StringResource) {
+    Text(
+        stringResource(title),
+        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+@Composable
+private fun MenuChoice(label: StringResource, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    DropdownMenuItem(
+        text = { Text(stringResource(label)) },
+        enabled = enabled,
+        trailingIcon = { if (selected) Icon(Icons.Default.Check, contentDescription = null) },
+        onClick = onClick,
+    )
 }

@@ -26,6 +26,27 @@ data class NearbyConversationPanelView(
     val localCleanupPending: Boolean = false, val serverConfirmationPending: Boolean = false,
     val audio: ru.sodovaya.volty.data.voice.VoiceConversationAudioState? = null, val audioEditable: Boolean = false)
 
+/** One switch replaces the start/hide/cancel trip controls; it is never shown dead-but-checked as enabled. */
+data class NearbyPositionRow(val visible: Boolean, val checked: Boolean, val enabled: Boolean)
+
+internal fun nearbyPositionRow(panel: NearbyConversationPanelView): NearbyPositionRow {
+    val checked = panel.tripActive || panel.tripPreparing || panel.hideTrip != null || panel.cancelTripRequestId != null
+    val canStop = panel.hideTrip != null || panel.cancelTripRequestId != null
+    val visible = checked || panel.startTripOperation != null
+    return NearbyPositionRow(visible, checked, if (checked) canStop else panel.startTripOperation != null)
+}
+
+/** Transient waits shown inside the status line instead of separate rows. */
+enum class NearbyPanelNotice { NONE, LOCAL_CLEANUP, SERVER_CLEANUP, PREPARING_POSITION, AUDIO_CHANGING }
+
+internal fun nearbyPanelNotice(panel: NearbyConversationPanelView): NearbyPanelNotice = when {
+    panel.localCleanupPending -> NearbyPanelNotice.LOCAL_CLEANUP
+    panel.serverConfirmationPending -> NearbyPanelNotice.SERVER_CLEANUP
+    panel.tripPreparing -> NearbyPanelNotice.PREPARING_POSITION
+    panel.audio?.pending != null -> NearbyPanelNotice.AUDIO_CHANGING
+    else -> NearbyPanelNotice.NONE
+}
+
 internal fun nearbyConversationPanel(voice: NearbyVoiceView, sharing: NearbySharingView = NearbySharingView()): NearbyConversationPanelView {
     val operation = voice.operation
     val evidence = voice.voice?.takeIf { operation != null && it.operationId == operation }
