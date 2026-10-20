@@ -232,4 +232,60 @@ class RadioClientSessionTest {
         repeat(3) { s.receive(RadioMessage.Audio(0, it.toLong(), frameOf(9)), 6_010) }
         assertContentEquals(frameOf(9), s.playback())
     }
+
+    @Test
+    fun rosterEchoingOlderHelloDoesNotSampleRtt() {
+        val s = session()
+        s.tick(0, quiet())
+        s.tick(1_000, quiet())
+        // periodic roster echoing the Hello@0 arrives 10 ms after Hello@1000: not that Hello's round trip
+        s.receive(roster(echo = 0), 1_010)
+        assertNull(s.rttMillis)
+        s.receive(roster(echo = 1_000), 1_050)
+        assertEquals(50L, s.rttMillis)
+    }
+
+    @Test
+    fun echoFromTheFutureIsIgnored() {
+        val s = session()
+        s.tick(0, quiet())
+        s.receive(roster(echo = 500), 40)
+        assertNull(s.rttMillis)
+    }
+
+    @Test
+    fun rttClearedOnLost() {
+        val s = session()
+        s.tick(0, quiet())
+        s.receive(roster(echo = 0), 40)
+        assertEquals(40L, s.rttMillis)
+        s.tick(3_040, quiet())
+        assertEquals(RadioClientPhase.LOST, s.phase)
+        assertNull(s.rttMillis)
+    }
+
+    @Test
+    fun joiningWithoutReplyGoesLost() {
+        val s = session()
+        s.tick(0, quiet())
+        s.tick(2_999, quiet())
+        assertEquals(RadioClientPhase.JOINING, s.phase)
+        s.tick(3_000, quiet())
+        assertEquals(RadioClientPhase.LOST, s.phase)
+    }
+
+    @Test
+    fun audioAloneKeepsSessionConnected() {
+        val s = session()
+        s.tick(0, quiet())
+        s.receive(roster(), 0)
+        var t = 20L
+        var seq = 0L
+        while (t <= 5_000) {
+            s.receive(RadioMessage.Audio(0, seq++, frameOf(1)), t)
+            s.tick(t, quiet())
+            t += 20
+        }
+        assertEquals(RadioClientPhase.CONNECTED, s.phase)
+    }
 }

@@ -65,7 +65,8 @@ class RadioClientSession(
         phase = RadioClientPhase.CONNECTED
         val helloAt = lastHelloAt
         val echo = msg.echoMillis
-        if (helloAt != null && echo != null && now - helloAt in 0..RTT_WINDOW_MILLIS) rttMillis = now - echo
+        // Only the round trip of the latest Hello counts: a periodic roster may echo an older one.
+        if (helloAt != null && echo == helloAt && now - helloAt in 0..RTT_WINDOW_MILLIS) rttMillis = now - echo
     }
 
     fun tick(nowMillis: Long, micFrame: ShortArray): List<RadioMessage> {
@@ -74,6 +75,7 @@ class RadioClientSession(
             nowMillis - heardAt >= lostAfterMillis
         ) {
             phase = RadioClientPhase.LOST
+            rttMillis = null
         }
         if (phase == RadioClientPhase.FULL) return emptyList()
 
