@@ -11,11 +11,13 @@ private const val OPUS_COMPLEXITY = 5
 private const val OPUS_EXPECTED_LOSS_PERCENT = 20
 private const val OPUS_MAX_PACKET_BYTES = 400
 
+/** Stateful: one instance per stream, not thread-safe. */
 interface RadioFrameEncoder {
     /** Encodes one 320-sample frame into a wire payload. */
     fun encode(pcm: ShortArray): ByteArray
 }
 
+/** Stateful: one instance per stream, not thread-safe. */
 interface RadioFrameDecoder {
     /** [payload] null means the frame was lost: conceal (PLC) instead of throwing. */
     fun decode(payload: ByteArray?): ShortArray
@@ -47,9 +49,9 @@ private object PcmEncoder : RadioFrameEncoder {
 private object PcmDecoder : RadioFrameDecoder {
     override fun decode(payload: ByteArray?): ShortArray {
         val out = ShortArray(RADIO_FRAME_SAMPLES)
-        if (payload == null) return out // lost frame: silence
-        val n = minOf(RADIO_FRAME_SAMPLES, payload.size / 2)
-        for (i in 0 until n) {
+        // lost frame, or a wrong-length datagram treated as lost: silence
+        if (payload == null || payload.size != RADIO_FRAME_SAMPLES * 2) return out
+        for (i in 0 until RADIO_FRAME_SAMPLES) {
             out[i] = ((payload[2 * i].toInt() and 0xFF) or (payload[2 * i + 1].toInt() shl 8)).toShort()
         }
         return out
@@ -79,11 +81,16 @@ private class OpusFrameDecoder : RadioFrameDecoder {
     // (decodeFEC on the next packet) needs lookahead this API does not expose.
     override fun decode(payload: ByteArray?): ShortArray {
         val out = ShortArray(RADIO_FRAME_SAMPLES)
-        if (payload == null) {
-            dec.decode(null, 0, 0, out, 0, RADIO_FRAME_SAMPLES, false)
-        } else {
-            dec.decode(payload, 0, payload.size, out, 0, RADIO_FRAME_SAMPLES, false)
+        if (payload != null) {
+            try {
+                dec.decode(payload, 0, payload.size, out, 0, RADIO_FRAME_SAMPLES, false)
+                return out
+            } catch (e: Exception) {
+                // malformed datagram: treat as lost, never kill the audio thread
+            }
         }
+        out.fill(0)
+        dec.decode(null, 0, 0, out, 0, RADIO_FRAME_SAMPLES, false)
         return out
     }
 }

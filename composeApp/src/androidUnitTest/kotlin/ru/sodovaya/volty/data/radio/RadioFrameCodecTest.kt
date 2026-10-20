@@ -62,17 +62,51 @@ class RadioFrameCodecTest {
         }
     }
 
+    private fun loud(frameIndex: Int): ShortArray = ShortArray(RADIO_FRAME_SAMPLES) { i ->
+        val n = frameIndex * RADIO_FRAME_SAMPLES + i
+        (sin(2.0 * PI * 1000.0 * n / 16000.0) * 20000.0).toInt().toShort()
+    }
+
     @Test
     fun decoderConcealsLostFrame() {
         for (mode in RadioMode.entries) {
+            // fresh decoder must not throw
+            assertEquals(RADIO_FRAME_SAMPLES, RadioFrameCodecs.decoder(mode).decode(null).size, "$mode fresh")
+        }
+        for (mode in listOf(RadioMode.BALANCED, RadioMode.RELIABLE)) {
             val enc = RadioFrameCodecs.encoder(mode)
             val dec = RadioFrameCodecs.decoder(mode)
-            repeat(3) { dec.decode(enc.encode(tone(it))) }
+            repeat(8) { dec.decode(enc.encode(loud(it))) }
             val out = dec.decode(null)
             assertEquals(RADIO_FRAME_SAMPLES, out.size, "$mode")
+            assertTrue(out.any { it.toInt() != 0 }, "$mode concealment was silent")
         }
     }
 
+    @Test
+    fun garbagePayloadDecodesAsConcealment() {
+        for (mode in listOf(RadioMode.BALANCED, RadioMode.RELIABLE)) {
+            val enc = RadioFrameCodecs.encoder(mode)
+            val dec = RadioFrameCodecs.decoder(mode)
+            repeat(3) { dec.decode(enc.encode(loud(it))) }
+            val valid = enc.encode(loud(3))
+            val bad = listOf(
+                ByteArray(40) { 0xFF.toByte() },
+                valid.copyOf(valid.size / 2),
+                ByteArray(0),
+            )
+            for (b in bad) assertEquals(RADIO_FRAME_SAMPLES, dec.decode(b).size, "$mode len ${b.size}")
+        }
+    }
+
+    @Test
+    fun pcmWrongLengthIsTreatedAsLost() {
+        val dec = RadioFrameCodecs.decoder(RadioMode.LOW_LATENCY)
+        for (n in listOf(0, 1, 639, 641, 1280)) {
+            val out = dec.decode(ByteArray(n) { 0x7F })
+            assertContentEquals(ShortArray(RADIO_FRAME_SAMPLES), out, "len $n")
+        }
+    }
     @Test
     fun modeWireRoundTrips() {
         for (m in RadioMode.entries) assertEquals(m, RadioMode.fromWire(m.wire))
