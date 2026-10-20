@@ -46,19 +46,22 @@ class RadioAudioIo(context: Context) {
 
     @Volatile
     private var running = false
+    private val failed = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var speakerphoneWas: Boolean? = null
 
     /**
      * Opens the recorder and player and starts the audio thread. Returns false (with everything
      * released again) if the microphone is not granted or the recorder/player cannot be opened.
      */
     @Synchronized
-    fun start(onFrame: (ShortArray) -> Unit): Boolean {
+    fun start(onFailure: () -> Unit = {}, onFrame: (ShortArray) -> Unit): Boolean {
         if (running) return true
         if (app.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) return false
         return try {
             openAll()
             running = true
-            thread = Thread({ loop(onFrame) }, "radio-audio").also { it.start() }
+            failed.set(false)
+            thread = Thread({ loop(onFrame, onFailure) }, "radio-audio").also { it.start() }
             true
         } catch (e: Exception) {
             Log.w(TAG, "audio start failed", e)
@@ -71,7 +74,9 @@ class RadioAudioIo(context: Context) {
     fun play(frame: ShortArray?) {
         val t = track ?: return
         val data = if (frame == null || frame.size != RADIO_FRAME_SAMPLES) silence else frame
-        t.write(data, 0, data.size) // blocking; the track buffer is small, so this also keeps latency bounded
+        // Non-blocking (ruling R18): if the track is full the frame is dropped, so the mic read is the only clock.
+        val n = t.write(data, 0, data.size, AudioTrack.WRITE_NON_BLOCKING)
+        if (n < 0) throw IllegalStateException("AudioTrack write failed: $n")
     }
 
     /** Stops the thread (joined with a timeout) and releases everything, restoring the audio mode. */
@@ -143,39 +148,61 @@ class RadioAudioIo(context: Context) {
         routeToHeadset()
 
         recorder.startRecording()
+        check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "AudioRecord did not start" }
         player.play()
     }
 
     private fun routeToHeadset() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            @Suppress("DEPRECATION")
+            run {
+                speakerphoneWas = audioManager.isSpeakerphoneOn
+                audioManager.isSpeakerphoneOn = true
+            }
+            return
+        }
         try {
             val device = audioManager.availableCommunicationDevices.firstOrNull {
                 it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
             }
-            if (device != null) communicationDeviceSet = audioManager.setCommunicationDevice(device)
+            val target = device ?: audioManager.availableCommunicationDevices.firstOrNull {
+                it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER // ruling R17: the default earpiece is useless on a bike
+            }
+            if (target != null) communicationDeviceSet = audioManager.setCommunicationDevice(target)
         } catch (e: Exception) {
             Log.w(TAG, "communication device not set", e)
         }
     }
 
-    private fun loop(onFrame: (ShortArray) -> Unit) {
-        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-        val recorder = record ?: return
-        while (running) {
-            val frame = ShortArray(RADIO_FRAME_SAMPLES)
-            var filled = 0
-            while (filled < frame.size && running) {
-                val n = recorder.read(frame, filled, frame.size - filled)
-                if (n < 0) return // recorder stopped or failed
-                filled += n
+    private fun reportFailure(onFailure: () -> Unit) {
+        if (running && failed.compareAndSet(false, true)) onFailure()
+    }
+
+    private fun loop(onFrame: (ShortArray) -> Unit, onFailure: () -> Unit) {
+        try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+            val recorder = record ?: return
+            var consecutiveErrors = 0
+            while (running) {
+                val frame = ShortArray(RADIO_FRAME_SAMPLES)
+                var filled = 0
+                while (filled < frame.size && running) {
+                    val n = recorder.read(frame, filled, frame.size - filled)
+                    if (n < 0) return reportFailure(onFailure) // dead object, bad value, ...
+                    filled += n
+                }
+                if (!running) return
+                try {
+                    onFrame(frame)
+                    consecutiveErrors = 0
+                } catch (e: Exception) {
+                    Log.w(TAG, "radio tick failed", e)
+                    if (++consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) return reportFailure(onFailure)
+                }
             }
-            if (!running) return
-            try {
-                onFrame(frame)
-            } catch (e: Exception) {
-                // One bad tick must never end the audio thread.
-                Log.w(TAG, "radio tick failed", e)
-            }
+        } catch (t: Throwable) {
+            Log.e(TAG, "radio audio thread died", t)
+            reportFailure(onFailure)
         }
     }
 
@@ -198,6 +225,11 @@ class RadioAudioIo(context: Context) {
             try { audioManager.clearCommunicationDevice() } catch (_: Exception) {}
         }
         communicationDeviceSet = false
+        speakerphoneWas?.let {
+            @Suppress("DEPRECATION")
+            try { audioManager.isSpeakerphoneOn = it } catch (_: Exception) {}
+        }
+        speakerphoneWas = null
         savedMode?.let { try { audioManager.mode = it } catch (_: Exception) {} }
         savedMode = null
     }
@@ -207,5 +239,6 @@ class RadioAudioIo(context: Context) {
         const val SAMPLE_RATE = 16_000
         const val FRAME_BYTES = RADIO_FRAME_SAMPLES * 2
         const val JOIN_TIMEOUT_MILLIS = 1_000L
+        const val MAX_CONSECUTIVE_ERRORS = 25
     }
 }

@@ -439,4 +439,30 @@ class RadioControllerTest {
         assertEquals(RadioState.Error("c", RadioError.AUDIO_UNAVAILABLE), r.controller.state.value)
         assertEquals(1, r.link.count("leave"))
     }
+
+    @Test
+    fun runtimeFailureWhileStartingCancelsJoin() = runTest {
+        val r = rig()
+        val gate = CompletableDeferred<Unit>()
+        r.link.gate = gate
+        r.link.joinResult = RadioLinkResult.Joined(hub)
+        r.controller.join("a", "c")
+        runCurrent()
+        assertEquals(RadioState.Starting("c"), r.controller.state.value)
+        r.controller.onRuntimeFailure(RadioError.AUDIO_UNAVAILABLE)
+        gate.complete(Unit)
+        runCurrent()
+        assertEquals(RadioState.Error("c", RadioError.AUDIO_UNAVAILABLE), r.controller.state.value)
+    }
+
+    @Test
+    fun duplicateHubProbeNotFoundRehosts() = runTest {
+        val r = rig()
+        r.controller.raise("a", "c")
+        runCurrent()
+        r.controller.onDuplicateHub() // join probe finds nothing (NotFound)
+        runCurrent()
+        assertEquals(listOf("join", "host", "leave", "join", "host"), r.link.calls)
+        assertEquals(RadioState.Hub("c"), r.controller.state.value)
+    }
 }

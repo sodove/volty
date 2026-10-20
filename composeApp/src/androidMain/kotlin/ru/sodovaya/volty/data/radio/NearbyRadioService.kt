@@ -15,11 +15,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
 import ru.sodovaya.volty.MainActivity
 import ru.sodovaya.volty.R
 import ru.sodovaya.volty.domain.radio.RadioController
+import ru.sodovaya.volty.domain.radio.RadioError
 import ru.sodovaya.volty.domain.radio.RadioState
 
 /**
@@ -38,13 +41,11 @@ class NearbyRadioService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == LEAVE) {
-            controller.leave()
-            if (!foregroundStarted) stopSelf(startId)
-            return START_NOT_STICKY
-        }
+        // startForegroundService() promises a startForeground() call, whatever the command is
+        // and whatever the radio's state has become by now (even Idle a few ms after Starting).
         if (!foregroundStarted) {
             try {
+                createChannel()
                 val notification = notification(runtime.members.value.size)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     startForeground(
@@ -58,17 +59,21 @@ class NearbyRadioService : Service() {
                 foregroundStarted = true
                 observe()
             } catch (_: Exception) {
-                // Refused (permission, background start): the runtime sees no service and fails the radio.
-                controller.leave()
+                // Refused (permission, background start): report it, never leave() silently.
+                scope.launch { controller.onRuntimeFailure(RadioError.AUDIO_UNAVAILABLE) }
                 stopSelf(startId)
+                return START_NOT_STICKY
             }
         }
+        if (intent?.action == LEAVE) controller.leave()
         return START_NOT_STICKY
     }
 
     private fun observe() {
         scope.launch {
-            combine(controller.state, runtime.members) { state, members -> state to members.size }.collect { (state, count) ->
+            combine(controller.state, runtime.members.map { it.size }.distinctUntilChanged()) { state, count -> state to count }
+                .distinctUntilChanged()
+                .collect { (state, count) ->
                 if (state == RadioState.Idle || state is RadioState.Error) {
                     stopForeground(STOP_FOREGROUND_REMOVE)
                     stopSelf()
@@ -79,10 +84,13 @@ class NearbyRadioService : Service() {
         }
     }
 
-    private fun notification(people: Int): Notification {
+    private fun createChannel() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(CHANNEL, getString(R.string.nearby_radio_channel), NotificationManager.IMPORTANCE_LOW),
         )
+    }
+
+    private fun notification(people: Int): Notification {
         val leave = PendingIntent.getService(
             this, NOTIFICATION,
             Intent(this, javaClass).setAction(LEAVE),

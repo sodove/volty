@@ -130,19 +130,39 @@ class RadioUdpTransport(
         return decoders.getOrPut(peer.host to packetSession) { RadioFrameCodecs.decoder(m) }
     }
 
+    /** Called once, on the receiver thread, when the socket is dead or keeps failing; never after [close]. */
+    @Volatile
+    var onFailure: (() -> Unit)? = null
+
     private fun receiveLoop() {
         val buffer = ByteArray(RadioPacketCodec.MAX_DATAGRAM + 1)
         val packet = DatagramPacket(buffer, buffer.size)
+        var socketErrors = 0
         while (!closed.get()) {
             try {
                 packet.length = buffer.size
                 socket.receive(packet)
+                socketErrors = 0
+            } catch (_: Exception) {
+                if (closed.get()) return
+                // A dead interface makes receive fail at once, every time: back off, then give up loudly.
+                if (socket.isClosed || ++socketErrors >= MAX_SOCKET_ERRORS) {
+                    if (!closed.get()) onFailure?.invoke()
+                    return
+                }
+                try {
+                    Thread.sleep(RECEIVE_BACKOFF_MILLIS * socketErrors)
+                } catch (_: InterruptedException) {
+                    return
+                }
+                continue
+            }
+            try {
                 val from = RadioAddress(packet.address.hostAddress ?: continue, packet.port)
                 val datagram = mapper.decode(from, packet.data.copyOfRange(packet.offset, packet.offset + packet.length))
                 if (datagram == null) rejectedInbound++ else inboundChannel.trySend(datagram)
             } catch (_: Exception) {
-                if (closed.get()) return
-                // A malformed datagram or a transient socket error must not end reception.
+                // A malformed datagram must not end reception.
             }
         }
     }
@@ -171,6 +191,8 @@ class RadioUdpTransport(
         const val UNASSIGNED_SENDER = 255
         private const val INBOUND_CAPACITY = 128
         private const val OUTBOUND_CAPACITY = 128
+        private const val MAX_SOCKET_ERRORS = 10
+        private const val RECEIVE_BACKOFF_MILLIS = 50L
     }
 }
 

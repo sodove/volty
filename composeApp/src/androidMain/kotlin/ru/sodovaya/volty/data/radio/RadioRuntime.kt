@@ -118,7 +118,7 @@ class RadioRuntime(
         if (attached || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
         attached = true
         link.onDuplicateHub = { scope.launch { controller.onDuplicateHub() } }
-        controller.onModeChanged = { mode -> active?.post(Inbox.ModeChange(mode)) }
+        controller.onModeChanged = { mode -> active?.requestMode(mode) }
         scope.launch {
             controller.state.collect { state ->
                 val before = previous
@@ -132,14 +132,16 @@ class RadioRuntime(
         when (state) {
             RadioState.Idle, is RadioState.Error -> {
                 stopRun()
-                stopService()
+                // The service stops itself on Idle/Error once it has called startForeground.
+                serviceStarted = false
             }
             is RadioState.Starting -> {
                 stopRun()
                 ensureService()
             }
-            // Keep the (client) run while the controller looks for the hub again; the session
-            // keeps probing and a Roster ends LOST on its own.
+            // Keep the run (and its audio) while the controller re-attaches Wi-Fi. This does NOT
+            // recover by itself: a Lost -> Client(JOINING) transition always rebuilds the transport and
+            // session below, because the P2P interface address may have changed.
             is RadioState.Lost -> ensureService()
             is RadioState.Hub -> {
                 if (!ensureService()) return
@@ -165,7 +167,7 @@ class RadioRuntime(
             // audioKey does not depend on the day, so any day derives the same one.
             val audioKey = RadioCredentialDerivation.derive(stored.key, clock() / DAY_MILLIS).audioKey
             val run = Run(who, address, audioKey, hubAddress, if (hub) controller.mode.value else RadioMode.BALANCED)
-            if (!run.start()) return@launch fail(RadioError.AUDIO_UNAVAILABLE)
+            if (!run.start()) return@launch fail(if (run.bindFailed) RadioError.WIFI_FAILED else RadioError.AUDIO_UNAVAILABLE)
             active = run
         }
     }
@@ -202,15 +204,8 @@ class RadioRuntime(
         }
     }
 
-    private fun stopService() {
-        if (!serviceStarted) return
-        serviceStarted = false
-        app.stopService(Intent(app, NearbyRadioService::class.java))
-    }
-
     private sealed interface Inbox {
         class Net(val datagram: RadioDatagram) : Inbox
-        class ModeChange(val mode: RadioMode) : Inbox
     }
 
     /** One transport + session + audio. Created and stopped on the controller scope. */
@@ -227,6 +222,10 @@ class RadioRuntime(
         private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         private var transport: RadioUdpTransport? = null
 
+        /** Set when [start] failed because the socket could not be bound (a Wi-Fi problem, not audio). */
+        var bindFailed = false
+            private set
+
         // Audio thread only from here on.
         private var hubSession: RadioHubSession? = null
         private var clientSession: RadioClientSession? = null
@@ -240,6 +239,14 @@ class RadioRuntime(
 
         @Volatile
         private var slotForHeader: Int = if (isHub) 0 else RadioUdpTransport.UNASSIGNED_SENDER
+
+        @Volatile
+        private var pendingMode: RadioMode? = null
+
+        /** Latest requested hub mode; applied at the next tick, never dropped by a full queue. */
+        fun requestMode(mode: RadioMode) {
+            if (isHub) pendingMode = mode
+        }
 
         fun post(item: Inbox) {
             if (!inbox.offer(item)) {
@@ -258,8 +265,10 @@ class RadioRuntime(
                     clock = clock,
                 )
             } catch (_: Exception) {
+                bindFailed = true
                 return false
             }
+            t.onFailure = { scope.launch { controller.onRuntimeFailure(RadioError.WIFI_FAILED) } }
             transport = t
             if (isHub) {
                 hubSession = RadioHubSession(who.userId, who.name, mode, hubStreamId = t.session)
@@ -267,7 +276,7 @@ class RadioRuntime(
                 clientSession = RadioClientSession(who.userId, who.name, streamId = t.session)
             }
             ioScope.launch { t.inbound.collect { post(Inbox.Net(it)) } }
-            if (!io.start(::tick)) {
+            if (!io.start(onFailure = { scope.launch { controller.onRuntimeFailure(RadioError.AUDIO_UNAVAILABLE) } }, onFrame = ::tick)) {
                 stop()
                 return false
             }
@@ -287,12 +296,13 @@ class RadioRuntime(
             val now = clock()
             val hubS = hubSession
             val clientS = clientSession
+            val wanted = pendingMode
+            if (hubS != null && wanted != null && wanted != mode) {
+                hubS.setMode(wanted)
+                mode = wanted
+            }
             while (true) {
                 when (val item = inbox.poll() ?: break) {
-                    is Inbox.ModeChange -> if (hubS != null) {
-                        hubS.setMode(item.mode)
-                        mode = item.mode
-                    }
                     is Inbox.Net ->
                         if (hubS != null) hubS.receive(item.datagram, now).forEach(t::send)
                         else clientS?.receive(item.datagram.message, now)
