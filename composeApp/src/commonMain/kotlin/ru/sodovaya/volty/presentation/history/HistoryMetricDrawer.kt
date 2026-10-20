@@ -31,6 +31,11 @@ fun HistoryMetricDrawer(
     onRemove: (HistorySeriesKey) -> Unit,
     onDismiss: () -> Unit,
     reduceMotion: Boolean = false,
+    presets: HistoryPresetsState = HistoryPresetsState(),
+    onLoadPresets: () -> Unit = {},
+    onSavePreset: (String) -> Unit = {},
+    onApplyPreset: (String) -> Unit = {},
+    onDeletePreset: (String) -> Unit = {},
 ) {
     var query by remember(state.rideId) { mutableStateOf(TextFieldValue()) }
     var expanded by remember(state.rideId) { mutableStateOf(emptySet<String>()) }
@@ -56,6 +61,9 @@ fun HistoryMetricDrawer(
                         label = { Text(stringResource(Res.string.history_metric_search)) },
                         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
                         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = if (compact) 4.dp else 8.dp))
+                }
+                if (presets.available) item("presets") {
+                    HistoryMetricPresetsPanel(state, presets, onLoadPresets, onSavePreset, onApplyPreset, onDeletePreset)
                 }
                 if (state.sources.isEmpty()) item("empty") {
                     Text(stringResource(if (state.loading) Res.string.history_metrics_loading else Res.string.history_metrics_empty),

@@ -25,6 +25,10 @@ interface HistoryComponent {
     fun retryRoute()
     fun setVisibleRides(ids: List<String>)
     fun retryPreview(id: String)
+    fun loadPresets()
+    fun savePreset(name: String)
+    fun applyPreset(id: String)
+    fun deletePreset(id: String)
     fun back()
 }
 
@@ -32,13 +36,15 @@ interface HistoryComponent {
  * and lifecycle; catalog errors and reads do not replace selected detail/route.
  */
 class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: CoroutineScope,
-    repository: HistoryReadRepository, readTick: () -> HistoryTick, private val onBack: () -> Unit) : HistoryComponent {
+    repository: HistoryReadRepository, readTick: () -> HistoryTick, private val onBack: () -> Unit,
+    presetStore: HistoryMetricPresetStore? = null) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
     private val detail = HistoryDetailComponent(componentContext, scope, repository, readTick)
     private val route = HistoryRouteComponent(componentContext, scope, repository)
     private val previews = HistoryPreviewComponent(componentContext, scope, repository, PREVIEW_GPS_SILENCE_MILLIS)
+    private val presets = HistoryPresetsComponent(componentContext, scope, presetStore)
     private val mutableState = MutableStateFlow(HistoryUiState())
     override val state = mutableState.asStateFlow()
     private var selectedRideId: String? = null
@@ -57,6 +63,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
             }
         }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { detail.state.collect(::onDetail) }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            presets.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(presets = it) }
+        }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             previews.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(previews = it) }
         }
@@ -120,6 +129,27 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         syncVisiblePreviews()
     }
     override fun retryPreview(id: String) { if (lifetime.isActive) previews.retry(id) }
+    override fun loadPresets() { if (lifetime.isActive) presets.refresh() }
+    override fun savePreset(name: String) = withSelection {
+        val current = detail.state.value
+        val ride = current.ride ?: return@withSelection
+        val title = name.trim()
+        if (title.isEmpty() || title.length > 80 || current.selectedKeys.size > 128) return@withSelection
+        // A name identifies one layout within one vehicle. Saving that name
+        // again updates its layout; equal names on another vehicle are separate.
+        val id = "history-preset-v1:${ride.vehicleId.length}:${ride.vehicleId}:$title"
+        presets.save(captureHistoryMetricPreset(id, title, ride.vehicleId, current.selectedKeys, current.sources))
+    }
+    override fun applyPreset(id: String) = withSelection {
+        val current = detail.state.value
+        val ride = current.ride ?: return@withSelection
+        val preset = presets.state.value.presets.singleOrNull { it.id == id } ?: return@withSelection
+        if (preset.vehicleId != ride.vehicleId) return@withSelection
+        val resolved = resolveHistoryMetricPreset(preset, ride.vehicleId, current.sources)
+        if (resolved.keys.isEmpty() && resolved.unavailable.isNotEmpty()) return@withSelection
+        detail.replaceMetrics(resolved.keys)
+    }
+    override fun deletePreset(id: String) { if (lifetime.isActive) presets.delete(id) }
 
     private fun syncVisiblePreviews() {
         if (!lifetime.isActive) return
@@ -148,7 +178,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
 
     fun close() {
         selection = Any(); catalogIntent = Any(); selectedRideId = null
-        catalog.close(); detail.close(); route.close(); previews.close(); lifetime.cancel()
+        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); lifetime.cancel()
     }
 }
 

@@ -33,6 +33,43 @@ class HistoryDetailComponentTest {
     private fun TestScope.component(repo: Repo, lifecycle: LifecycleRegistry = LifecycleRegistry(Lifecycle.State.RESUMED)) =
         HistoryDetailComponent(DefaultComponentContext(lifecycle), backgroundScope, repo, { HistoryTick(9000, 8010, 1) })
 
+    @Test fun presetReplacementPreservesRangeCursorOrderAndAlreadyLoadedFacts() = runTest {
+        val repo=Repo();val c=component(repo)
+        try {
+            c.openRide("a");runCurrent();c.addMetric(key);runCurrent();c.selectTime(2500)
+            c.replaceMetrics(listOf(other,key,other));runCurrent()
+            assertEquals(listOf(other,key),c.state.value.selectedKeys)
+            assertEquals(listOf(key,other),repo.reads.map{it.second})
+            assertEquals(range,c.state.value.range);assertEquals(2500L,c.state.value.cursorEpochMillis)
+            c.replaceMetrics(emptyList());runCurrent();assertTrue(c.state.value.series.isEmpty());assertTrue(c.state.value.selectedKeys.isEmpty())
+        }finally{c.close()}
+    }
+
+    @Test fun replacedMetricCannotReturnFromACancelledStorageRead() = runTest {
+        val entered=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>()
+        val repo=object:Repo(){override suspend fun series(rideId:String,key:HistorySeriesKey,range:HistoryRange,maxPoints:Int):HistorySeries{
+            if(key==this@HistoryDetailComponentTest.key)withContext(NonCancellable){entered.complete(Unit);release.await()}
+            return super.series(rideId,key,range,maxPoints)
+        }}
+        val c=component(repo)
+        try{
+            c.openRide("a");runCurrent();c.addMetric(key);runCurrent();assertTrue(entered.isCompleted)
+            c.replaceMetrics(listOf(other));runCurrent();release.complete(Unit);runCurrent()
+            assertEquals(listOf(other),c.state.value.selectedKeys);assertEquals(setOf(other),c.state.value.series.keys)
+        }finally{release.complete(Unit);c.close();runCurrent()}
+    }
+
+    @Test fun synchronousRideChangeDuringPresetPublicationStopsOldMetricReads()=runTest {
+        val repo=Repo();val c=component(repo)
+        val observer=backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)){
+            c.state.collect{if(it.ride?.id=="a" && it.selectedKeys==listOf(key,other))c.openRide("b")}
+        }
+        try{
+            c.openRide("a");runCurrent();c.replaceMetrics(listOf(key,other));runCurrent()
+            assertEquals("b",c.state.value.ride?.id);assertTrue(c.state.value.selectedKeys.isEmpty());assertTrue(repo.reads.isEmpty())
+        }finally{observer.cancel();c.close()}
+    }
+
     @Test fun unclosedLegacyUsesRecordedWindowWithoutReadingCurrentClockOrInventingEnd() = runTest {
         var windowReads = 0; var clockReads = 0
         val repo = object : Repo() {

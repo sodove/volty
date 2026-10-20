@@ -116,14 +116,19 @@ fun reorderHistoryMetric(keys: List<HistorySeriesKey>, key: HistorySeriesKey, in
   selected-list reorder/remove. Use stable source/metric/cell keys, LazyColumn.
   Search local text state synchronously; include imePadding, preserve editor cursor.
   No per-cell full-trip preload: load selected/visible series only.
-- [ ] Persist chosen metric presets by source-kind/metric, resolve recorded IDs
+- [x] Persist chosen metric presets by source-kind/metric, resolve recorded IDs
   per ride; never auto-rebind BatteryA to BatteryB because their display names match.
 - [x] Verify drawer on emulator portrait/landscape/keyboard and no-long-bar layout;
   common tests assert policy only. Full suite, commit drawer.
 
 Checkpoint: `8801f773`; native evidence and limits are recorded in
-`../specs/2026-10-18-history-metric-drawer-acceptance.md`. Persistent presets remain
-open, so Task2 as a whole is not complete.
+`../specs/2026-10-18-history-metric-drawer-acceptance.md`. The later persistent
+layout checkpoint is documented in
+`../specs/2026-10-20-history-metric-presets-acceptance.md`: explicit named save,
+apply and delete, exact vehicle/source/kind binding, unknown entries retained as
+unavailable, versioned atomic preferences and native process-restart acceptance.
+This completes the drawer/preset task; production screen/root activation remains
+part of Task5 rather than being implied by this checkpoint.
 
 ## Task3 — historical map scene, cursor and animation
 

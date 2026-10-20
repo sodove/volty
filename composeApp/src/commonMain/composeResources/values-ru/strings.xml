@@ -1042,4 +1042,16 @@
     <string name="history_source_assembly">Сборка батареи</string>
     <string name="history_source_derived">Оценка батареи контроллером</string>
     <string name="history_source_reported_can">Суммы CAN со слов контроллера</string>
+    <string name="history_presets_title">Наборы метрик</string>
+    <string name="history_presets_hint">Наборы привязаны к этому транспорту. Отсутствующие источники остаются недоступными. Сохранение с тем же именем обновляет набор.</string>
+    <string name="history_presets_read_error">Не удалось прочитать сохранённые наборы.</string>
+    <string name="history_presets_save_error">Не удалось сохранить набор. Можно хранить до 24 наборов, по 128 метрик в каждом.</string>
+    <string name="history_presets_delete_error">Не удалось удалить набор.</string>
+    <string name="history_presets_reload">Обновить наборы</string>
+    <string name="history_presets_empty">Для этого транспорта пока нет наборов</string>
+    <string name="history_presets_availability">Доступно: %1$d · недоступно: %2$d</string>
+    <string name="history_presets_delete">Удалить набор %1$s</string>
+    <string name="history_presets_name">Название набора</string>
+    <string name="history_presets_save">Сохранить выбранные метрики</string>
+    <string name="history_presets_metric_limit">В наборе может быть до 128 метрик.</string>
 </resources>

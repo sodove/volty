@@ -10,4 +10,5 @@ data class HistoryUiState(
     val detail: HistoryDetailState = HistoryDetailState(),
     val route: HistoryRouteState = HistoryRouteState(),
     val previews: HistoryPreviewsState = HistoryPreviewsState(),
+    val presets: HistoryPresetsState = HistoryPresetsState(),
 )

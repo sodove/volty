@@ -38,6 +38,40 @@ class HistoryComponentTest {
     private fun TestScope.component(repo: Repo, onBack: () -> Unit = {}) = DefaultHistoryComponent(
         DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo, { HistoryTick(6000, 5010, 1) }, onBack)
 
+    @Test fun explicitPresetSaveApplyUsesCapturedVehicleAndNeverPreloadsOnRead()=runTest {
+        val repo=Repo();var saved=emptyList<HistoryMetricPreset>()
+        val store=object:HistoryMetricPresetStore{
+            override suspend fun read()=saved
+            override suspend fun save(preset:HistoryMetricPreset):List<HistoryMetricPreset>{saved=listOf(preset);return saved}
+            override suspend fun delete(id:String):List<HistoryMetricPreset>{saved=saved.filterNot{it.id==id};return saved}
+        }
+        val c=DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),backgroundScope,repo,{origin},{},store)
+        try{
+            c.loadPresets();runCurrent();assertTrue(repo.detailReads.isEmpty());assertTrue(repo.routeReads.isEmpty())
+            c.openRide("a");runCurrent();c.addMetric(key);runCurrent();c.savePreset("  Battery  ");runCurrent()
+            assertEquals("Battery",saved.single().name);assertEquals("bike",saved.single().vehicleId)
+            c.openRide("b");runCurrent();assertTrue(c.state.value.detail.selectedKeys.isEmpty())
+            c.applyPreset(saved.single().id);runCurrent();assertEquals(listOf(key),c.state.value.detail.selectedKeys)
+            c.deletePreset(saved.single().id);runCurrent();assertTrue(c.state.value.presets.presets.isEmpty())
+        }finally{c.close()}
+    }
+
+    @Test fun latePresetSaveDoesNotModifyTheRideOpenedDuringTheWrite()=runTest {
+        val entered=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>();var captured:HistoryMetricPreset?=null
+        val store=object:HistoryMetricPresetStore{
+            override suspend fun read()=emptyList<HistoryMetricPreset>()
+            override suspend fun save(preset:HistoryMetricPreset)=withContext(NonCancellable){captured=preset;entered.complete(Unit);release.await();listOf(preset)}
+            override suspend fun delete(id:String)=emptyList<HistoryMetricPreset>()
+        }
+        val c=DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),backgroundScope,Repo(),{origin},{},store)
+        try{
+            c.openRide("a");runCurrent();c.addMetric(key);runCurrent();c.savePreset("Pack");runCurrent();assertTrue(entered.isCompleted)
+            c.openRide("b");runCurrent();release.complete(Unit);runCurrent()
+            assertEquals(listOf(key.metricId),captured!!.metrics.map{it.metricId});assertEquals("b",c.state.value.selectedRideId)
+            assertTrue(c.state.value.detail.selectedKeys.isEmpty());assertEquals(listOf(captured),c.state.value.presets.presets)
+        }finally{release.complete(Unit);c.close();runCurrent()}
+    }
+
     @Test fun lateRideAndRouteReadsCannotReplaceNewSelectedScreen() = runTest {
         for (holdRoute in listOf(false, true)) {
             val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
@@ -120,7 +154,7 @@ class HistoryComponentTest {
             val lifecycle = LifecycleRegistry(Lifecycle.State.RESUMED)
             val parent = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job]))
             var exits = 0
-            val c = DefaultHistoryComponent(DefaultComponentContext(lifecycle), parent, repo, { origin }) { exits++ }
+            val c = DefaultHistoryComponent(DefaultComponentContext(lifecycle), parent, repo, { origin }, onBack = { exits++ })
             try {
                 c.openRide("a"); runCurrent(); assertTrue(entered.isCompleted)
                 if (destroy) lifecycle.destroy() else parent.cancel()

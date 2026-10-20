@@ -161,6 +161,25 @@ class HistoryDetailComponent(
         if (request === generation) readMetric(key)
     }
 
+    fun replaceMetrics(keys: List<HistorySeriesKey>) {
+        if (!lifetime.isActive) return
+        val current = mutableState.value
+        val ride = current.ride ?: return
+        // Validate the whole layout before retiring any displayed values.
+        val captured = captureHistoryMetricPreset("selection", "selection", ride.vehicleId, keys, current.sources)
+        val next = captured.metrics.map { HistorySeriesKey(it.sourceId, it.metricId, it.cellIndex) }
+        if (next == current.selectedKeys) return
+        retireReads()
+        val request = generation
+        mutableState.value = current.copy(selectedKeys = next,
+            series = current.series.filterKeys { it in next }, stats = current.stats.filterKeys { it in next },
+            loadingKeys = emptySet(), metricErrors = current.metricErrors.filterKeys { it in next })
+        for (key in next) {
+            if (!lifetime.isActive || generation !== request) return
+            if (key !in mutableState.value.series || key !in mutableState.value.stats) readMetric(key)
+        }
+    }
+
     fun removeMetric(key: HistorySeriesKey) {
         if (!lifetime.isActive) return
         metricTokens.remove(key)

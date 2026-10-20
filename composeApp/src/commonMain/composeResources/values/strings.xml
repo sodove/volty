@@ -1044,4 +1044,16 @@
     <string name="history_source_assembly">Battery assembly</string>
     <string name="history_source_derived">Controller battery estimate</string>
     <string name="history_source_reported_can">Reported CAN totals</string>
+    <string name="history_presets_title">Metric layouts</string>
+    <string name="history_presets_hint">Layouts belong to this vehicle. Missing sources stay unavailable. Saving the same name updates its layout.</string>
+    <string name="history_presets_read_error">Could not read saved layouts.</string>
+    <string name="history_presets_save_error">Could not save the layout. You can keep up to 24 layouts, with 128 metrics each.</string>
+    <string name="history_presets_delete_error">Could not delete the layout.</string>
+    <string name="history_presets_reload">Reload layouts</string>
+    <string name="history_presets_empty">No saved layouts for this vehicle</string>
+    <string name="history_presets_availability">%1$d available · %2$d unavailable</string>
+    <string name="history_presets_delete">Delete layout %1$s</string>
+    <string name="history_presets_name">Layout name</string>
+    <string name="history_presets_save">Save selected metrics</string>
+    <string name="history_presets_metric_limit">A layout can contain up to 128 metrics.</string>
 </resources>

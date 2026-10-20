@@ -49,6 +49,9 @@ val appModule = module {
     singleOf(::SqlDelightRideHistoryRepository) bind RideHistoryRepository::class
     single { SqlDelightHistoryStore(get()) } bind HistoryStore::class
     single { SqlDelightHistoryReadRepository(get()) } bind HistoryReadRepository::class
+    single<ru.sodovaya.volty.domain.history.HistoryMetricPresetStore> {
+        ru.sodovaya.volty.data.history.DataStoreHistoryMetricPresets(get<DataStoreFactory>().create())
+    }
     // TWO bindings, ONE instance: CAN discovery (G2 Task 5) needs the same live
     // links the connection does — a second KableBmsRepository would have none.
     // `binds` rather than a second `single { get<BmsRepository>() as … }` so the

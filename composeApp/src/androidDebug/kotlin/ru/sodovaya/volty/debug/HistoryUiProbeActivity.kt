@@ -39,9 +39,11 @@ class HistoryUiProbeActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val stored = intent.getBooleanExtra("stored", false)
         val catalog = stored || intent.getBooleanExtra("catalog", false)
-        val repository = if (stored) getKoin().get<HistoryReadRepository>() else ProbeReader()
+        val repository = if (stored) getKoin().get<HistoryReadRepository>()
+            else ProbeReader(intent.getBooleanExtra("omitFirstSource", false))
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
-            { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish)
+            { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish,
+            getKoin().get<HistoryMetricPresetStore>())
         if (catalog) owner.refresh() else owner.openRide("fixture")
         setContent {
             VoltyTheme {
@@ -73,7 +75,9 @@ class HistoryUiProbeActivity : ComponentActivity() {
                         Modifier.fillMaxSize().padding(padding))
                 }
                 if (drawer) HistoryMetricDrawer(state.detail, owner::loadSourceMetrics, owner::addMetric,
-                    owner::removeMetric, onDismiss = { drawer = false })
+                    owner::removeMetric, onDismiss = { drawer = false }, presets = state.presets,
+                    onLoadPresets = owner::loadPresets, onSavePreset = owner::savePreset,
+                    onApplyPreset = owner::applyPreset, onDeletePreset = owner::deletePreset)
             }
         }
     }
@@ -101,7 +105,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
         }
     }
 
-    private class ProbeReader : HistoryReadRepository {
+    private class ProbeReader(private val omitFirstSource: Boolean = false) : HistoryReadRepository {
         private val failedReads = mutableSetOf<String>()
         private val sources = listOf(HistorySource("fixture-a", HistorySourceKind.BATTERY, "Pack"),
             HistorySource("fixture-b", HistorySourceKind.BATTERY, "Pack"))
@@ -113,7 +117,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
             val next = if (start + rows.size < 24) HistoryCursor(1000, rows.last().id) else null
             return HistoryPage(rows, next, next != null)
         }
-        override suspend fun sources(rideId: String) = sources
+        override suspend fun sources(rideId: String) = if (omitFirstSource) sources.drop(1) else sources
         override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
             val keys = listOf("voltage_v", "current_a", "power_w").map { HistorySeriesKey(sourceId, it) } +
                 (0 until 1000).map { HistorySeriesKey(sourceId, "cell_v", it * 2) }
