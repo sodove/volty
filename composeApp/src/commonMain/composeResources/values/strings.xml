@@ -1059,4 +1059,21 @@
     <string name="history_preview_source_ofm">© OpenFreeMap</string>
     <string name="history_preview_source_omt">© OpenMapTiles</string>
     <string name="history_preview_source_osm">© OpenStreetMap</string>
+    <string name="history_summary_range">Summary · displayed range</string>
+    <string name="history_summary_expand">Expand summary</string>
+    <string name="history_summary_collapse">Collapse summary</string>
+    <string name="history_summary_source_unavailable">Recorded source unavailable</string>
+    <string name="history_summary_min">Minimum</string>
+    <string name="history_summary_max">Maximum</string>
+    <string name="history_summary_energy">Net energy</string>
+    <string name="history_summary_partial">Partial data</string>
+    <string name="history_summary_unavailable">No data</string>
+    <string name="history_unit_volt">V</string>
+    <string name="history_unit_amp">A</string>
+    <string name="history_unit_watt">W</string>
+    <string name="history_unit_millivolt">mV</string>
+    <string name="history_unit_erpm">eRPM</string>
+    <string name="history_unit_km">km</string>
+    <string name="history_unit_wh">Wh</string>
+    <string name="history_unit_ah">Ah</string>
 </resources>

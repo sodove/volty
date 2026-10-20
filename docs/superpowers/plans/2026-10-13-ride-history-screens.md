@@ -227,11 +227,15 @@ Tests `HistoryScreenStatePolicyTest.kt`; actual Compose checked natively.
 **Consumes:** Tasks1–4 and existing graph geometry; Foundation true summary stats.
 **Produces:** Complete screens and root navigation retaining one shared component.
 
-- [ ] RED on pure `historySummaryLabel(stats: HistoryStats): SummaryQuality`
+- [x] RED on per-field `historyMetricSummary(key, stats): HistoryMetricSummary`
   (`SummaryQuality.EXACT`, `PARTIAL`, `UNAVAILABLE`): unknown energy is not 0Wh.
+  Ruling: a single quality for the whole stats object would hide earned extrema
+  or incorrectly qualify absent energy; quality belongs to each displayed value.
   ```kotlin
   @Test fun missingEnergyIsUnavailable() {
-    assertEquals(SummaryQuality.UNAVAILABLE, historySummaryLabel(HistoryStats(null, null, null, false)))
+    assertEquals(SummaryQuality.UNAVAILABLE,
+      historyMetricSummary(HistorySeriesKey("pack", "power_w"),
+        HistoryStats(null, null, null, false)).energy.quality)
   }
   ```
 - [ ] Port home composition: same full-screen map, header/back/title, compact
@@ -249,6 +253,14 @@ Tests `HistoryScreenStatePolicyTest.kt`; actual Compose checked natively.
   midloading back, repeated ride switching and 20+metric picker.
   Unit tests do not substitute for screenshots/gesture results.
 - [ ] Full suite/signed candidate, commit home/fullscreen/routing.
+
+Summary-only checkpoint (2026-10-20): the source-qualified compact/expand panel
+and per-field quality/sign policy are implemented and exercised on Android,
+including font200% Russian landscape and unknown/partial fixtures. See
+`../specs/2026-10-20-history-summary-acceptance.md`. This is a GPL-attributed
+adaptation of pinned HistoryStatsBar hierarchy, using Volty's persisted range
+stats instead of reduced chart samples. No root activation or completed home,
+cursor/whole-ride sections, full chart interactions or signed candidate is claimed.
 
 ## Task6 — favorites, trim and curated media
 

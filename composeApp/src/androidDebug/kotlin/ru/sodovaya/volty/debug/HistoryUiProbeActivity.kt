@@ -40,7 +40,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
         val stored = intent.getBooleanExtra("stored", false)
         val catalog = stored || intent.getBooleanExtra("catalog", false)
         val repository = if (stored) getKoin().get<HistoryReadRepository>()
-            else ProbeReader(intent.getBooleanExtra("omitFirstSource", false),intent.getBooleanExtra("remotePreviewArea", false))
+            else ProbeReader(intent.getBooleanExtra("omitFirstSource", false),intent.getBooleanExtra("remotePreviewArea", false),
+                intent.getBooleanExtra("summary", false))
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
             { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish,
             getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>())
@@ -50,6 +51,16 @@ class HistoryUiProbeActivity : ComponentActivity() {
                 val state by owner.state.collectAsState()
                 val catalogListState = rememberLazyListState()
                 var drawer by remember { mutableStateOf(true) }
+                if (intent.getBooleanExtra("summary", false)) {
+                    LaunchedEffect(state.detail.ride?.id) {
+                        if (state.detail.ride != null) {
+                            listOf(HistorySeriesKey("fixture-a", "power_w"), HistorySeriesKey("fixture-a", "voltage_v"),
+                                HistorySeriesKey("fixture-b", "current_a")).forEach(owner::addMetric)
+                        }
+                    }
+                    MapProbe(owner, state, showSummary = true)
+                    return@VoltyTheme
+                }
                 if (catalog) {
                     BackHandler(enabled = state.destination != HistoryDestination.CATALOG) { owner.back() }
                     if (state.destination == HistoryDestination.CATALOG) {
@@ -88,7 +99,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun MapProbe(owner: HistoryComponent, state: HistoryUiState) {
+    private fun MapProbe(owner: HistoryComponent, state: HistoryUiState, showSummary: Boolean = false) {
+        var summaryExpanded by remember(state.selectedRideId) { mutableStateOf(false) }
         val identity = remember(state.selectedRideId) { HistoryMapIdentity(state.selectedRideId ?: "fixture", 1) }
         val rideOrigin = state.detail.ride?.started ?: origin
         val history = remember(identity, rideOrigin, state.route.fixes, state.route.markers, state.detail.cursorEpochMillis) {
@@ -99,6 +111,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
         val fit = remember(identity, insets) { MapCameraRequest.FitHistory(1, identity, insets, reduceMotion = true) }
         Box(Modifier.fillMaxSize()) {
             PlatformRideMapLayer(historyMapNavigationScene(history, fit), darkTheme = true, onCameraGesture = {}, modifier = Modifier.fillMaxSize())
+            if (showSummary) HistorySummaryPanel(state.detail, summaryExpanded, { summaryExpanded = it },
+                Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(16.dp).fillMaxWidth())
             Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding(), tonalElevation = 3.dp) {
                 Column(Modifier.padding(16.dp)) {
                     Text("GPS · ${history.segments.size} segments · ${state.detail.cursorEpochMillis ?: "—"}")
@@ -110,7 +124,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
         }
     }
 
-    private class ProbeReader(private val omitFirstSource: Boolean = false,private val remotePreviewArea: Boolean = false) : HistoryReadRepository {
+    private class ProbeReader(private val omitFirstSource: Boolean = false,private val remotePreviewArea: Boolean = false,
+        private val summaryFixture: Boolean = false) : HistoryReadRepository {
         private val failedReads = mutableSetOf<String>()
         private val sources = listOf(HistorySource("fixture-a", HistorySourceKind.BATTERY, "Pack"),
             HistorySource("fixture-b", HistorySourceKind.BATTERY, "Pack"))
@@ -130,7 +145,12 @@ class HistoryUiProbeActivity : ComponentActivity() {
         }
         override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int) =
             HistorySeries(key, emptyList(), emptyList(), false, origin)
-        override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) = HistoryStats(null, null, null, false)
+        override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) =
+            if (!summaryFixture) HistoryStats(null, null, null, false) else when (key.metricId) {
+                "power_w" -> HistoryStats(-4200.0, 200.0, 12.0, false)
+                "voltage_v" -> HistoryStats(60.0, 84.0, null, true)
+                else -> HistoryStats(null, null, null, true)
+            }
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?) = HistoryPage<HistoryGpsFix>(emptyList(), null, false)
         override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
             if (rideId.endsWith("-7") && failedReads.add(rideId)) error("Synthetic one-shot route read failure")

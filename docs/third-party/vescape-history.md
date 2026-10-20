@@ -80,3 +80,21 @@ No standalone `LICENSE`, `NOTICE`, or `COPYING` file was found in the listed mod
 ## Local archive follow-up (primary, 2026-10-13)
 
 Neither local archive contains LICENSE/NOTICE/COPYING entries. AudioSwitch source is the LiveKit POM-pinned davidliu/audioswitch commit039a35aefab7747c557242fa216c9ea11743b604; git show proves LICENSE.txt is Apache2.0 (LICENSE without extension returned404 and was not evidence). Text retained in docs/third-party/licenses/AudioSwitch-Apache-2.0.txt. BRouter upstream v1.7.10 LICENSE is MIT, copyright2019 BRouter contributors: https://github.com/abrensch/brouter/blob/v1.7.10/LICENSE . These source licenses do not themselves prove byte-for-byte identity or complete bundled component provenance of the local archives. Archive notices/transitive inventory remains incomplete; no Vescape source imported yet.
+
+## Summary-panel transfer (2026-10-20)
+
+`presentation/history/ported/HistorySummaryPanel.kt` adapts the pinned
+`src/screens/main/history/HistoryStatsBar.tsx` compact/expand hierarchy, with the
+same adjacent GPL-3.0-or-later notice/license. Changes: source-qualified selected
+metrics, flowing readable cells, bounded lazy expansion and Volty typography;
+per-field unknown/partial values use persisted full-stream range statistics.
+It does not port upstream session aggregate calculation or recompute peaks/energy
+from decimated chart points. Root history activation remains a later acceptance
+step. The independent original Kotlin HistorySummaryPolicy converts canonical
+extrema to display sign and preserves already consumption-signed Wh.
+
+The direct-dependency inventory above predates the renderer change: application
+now uses the same-version official `org.maplibre.gl:android-sdk-opengl:13.0.2`
+artifact. The old default Vulkan artifact entry is historical, not evidence for
+the new artifact's complete archive/transitive notice audit. Final combined APK
+source/notice/distribution acceptance remains open.

@@ -7,8 +7,9 @@ These Kotlin/Compose files adapt Vescape's UI at pinned revision
 |---|---|---|
 | `HistoryRideCard.kt` | `src/modules/history/components/HistoryRideRow.tsx` | Compose Surface/Row, Volty theme and typography, content may grow with system font size, recorded segmented preview input with loading/error/retry/partial states. Keeps the 86-wide preview, 88-high row minimum, 12-radius card, labels and chevron hierarchy. |
 | `HistoryRoutePreview.kt` | `src/modules/history/components/RouteSparkline.tsx` | Compose Canvas instead of Skia, separate paths for GPS segments, neutral loaded-point marks, route-only fallback. Tile/cache rendering is not ported yet. Projection comes from Volty's independently tested policy. |
+| `HistorySummaryPanel.kt` | `src/screens/main/history/HistoryStatsBar.tsx` | Compact/expand hierarchy adapted to source-qualified selected metrics. Flowing cells and bounded lazy expansion replace fixed tiny columns. Canonical persisted range statistics, independent per-field quality and Volty units replace upstream session aggregates; no reduced-sample recomputation or aggregate/contributor addition. |
 
-Both adaptations are marked `GPL-3.0-or-later`, matching upstream `package.json`.
+These adaptations are marked `GPL-3.0-or-later`, matching upstream `package.json`.
 `LICENSE` is a verbatim copy of upstream's GNU GPL version 3 text (SHA-256
 `230184F60BAE2FEAF244F10A8BAC053C8FF33A183BCC365B4D8B876D2B7F4809`).
 Retraction: the initial LF-only Git rule normalized this upstream CRLF file in
@@ -20,3 +21,8 @@ The source pin, package-author evidence and dependency audit are recorded in
 This record identifies transferred material and its license. It does not assert
 that a directory boundary resolves combined-application distribution requirements
 or that the complete screen port/dependency compatibility audit is finished.
+
+Retraction (2026-10-20): the earlier tile/cache-pending statement above describes
+the Canvas adaptation alone. Volty's separate image pipeline now provides bounded
+OFM background snapshots and PNG caches behind that fallback, without borrowing
+the upstream owner's Mapbox style/token.

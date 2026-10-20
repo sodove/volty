@@ -1057,4 +1057,21 @@
     <string name="history_preview_source_ofm">© OpenFreeMap</string>
     <string name="history_preview_source_omt">© OpenMapTiles</string>
     <string name="history_preview_source_osm">© OpenStreetMap</string>
+    <string name="history_summary_range">Сводка · видимый диапазон</string>
+    <string name="history_summary_expand">Развернуть сводку</string>
+    <string name="history_summary_collapse">Свернуть сводку</string>
+    <string name="history_summary_source_unavailable">Источник записи недоступен</string>
+    <string name="history_summary_min">Минимум</string>
+    <string name="history_summary_max">Максимум</string>
+    <string name="history_summary_energy">Баланс энергии</string>
+    <string name="history_summary_partial">Неполные данные</string>
+    <string name="history_summary_unavailable">Нет данных</string>
+    <string name="history_unit_volt">В</string>
+    <string name="history_unit_amp">А</string>
+    <string name="history_unit_watt">Вт</string>
+    <string name="history_unit_millivolt">мВ</string>
+    <string name="history_unit_erpm">эл. об/мин</string>
+    <string name="history_unit_km">км</string>
+    <string name="history_unit_wh">Вт·ч</string>
+    <string name="history_unit_ah">А·ч</string>
 </resources>
