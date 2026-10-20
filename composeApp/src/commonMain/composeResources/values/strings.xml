@@ -1082,4 +1082,10 @@
     <string name="history_chart_scale">Plot scale: %1$s … %2$s %3$s</string>
     <string name="history_charts_title">Ride charts</string>
     <string name="history_charts_back">Back to ride map</string>
+    <string name="history_window_earlier">Show earlier time</string>
+    <string name="history_window_later">Show later time</string>
+    <string name="history_window_zoom_in">Zoom in on time</string>
+    <string name="history_window_zoom_out">Zoom out on time</string>
+    <string name="history_window_reset">Show whole recorded ride</string>
+    <string name="history_window_cursor">Move shared cursor</string>
 </resources>

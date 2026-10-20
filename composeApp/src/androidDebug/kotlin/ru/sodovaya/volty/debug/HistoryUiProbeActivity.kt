@@ -148,17 +148,23 @@ class HistoryUiProbeActivity : ComponentActivity() {
         }
         override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries {
             if (!chartFixture) return HistorySeries(key, emptyList(), emptyList(), false, origin)
-            val samples = listOf(1000L, 1500L, 2000L, 2500L, 3000L, 4000L, 4500L, 5000L).mapIndexed { index, time ->
+            val markers = chartMarkers(key, range)
+            return HistorySeries(key, historyOverview(chartSamples(key, range), markers), markers, false, origin)
+        }
+        private fun chartSamples(key: HistorySeriesKey, range: HistoryRange): List<HistorySample> =
+            listOf(1000L, 1500L, 2000L, 2500L, 3000L, 4000L, 4500L, 5000L).mapIndexed { index, time ->
                 val value = if (time == 2000L || key.metricId == "current_a") null else
                     if (key.metricId == "power_w") listOf(-500.0, -4200.0, 0.0, 200.0, -700.0, -1200.0, -900.0, -200.0)[index]
                     else 60.0 + index * 3.0
                 HistorySample(HistoryTick(time, time - 990, 1), key, value, if (value == null) HistoryUnknownReason.GAP else null)
             }.filter { it.tick.epochMillis in range.startEpochMillis..range.endEpochMillis }
-            val markers = listOf(HistoryMarker(HistoryTick(3500, 2510, 1), HistoryMarkerKind.BLE_GAP, key.sourceId))
-            return HistorySeries(key, historyOverview(samples, markers), markers, false, origin)
-        }
+        private fun chartMarkers(key: HistorySeriesKey, range: HistoryRange) =
+            listOf(HistoryMarker(HistoryTick(3500, 2510, 1), HistoryMarkerKind.BLE_GAP, key.sourceId))
+                .filter { it.tick.epochMillis in range.startEpochMillis..range.endEpochMillis }
         override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) =
-            if (!summaryFixture) HistoryStats(null, null, null, false) else when (key.metricId) {
+            if (chartFixture) historyStats(chartSamples(key, range), chartMarkers(key, range),
+                HistoryMetricRegistry.descriptor(key.metricId)?.consumptionMultiplier)
+            else if (!summaryFixture) HistoryStats(null, null, null, false) else when (key.metricId) {
                 "power_w" -> HistoryStats(-4200.0, 200.0, 12.0, false)
                 "voltage_v" -> HistoryStats(60.0, 84.0, null, true)
                 else -> HistoryStats(null, null, null, true)
@@ -170,10 +176,12 @@ class HistoryUiProbeActivity : ComponentActivity() {
                 lon + if(remotePreviewArea) 50.0 else 0.0, 3.0, null)
             val fixes = listOf(fix(1000, 56.838, 60.600), fix(1500, 56.839, 60.603), fix(2000, 56.840, 60.603),
                 fix(3000, 56.843, 60.610), fix(3500, 56.844, 60.612), fix(4000, 56.845, 60.611))
-            val partial = rideId.endsWith("-5") && after == null
-            val rows = if (after == null) fixes else listOf(fix(4500,56.846,60.613))
+            val rows = (if (after == null) fixes else listOf(fix(4500,56.846,60.613)))
+                .filter { it.tick.epochMillis in range.startEpochMillis..range.endEpochMillis }
+            val partial = rideId.endsWith("-5") && after == null && rows.lastOrNull()?.tick?.epochMillis == 4000L && range.endEpochMillis >= 4500L
             return HistoryRoutePage(origin, HistoryPage(rows, if (partial) HistoryCursor(4000,"6") else null, partial),
-                listOf(HistoryMarker(HistoryTick(2500, 1510, 1), HistoryMarkerKind.GPS_GAP)))
+                listOf(HistoryMarker(HistoryTick(2500, 1510, 1), HistoryMarkerKind.GPS_GAP))
+                    .filter { it.tick.epochMillis in range.startEpochMillis..range.endEpochMillis })
         }
     }
 

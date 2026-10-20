@@ -17,7 +17,8 @@ import volty.composeapp.generated.resources.*
 fun HistoryChartsScreen(owner: HistoryComponent, state: HistoryUiState,
     cursorMaxAgeMillis: (HistorySeriesKey) -> Long, modifier: Modifier = Modifier) {
     var drawer by remember(state.selectedRideId) { mutableStateOf(false) }
-    Scaffold(modifier, topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_charts_title)) },
+    Scaffold(modifier, bottomBar = { HistoryTimelineControls(state.detail, owner::selectRange, owner::selectTime) },
+        topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_charts_title)) },
         navigationIcon = { IconButton(onClick = owner::back) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.history_charts_back))
         } }, actions = { IconButton(onClick = { drawer = true }) {

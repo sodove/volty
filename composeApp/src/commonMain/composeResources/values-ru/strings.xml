@@ -1080,4 +1080,10 @@
     <string name="history_chart_scale">Шкала графика: %1$s … %2$s %3$s</string>
     <string name="history_charts_title">Графики поездки</string>
     <string name="history_charts_back">Назад к карте поездки</string>
+    <string name="history_window_earlier">Показать раньше</string>
+    <string name="history_window_later">Показать позже</string>
+    <string name="history_window_zoom_in">Приблизить по времени</string>
+    <string name="history_window_zoom_out">Отдалить по времени</string>
+    <string name="history_window_reset">Показать всю записанную поездку</string>
+    <string name="history_window_cursor">Переместить общий курсор</string>
 </resources>

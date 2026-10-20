@@ -33,6 +33,23 @@ class HistoryDetailComponentTest {
     private fun TestScope.component(repo: Repo, lifecycle: LifecycleRegistry = LifecycleRegistry(Lifecycle.State.RESUMED)) =
         HistoryDetailComponent(DefaultComponentContext(lifecycle), backgroundScope, repo, { HistoryTick(9000, 8010, 1) })
 
+    @Test fun availableRecordedBoundsSurviveWindowChangesAndRetireWithSelection() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent(); c.addMetric(key); runCurrent()
+            assertEquals(range, c.state.value.availableRange)
+            c.selectTime(2500); c.selectRange(HistoryRange(2000, 4000)); runCurrent()
+            assertEquals(range, c.state.value.availableRange)
+            assertEquals(HistoryRange(2000, 4000), repo.reads.last().third)
+            assertEquals(2500L, c.state.value.cursorEpochMillis)
+            c.selectRange(checkNotNull(c.state.value.availableRange)); runCurrent()
+            assertEquals(range, c.state.value.range); assertEquals(range, repo.reads.last().third)
+            c.clear(); assertNull(c.state.value.availableRange)
+            c.openRide("b"); assertNull(c.state.value.availableRange); runCurrent()
+            assertEquals(range, c.state.value.availableRange)
+        } finally { c.close() }
+    }
+
     @Test fun presetReplacementPreservesRangeCursorOrderAndAlreadyLoadedFacts() = runTest {
         val repo=Repo();val c=component(repo)
         try {

@@ -15,6 +15,7 @@ data class HistoryDetailState(
     val ride: HistoryRide? = null,
     val sources: List<HistorySource> = emptyList(),
     val range: HistoryRange? = null,
+    val availableRange: HistoryRange? = null,
     val cursorEpochMillis: Long? = null,
     val selectedKeys: List<HistorySeriesKey> = emptyList(),
     val series: Map<HistorySeriesKey, HistorySeries> = emptyMap(),
@@ -91,7 +92,8 @@ class HistoryDetailComponent(
                 }
                 val range = recorded ?: HistoryRange(ride.started.epochMillis, end)
                 availableRange = range
-                mutableState.value = mutableState.value.copy(ride = ride, sources = sources, range = range, loading = false)
+                mutableState.value = mutableState.value.copy(ride = ride, sources = sources, range = range,
+                    availableRange = range, loading = false)
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (_: Exception) {

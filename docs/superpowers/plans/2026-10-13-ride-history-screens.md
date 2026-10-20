@@ -271,6 +271,15 @@ This does not close the chart-interaction checkbox: shared pan/pinch window,
 accessible timeline/time-axis controls, full Vescape-shaped home/navigation,
 remaining source/cursor/whole-ride sections and root cutover still need completion.
 
+Explicit time-window controls (2026-10-20): detail now retains original recorded
+bounds for reset, with tested anchor zoom/clamped pan and numeric/stale guards.
+Fullscreen charts expose earlier/later, zoom in/out/reset and a named shared-cursor
+slider, with clock endpoints and an adaptive wide layout. Native narrowed-window
+checks cover all series plus map/range summary. Evidence:
+`../specs/2026-10-20-history-time-window-acceptance.md`. Pinch/drag preview with
+settled read commit remains required, as do product retention and full home/root
+integration. The gesture checkbox above stays open.
+
 ## Task6 — favorites, trim and curated media
 
 **Files:** Create `domain/history/HistoryFavorite.kt`, `FavoriteRangePolicy.kt`,
