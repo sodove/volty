@@ -17,4 +17,7 @@ data class StoredRadioKey(val key: RadioKey, val fetchedAtMillis: Long)
 interface RadioKeyStore {
     suspend fun get(actor: String, community: String): StoredRadioKey?
     suspend fun put(actor: String, key: RadioKey, fetchedAtMillis: Long)
+
+    /** Every community this account has a cached key for; what auto-join scans for. A store that cannot enumerate reports none. */
+    suspend fun communities(actor: String): List<String> = emptyList()
 }

@@ -69,6 +69,7 @@ import ru.sodovaya.volty.presentation.nearby.VoiceSpacesNearbyScreen
 import ru.sodovaya.volty.presentation.root.nearby.NearbyConversationPanelScreen
 import ru.sodovaya.volty.presentation.root.nearby.nearbyConversationPanelVisible
 import ru.sodovaya.volty.presentation.root.nearby.NearbyIncomingCallScreen
+import ru.sodovaya.volty.presentation.root.nearby.NearbyRadioStatusLine
 import ru.sodovaya.volty.presentation.root.nearby.nearbyChannelMarkers
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
@@ -374,6 +375,8 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                 nearby.voice, nearby.sharing, expanded=false, actions=component.nearby.actions,
                 maxHeight=panelMaximumHeight, onOpenDetails={ conversationDetailsVisible = true },
             )
+            // One line while an offline radio runs; the server screen has the full card.
+            if (!rideMapVisible) NearbyRadioStatusLine()
         }
         // Persistent bottom tab bar — only for main destinations
         BottomTabBar(

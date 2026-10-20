@@ -235,6 +235,8 @@ private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWor
                     }
                 }
             }
+            // The radio belongs to the server, not to one voice channel: it works with no internet at all.
+            item(key="radio") {ru.sodovaya.volty.presentation.root.nearby.NearbyRadioCard(detail.community.id,Modifier.fillMaxWidth())}
         }
     }
 }

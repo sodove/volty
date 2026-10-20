@@ -24,6 +24,7 @@ import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
 import ru.sodovaya.volty.domain.voice.VoiceInputPreference
+import ru.sodovaya.volty.domain.radio.RadioMode
 import ru.sodovaya.volty.domain.voice.VoiceOutputPreference
 import ru.sodovaya.volty.util.UnitSystem
 
@@ -78,6 +79,16 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     /** One stored pair, with no synthetic loaded value before DataStore emits. */
     val voiceAudioPreferences: Flow<VoiceAudioPreferences>
         get() = store.data.map(::decodeVoiceAudioPreferences)
+
+    /** Offline radio: look for a radio of any of the rider's servers and join it while the app is open. Off by default (it keeps Wi-Fi scanning). */
+    val radioAutoJoin: StateFlow<Boolean> = store.data
+        .map { it[Keys.RADIO_AUTO_JOIN] ?: false }
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
+    /** The connection mode this phone uses when it raises a radio. */
+    val radioMode: StateFlow<RadioMode> = store.data
+        .map { prefs -> RadioMode.entries.firstOrNull { it.name == prefs[Keys.RADIO_MODE] } ?: RadioMode.BALANCED }
+        .stateIn(scope, SharingStarted.Eagerly, RadioMode.BALANCED)
 
     /** Allow automatic offline-region downloads over mobile data without a prompt. */
     val offlineSkipMeteredConfirmation: StateFlow<Boolean> = store.data
@@ -188,6 +199,8 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     suspend fun setVoiceOutputPreference(preference: VoiceOutputPreference) = store.edit {
         it[Keys.VOICE_OUTPUT_PREFERENCE] = preference.name
     }
+    suspend fun setRadioAutoJoin(enabled: Boolean) = store.edit { it[Keys.RADIO_AUTO_JOIN] = enabled }
+    suspend fun setRadioMode(mode: RadioMode) = store.edit { it[Keys.RADIO_MODE] = mode.name }
     suspend fun setOfflineSkipMeteredConfirmation(skip: Boolean) = store.edit {
         it[Keys.OFFLINE_SKIP_METERED_CONFIRMATION] = skip
     }
@@ -237,6 +250,8 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         val VOICE_OUTPUT_PREFERENCE = stringPreferencesKey("voice_output_preference")
         val OFFLINE_SKIP_METERED_CONFIRMATION =
             booleanPreferencesKey("offline_skip_metered_confirmation")
+        val RADIO_AUTO_JOIN = booleanPreferencesKey("radio_auto_join")
+        val RADIO_MODE = stringPreferencesKey("radio_mode")
         val NAVIGATION_ROUTE_STYLE = stringPreferencesKey("navigation_route_style")
         val NAVIGATION_TOP_SPEED_KPH = intPreferencesKey("navigation_top_speed_kph")
         val ALARM_ENABLED = booleanPreferencesKey("alarm_enabled")

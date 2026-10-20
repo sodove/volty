@@ -302,6 +302,18 @@ val androidModule = module {
                     ?.let { ru.sodovaya.volty.data.radio.RadioIdentity(it.userId.value, it.displayName) }
             },
             scope = get(named(RADIO_SCOPE)),
+            autoJoin = { get<AppPrefs>().radioAutoJoin.value },
+            appVisible = { get<ru.sodovaya.volty.data.radio.AppVisibility>().isVisible },
+        )
+    }
+    single { ru.sodovaya.volty.data.radio.AppVisibility() }
+    single { ru.sodovaya.volty.data.radio.RadioDiagnosticExporter(androidContext()) }
+    single<ru.sodovaya.volty.domain.radio.RadioPanelHost> {
+        val repository = get<ru.sodovaya.volty.data.social.DefaultSocialRepository>()
+        ru.sodovaya.volty.data.radio.AndroidRadioPanelHost(
+            androidContext(), get(), get(), get(), get(),
+            actor = { (repository.session.value as? ru.sodovaya.volty.domain.social.SocialSession.Authenticated)?.userId?.value },
+            scope = get(named(RADIO_SCOPE)),
         )
     }
     single { NearbySharingController(get(),get(),get(),get(),Dispatchers.Main,{java.util.UUID.randomUUID().toString()}) }

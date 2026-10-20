@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.os.BatteryManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import java.util.concurrent.ArrayBlockingQueue
@@ -12,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +23,13 @@ import ru.sodovaya.volty.domain.radio.RadioClientPhase
 import ru.sodovaya.volty.domain.radio.RadioClientSession
 import ru.sodovaya.volty.domain.radio.RadioController
 import ru.sodovaya.volty.domain.radio.RadioDatagram
+import ru.sodovaya.volty.domain.radio.RadioDiagnostics
+import ru.sodovaya.volty.domain.radio.RadioLossCounter
+import ru.sodovaya.volty.domain.radio.RadioMemberStat
+import ru.sodovaya.volty.domain.radio.RadioMessage
+import ru.sodovaya.volty.domain.radio.RadioRole
+import ru.sodovaya.volty.domain.radio.radioRequiredPermissions
+import ru.sodovaya.volty.domain.radio.shouldAutoJoin
 import ru.sodovaya.volty.domain.radio.RadioError
 import ru.sodovaya.volty.domain.radio.RadioHubSession
 import ru.sodovaya.volty.domain.radio.RadioKeyStore
@@ -93,6 +102,10 @@ class RadioRuntime(
     private val identity: () -> RadioIdentity?,
     private val scope: CoroutineScope,
     private val clock: () -> Long = System::currentTimeMillis,
+    /** The rider's "join radio automatically" switch; read on every poll. */
+    private val autoJoin: () -> Boolean = { false },
+    /** True while one of the app's activities is resumed (ruling R20). */
+    private val appVisible: () -> Boolean = { false },
 ) {
     private val app = context.applicationContext ?: context
     private val _members = MutableStateFlow<List<RadioMember>>(emptyList())
@@ -105,7 +118,17 @@ class RadioRuntime(
     /** Client only: round trip to the hub. */
     val rttMillis: StateFlow<Long?> = _rttMillis.asStateFlow()
 
+    private val _activeMode = MutableStateFlow<RadioMode?>(null)
+
+    /** The mode the running radio actually uses (a client follows its hub); null with no radio. */
+    val activeMode: StateFlow<RadioMode?> = _activeMode.asStateFlow()
+
     private var attached = false
+    private var autoJoinSuppressedUntil = 0L
+
+    /** What the last radio measured; kept after it ends so a field tester can still export it. */
+    @Volatile
+    private var frozen: RadioDiagnostics? = null
     private var previous: RadioState = RadioState.Idle
     private var startJob: Job? = null
     private var serviceStarted = false
@@ -126,6 +149,37 @@ class RadioRuntime(
                 onState(before, state)
             }
         }
+        scope.launch {
+            while (true) {
+                delay(AUTO_JOIN_POLL_MILLIS)
+                pollAutoJoin()
+            }
+        }
+    }
+
+    /** After a manual leave the auto-join poll stays quiet for a while, so leaving is not undone 30 s later. */
+    fun suppressAutoJoin() {
+        autoJoinSuppressedUntil = clock() + AUTO_JOIN_SUPPRESS_MILLIS
+    }
+
+    /** The current (or, once it has ended, the last) radio's measurements; null if none ran. */
+    fun diagnostics(): RadioDiagnostics? = active?.snapshot() ?: frozen
+
+    private fun scanPermitted(): Boolean =
+        radioRequiredPermissions(Build.VERSION.SDK_INT, scanning = true).all {
+            app.checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED
+        }
+
+    private fun mayAutoJoin(): Boolean =
+        shouldAutoJoin(autoJoin(), controller.state.value, appVisible(), scanPermitted(), clock(), autoJoinSuppressedUntil)
+
+    /** One auto-join check: looks for a cached server's radio and joins the first one seen. */
+    private suspend fun pollAutoJoin() {
+        if (!mayAutoJoin()) return
+        val who = identity() ?: return
+        val hit = link.android.radioNearbyAny(keys.communities(who.userId)) ?: return
+        // The scan and the key read suspended: the rider may have started something meanwhile.
+        if (mayAutoJoin()) controller.join(who.userId, hit)
     }
 
     private fun onState(before: RadioState, state: RadioState) {
@@ -181,9 +235,11 @@ class RadioRuntime(
         startJob = null
         val run = active ?: return
         active = null
+        frozen = run.snapshot()
         run.stop()
         _members.value = emptyList()
         _rttMillis.value = null
+        _activeMode.value = null
     }
 
     /** Starts the foreground service (microphone | connectedDevice); fails the radio if it cannot. */
@@ -225,6 +281,15 @@ class RadioRuntime(
         /** Set when [start] failed because the socket could not be bound (a Wi-Fi problem, not audio). */
         var bindFailed = false
             private set
+
+        private val startedAt = clock()
+        private val batteryStart = batteryPercent()
+
+        /** Receive loss per sender slot; written on the audio thread, published as a copy by [publish]. */
+        private val losses = HashMap<Int, RadioLossCounter>()
+
+        @Volatile
+        private var lossSnapshot: Map<Int, Int?> = emptyMap()
 
         // Audio thread only from here on.
         private var hubSession: RadioHubSession? = null
@@ -303,9 +368,13 @@ class RadioRuntime(
             }
             while (true) {
                 when (val item = inbox.poll() ?: break) {
-                    is Inbox.Net ->
+                    is Inbox.Net -> {
+                        (item.datagram.message as? RadioMessage.Audio)?.let {
+                            losses.getOrPut(it.slot) { RadioLossCounter() }.onSeq(it.seq)
+                        }
                         if (hubS != null) hubS.receive(item.datagram, now).forEach(t::send)
                         else clientS?.receive(item.datagram.message, now)
+                    }
                 }
             }
             if (hubS != null) {
@@ -329,7 +398,25 @@ class RadioRuntime(
             scope.launch { controller.onClientPhase(phase) }
         }
 
+        /** Main thread: what this run has measured so far. Everyone on the radio, this phone included. */
+        fun snapshot(): RadioDiagnostics {
+            val loss = lossSnapshot
+            val rtt = _rttMillis.value
+            return RadioDiagnostics(
+                role = if (isHub) RadioRole.HUB else RadioRole.CLIENT,
+                mode = _activeMode.value ?: mode,
+                members = _members.value.map {
+                    RadioMemberStat(it.name, if (!isHub && it.slot == 0) rtt else null, loss[it.slot])
+                },
+                batteryStartPercent = batteryStart,
+                batteryNowPercent = batteryPercent(),
+                elapsedMillis = clock() - startedAt,
+            )
+        }
+
         private fun publish(hubS: RadioHubSession?, clientS: RadioClientSession?) {
+            lossSnapshot = losses.mapValues { it.value.lossPercent() }
+            _activeMode.value = if (hubS != null) mode else clientS?.mode
             if (hubS != null) {
                 val me = RadioMember(0, who.userId, who.name, clock(), null)
                 _members.value = listOf(me) + hubS.members
@@ -340,7 +427,15 @@ class RadioRuntime(
         }
     }
 
+    /** Battery level in percent, or null when the device does not say. */
+    private fun batteryPercent(): Int? {
+        val manager = app.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager ?: return null
+        return manager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY).takeIf { it in 1..100 }
+    }
+
     private companion object {
+        const val AUTO_JOIN_POLL_MILLIS = 30_000L
+        const val AUTO_JOIN_SUPPRESS_MILLIS = 10 * 60_000L
         const val DAY_MILLIS = 86_400_000L
         const val INBOX_CAPACITY = 512
         const val PUBLISH_EVERY_TICKS = 25L

@@ -56,6 +56,11 @@ class AndroidRadioKeyStore(context: Context) : RadioKeyStore {
         }
     }
 
+    override suspend fun communities(actor: String): List<String> = withContext(Dispatchers.IO) {
+        invitationDraftId(actor)
+        try { prefs(actor).all.keys.toList() } catch (_: Exception) { emptyList() }
+    }
+
     private fun prefs(actor: String) = appContext.getSharedPreferences("nearby_radio_keys_$actor", Context.MODE_PRIVATE)
     private fun alias(actor: String) = "volty.nearby.radio-keys.$actor"
     private fun keystore() = KeyStore.getInstance(KEYSTORE).apply { load(null) }

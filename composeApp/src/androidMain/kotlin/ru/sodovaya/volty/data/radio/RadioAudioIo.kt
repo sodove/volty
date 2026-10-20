@@ -16,6 +16,9 @@ import android.os.Build
 import android.os.Process
 import android.util.Log
 import ru.sodovaya.volty.domain.radio.RADIO_FRAME_SAMPLES
+import ru.sodovaya.volty.domain.radio.RadioDeviceKind
+import ru.sodovaya.volty.domain.radio.RadioOutputChoice
+import ru.sodovaya.volty.domain.radio.radioOutputChoice
 
 /**
  * Microphone and speaker for the radio: 16 kHz mono PCM16, 20 ms frames.
@@ -152,26 +155,48 @@ class RadioAudioIo(context: Context) {
         player.play()
     }
 
+    /**
+     * Picks the output by [radioOutputChoice] (rulings R17/R19): a Bluetooth headset when present,
+     * a wired or USB headset left in charge, and the loudspeaker only when nothing is plugged in.
+     */
     private fun routeToHeadset() {
+        val present = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).mapTo(HashSet()) { kindOf(it.type) }
+        val choice = radioOutputChoice(present)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
-            @Suppress("DEPRECATION")
-            run {
-                speakerphoneWas = audioManager.isSpeakerphoneOn
-                audioManager.isSpeakerphoneOn = true
+            // No SCO is started below API 31, so a wired headset can only be kept by not forcing the speaker.
+            if (choice == RadioOutputChoice.BUILT_IN_SPEAKER) {
+                @Suppress("DEPRECATION")
+                run {
+                    speakerphoneWas = audioManager.isSpeakerphoneOn
+                    audioManager.isSpeakerphoneOn = true
+                }
             }
             return
         }
         try {
-            val device = audioManager.availableCommunicationDevices.firstOrNull {
-                it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET
+            val wanted: (AudioDeviceInfo) -> Boolean = when (choice) {
+                RadioOutputChoice.BLUETOOTH_HEADSET -> { d -> kindOf(d.type).let { it == RadioDeviceKind.BLUETOOTH_SCO || it == RadioDeviceKind.BLE_HEADSET } }
+                RadioOutputChoice.WIRED_HEADSET -> { d ->
+                    kindOf(d.type).let { it == RadioDeviceKind.WIRED_HEADSET || it == RadioDeviceKind.WIRED_HEADPHONES || it == RadioDeviceKind.USB_HEADSET }
+                }
+                RadioOutputChoice.BUILT_IN_SPEAKER -> { d -> d.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER } // the default earpiece is useless on a bike
             }
-            val target = device ?: audioManager.availableCommunicationDevices.firstOrNull {
-                it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER // ruling R17: the default earpiece is useless on a bike
-            }
+            val target = audioManager.availableCommunicationDevices.firstOrNull(wanted)
             if (target != null) communicationDeviceSet = audioManager.setCommunicationDevice(target)
         } catch (e: Exception) {
             Log.w(TAG, "communication device not set", e)
         }
+    }
+
+    private fun kindOf(type: Int): RadioDeviceKind = when (type) {
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> RadioDeviceKind.BLUETOOTH_SCO
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> RadioDeviceKind.BLE_HEADSET
+        AudioDeviceInfo.TYPE_WIRED_HEADSET -> RadioDeviceKind.WIRED_HEADSET
+        AudioDeviceInfo.TYPE_WIRED_HEADPHONES -> RadioDeviceKind.WIRED_HEADPHONES
+        AudioDeviceInfo.TYPE_USB_HEADSET -> RadioDeviceKind.USB_HEADSET
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> RadioDeviceKind.BUILTIN_SPEAKER
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> RadioDeviceKind.EARPIECE
+        else -> RadioDeviceKind.OTHER
     }
 
     private fun reportFailure(onFailure: () -> Unit) {
