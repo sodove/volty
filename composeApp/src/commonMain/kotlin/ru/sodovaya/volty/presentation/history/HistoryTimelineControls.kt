@@ -24,7 +24,8 @@ import volty.composeapp.generated.resources.*
 /** Accessible alternatives to gestures, sharing the same committed range/cursor. */
 @Composable
 fun HistoryTimelineControls(state: HistoryDetailState, onRange: (HistoryRange) -> Unit,
-    onSelectTime: (Long?) -> Unit, modifier: Modifier = Modifier) {
+    onSelectTime: (Long?) -> Unit, modifier: Modifier = Modifier, compact: Boolean = false,
+    applyNavigationInsets: Boolean = true) {
     val range = state.range ?: return
     val bounds = state.availableRange ?: return
     val zone = TimeZone.currentSystemDefault()
@@ -36,10 +37,12 @@ fun HistoryTimelineControls(state: HistoryDetailState, onRange: (HistoryRange) -
     Surface(modifier, tonalElevation = 3.dp) {
         BoxWithConstraints {
         val wide = maxWidth >= 600.dp
-        Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 16.dp, vertical = 4.dp),
+        Column(Modifier.fillMaxWidth().then(if (applyNavigationInsets) Modifier.navigationBarsPadding() else Modifier)
+            .padding(horizontal = 16.dp, vertical = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally) {
             Text(times, style = MaterialTheme.typography.labelSmall)
-            if (wide) Row(verticalAlignment = Alignment.CenterVertically) {
+            if (compact) TimelineCursor(range, state.cursorEpochMillis, onSelectTime)
+            else if (wide) Row(verticalAlignment = Alignment.CenterVertically) {
                 TimelineButtons(range, bounds, onRange)
                 TimelineCursor(range, state.cursorEpochMillis, onSelectTime, Modifier.weight(1f))
             } else {

@@ -238,7 +238,7 @@ Tests `HistoryScreenStatePolicyTest.kt`; actual Compose checked natively.
         HistoryStats(null, null, null, false)).energy.quality)
   }
   ```
-- [ ] Port home composition: same full-screen map, header/back/title, compact
+- [x] Port home composition: same full-screen map, header/back/title, compact
   expandable summary, bottom series stack/navigation/drawers. Port source tokens/
   card shapes/spacing with Volty fonts/branding; add original/source attribution.
   Summary current cursor, selected range and whole-ride stats have distinct labels.
@@ -288,6 +288,16 @@ including Russian font200% landscape. See
 `../specs/2026-10-20-history-window-gestures-acceptance.md`. This supersedes the
 preceding gesture-pending statement only. Complete home/navigation/transitions,
 product retention/root cutover and all later tasks remain required.
+
+Home-composition checkpoint (2026-10-20): `HistoryScreen` now renders the shared
+map-backed home, bounded compact chart panel, loaded-ride navigation/list sheet,
+source-aware summary and metric drawer. Fullscreen charts keep the same native
+map/component/window/cursor. Native input/layout/stored legacy and actual slow-read
+checks plus final4359 tests are recorded in
+`../specs/2026-10-20-history-home-acceptance.md`. This completes the composition
+checkbox only. Product root/rotation retention, remaining motion/map/native
+matrix, favorites/media/export, recorder activation and signed acceptance remain
+required; Task5 and the full rewrite are not marked complete.
 
 ## Task6 — favorites, trim and curated media
 

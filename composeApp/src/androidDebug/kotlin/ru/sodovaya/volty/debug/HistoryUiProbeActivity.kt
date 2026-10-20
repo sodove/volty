@@ -49,10 +49,12 @@ class HistoryUiProbeActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         val stored = intent.getBooleanExtra("stored", false)
+        val home = intent.getBooleanExtra("home", false)
         val catalog = stored || intent.getBooleanExtra("catalog", false)
         val repository = if (stored) getKoin().get<HistoryReadRepository>()
             else ProbeReader(intent.getBooleanExtra("omitFirstSource", false),intent.getBooleanExtra("remotePreviewArea", false),
-                intent.getBooleanExtra("summary", false) || intent.getBooleanExtra("charts", false), intent.getBooleanExtra("charts", false))
+                home || intent.getBooleanExtra("summary", false) || intent.getBooleanExtra("charts", false),
+                home || intent.getBooleanExtra("charts", false), intent.getLongExtra("readDelayMillis", 0).coerceIn(0, 3000))
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
             { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish,
             getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>())
@@ -63,10 +65,20 @@ class HistoryUiProbeActivity : ComponentActivity() {
                 if (windows != previous) { previous = windows; Log.d("HistoryProbeWindow", "committed=${windows.first} preview=${windows.second}") }
             }
         }
-        if (catalog) owner.refresh() else owner.openRide("fixture")
+        if (catalog) owner.refresh() else owner.openRide(if (home) "fixture-0" else "fixture")
         setContent {
             VoltyTheme {
                 val state by owner.state.collectAsState()
+                if (home) {
+                    if (!stored) LaunchedEffect(state.detail.ride?.id) {
+                        if (state.detail.ride != null) listOf(HistorySeriesKey("fixture-a", "power_w"),
+                            HistorySeriesKey("fixture-a", "voltage_v"), HistorySeriesKey("fixture-b", "current_a")).forEach(owner::addMetric)
+                    }
+                    HistoryScreen(owner, { 0 }, 1000, vehicleNames = if (stored) emptyMap() else
+                        mapOf("fixture-vehicle-0" to "Scooter", "fixture-vehicle-1" to "Bicycle", "fixture-vehicle-2" to "Wheel"),
+                        reduceMotion = intent.getBooleanExtra("reduceMotion", false))
+                    return@VoltyTheme
+                }
                 val catalogListState = rememberLazyListState()
                 var drawer by remember { mutableStateOf(true) }
                 if (intent.getBooleanExtra("summary", false) || intent.getBooleanExtra("charts", false)) {
@@ -146,7 +158,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
     }
 
     private class ProbeReader(private val omitFirstSource: Boolean = false,private val remotePreviewArea: Boolean = false,
-        private val summaryFixture: Boolean = false, private val chartFixture: Boolean = false) : HistoryReadRepository {
+        private val summaryFixture: Boolean = false, private val chartFixture: Boolean = false,
+        private val readDelayMillis: Long = 0) : HistoryReadRepository {
         private val failedReads = mutableSetOf<String>()
         private val sources = listOf(HistorySource("fixture-a", HistorySourceKind.BATTERY, "Pack"),
             HistorySource("fixture-b", HistorySourceKind.BATTERY, "Pack"))
@@ -165,6 +178,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
             return HistoryRecordedKeys(keys.take(limit), keys.size > limit)
         }
         override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries {
+            if (readDelayMillis > 0) kotlinx.coroutines.delay(readDelayMillis)
             if (chartFixture) Log.d("HistoryProbeRead", "series $range")
             if (!chartFixture) return HistorySeries(key, emptyList(), emptyList(), false, origin)
             val markers = chartMarkers(key, range)
@@ -181,6 +195,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
             listOf(HistoryMarker(HistoryTick(3500, 2510, 1), HistoryMarkerKind.BLE_GAP, key.sourceId))
                 .filter { it.tick.epochMillis in range.startEpochMillis..range.endEpochMillis }
         override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats {
+            if (readDelayMillis > 0) kotlinx.coroutines.delay(readDelayMillis)
             if (chartFixture) Log.d("HistoryProbeRead", "stats $range")
             return if (chartFixture) historyStats(chartSamples(key, range), chartMarkers(key, range),
                 HistoryMetricRegistry.descriptor(key.metricId)?.consumptionMultiplier)
@@ -192,6 +207,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
         }
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?) = HistoryPage<HistoryGpsFix>(emptyList(), null, false)
         override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
+            if (readDelayMillis > 0) kotlinx.coroutines.delay(readDelayMillis)
             if (chartFixture) Log.d("HistoryProbeRead", "route $range")
             if (rideId.endsWith("-7") && failedReads.add(rideId)) error("Synthetic one-shot route read failure")
             fun fix(time: Long, lat: Double, lon: Double) = HistoryGpsFix(HistoryTick(time, time - 990, 1), lat,

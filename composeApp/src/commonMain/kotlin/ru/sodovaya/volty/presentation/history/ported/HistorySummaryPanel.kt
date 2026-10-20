@@ -34,13 +34,18 @@ fun HistorySummaryPanel(state: HistoryDetailState, expanded: Boolean, onExpanded
     val labels = historySourceLabels(state.sources)
     val expandedLabel = stringResource(if (expanded) Res.string.history_summary_collapse else Res.string.history_summary_expand)
     BoxWithConstraints(modifier) {
-    val bodyHeight = minOf(maxHeight * 0.4f, if (expanded) 300.dp else 190.dp)
+    // The host already bounds this panel. Column gives the lazy body only the
+    // remaining space after the header; applying another 40% bound here clipped
+    // the quality labels in the composed home (the old full-screen probe hid it).
+    val bodyHeight = minOf(maxHeight, if (expanded) 300.dp else 190.dp)
     Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), tonalElevation = 3.dp) {
         Column(if (reduceMotion) Modifier else Modifier.animateContentSize()) {
             Surface(onClick = { onExpandedChange(!expanded) }, color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 modifier = Modifier.fillMaxWidth().semantics { stateDescription = expandedLabel }) {
                 Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(Res.string.history_summary_range), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                    Text(stringResource(if (state.range != null && state.range == state.availableRange)
+                        Res.string.history_summary_recording else Res.string.history_summary_range),
+                        Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
                     Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, expandedLabel)
                 }
             }

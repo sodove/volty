@@ -98,3 +98,19 @@ now uses the same-version official `org.maplibre.gl:android-sdk-opengl:13.0.2`
 artifact. The old default Vulkan artifact entry is historical, not evidence for
 the new artifact's complete archive/transitive notice audit. Final combined APK
 source/notice/distribution acceptance remains open.
+
+## Home composition and navigation transfer (2026-10-20)
+
+The adjacent GPL-noticed `ported/HistoryScreen.kt` adapts the responsibilities of
+the pinned Vescape `HistoryOverlay.tsx`, `HistoryRideDetail.tsx` and
+`HistoryTelemetryPanel.tsx`: map-backed detail home, header/summary, bottom
+charts/navigation, a ride selection sheet and fullscreen charts sharing selection.
+`HistoryNavigationStrip.kt` adapts `HistoryPanelNav.tsx` central dropdown title,
+adjacent-ride controls and side actions. Original author and revision are recorded
+in each file and the adjacent README. Compose rendering uses Volty's theme and
+source-qualified read owners, a lazy selected-metric stack instead of a fixed
+metric-button strip, adaptive layouts, unknown/read-quality states, and measured
+camera padding. The Kotlin state-qualification/adjacency policy is original code.
+No additional runtime dependency or upstream assets/token are introduced.
+Favorite/media/export actions remain omitted until their real owners are wired;
+this does not claim the complete experience or root/recorder activation is done.

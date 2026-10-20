@@ -15,11 +15,12 @@ import volty.composeapp.generated.resources.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun HistoryChartsScreen(owner: HistoryComponent, state: HistoryUiState,
-    cursorMaxAgeMillis: (HistorySeriesKey) -> Long, modifier: Modifier = Modifier) {
+    cursorMaxAgeMillis: (HistorySeriesKey) -> Long, modifier: Modifier = Modifier, applySystemInsets: Boolean = true) {
     var drawer by remember(state.selectedRideId) { mutableStateOf(false) }
     Scaffold(modifier, bottomBar = { HistoryTimelineControls(state.detail.copy(range = state.windowPreview ?: state.detail.range),
-        owner::selectRange, owner::selectTime) },
+        owner::selectRange, owner::selectTime, applyNavigationInsets = applySystemInsets) },
         topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_charts_title)) },
+        windowInsets = if (applySystemInsets) TopAppBarDefaults.windowInsets else WindowInsets(0),
         navigationIcon = { IconButton(onClick = owner::back) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.history_charts_back))
         } }, actions = { IconButton(onClick = { drawer = true }) {

@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -29,7 +30,7 @@ import volty.composeapp.generated.resources.*
 @Composable
 fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
     cursorMaxAgeMillis: (HistorySeriesKey) -> Long, modifier: Modifier = Modifier,
-    windowPreview: HistoryRange? = null, gestureOwner: HistoryComponent? = null) {
+    windowPreview: HistoryRange? = null, gestureOwner: HistoryComponent? = null, compact: Boolean = false) {
     val text = historyMetricText()
     val labels = historySourceLabels(state.sources)
     LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -39,18 +40,31 @@ fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
         items(state.selectedKeys, key = ::historyMetricItemKey) { key ->
             Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 2.dp) {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(text.title(key), style = MaterialTheme.typography.titleSmall)
-                    Text(labels[key.sourceId] ?: stringResource(Res.string.history_summary_source_unavailable),
-                        style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    when {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(text.title(key), style = MaterialTheme.typography.titleSmall)
+                        Text(labels[key.sourceId] ?: stringResource(Res.string.history_summary_source_unavailable),
+                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    val density = LocalDensity.current
+                    var bodyHeight by remember(key, compact, density.density, density.fontScale) { mutableStateOf(if (compact) 120.dp else 180.dp) }
+                    // A slower range query clears facts, not the row's geometry.
+                    // Preserve the measured body height while progress/errors are
+                    // shown; never show the old window's values as a placeholder.
+                    Box(Modifier.fillMaxWidth().heightIn(min = bodyHeight).onSizeChanged { size ->
+                        val measured = with(density) { size.height.toDp() }
+                        if (measured > bodyHeight) bodyHeight = measured
+                    }) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) { when {
                         key in state.loadingKeys -> LinearProgressIndicator(Modifier.fillMaxWidth())
                         key in state.metricErrors -> Text(stringResource(Res.string.history_metric_chart_error), color = MaterialTheme.colorScheme.error)
                         else -> {
                             val series = state.series[key]; val range = state.range
                             if (series == null || range == null) Text(stringResource(Res.string.history_summary_unavailable))
                             else RecordedChart(series, range, windowPreview, state.cursorEpochMillis,
-                                cursorMaxAgeMillis(key), onSelectTime, gestureOwner)
+                                cursorMaxAgeMillis(key), onSelectTime, gestureOwner, compact)
                         }
+                    }
+                    }
                     }
                 }
             }
@@ -62,7 +76,7 @@ private data class BoundHistoryChart(val source: HistorySeries, val range: Histo
 
 @Composable
 private fun RecordedChart(series: HistorySeries, range: HistoryRange, preview: HistoryRange?, cursor: Long?, maxAgeMillis: Long,
-    onSelectTime: (Long?) -> Unit, gestureOwner: HistoryComponent?) {
+    onSelectTime: (Long?) -> Unit, gestureOwner: HistoryComponent?, compact: Boolean) {
     val bound by produceState<BoundHistoryChart?>(null, series, range) {
         value = withContext(Dispatchers.Default) { BoundHistoryChart(series, range, historyChartScene(series, range)) }
     }
@@ -82,13 +96,13 @@ private fun RecordedChart(series: HistorySeries, range: HistoryRange, preview: H
         scene == null -> Text(stringResource(Res.string.history_metric_chart_error), color = MaterialTheme.colorScheme.error)
         scene.segments.isEmpty() -> Text(stringResource(Res.string.history_summary_unavailable))
         else -> {
-            Text(stringResource(Res.string.history_chart_scale, scene.minimum.toString(), scene.maximum.toString(), unit),
+            if (!compact) Text(stringResource(Res.string.history_chart_scale, scene.minimum.toString(), scene.maximum.toString(), unit),
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val line = MaterialTheme.colorScheme.primary
             val grid = MaterialTheme.colorScheme.outlineVariant
             val cursorColor = MaterialTheme.colorScheme.tertiary
             val description = stringResource(Res.string.history_chart_description)
-            Canvas(Modifier.fillMaxWidth().height(132.dp).semantics { contentDescription = description }
+            Canvas(Modifier.fillMaxWidth().height(if (compact) 96.dp else 132.dp).semantics { contentDescription = description }
                 .pointerInput(range, gestureOwner) {
                     if (gestureOwner != null) detectHistoryChartGestures(gestureOwner, range, chartPadding) { latestSelect(it) }
                     else detectTapGestures { offset ->
