@@ -161,6 +161,15 @@ class RadioAudioIo(context: Context) {
      */
     private fun routeToHeadset() {
         val present = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).mapTo(HashSet()) { kindOf(it.type) }
+        // On API 31+ a connected Bluetooth headset may show up in the output list only as A2DP, while the
+        // communication-device list names its SCO / LE endpoint: look at both so it is not mistaken for "no headset".
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            try {
+                audioManager.availableCommunicationDevices.mapTo(present) { kindOf(it.type) }
+            } catch (e: Exception) {
+                Log.w(TAG, "communication devices unreadable", e)
+            }
+        }
         val choice = radioOutputChoice(present)
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             // No SCO is started below API 31, so a wired headset can only be kept by not forcing the speaker.

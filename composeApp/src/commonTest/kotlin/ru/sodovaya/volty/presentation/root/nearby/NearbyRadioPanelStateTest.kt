@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.root.nearby
 import ru.sodovaya.volty.domain.radio.RadioClientPhase
 import ru.sodovaya.volty.domain.radio.RadioError
 import ru.sodovaya.volty.domain.radio.RadioMember
+import ru.sodovaya.volty.domain.radio.RadioMode
 import ru.sodovaya.volty.domain.radio.RadioState
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -132,11 +133,43 @@ class NearbyRadioPanelStateTest {
     }
 
     @Test
-    fun diagnosticsExportOnlyWhileARadioExists() {
-        assertEquals(false, panel(RadioState.Idle).canExportDiagnostics)
-        assertEquals(true, panel(RadioState.Hub(c), roster).canExportDiagnostics)
-        assertEquals(true, panel(RadioState.Lost(c, 1)).canExportDiagnostics)
-        assertEquals(false, panel(RadioState.Hub("other"), roster).canExportDiagnostics)
+    fun diagnosticsExportWheneverASnapshotExists() {
+        fun can(state: RadioState, has: Boolean, supported: Boolean = true) =
+            radioPanelState(state, roster, supported, c, hasDiagnostics = has).canExportDiagnostics
+        assertEquals(false, can(RadioState.Idle, has = false))
+        assertEquals(true, can(RadioState.Idle, has = true)) // after a run ended
+        assertEquals(true, can(RadioState.Error(c, RadioError.NOT_FOUND), has = true))
+        assertEquals(true, can(RadioState.Hub(c), has = true))
+        assertEquals(false, can(RadioState.Hub(c), has = false))
+        assertEquals(false, can(RadioState.Idle, has = true, supported = false))
+    }
+
+    @Test
+    fun hubWithEmptyRosterShowsStarting() {
+        val p = panel(RadioState.Hub(c), emptyList())
+        assertEquals(RadioTitle.STARTING, p.title)
+        assertEquals(emptyList(), p.members)
+        assertEquals(RadioAction.LEAVE, p.primary)
+        assertEquals(RadioTitle.STARTING, radioStatusTitle(p))
+    }
+
+    @Test
+    fun connectedClientWithEmptyRosterShowsConnecting() {
+        val p = panel(RadioState.Client(c, RadioClientPhase.CONNECTED), emptyList())
+        assertEquals(RadioTitle.CONNECTING, p.title)
+        assertEquals(emptyList(), p.members)
+        assertEquals(RadioTitle.CONNECTING, radioStatusTitle(p))
+    }
+
+    @Test
+    fun joiningClientShowsNoMode() {
+        // The rider's own saved mode must not pose as the hub's.
+        val joining = radioPanelState(RadioState.Client(c, RadioClientPhase.JOINING), emptyList(), true, c, mode = RadioMode.RELIABLE)
+        assertNull(joining.shownMode)
+        val heard = radioPanelState(RadioState.Client(c, RadioClientPhase.CONNECTED), roster, true, c, mode = RadioMode.LOW_LATENCY)
+        assertEquals(RadioMode.LOW_LATENCY, heard.shownMode)
+        // Raising or idle shows the rider's own choice.
+        assertEquals(RadioMode.RELIABLE, radioPanelState(RadioState.Idle, emptyList(), true, c, mode = RadioMode.RELIABLE).shownMode)
     }
 
     @Test
@@ -146,6 +179,7 @@ class NearbyRadioPanelStateTest {
         assertNull(line(RadioState.Error(c, RadioError.FULL)))
         assertEquals(RadioTitle.STARTING, line(RadioState.Starting(c)))
         assertEquals(RadioTitle.MEMBERS, line(RadioState.Hub(c)))
+        assertEquals(RadioTitle.STARTING, radioStatusTitle(panel(RadioState.Hub(c), emptyList(), community = null)))
         assertEquals(RadioTitle.LOST, line(RadioState.Lost(c, 1)))
         assertNull(radioStatusTitle(panel(RadioState.Hub(c), roster, supported = false)))
     }

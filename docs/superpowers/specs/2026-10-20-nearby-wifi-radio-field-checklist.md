@@ -5,7 +5,7 @@ audio routing, foreground service, battery) is unverified by unit tests and can 
 
 **For every item record:** phone model(s), Android version, result (pass / fail / notes), and attach the exported
 diagnostics file (radio card on the server screen, "Отправить диагностику рации" / "Share radio diagnostics", on the
-hub and on each client). The export keeps the last radio's numbers after it ends (until the next radio starts), but only while the radio card shows the export button, so export before leaving if you can.
+hub and on each client). The radio card shows the export button whenever a radio has run since the app started (also after it ended or failed; the last run's numbers stay until the next radio starts).
 
 Before starting: every phone signed in to the same Volty server, opened once **online** after the radio build (the radio
 key is fetched then), microphone / nearby-devices permissions granted, Wi-Fi switched on, each phone on a different
@@ -14,12 +14,13 @@ battery per hour <= ~15 % client, <= ~25 % hub.
 
 | # | Check | How | Record |
 |---|-------|-----|--------|
+| 0 | Mouth-to-ear latency (method) | Two phones A and B 2-3 m apart, radio connected, B's speaker audible. A third device records video or audio of both. Clap sharply next to A's microphone; the recording shows the clap itself and, later, the clap coming out of B's speaker. Measure the offset between the two in an audio editor / frame by frame (repeat 5 times, take the median). Target <= ~0.3 s. Do it once per connection mode. | median offset per mode and phone pair |
 | 1 | Two phones, static, 10 m | One raises ("Поднять рацию"), the other joins ("Подключиться к рации"). Talk both ways for 2 min. | join time, audible delay, loss % and RTT from the export |
 | 2 | Two phones, static, 50 m | Same, line of sight. | same |
 | 3 | Two phones, static, 100 m | Same. Note where audio first breaks up. | same, plus the distance at first dropout |
 | 4 | Each connection mode at 50 m | Hub picks "Минимальная задержка", "Сбалансированный", "Надёжность" in turn (live change). Clients show the mode read-only. | which mode sounds best at 10 / 50 / 100 m; does a live mode change reach the client |
 | 5 | Column ride, 3-5 phones, 20 min | Hub rides in the middle, others spread over ~100 m. Everyone talks now and then. | dropouts, who lost the radio and when, loss % per member |
-| 6 | Capacity | One hub, add clients one by one with as many phones as available. Note the number at which "Рация заполнена" appears (cap should be hub + 9). | maximum members reached; the 10th client's message |
+| 6 | Capacity | One hub, add clients one by one with as many phones as available. Note the number at which "Рация заполнена" appears (cap should be hub + 9). | maximum reached with N phones available (state N; if the cap was not hit, say so); the 10th client's message |
 | 7 | Hub rides away | Hub leaves range. Others must show "Рация потеряна" within ~3 s. Then press "Поднять заново" on one of them; the rest should rejoin on their own. | time to Lost, time until everyone is back |
 | 8 | Hub phone returns | Hub comes back within 2 min. Clients should rejoin by themselves; if two hubs exist one gives way (random back-off up to 30 s). | rejoin time, any split-brain left over |
 | 9 | Bluetooth headset, wind, speed | Ride at speed with a BT headset (and once with a wired one, once with no headset). | intelligibility, echo, does audio go to the headset (not the loudspeaker), does the loudspeaker take over only with nothing plugged in |

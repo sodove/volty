@@ -124,6 +124,7 @@ class RadioRuntime(
     val activeMode: StateFlow<RadioMode?> = _activeMode.asStateFlow()
 
     private var attached = false
+    @Volatile
     private var autoJoinSuppressedUntil = 0L
 
     /** What the last radio measured; kept after it ends so a field tester can still export it. */
@@ -152,7 +153,14 @@ class RadioRuntime(
         scope.launch {
             while (true) {
                 delay(AUTO_JOIN_POLL_MILLIS)
-                pollAutoJoin()
+                try {
+                    pollAutoJoin()
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // A failed scan or key read must not end auto-join for the rest of the process.
+                    android.util.Log.w("RadioRuntime", "auto-join poll failed", e)
+                }
             }
         }
     }
@@ -161,6 +169,11 @@ class RadioRuntime(
     fun suppressAutoJoin() {
         autoJoinSuppressedUntil = clock() + AUTO_JOIN_SUPPRESS_MILLIS
     }
+
+    private val _diagnosticsAvailable = MutableStateFlow(false)
+
+    /** True once a radio has run since the app started, so its measurements can be exported. */
+    val diagnosticsAvailable: StateFlow<Boolean> = _diagnosticsAvailable.asStateFlow()
 
     /** The current (or, once it has ended, the last) radio's measurements; null if none ran. */
     fun diagnostics(): RadioDiagnostics? = active?.snapshot() ?: frozen
@@ -223,6 +236,7 @@ class RadioRuntime(
             val run = Run(who, address, audioKey, hubAddress, if (hub) controller.mode.value else RadioMode.BALANCED)
             if (!run.start()) return@launch fail(if (run.bindFailed) RadioError.WIFI_FAILED else RadioError.AUDIO_UNAVAILABLE)
             active = run
+            _diagnosticsAvailable.value = true
         }
     }
 

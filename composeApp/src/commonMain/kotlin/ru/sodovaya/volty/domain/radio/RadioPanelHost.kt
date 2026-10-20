@@ -18,6 +18,9 @@ interface RadioPanelHost {
     val mode: StateFlow<RadioMode>
     val autoJoin: StateFlow<Boolean>
 
+    /** True once a radio has run, so there is something to export (also after it ended or failed). */
+    val hasDiagnostics: StateFlow<Boolean>
+
     /** Runtime permissions not granted yet for raising/joining, or with [scanning] also for auto-join. */
     fun missingPermissions(scanning: Boolean): List<String>
 

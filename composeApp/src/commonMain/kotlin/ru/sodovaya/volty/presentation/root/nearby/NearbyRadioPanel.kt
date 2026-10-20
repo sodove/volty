@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.root.nearby
 import ru.sodovaya.volty.domain.radio.RadioClientPhase
 import ru.sodovaya.volty.domain.radio.RadioError
 import ru.sodovaya.volty.domain.radio.RadioMember
+import ru.sodovaya.volty.domain.radio.RadioMode
 import ru.sodovaya.volty.domain.radio.RadioState
 
 enum class RadioTitle { IDLE, UNSUPPORTED, STARTING, CONNECTING, MEMBERS, LOST, ERROR, ELSEWHERE }
@@ -20,6 +21,8 @@ data class RadioPanelState(
     val error: RadioError?,
     val modePicker: RadioModePicker = RadioModePicker.HIDDEN,
     val canExportDiagnostics: Boolean = false,
+    /** The mode to show; null when it is not known yet (a client that has not heard its hub). */
+    val shownMode: RadioMode? = null,
 )
 
 /**
@@ -32,6 +35,18 @@ fun radioPanelState(
     roster: List<RadioMember>,
     supported: Boolean,
     community: String? = null,
+    mode: RadioMode? = null,
+    hasDiagnostics: Boolean = false,
+): RadioPanelState = radioPanelBase(state, roster, supported, community, mode).let {
+    if (hasDiagnostics && supported) it.copy(canExportDiagnostics = true) else it
+}
+
+private fun radioPanelBase(
+    state: RadioState,
+    roster: List<RadioMember>,
+    supported: Boolean,
+    community: String?,
+    mode: RadioMode?,
 ): RadioPanelState {
     if (!supported) return RadioPanelState(RadioTitle.UNSUPPORTED, null, null, emptyList(), RadioError.UNSUPPORTED_ANDROID)
     val bound = when (state) {
@@ -48,28 +63,36 @@ fun radioPanelState(
     }
     val names = roster.map { it.name }
     return when {
-        state == RadioState.Idle || foreign -> idle()
+        state == RadioState.Idle || foreign -> idle(mode)
         state is RadioState.Starting ->
             RadioPanelState(RadioTitle.STARTING, RadioAction.LEAVE, null, emptyList(), null)
+        // Never show a number that has not been earned: no roster yet means "still connecting", not "0 people".
+        state is RadioState.Hub && roster.isEmpty() ->
+            RadioPanelState(RadioTitle.STARTING, RadioAction.LEAVE, null, emptyList(), null)
         state is RadioState.Hub ->
-            RadioPanelState(RadioTitle.MEMBERS, RadioAction.LEAVE, null, names, null, RadioModePicker.EDITABLE, canExportDiagnostics = true)
-        state is RadioState.Client -> RadioPanelState(
-            if (state.phase == RadioClientPhase.CONNECTED) RadioTitle.MEMBERS else RadioTitle.CONNECTING,
-            RadioAction.LEAVE, null, if (state.phase == RadioClientPhase.CONNECTED) names else emptyList(), null,
-            RadioModePicker.READ_ONLY, canExportDiagnostics = true,
-        )
+            RadioPanelState(RadioTitle.MEMBERS, RadioAction.LEAVE, null, names, null, RadioModePicker.EDITABLE, shownMode = mode)
+        state is RadioState.Client -> {
+            val heard = state.phase == RadioClientPhase.CONNECTED && roster.isNotEmpty()
+            RadioPanelState(
+                if (heard) RadioTitle.MEMBERS else RadioTitle.CONNECTING,
+                RadioAction.LEAVE, null, if (heard) names else emptyList(), null,
+                RadioModePicker.READ_ONLY,
+                // The hub's mode arrives with its roster; before that the rider's own saved mode would be a guess.
+                shownMode = if (roster.isNotEmpty()) mode else null,
+            )
+        }
         state is RadioState.Lost ->
-            RadioPanelState(RadioTitle.LOST, RadioAction.RERAISE, RadioAction.LEAVE, emptyList(), null, canExportDiagnostics = true)
-        state is RadioState.Error -> errorPanel(state.reason)
-        else -> idle()
+            RadioPanelState(RadioTitle.LOST, RadioAction.RERAISE, RadioAction.LEAVE, emptyList(), null)
+        state is RadioState.Error -> errorPanel(state.reason, mode)
+        else -> idle(mode)
     }
 }
 
-private fun idle() = RadioPanelState(
-    RadioTitle.IDLE, RadioAction.RAISE, RadioAction.JOIN, emptyList(), null, RadioModePicker.EDITABLE,
+private fun idle(mode: RadioMode?) = RadioPanelState(
+    RadioTitle.IDLE, RadioAction.RAISE, RadioAction.JOIN, emptyList(), null, RadioModePicker.EDITABLE, shownMode = mode,
 )
 
-private fun errorPanel(reason: RadioError): RadioPanelState {
+private fun errorPanel(reason: RadioError, mode: RadioMode?): RadioPanelState {
     val (primary, secondary) = when (reason) {
         // A radio that is full or was not found may exist; retry joining it, or start one.
         RadioError.FULL -> RadioAction.JOIN to null
@@ -82,6 +105,7 @@ private fun errorPanel(reason: RadioError): RadioPanelState {
     return RadioPanelState(
         RadioTitle.ERROR, primary, secondary, emptyList(), reason,
         if (primary != null) RadioModePicker.EDITABLE else RadioModePicker.HIDDEN,
+        shownMode = mode,
     )
 }
 

@@ -79,7 +79,8 @@ fun NearbyRadioCard(community: String, modifier: Modifier = Modifier, host: Radi
     val roster by host.roster.collectAsState()
     val mode by host.mode.collectAsState()
     val autoJoin by host.autoJoin.collectAsState()
-    val panel = radioPanelState(state, roster, host.supported, community)
+    val hasDiagnostics by host.hasDiagnostics.collectAsState()
+    val panel = radioPanelState(state, roster, host.supported, community, mode, hasDiagnostics)
 
     // What the rider asked for while a permission dialog is open: an action, or turning auto-join on.
     var pendingAction by remember { mutableStateOf<RadioAction?>(null) }
@@ -127,10 +128,10 @@ fun NearbyRadioCard(community: String, modifier: Modifier = Modifier, host: Radi
             }
             if (denied) Text(stringResource(Res.string.radio_permission_denied), color = MaterialTheme.colorScheme.error)
             panel.members.forEach { Text(it, style = MaterialTheme.typography.bodyMedium) }
-            if (panel.modePicker != RadioModePicker.HIDDEN) {
+            if (panel.modePicker == RadioModePicker.EDITABLE || (panel.modePicker == RadioModePicker.READ_ONLY && panel.shownMode != null)) {
                 val editable = panel.modePicker == RadioModePicker.EDITABLE
                 Text(stringResource(Res.string.radio_mode), style = MaterialTheme.typography.labelLarge)
-                (if (editable) RadioMode.entries else listOf(mode)).forEach { option ->
+                (if (editable) RadioMode.entries else listOfNotNull(panel.shownMode)).forEach { option ->
                     Row(
                         Modifier.fillMaxWidth().let { if (editable) it.clickable { host.setMode(option) } else it },
                         verticalAlignment = Alignment.CenterVertically,

@@ -36,6 +36,7 @@ class AndroidRadioPanelHost(
         combine(controller.mode, runtime.activeMode) { chosen, active -> active ?: chosen }
             .stateIn(scope, SharingStarted.Eagerly, controller.mode.value)
     override val autoJoin: StateFlow<Boolean> = prefs.radioAutoJoin
+    override val hasDiagnostics: StateFlow<Boolean> = runtime.diagnosticsAvailable
 
     init {
         // The rider's saved mode is what the next raise uses; the controller forwards it to a running hub.
