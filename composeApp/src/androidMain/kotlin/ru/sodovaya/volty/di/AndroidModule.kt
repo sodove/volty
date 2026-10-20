@@ -42,6 +42,7 @@ import ru.sodovaya.volty.data.social.AndroidLocationProvider
 import ru.sodovaya.volty.data.social.HttpSocialTransport
 import ru.sodovaya.volty.data.social.SocialCredentialStore
 import ru.sodovaya.volty.data.nearby.AndroidInvitationDraftStore
+import ru.sodovaya.volty.data.radio.AndroidRadioKeyStore
 import ru.sodovaya.volty.data.nearby.AndroidInvitationSecretGenerator
 import ru.sodovaya.volty.di.nearby.NearbyCommunityAccountFactory
 import ru.sodovaya.volty.di.nearby.VoiceRosterAccountFactory
@@ -154,6 +155,7 @@ val androidModule = module {
             baseUrl = NEARBY_API_BASE_URL,
             storeForActor = { actor -> AndroidInvitationDraftStore(context, actor) },
             generator = AndroidInvitationSecretGenerator(),
+            radioKeyStore = AndroidRadioKeyStore(context),
         )
     }
     single {

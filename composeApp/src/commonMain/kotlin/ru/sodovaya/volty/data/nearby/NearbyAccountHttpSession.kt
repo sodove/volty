@@ -2,12 +2,19 @@ package ru.sodovaya.volty.data.nearby
 
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlin.time.Clock
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import ru.sodovaya.volty.domain.nearby.community.*
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
+import ru.sodovaya.volty.domain.radio.RadioKeyStore
 
 /** Owns six bounded HTTP adapters for one authenticated Nearby account lifetime. */
 class NearbyAccountHttpSession private constructor(
@@ -17,16 +24,26 @@ class NearbyAccountHttpSession private constructor(
     private val accountJob: Job?,
     client: HttpClient,
     baseUrl: String,
+    private val radioKeyStore: RadioKeyStore?,
+    private val nowMillis: () -> Long,
 ) {
     constructor(
         credentials: NearbyAccountCredentials,
         client: HttpClient,
         baseUrl: String,
         accountJob: Job? = null,
-    ) : this(credentials.actorId, NearbyAccountBinding(credentials, accountJob), null, accountJob, client, baseUrl)
+        radioKeyStore: RadioKeyStore? = null,
+        nowMillis: () -> Long = ::radioClockMillis,
+    ) : this(credentials.actorId, NearbyAccountBinding(credentials, accountJob), null, accountJob, client, baseUrl,
+        radioKeyStore, nowMillis)
 
-    internal constructor(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String) :
-        this(account.userId.value, null, account, account.job, client, baseUrl)
+    internal constructor(
+        account: SocialAuthenticatedAccount,
+        client: HttpClient,
+        baseUrl: String,
+        radioKeyStore: RadioKeyStore? = null,
+        nowMillis: () -> Long = ::radioClockMillis,
+    ) : this(account.userId.value, null, account, account.job, client, baseUrl, radioKeyStore, nowMillis)
 
     private val root = nearbyHttpsApiBaseUrl(baseUrl)
     init { invitationDraftId(actorId) }
@@ -38,10 +55,35 @@ class NearbyAccountHttpSession private constructor(
     private val invitationsHttp = InvitationHttpPort(client, root) { currentBearer() }
     private val invitationListingHttp = InvitationListingHttpPort(client, root) { currentBearer() }
     private val membersHttp=CommunityMembersHttpPort(client,root,actorId) {currentBearer()}
+    private val radioKeyHttp = RadioKeyHttpPort(client, root, actorId) { currentBearer() }
+
+    // Radio keys refresh in the background after a membership list loads; failures never reach the list.
+    // Deliberately not a child of the account Job (borrowed Jobs must gain no children); tied to it by completion.
+    private val radioJob = SupervisorJob()
+    private val radioScope = CoroutineScope(radioJob + Dispatchers.Default.limitedParallelism(1))
+    init { if (radioKeyStore != null) (accountJob ?: authority?.job)?.invokeOnCompletion { radioJob.cancel() } }
+    private val radioKeysRequested = mutableSetOf<String>() // touched only on radioScope's single thread
+
+    private fun refreshRadioKeys(listed: List<CommunitySummary>) {
+        val store = radioKeyStore ?: return
+        val ids = listed.map { it.id }
+        radioScope.launch {
+            for (community in ids) {
+                if (!radioKeysRequested.add(community)) continue
+                val key = try { radioKeyHttp.fetch(community) } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+                val stored = key != null && try { store.put(actorId, key, nowMillis()); true }
+                    catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) { false }
+                if (!stored) radioKeysRequested.remove(community) // a later listing may retry
+            }
+        }
+    }
 
     val communities: CommunityPort = object : CommunityPort {
         override suspend fun memberships(after: String?, limit: Int) = guarded {
-            communitiesHttp.memberships(after, limit)
+            communitiesHttp.memberships(after, limit).also { result ->
+                if (result is CommunityResult.Ready) refreshRadioKeys(result.value)
+            }
         }
 
         override suspend fun catalog(query: String, after: String?, limit: Int) = guarded {
@@ -117,6 +159,7 @@ class NearbyAccountHttpSession private constructor(
     fun retire() {
         // Consumer retirement never retires authentication or cancels its borrowed Job.
         retired.value = true
+        radioJob.cancel()
         binding?.retire()
 
         var closeFailed = false
@@ -126,6 +169,7 @@ class NearbyAccountHttpSession private constructor(
         try { invitationsHttp.close() } catch (_: Throwable) { closeFailed = true }
         try { invitationListingHttp.close() } catch (_: Throwable) { closeFailed = true }
         try { membersHttp.close() } catch (_: Throwable) { closeFailed = true }
+        try { radioKeyHttp.close() } catch (_: Throwable) { closeFailed = true }
         if (closeFailed) throw IllegalStateException(CLEANUP_FAILED)
     }
 
@@ -162,3 +206,5 @@ class NearbyAccountHttpSession private constructor(
         const val CLEANUP_FAILED = "Nearby account HTTP cleanup failed"
     }
 }
+
+private fun radioClockMillis(): Long = Clock.System.now().toEpochMilliseconds()

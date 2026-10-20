@@ -23,6 +23,7 @@ import ru.sodovaya.volty.domain.nearby.community.InvitationCreationDraftOwner
 import ru.sodovaya.volty.domain.nearby.community.InvitationDraftStore
 import ru.sodovaya.volty.domain.nearby.community.InvitationSecretGenerator
 import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
+import ru.sodovaya.volty.domain.radio.RadioKeyStore
 import ru.sodovaya.volty.presentation.nearby.CommunityBrowser
 
 /** Composes community commands, browser state, and invitation drafts for one account lifetime. */
@@ -41,8 +42,9 @@ class NearbyCommunityAccount private constructor(
         generator: InvitationSecretGenerator,
         client: HttpClient,
         baseUrl: String,
+        radioKeyStore: RadioKeyStore? = null,
     ) : this(parent, credentials.actorId, store, generator, baseUrl,
-        { job -> NearbyAccountHttpSession(credentials, client, baseUrl, job) })
+        { job -> NearbyAccountHttpSession(credentials, client, baseUrl, job, radioKeyStore) })
 
     internal constructor(
         account: SocialAuthenticatedAccount,
@@ -50,8 +52,9 @@ class NearbyCommunityAccount private constructor(
         generator: InvitationSecretGenerator,
         client: HttpClient,
         baseUrl: String,
+        radioKeyStore: RadioKeyStore? = null,
     ) : this(account.scope(), account.userId.value, store, generator, baseUrl,
-        { NearbyAccountHttpSession(account, client, baseUrl) })
+        { NearbyAccountHttpSession(account, client, baseUrl, radioKeyStore) })
 
     private val accountJob: Job = requireNotNull(parent.coroutineContext[Job]) {
         "Nearby community account requires a parent Job"
