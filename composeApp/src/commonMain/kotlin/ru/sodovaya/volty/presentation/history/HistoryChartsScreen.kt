@@ -27,7 +27,8 @@ fun HistoryChartsScreen(owner: HistoryComponent, state: HistoryUiState,
             Icon(Icons.Default.Add, stringResource(Res.string.history_metrics_title))
         } }) }) { padding ->
         HistoryChartPanel(state.detail, owner::selectTime, cursorMaxAgeMillis, Modifier.fillMaxSize().padding(padding),
-            state.windowPreview, owner)
+            state.windowPreview, owner, mapMetricKey = state.mapMetricKey,
+            onSelectMapMetric = { owner.selectMapMetric(it); owner.back() })
     }
     if (drawer) HistoryMetricDrawer(state.detail, owner::loadSourceMetrics, owner::addMetric, owner::removeMetric,
         onDismiss = { drawer = false }, presets = state.presets, onLoadPresets = owner::loadPresets,

@@ -986,6 +986,11 @@
     <string name="history_next_ride">Следующая поездка</string>
     <string name="history_open_rides">Выбрать поездку</string>
     <string name="history_fit_route">Показать записанный маршрут целиком</string>
+    <string name="history_map_use_metric">Показать на карте: %1$s</string>
+    <string name="history_map_metric">Цвет карты · %1$s · %2$s</string>
+    <string name="history_map_neutral">Убрать окраску карты</string>
+    <string name="history_map_partial">Данные или окраска показаны не полностью</string>
+    <string name="history_map_unknown">Серый: нет подтверждённого значения показателя</string>
     <string name="history_charts_expand">Показать графики</string>
     <string name="history_charts_collapse">Скрыть графики</string>
     <string name="history_ride_loading">Загрузка поездки…</string>

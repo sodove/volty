@@ -21,6 +21,7 @@ interface HistoryComponent {
     fun moveMetric(key: HistorySeriesKey, index: Int)
     fun selectTime(epochMillis: Long?)
     fun selectRange(range: HistoryRange)
+    fun selectMapMetric(key: HistorySeriesKey?)
     fun beginWindowGesture(): HistoryWindowGestureToken?
     fun transformWindowGesture(token: HistoryWindowGestureToken, zoom: Double, anchor: Double, pan: Double)
     fun finishWindowGesture(token: HistoryWindowGestureToken)
@@ -99,7 +100,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         val ride = next.ride; val range = next.range
         val needsRoute = ride != null && range != null && (route.state.value.rideId != ride.id || route.state.value.range != range)
         val current = mutableState.value
-        mutableState.value = current.copy(detail = next, route = if (needsRoute)
+        mutableState.value = current.copy(detail = next, mapMetricKey = current.mapMetricKey?.takeIf { it in next.selectedKeys }, route = if (needsRoute)
             HistoryRouteState(rideId = ride?.id, range = range, loading = true) else current.route)
         // UI publication can synchronously choose another ride or leave history.
         if (lifetime.isActive && selection === captured && needsRoute) route.open(checkNotNull(ride), checkNotNull(range))
@@ -122,7 +123,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         windowIntent = Any(); windowGesture = null
         val captured = selection
         mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE, selectedRideId = id,
-            detail = HistoryDetailState(rideId = id, loading = true), route = HistoryRouteState(), windowPreview = null)
+            detail = HistoryDetailState(rideId = id, loading = true), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null)
         if (!lifetime.isActive || selection !== captured) return
         route.clear()
         if (lifetime.isActive && selection === captured) detail.openRide(id)
@@ -139,6 +140,10 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     override fun removeMetric(key: HistorySeriesKey) = withSelection { detail.removeMetric(key) }
     override fun moveMetric(key: HistorySeriesKey, index: Int) = withSelection { detail.moveMetric(key, index) }
     override fun selectTime(epochMillis: Long?) = withSelection { detail.selectTime(epochMillis) }
+    override fun selectMapMetric(key: HistorySeriesKey?) = withSelection {
+        val current = mutableState.value
+        if (key == null || key in current.detail.selectedKeys) mutableState.value = current.copy(mapMetricKey = key)
+    }
     override fun selectRange(range: HistoryRange) = withSelection {
         val captured = selection; val intent = Any(); windowIntent = intent; windowGesture = null
         mutableState.value = mutableState.value.copy(windowPreview = null)
@@ -241,7 +246,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                 windowIntent = Any(); windowGesture = null
                 val captured = selection
                 mutableState.value = mutableState.value.copy(destination = HistoryDestination.CATALOG, selectedRideId = null,
-                    detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null)
+                    detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null)
                 if (lifetime.isActive && selection === captured) { detail.clear(); route.clear() }
             }
         }

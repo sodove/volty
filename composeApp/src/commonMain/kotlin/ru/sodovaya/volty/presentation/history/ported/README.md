@@ -24,6 +24,11 @@ This record identifies transferred material and its license. It does not assert
 that a directory boundary resolves combined-application distribution requirements
 or that the complete screen port/dependency compatibility audit is finished.
 
+The home now connects Volty's original Kotlin selected-metric map-color owner,
+evidence/index policy and legend. Chart Map actions collapse the home chart panel
+and reuse the retained map; explicit clear preserves its neutral route. Upstream
+device-specific hot thresholds are not copied into the richer source model.
+
 Retraction (2026-10-20): the earlier tile/cache-pending statement above describes
 the Canvas adaptation alone. Volty's separate image pipeline now provides bounded
 OFM background snapshots and PNG caches behind that fallback, without borrowing

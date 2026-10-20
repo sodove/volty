@@ -68,6 +68,37 @@ class HistoryComponentTest {
         } finally { c.close() }
     }
 
+    @Test fun mapMetricUsesSelectedKeyAndSurvivesWindowCursorAndFullscreenWithoutReads() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent(); c.addMetric(key); runCurrent()
+            c.selectMapMetric(key); assertEquals(key, c.state.value.mapMetricKey)
+            c.selectTime(1500); c.selectRange(HistoryRange(1000, 2000)); runCurrent()
+            val reads = Triple(repo.seriesReads.toList(), repo.statsReads.toList(), repo.routeReads.toList())
+            c.showCharts(); c.back(); c.selectMapMetric(key.copy(sourceId = "unselected")); runCurrent()
+            assertEquals(key, c.state.value.mapMetricKey); assertEquals(1500L, c.state.value.detail.cursorEpochMillis)
+            assertEquals(HistoryRange(1000, 2000), c.state.value.detail.range)
+            assertEquals(reads, Triple(repo.seriesReads.toList(), repo.statsReads.toList(), repo.routeReads.toList()))
+            c.selectMapMetric(null); assertNull(c.state.value.mapMetricKey)
+        } finally { c.close() }
+    }
+
+    @Test fun removingMapSeriesOrChangingRideClearsMapChoiceAndCloseIgnoresCommands() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent(); c.addMetric(key); runCurrent(); c.selectMapMetric(key)
+            assertEquals(key, c.state.value.mapMetricKey)
+            c.removeMetric(key); runCurrent(); assertNull(c.state.value.mapMetricKey)
+            c.addMetric(key); runCurrent(); c.selectMapMetric(key); assertEquals(key, c.state.value.mapMetricKey)
+            c.openRide("b"); assertNull(c.state.value.mapMetricKey); runCurrent()
+            c.addMetric(key); runCurrent(); c.selectMapMetric(key); assertEquals(key, c.state.value.mapMetricKey)
+            c.back(); assertNull(c.state.value.mapMetricKey)
+            c.openRide("a"); runCurrent(); c.addMetric(key); runCurrent(); c.selectMapMetric(key)
+            assertEquals(key, c.state.value.mapMetricKey); c.close()
+            val frozen = c.state.value; c.selectMapMetric(null); assertEquals(frozen, c.state.value)
+        } finally { c.close() }
+    }
+
     @Test fun cancelledAndSupersededGestureCannotClearTheNewPreviewOrCommit() = runTest {
         val repo = Repo(); val c = component(repo)
         try {

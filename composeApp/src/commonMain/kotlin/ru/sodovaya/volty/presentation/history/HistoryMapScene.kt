@@ -12,6 +12,7 @@ data class HistoryMapScene(
     val segments: List<HistoryMapSegment>,
     val selectedFix: HistoryGpsFix?,
     val gapFixes: List<HistoryGpsFix>,
+    val coloring: HistoryMapColoring? = null,
 ) {
     val startFix: HistoryGpsFix? get() = segments.firstOrNull()?.fixes?.firstOrNull()
     val endFix: HistoryGpsFix? get() = segments.lastOrNull()?.fixes?.lastOrNull()

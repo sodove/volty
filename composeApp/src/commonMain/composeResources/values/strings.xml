@@ -988,6 +988,11 @@
     <string name="history_next_ride">Next ride</string>
     <string name="history_open_rides">Choose a ride</string>
     <string name="history_fit_route">Fit recorded route</string>
+    <string name="history_map_use_metric">Show on map: %1$s</string>
+    <string name="history_map_metric">Map color · %1$s · %2$s</string>
+    <string name="history_map_neutral">Clear map color</string>
+    <string name="history_map_partial">Partial data or color overlay</string>
+    <string name="history_map_unknown">Grey: no confirmed metric value</string>
     <string name="history_charts_expand">Show charts</string>
     <string name="history_charts_collapse">Hide charts</string>
     <string name="history_ride_loading">Loading ride…</string>

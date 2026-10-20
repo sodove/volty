@@ -151,7 +151,7 @@ fun historyMapScene(gps: List<HistoryGpsFix>, markers: List<HistoryMarker>, curs
     assertTrue(historyMapScene(emptyList(), emptyList(), 1000, 1).segments.isEmpty())
   }
   ```
-- [ ] Extend existing retained map scene with a historical layer input. Render
+- [x] Extend existing retained map scene with a historical layer input. Render
   route/start/end/gap markers/selected point, color by selected metric only where
   samples earned. Unknown metric segment uses neutral missing-data style.
   Preserve navigation/live/Nearby map ownership; historical overlay cannot alter
@@ -170,6 +170,15 @@ recorded cursor, loaded-portion endpoints/gaps and fenced camera requests on the
 existing retained map. Evidence is in `../specs/2026-10-18-history-map-acceptance.md`.
 Metric coloring, full screen/camera integration and the remaining native cases
 stay open; the partial adapter commit does not check off those requirements.
+
+Color-overlay checkpoint (2026-10-20): explicit selected-source chart Map action,
+earned range legend, bounded indexed coloring above the complete neutral route,
+unknown/gap/source fences and explicit clear are now integrated into the composed
+home/fullscreen owner. Final4374 tests and native actual colored/neutral edges,
+route paging, unknown second pack, font200% and retained MapView evidence are in
+`../specs/2026-10-20-history-map-color-acceptance.md`. This supersedes the preceding
+metric-coloring-pending statement only. Remaining camera/motion/native/root gates
+are still open; Task3 as a whole is not marked complete.
 
 ## Task4 — route previews and history list
 

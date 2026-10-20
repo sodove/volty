@@ -52,6 +52,9 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     var metricsOpen by remember(state.selectedRideId) { mutableStateOf(false) }
     var summaryExpanded by remember(state.selectedRideId) { mutableStateOf(false) }
     var chartsExpanded by remember { mutableStateOf(true) }
+    LaunchedEffect(state.destination, state.mapMetricKey) {
+        if (state.destination == HistoryDestination.RIDE && state.mapMetricKey != null) chartsExpanded = false
+    }
     BackHandler(enabled = !listOpen && !metricsOpen) { owner.back() }
     LaunchedEffect(owner, content.phase, listOpen) {
         if ((content.phase == HistoryScreenPhase.CATALOG || listOpen) && !state.catalog.loaded && !state.catalog.refreshing)
@@ -87,7 +90,10 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
             // while range/cursor changes never do. Native map itself stays mounted.
             LaunchedEffect(state.selectedRideId, content.phase == HistoryScreenPhase.LOADING) { fitSequence++ }
             val identity = remember(state.selectedRideId) { HistoryMapIdentity(checkNotNull(state.selectedRideId), 0) }
-            val scene = rememberHistoryScreenMap(identity, content, state.detail.cursorEpochMillis, gpsMaxAgeMillis)
+            val geometry = rememberHistoryScreenMap(identity, content, state.detail.cursorEpochMillis, gpsMaxAgeMillis)
+            val coloring = rememberHistoryMapColoring(identity, content.detail, content.route, state.mapMetricKey,
+                gpsMaxAgeMillis, state.mapMetricKey?.let(cursorMaxAgeMillis) ?: 0)
+            val scene = geometry.copy(coloring = coloring)
             val insets = HistoryMapInsets(sidePadding, topPixels + sidePadding,
                 if (wide) with(density) { panelWidth.roundToPx() } + sidePadding else sidePadding,
                 if (wide) sidePadding else panelPixels + sidePadding)
@@ -142,7 +148,10 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                         }
                         if (chartsExpanded) HistoryChartPanel(checkNotNull(content.detail), owner::selectTime, cursorMaxAgeMillis,
                             Modifier.fillMaxWidth().then(if (scrollChrome) Modifier.height(240.dp) else Modifier.weight(1f)),
-                            state.windowPreview, owner, compact = true)
+                            state.windowPreview, owner, compact = true, mapMetricKey = state.mapMetricKey,
+                            onSelectMapMetric = owner::selectMapMetric)
+                        state.mapMetricKey?.let { key -> HistoryMapColorLegend(checkNotNull(content.detail), key, coloring,
+                            { owner.selectMapMetric(null) }) }
                         HistoryTimelineControls(checkNotNull(content.detail).copy(range = state.windowPreview ?: content.detail.range),
                             owner::selectRange, owner::selectTime, compact = true, applyNavigationInsets = false)
                     } else HistoryDetailStatus(content.phase) { state.selectedRideId?.let(owner::openRide) }

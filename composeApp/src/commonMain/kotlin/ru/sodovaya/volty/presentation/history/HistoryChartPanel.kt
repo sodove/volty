@@ -6,8 +6,11 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
@@ -30,7 +33,8 @@ import volty.composeapp.generated.resources.*
 @Composable
 fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
     cursorMaxAgeMillis: (HistorySeriesKey) -> Long, modifier: Modifier = Modifier,
-    windowPreview: HistoryRange? = null, gestureOwner: HistoryComponent? = null, compact: Boolean = false) {
+    windowPreview: HistoryRange? = null, gestureOwner: HistoryComponent? = null, compact: Boolean = false,
+    mapMetricKey: HistorySeriesKey? = null, onSelectMapMetric: ((HistorySeriesKey) -> Unit)? = null) {
     val text = historyMetricText()
     val labels = historySourceLabels(state.sources)
     LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -40,13 +44,19 @@ fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
         items(state.selectedKeys, key = ::historyMetricItemKey) { key ->
             Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 2.dp) {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                    FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(text.title(key), style = MaterialTheme.typography.titleSmall)
                         Text(labels[key.sourceId] ?: stringResource(Res.string.history_summary_source_unavailable),
                             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
+                    if (onSelectMapMetric != null) IconButton(onClick = { onSelectMapMetric(key) }) {
+                        Icon(Icons.Default.Map, stringResource(Res.string.history_map_use_metric, text.title(key)),
+                            tint = if (mapMetricKey == key) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    }
                     val density = LocalDensity.current
-                    var bodyHeight by remember(key, compact, density.density, density.fontScale) { mutableStateOf(if (compact) 120.dp else 180.dp) }
+                    var bodyHeight by remember(key, compact, density.density, density.fontScale) { mutableStateOf(if (compact) 100.dp else 180.dp) }
                     // A slower range query clears facts, not the row's geometry.
                     // Preserve the measured body height while progress/errors are
                     // shown; never show the old window's values as a placeholder.
@@ -102,7 +112,7 @@ private fun RecordedChart(series: HistorySeries, range: HistoryRange, preview: H
             val grid = MaterialTheme.colorScheme.outlineVariant
             val cursorColor = MaterialTheme.colorScheme.tertiary
             val description = stringResource(Res.string.history_chart_description)
-            Canvas(Modifier.fillMaxWidth().height(if (compact) 96.dp else 132.dp).semantics { contentDescription = description }
+            Canvas(Modifier.fillMaxWidth().height(if (compact) 76.dp else 132.dp).semantics { contentDescription = description }
                 .pointerInput(range, gestureOwner) {
                     if (gestureOwner != null) detectHistoryChartGestures(gestureOwner, range, chartPadding) { latestSelect(it) }
                     else detectTapGestures { offset ->
