@@ -31,6 +31,15 @@ class HistoryRouteComponentTest {
     private fun TestScope.component(repo: Repo, maxPages: Int = 8) = HistoryRouteComponent(
         DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo, maxPages)
 
+    @Test fun unclosedLegacyRecordedWindowMayPrecedeMetadataWithoutInventingGps() = runTest {
+        val repo = Repo { _,_,_ -> error("Legacy has no GPS") }; val c = component(repo)
+        try {
+            val recorded = HistoryRange(500,3000)
+            c.open(ride().copy(status = HistoryRideStatus.LEGACY,ended = null),recorded); runCurrent()
+            assertEquals(recorded,c.state.value.range); assertTrue(c.state.value.noRoute); assertTrue(repo.calls.isEmpty())
+        } finally { c.close() }
+    }
+
     @Test fun pagesEqualTimeFixesByStoredCursorAndRetainsRecordedGaps() = runTest {
         val cursor = HistoryCursor(1000, "2"); val gap = HistoryMarker(fix(1001).tick, HistoryMarkerKind.GPS_GAP)
         val repo = Repo { _, _, after -> if (after == null) page(listOf(fix(1000), fix(1000, 56.0)), cursor, listOf(gap))

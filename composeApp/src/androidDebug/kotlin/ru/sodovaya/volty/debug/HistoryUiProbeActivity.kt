@@ -27,7 +27,8 @@ import volty.composeapp.generated.resources.*
 import org.koin.android.ext.android.getKoin
 
 /** Native rendering/input fixture. Earlier revisions used synthetic data only;
- * the explicit stored=true mode now reads existing closed rides through app DI.
+ * stored=true now reads closed rides and persisted windows of unclosed legacy
+ * rides through app DI. It has no qualified clock for a live v2 recording.
  * Neither mode writes recordings or starts BLE/location. Synthetic is default.
  * This source/manifest belongs exclusively to the Android debug variant.
  */
@@ -40,7 +41,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
         val catalog = stored || intent.getBooleanExtra("catalog", false)
         val repository = if (stored) getKoin().get<HistoryReadRepository>() else ProbeReader()
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
-            { if (stored) error("Stored debug probe supports closed rides only") else origin }, ::finish)
+            { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish)
         if (catalog) owner.refresh() else owner.openRide("fixture")
         setContent {
             VoltyTheme {

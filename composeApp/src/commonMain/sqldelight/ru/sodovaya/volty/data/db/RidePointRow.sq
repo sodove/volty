@@ -57,3 +57,25 @@ selectRecordedHistoryMetricKeys:
 SELECT DISTINCT metricKey FROM RidePointRow
 WHERE rideId = :rideId AND cellIndex = -1 AND metricKey IN :metricKeys
 ORDER BY metricKey LIMIT :pageSize;
+
+-- Available wall-time evidence only; this does not finish an unclosed ride.
+-- Reuse exact millisecond truncation from selectHistorySeries, not MAX(text)
+-- or SQLite's rounded fractional-second parser. Return original boundary strings
+-- so Kotlin also validates their Instant representation.
+selectLegacyRecordedRange:
+WITH fractions AS (
+    SELECT timestamp, CASE WHEN substr(timestamp, 20, 1) = '.' THEN
+        max(instr(substr(timestamp, 21), 'Z'), instr(substr(timestamp, 21), '+'), instr(substr(timestamp, 21), '-'))
+        ELSE 0 END AS zoneStart
+    FROM RidePointRow WHERE rideId = :rideId
+), timed AS (
+    SELECT timestamp, CAST(strftime('%s', CASE WHEN zoneStart > 0
+        THEN substr(timestamp, 1, 19) || substr(timestamp, 20 + zoneStart) ELSE timestamp END) AS INTEGER) * 1000
+        + CASE WHEN zoneStart > 0 THEN CAST(substr(substr(timestamp, 21, zoneStart - 1) || '000', 1, 3) AS INTEGER)
+          ELSE 0 END AS capturedMillis
+    FROM fractions
+)
+SELECT COUNT(*) AS totalRows, COUNT(capturedMillis) AS parsedRows,
+    COALESCE((SELECT timestamp FROM timed ORDER BY capturedMillis, timestamp LIMIT 1), '') AS firstTimestamp,
+    COALESCE((SELECT timestamp FROM timed ORDER BY capturedMillis DESC, timestamp DESC LIMIT 1), '') AS lastTimestamp
+FROM timed;

@@ -37,7 +37,10 @@ class HistoryRouteComponent(componentContext: ComponentContext, parentScope: Cor
 
     fun open(ride: HistoryRide, range: HistoryRange) {
         if (!lifetime.isActive) return
-        require(range.startEpochMillis >= ride.started.epochMillis)
+        val legacy = ride.status == HistoryRideStatus.LEGACY
+        // Unclosed legacy bounds come from captured wall timestamps, which may
+        // precede metadata after a clock rollback. They never imply GPS exists.
+        if (!(legacy && ride.ended == null)) require(range.startEpochMillis >= ride.started.epochMillis)
         ride.ended?.let { ended ->
             val end = if (ride.status == HistoryRideStatus.LEGACY) ended.epochMillis else checkNotNull(historyAxisEpochMillis(ride.started, ended))
             require(range.endEpochMillis <= end)
@@ -45,7 +48,6 @@ class HistoryRouteComponent(componentContext: ComponentContext, parentScope: Cor
         retire()
         selected = ride; pages = 0
         val captured = selection
-        val legacy = ride.status == HistoryRideStatus.LEGACY
         mutableState.value = HistoryRouteState(rideId = ride.id, range = range, loaded = legacy, loading = !legacy)
         if (!legacy && lifetime.isActive && selection === captured) readPage(null)
     }

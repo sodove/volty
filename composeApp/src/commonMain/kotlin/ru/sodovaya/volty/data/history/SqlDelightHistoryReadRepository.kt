@@ -19,6 +19,8 @@ class SqlDelightHistoryReadRepository(
     private val current = DefaultHistoryReadRepository(SqlDelightHistoryStore(provider, dispatcher), maxReadPages)
     private val legacy = LegacyHistoryReader(provider, dispatcher)
 
+    override suspend fun legacyRecordedRange(rideId: String): HistoryRange? = reader(rideId).legacyRecordedRange(rideId)
+
     override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
         require(limit in 1..20000)
         return reader(rideId).recordedKeys(rideId, sourceId, limit)

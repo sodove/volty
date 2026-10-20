@@ -25,6 +25,19 @@ data class LegacyHistorySnapshot(
 class LegacyHistoryReader(provider: VoltyDatabaseProvider,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default) : HistoryReadRepository {
     private val database = provider.database
+    override suspend fun legacyRecordedRange(rideId: String): HistoryRange? = withContext(dispatcher) {
+        database.transactionWithResult {
+            val ride = database.rideRowQueries.selectById(rideId).executeAsOneOrNull() ?: return@transactionWithResult null
+            val start = wallTick(ride.startedAt).epochMillis
+            val bounds = database.ridePointRowQueries.selectLegacyRecordedRange(rideId).executeAsOne()
+            check(bounds.totalRows == bounds.parsedRows) { "Unparseable legacy recording timestamp" }
+            if (bounds.totalRows == 0L) return@transactionWithResult HistoryRange(start, start)
+            val first = wallTick(checkNotNull(bounds.firstTimestamp)).epochMillis
+            val last = wallTick(checkNotNull(bounds.lastTimestamp)).epochMillis
+            check(last >= first)
+            HistoryRange(minOf(start, first), maxOf(start, last))
+        }
+    }
     override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys = withContext(dispatcher) {
         require(limit in 1..20000)
         database.transactionWithResult {

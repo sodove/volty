@@ -75,14 +75,21 @@ class HistoryDetailComponent(
                 currentCoroutineContext().ensureActive()
                 if (request !== generation) return@launch
                 check(sources.map { it.id }.distinct().size == sources.size)
-                val end = ride.ended?.let {
+                // Retraction: an unclosed legacy row used to borrow today's wall
+                // clock. That manufactured a potentially multi-day viewport for
+                // an old recording. Use stored evidence without inventing endedAt.
+                val recorded = if (ride.status == HistoryRideStatus.LEGACY && ride.ended == null) {
+                    checkNotNull(repository.legacyRecordedRange(id)) { "Recorded legacy window unavailable" }
+                } else null
+                currentCoroutineContext().ensureActive()
+                if (request !== generation) return@launch
+                val end = recorded?.endEpochMillis ?: ride.ended?.let {
                     if (ride.status == HistoryRideStatus.LEGACY) it.epochMillis
                     else checkNotNull(historyAxisEpochMillis(ride.started, it))
                 } ?: readTick().let { now ->
-                    if (ride.status == HistoryRideStatus.LEGACY) maxOf(ride.started.epochMillis, now.epochMillis)
-                    else checkNotNull(historyAxisEpochMillis(ride.started, now))
+                    checkNotNull(historyAxisEpochMillis(ride.started, now))
                 }
-                val range = HistoryRange(ride.started.epochMillis, end)
+                val range = recorded ?: HistoryRange(ride.started.epochMillis, end)
                 availableRange = range
                 mutableState.value = mutableState.value.copy(ride = ride, sources = sources, range = range, loading = false)
             } catch (cancel: CancellationException) {

@@ -17,6 +17,9 @@ data class HistoryRecordedKeys(val keys: List<HistorySeriesKey>, val truncated: 
 data class HistoryRoutePage(val origin: HistoryTick?, val fixes: HistoryPage<HistoryGpsFix>, val markers: List<HistoryMarker>)
 
 interface HistoryReadRepository {
+    /** Optional persisted wall-time window for unclosed legacy recordings.
+     * It is available data, not a manufactured completion time. */
+    suspend fun legacyRecordedRange(rideId: String): HistoryRange? = null
     suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int = 20000): HistoryRecordedKeys
     suspend fun rides(before: HistoryCursor? = null): HistoryPage<HistoryRide>
     suspend fun ride(rideId: String): HistoryRide?

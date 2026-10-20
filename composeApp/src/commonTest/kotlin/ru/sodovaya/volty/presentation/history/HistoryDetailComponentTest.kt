@@ -33,6 +33,38 @@ class HistoryDetailComponentTest {
     private fun TestScope.component(repo: Repo, lifecycle: LifecycleRegistry = LifecycleRegistry(Lifecycle.State.RESUMED)) =
         HistoryDetailComponent(DefaultComponentContext(lifecycle), backgroundScope, repo, { HistoryTick(9000, 8010, 1) })
 
+    @Test fun unclosedLegacyUsesRecordedWindowWithoutReadingCurrentClockOrInventingEnd() = runTest {
+        var windowReads = 0; var clockReads = 0
+        val repo = object : Repo() {
+            override suspend fun ride(rideId: String) = super.ride(rideId)!!.copy(status = HistoryRideStatus.LEGACY,ended = null)
+            override suspend fun legacyRecordedRange(rideId: String): HistoryRange { windowReads++; return HistoryRange(500,3000) }
+        }
+        val c = HistoryDetailComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),backgroundScope,repo,
+            { clockReads++; error("Current clock is not recorded legacy evidence") })
+        try {
+            c.openRide("old"); runCurrent()
+            assertEquals(1,windowReads); assertEquals(0,clockReads)
+            assertEquals(HistoryRange(500,3000),c.state.value.range); assertNull(c.state.value.ride!!.ended)
+            assertNull(c.state.value.error); assertTrue(repo.reads.isEmpty())
+        } finally { c.close() }
+    }
+
+    @Test fun lateLegacyWindowCannotReplaceAnotherRide() = runTest {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val repo = object : Repo() {
+            override suspend fun ride(rideId: String) = super.ride(rideId)!!.let { if (rideId == "old") it.copy(status = HistoryRideStatus.LEGACY,ended = null) else it }
+            override suspend fun legacyRecordedRange(rideId: String): HistoryRange = withContext(NonCancellable) {
+                entered.complete(Unit); release.await(); HistoryRange(500,3000)
+            }
+        }
+        val c = component(repo)
+        try {
+            c.openRide("old"); runCurrent(); assertTrue(entered.isCompleted)
+            c.openRide("new"); runCurrent(); release.complete(Unit); runCurrent()
+            assertEquals("new",c.state.value.ride?.id); assertEquals(range,c.state.value.range)
+        } finally { release.complete(Unit); c.close(); runCurrent() }
+    }
+
     @Test fun delayedNonCancellableRideCannotReplaceNewSelection() = runTest {
         val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
         val repo = object : Repo() {
