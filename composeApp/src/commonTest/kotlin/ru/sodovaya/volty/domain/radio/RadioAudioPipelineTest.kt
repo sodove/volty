@@ -195,4 +195,17 @@ class RadioAudioPipelineTest {
         for (seq in 2..5) buffer.push(seq.toLong(), frameOf(1, seq))
         assertEquals(listOf(3, 4, 5), List(3) { buffer.pop()!![0].toInt() })
     }
+
+    @Test
+    fun skippedFramesAreNeverPlayedLate() {
+        val buffer = RadioJitterBuffer(targetFrames = 2)
+        for (seq in listOf(0, 4, 5)) buffer.push(seq.toLong(), frameOf(1, seq))
+        assertEquals(0, buffer.pop()!![0].toInt())
+        assertNull(buffer.pop())
+        buffer.push(2, frameOf(1, 2))
+        buffer.push(3, frameOf(1, 3))
+        assertEquals(4, buffer.pop()!![0].toInt())
+        assertEquals(5, buffer.pop()!![0].toInt())
+        assertNull(buffer.pop())
+    }
 }

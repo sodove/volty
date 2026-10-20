@@ -51,7 +51,9 @@ class RadioJitterBuffer(private val targetFrames: Int = 3, private val maxFrames
             return concealed
         }
         // Longer gap: report silence once, then resume from what is actually buffered.
+        // Everything before [oldest] is declared lost and must never play late.
         lastSeq = oldest - 1
+        highWater = maxOf(highWater ?: (oldest - 1), oldest - 1)
         return null
     }
 
