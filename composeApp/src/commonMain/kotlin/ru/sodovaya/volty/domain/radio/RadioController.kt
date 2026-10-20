@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** What the Wi-Fi layer reported for one attempt to host or join the group. */
 sealed interface RadioLinkResult {
@@ -52,8 +54,13 @@ sealed interface RadioState {
  * in [RadioLinkResult.NotFound], because an old key is the one offline hint that the hub may be
  * on a newer one.
  *
- * A client reporting [RadioClientPhase.FULL] stays a [RadioState.Client] with that phase;
- * [RadioError.FULL] is reserved for a link that refuses the join outright.
+ * A client reporting [RadioClientPhase.FULL] is told to leave the link and becomes
+ * `Error(FULL)`: a full radio carries no audio, so there is nothing to stay connected to.
+ *
+ * Not thread-safe: the controller must be confined to a single-threaded scope (the main
+ * dispatcher in production). Every link call goes through one mutex, so a cancelled call that is
+ * still tearing down never overlaps the next one, and every state write is dropped unless it
+ * comes from the current generation of work, so a stale coroutine cannot overwrite a newer state.
  */
 class RadioController(
     private val link: RadioLink,
@@ -76,25 +83,36 @@ class RadioController(
     private var job: Job? = null
     private var community: String? = null
     private var keyFetchedAt: Long = 0
+    private var generation = 0
+    private val linkLock = Mutex()
 
     fun setMode(mode: RadioMode) {
         _mode.value = mode
         onModeChanged?.invoke(mode)
     }
 
-    fun raise(actor: String, community: String) = start(actor, community) {
-        when (val first = link.join(community, RAISE_PROBE_MILLIS)) {
-            is RadioLinkResult.Joined -> _state.value = RadioState.Client(community, RadioClientPhase.JOINING)
-            RadioLinkResult.NotFound -> host(community)
-            else -> fail(community, first)
+    /** Allowed from Idle, Error or Lost (where it means [reRaise]); ignored otherwise. */
+    fun raise(actor: String, community: String) {
+        if (_state.value is RadioState.Lost) return reRaise()
+        if (!canStart()) return
+        start(actor, community) { g ->
+            when (val first = linked { link.join(community, RAISE_PROBE_MILLIS) }) {
+                is RadioLinkResult.Joined -> put(g, RadioState.Client(community, RadioClientPhase.JOINING))
+                RadioLinkResult.NotFound -> host(g, community)
+                else -> fail(g, community, first)
+            }
         }
     }
 
-    fun join(actor: String, community: String) = start(actor, community) {
-        when (val r = link.join(community, JOIN_TIMEOUT_MILLIS)) {
-            is RadioLinkResult.Joined -> _state.value = RadioState.Client(community, RadioClientPhase.JOINING)
-            RadioLinkResult.NotFound -> _state.value = RadioState.Error(community, notFoundReason())
-            else -> fail(community, r)
+    /** Allowed from Idle, Error or Lost; ignored otherwise. */
+    fun join(actor: String, community: String) {
+        if (!canStart()) return
+        start(actor, community) { g ->
+            when (val r = linked { link.join(community, JOIN_TIMEOUT_MILLIS) }) {
+                is RadioLinkResult.Joined -> put(g, RadioState.Client(community, RadioClientPhase.JOINING))
+                RadioLinkResult.NotFound -> put(g, RadioState.Error(community, notFoundReason()))
+                else -> fail(g, community, r)
+            }
         }
     }
 
@@ -102,77 +120,103 @@ class RadioController(
     fun reRaise() {
         val c = community ?: return
         if (_state.value !is RadioState.Lost) return
-        job?.cancel()
-        job = scope.launch { host(c) }
+        val g = next()
+        _state.value = RadioState.Starting(c)
+        job = scope.launch { host(g, c) }
     }
 
     fun leave() {
         if (_state.value == RadioState.Idle) return
-        job?.cancel()
-        job = null
+        next()
         community = null
         _state.value = RadioState.Idle
-        scope.launch { link.leave() }
+        scope.launch { linked { link.leave() } }
     }
 
     fun onClientPhase(phase: RadioClientPhase) {
         val c = community ?: return
         val current = _state.value
         if (current !is RadioState.Client && current !is RadioState.Lost) return
-        if (phase == RadioClientPhase.LOST) {
-            if (current is RadioState.Lost) return
-            val until = clock() + REJOIN_WINDOW_MILLIS
-            _state.value = RadioState.Lost(c, until)
-            job?.cancel()
-            job = scope.launch { rejoin(c, until) }
-        } else if (current is RadioState.Client) {
-            _state.value = RadioState.Client(c, phase)
+        when {
+            phase == RadioClientPhase.LOST -> {
+                if (current is RadioState.Lost) return
+                val until = clock() + REJOIN_WINDOW_MILLIS
+                val g = next()
+                _state.value = RadioState.Lost(c, until)
+                job = scope.launch { rejoin(g, c, until) }
+            }
+            phase == RadioClientPhase.FULL && current is RadioState.Client -> {
+                next()
+                _state.value = RadioState.Error(c, RadioError.FULL)
+                scope.launch { linked { link.leave() } }
+            }
+            current is RadioState.Client -> _state.value = RadioState.Client(c, phase)
         }
     }
 
     /** Starting the ordinary server voice ends the radio. */
     fun onServerVoiceStarted() = leave()
 
-    private fun start(actor: String, community: String, body: suspend () -> Unit) {
+    private fun canStart(): Boolean = when (_state.value) {
+        RadioState.Idle, is RadioState.Error, is RadioState.Lost -> true
+        else -> false
+    }
+
+    /** Starts new work: invalidates the previous job's writes and cancels it. */
+    private fun next(): Int {
         job?.cancel()
+        job = null
+        return ++generation
+    }
+
+    private suspend fun <T> linked(block: suspend () -> T): T = linkLock.withLock { block() }
+
+    private fun put(g: Int, s: RadioState) {
+        if (g == generation) _state.value = s
+    }
+
+    private fun start(actor: String, community: String, body: suspend (Int) -> Unit) {
+        val g = next()
         this.community = community
         _state.value = RadioState.Starting(community)
         job = scope.launch {
             val stored = keys.get(actor, community)
             if (stored == null) {
-                _state.value = RadioState.Error(community, RadioError.NO_KEY)
+                put(g, RadioState.Error(community, RadioError.NO_KEY))
                 return@launch
             }
+            if (g != generation) return@launch
             keyFetchedAt = stored.fetchedAtMillis
             if (serverVoice.isActive()) serverVoice.disconnect()
-            body()
+            body(g)
         }
     }
 
-    private suspend fun host(community: String) {
-        when (val r = link.host(community)) {
-            is RadioLinkResult.Hosting -> _state.value = RadioState.Hub(community)
-            else -> fail(community, r)
+    private suspend fun host(g: Int, community: String) {
+        when (val r = linked { link.host(community) }) {
+            is RadioLinkResult.Hosting -> put(g, RadioState.Hub(community))
+            else -> fail(g, community, r)
         }
     }
 
-    private suspend fun rejoin(community: String, until: Long) {
+    private suspend fun rejoin(g: Int, community: String, until: Long) {
         while (true) {
             val remaining = until - clock()
             if (remaining <= 0) {
-                _state.value = RadioState.Error(community, notFoundReason())
+                put(g, RadioState.Error(community, notFoundReason()))
                 return
             }
-            when (val r = link.join(community, REJOIN_ATTEMPT_MILLIS)) {
+            when (val r = linked { link.join(community, minOf(REJOIN_ATTEMPT_MILLIS, remaining)) }) {
                 is RadioLinkResult.Joined -> {
-                    _state.value = RadioState.Client(community, RadioClientPhase.JOINING)
+                    put(g, RadioState.Client(community, RadioClientPhase.JOINING))
                     return
                 }
-                RadioLinkResult.NotFound -> delay(minOf(REJOIN_PAUSE_MILLIS, maxOf(until - clock(), 0L)))
-                else -> {
-                    fail(community, r)
+                is RadioLinkResult.Unsupported -> {
+                    fail(g, community, r)
                     return
                 }
+                // NotFound and Failed both mean "not yet": keep trying until the window closes.
+                else -> delay(minOf(REJOIN_PAUSE_MILLIS, maxOf(until - clock(), 0L)))
             }
         }
     }
@@ -180,9 +224,9 @@ class RadioController(
     private fun notFoundReason(): RadioError =
         if (clock() - keyFetchedAt > STALE_KEY_AFTER_MILLIS) RadioError.STALE_KEY else RadioError.NOT_FOUND
 
-    private fun fail(community: String, result: RadioLinkResult) {
+    private fun fail(g: Int, community: String, result: RadioLinkResult) {
         val reason = if (result is RadioLinkResult.Unsupported) RadioError.UNSUPPORTED_ANDROID else RadioError.WIFI_FAILED
-        _state.value = RadioState.Error(community, reason)
+        put(g, RadioState.Error(community, reason))
     }
 
     private companion object {
