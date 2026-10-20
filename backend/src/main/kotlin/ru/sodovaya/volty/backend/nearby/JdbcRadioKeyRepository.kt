@@ -18,6 +18,7 @@ class JdbcRadioKeyRepository(private val source:DataSource,private val secret:By
                 SELECT 1 FROM nearby_communities g
                 JOIN nearby_community_members m ON m.community_id=g.id AND m.user_id=?::uuid
                 WHERE g.id=?::uuid AND g.state='ACTIVE'
+                AND NOT EXISTS (SELECT 1 FROM nearby_community_bans b WHERE b.community_id=g.id AND b.user_id=m.user_id)
             """.trimIndent()).use {
                 it.setString(1,actor);it.setString(2,community);it.executeQuery().use {rows -> rows.next()}
             }

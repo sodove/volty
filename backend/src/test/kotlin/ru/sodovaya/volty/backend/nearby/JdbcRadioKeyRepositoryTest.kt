@@ -39,6 +39,11 @@ class JdbcRadioKeyRepositoryTest {
         sql("UPDATE nearby_communities SET state='DELETED' WHERE id='$community'")
         assertEquals(RadioKeyResult.Denied,keys.issue(owner,community))
     }
+    @Test fun bannedMemberIsDenied() {
+        assertIs<RadioKeyResult.Issued>(keys.issue(member,community))
+        sql("INSERT INTO nearby_community_bans(community_id,user_id,created_at) VALUES ('$community','$member',102)")
+        assertEquals(RadioKeyResult.Denied,keys.issue(member,community))
+    }
     @Test fun keysDifferAcrossCommunities() {
         val a=assertIs<RadioKeyResult.Issued>(keys.issue(owner,community))
         val b=assertIs<RadioKeyResult.Issued>(keys.issue(owner,other))
