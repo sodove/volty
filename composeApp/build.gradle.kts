@@ -125,6 +125,7 @@ kotlin {
             implementation(libs.valhalla.models)
             implementation(libs.valhalla.models.config)
             implementation(libs.bouncycastle)
+            implementation(libs.concentus)
             implementation(libs.ktor.client.cio)
             implementation(libs.ktor.client.okhttp)
             // 13's default artifact is Vulkan-only. Keep the same public API
