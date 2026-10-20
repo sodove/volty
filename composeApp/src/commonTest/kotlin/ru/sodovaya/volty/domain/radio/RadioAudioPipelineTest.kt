@@ -185,4 +185,14 @@ class RadioAudioPipelineTest {
         repeat(3) { buffer.push(4L + it, frameOf(1000, 4 + it)) }
         assertEquals(listOf(4, 5, 6), List(3) { buffer.pop()!![0].toInt() })
     }
+
+    @Test
+    fun drainDoesNotReadmitPlayedFrames() {
+        val buffer = RadioJitterBuffer(targetFrames = 3)
+        repeat(3) { buffer.push(it.toLong(), frameOf(1, it)) }
+        repeat(3) { buffer.pop() }
+        assertNull(buffer.pop())
+        for (seq in 2..5) buffer.push(seq.toLong(), frameOf(1, seq))
+        assertEquals(listOf(3, 4, 5), List(3) { buffer.pop()!![0].toInt() })
+    }
 }
