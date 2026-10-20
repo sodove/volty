@@ -17,6 +17,13 @@
          entering the app still does not imply location sharing. -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Offline Wi-Fi radio (Wi-Fi Direct group, Android 10+). NEARBY_WIFI_DEVICES replaces
+         location for Wi-Fi Direct on API 33+; below that the location permissions above apply. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="33" />
     <!-- HTTPS social transport, map tiles and the future WebRTC/SFU adapter. -->
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Requested only after the user confirms joining a voice room. -->
