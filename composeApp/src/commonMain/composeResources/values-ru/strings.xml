@@ -1074,4 +1074,10 @@
     <string name="history_unit_km">км</string>
     <string name="history_unit_wh">Вт·ч</string>
     <string name="history_unit_ah">А·ч</string>
+    <string name="history_chart_cursor">Курсор: %1$s</string>
+    <string name="history_chart_description">График записи. Нажмите, чтобы поставить общий курсор.</string>
+    <string name="history_chart_partial">Загружена только часть записанного ряда</string>
+    <string name="history_chart_scale">Шкала графика: %1$s … %2$s %3$s</string>
+    <string name="history_charts_title">Графики поездки</string>
+    <string name="history_charts_back">Назад к карте поездки</string>
 </resources>

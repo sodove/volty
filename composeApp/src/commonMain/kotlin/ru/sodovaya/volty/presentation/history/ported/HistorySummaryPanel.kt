@@ -93,7 +93,7 @@ private fun SummaryCell(title: String, value: HistorySummaryValue, unit: History
             })
         }
         val qualifier = if (value.quality == SummaryQuality.PARTIAL) "≈ " else ""
-        Text(if (number == null) "—" else "$qualifier$number ${summaryUnit(unit)}", style = MaterialTheme.typography.titleMedium)
+        Text(if (number == null) "—" else "$qualifier$number ${historyUnitText(unit)}", style = MaterialTheme.typography.titleMedium)
         if (value.quality != SummaryQuality.EXACT) Text(stringResource(if (value.quality == SummaryQuality.PARTIAL)
             Res.string.history_summary_partial else Res.string.history_summary_unavailable),
             style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -101,7 +101,7 @@ private fun SummaryCell(title: String, value: HistorySummaryValue, unit: History
 }
 
 @Composable
-private fun summaryUnit(unit: HistoryUnit?): String = when (unit) {
+internal fun historyUnitText(unit: HistoryUnit?): String = when (unit) {
     HistoryUnit.PERCENT -> stringResource(Res.string.unit_percent)
     HistoryUnit.CELSIUS -> stringResource(Res.string.unit_celsius)
     HistoryUnit.KMH -> stringResource(Res.string.unit_kmh)

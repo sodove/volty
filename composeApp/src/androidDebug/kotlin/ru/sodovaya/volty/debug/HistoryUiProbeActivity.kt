@@ -41,7 +41,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
         val catalog = stored || intent.getBooleanExtra("catalog", false)
         val repository = if (stored) getKoin().get<HistoryReadRepository>()
             else ProbeReader(intent.getBooleanExtra("omitFirstSource", false),intent.getBooleanExtra("remotePreviewArea", false),
-                intent.getBooleanExtra("summary", false))
+                intent.getBooleanExtra("summary", false) || intent.getBooleanExtra("charts", false), intent.getBooleanExtra("charts", false))
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
             { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish,
             getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>())
@@ -51,14 +51,17 @@ class HistoryUiProbeActivity : ComponentActivity() {
                 val state by owner.state.collectAsState()
                 val catalogListState = rememberLazyListState()
                 var drawer by remember { mutableStateOf(true) }
-                if (intent.getBooleanExtra("summary", false)) {
+                if (intent.getBooleanExtra("summary", false) || intent.getBooleanExtra("charts", false)) {
                     LaunchedEffect(state.detail.ride?.id) {
                         if (state.detail.ride != null) {
                             listOf(HistorySeriesKey("fixture-a", "power_w"), HistorySeriesKey("fixture-a", "voltage_v"),
                                 HistorySeriesKey("fixture-b", "current_a")).forEach(owner::addMetric)
+                            if (intent.getBooleanExtra("charts", false)) owner.showCharts()
                         }
                     }
-                    MapProbe(owner, state, showSummary = true)
+                    BackHandler(enabled = state.destination == HistoryDestination.CHARTS) { owner.back() }
+                    if (state.destination == HistoryDestination.CHARTS) HistoryChartsScreen(owner, state, { 0 })
+                    else MapProbe(owner, state, showSummary = true)
                     return@VoltyTheme
                 }
                 if (catalog) {
@@ -125,7 +128,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
     }
 
     private class ProbeReader(private val omitFirstSource: Boolean = false,private val remotePreviewArea: Boolean = false,
-        private val summaryFixture: Boolean = false) : HistoryReadRepository {
+        private val summaryFixture: Boolean = false, private val chartFixture: Boolean = false) : HistoryReadRepository {
         private val failedReads = mutableSetOf<String>()
         private val sources = listOf(HistorySource("fixture-a", HistorySourceKind.BATTERY, "Pack"),
             HistorySource("fixture-b", HistorySourceKind.BATTERY, "Pack"))
@@ -143,8 +146,17 @@ class HistoryUiProbeActivity : ComponentActivity() {
                 (0 until 1000).map { HistorySeriesKey(sourceId, "cell_v", it * 2) }
             return HistoryRecordedKeys(keys.take(limit), keys.size > limit)
         }
-        override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int) =
-            HistorySeries(key, emptyList(), emptyList(), false, origin)
+        override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries {
+            if (!chartFixture) return HistorySeries(key, emptyList(), emptyList(), false, origin)
+            val samples = listOf(1000L, 1500L, 2000L, 2500L, 3000L, 4000L, 4500L, 5000L).mapIndexed { index, time ->
+                val value = if (time == 2000L || key.metricId == "current_a") null else
+                    if (key.metricId == "power_w") listOf(-500.0, -4200.0, 0.0, 200.0, -700.0, -1200.0, -900.0, -200.0)[index]
+                    else 60.0 + index * 3.0
+                HistorySample(HistoryTick(time, time - 990, 1), key, value, if (value == null) HistoryUnknownReason.GAP else null)
+            }.filter { it.tick.epochMillis in range.startEpochMillis..range.endEpochMillis }
+            val markers = listOf(HistoryMarker(HistoryTick(3500, 2510, 1), HistoryMarkerKind.BLE_GAP, key.sourceId))
+            return HistorySeries(key, historyOverview(samples, markers), markers, false, origin)
+        }
         override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) =
             if (!summaryFixture) HistoryStats(null, null, null, false) else when (key.metricId) {
                 "power_w" -> HistoryStats(-4200.0, 200.0, 12.0, false)

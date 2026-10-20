@@ -262,6 +262,15 @@ adaptation of pinned HistoryStatsBar hierarchy, using Volty's persisted range
 stats instead of reduced chart samples. No root activation or completed home,
 cursor/whole-ride sections, full chart interactions or signed candidate is claimed.
 
+Recorded-chart rendering checkpoint (2026-10-20): original Kotlin chart projection,
+lazy selected-series cards and a fullscreen wrapper reuse the existing detail
+owner and metric drawer. Actual overview gap separators preserve earned post-gap
+points, and native chart taps update the same cursor later shown on the map.
+The acceptance record is `../specs/2026-10-20-history-recorded-charts-acceptance.md`.
+This does not close the chart-interaction checkbox: shared pan/pinch window,
+accessible timeline/time-axis controls, full Vescape-shaped home/navigation,
+remaining source/cursor/whole-ride sections and root cutover still need completion.
+
 ## Task6 — favorites, trim and curated media
 
 **Files:** Create `domain/history/HistoryFavorite.kt`, `FavoriteRangePolicy.kt`,
