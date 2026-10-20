@@ -185,7 +185,7 @@ in foundation facade with extrema/segment-safe read and its tests.
 - [x] RED using pure `historyPreviewPath(gps: List<HistoryGpsFix>, width: Double,
   height: Double): List<Pair<Double, Double>>` on zero-area bounds, crossing
   longitude wrap and gaps. Empty input returns empty path, no native map allocation.
-- [ ] Port Vescape thumbnail/layout/tile-cache approach. Key caches by ride ID,
+- [x] Port Vescape thumbnail/layout/tile-cache approach. Key caches by ride ID,
   data revision, dimensions and style revision; bound disk cache and concurrent
   requests. Reuse approved tile provider/cache, obey attribution/provider terms.
   If a tile fails/offline, route-only fallback remains visible, no broken partial tile mosaic.
@@ -205,6 +205,17 @@ ledger. Source previews use the existing bounded atomic route page with an
 explicit incomplete flag when data/segments are omitted; this does not claim a
 new full-route SQL summary, tile/image cache, name/distance/date-group/favorite
 binding or production root activation.
+
+Image-background checkpoint (2026-10-20): visible-only image ownership, bounded
+PNG memory/disk caches and one serialized native OpenGL snapshotter now sit behind
+the existing Canvas route fallback. The owner's exact key and parent admission
+fence late/stale images. The approved OFM styles/provider are reused with readable
+credits; failed/uncached offline requests preserve route-only previews. Native
+light/dark/offline/cancellation/font/orientation/back-scroll checks and full4317
+tests are recorded in `../specs/2026-10-20-history-preview-images-acceptance.md`.
+This supersedes the earlier image-cache-pending statement only. Remaining Task4
+items include full row metadata/date groups/favorites, future trim/delete binding
+and measured long-list performance; Task4 as a whole stays open.
 
 ## Task5 — full history home, summary and fullscreen charts
 
