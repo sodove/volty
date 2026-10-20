@@ -34,6 +34,12 @@ interface HistoryComponent {
     fun savePreset(name: String)
     fun applyPreset(id: String)
     fun deletePreset(id: String)
+    fun loadFavorites()
+    fun loadOlderFavorites()
+    fun saveFavorite(name: String, range: HistoryRange, editing: HistoryFavorite? = null)
+    fun deleteFavorite(favorite: HistoryFavorite)
+    fun openFavorite(favorite: HistoryFavorite)
+    fun retrySelectedRide()
     fun setVisiblePreviewImages(keys: List<HistoryPreviewImageKey>)
     fun back()
 }
@@ -44,7 +50,8 @@ interface HistoryComponent {
 class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: CoroutineScope,
     repository: HistoryReadRepository, readTick: () -> HistoryTick, private val onBack: () -> Unit,
     presetStore: HistoryMetricPresetStore? = null, imageLoader: HistoryPreviewImageLoader? = null,
-    previewDispatcher: CoroutineDispatcher = Dispatchers.Default) : HistoryComponent {
+    previewDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    favoriteStore: HistoryFavoriteRepository? = null) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -52,6 +59,25 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val route = HistoryRouteComponent(componentContext, scope, repository)
     private val previews = HistoryPreviewComponent(componentContext, scope, repository, PREVIEW_GPS_SILENCE_MILLIS,previewDispatcher)
     private val presets = HistoryPresetsComponent(componentContext, scope, presetStore)
+    private val favorites = HistoryFavoritesComponent(componentContext, scope, favoriteStore)
+    override fun loadFavorites() { if (lifetime.isActive) favorites.refresh() }
+    override fun loadOlderFavorites() { if (lifetime.isActive) favorites.loadOlder() }
+    @OptIn(kotlin.uuid.ExperimentalUuidApi::class)
+    override fun saveFavorite(name: String, range: HistoryRange, editing: HistoryFavorite?) = withSelection {
+        if (state.value.favorites.busy || !state.value.favorites.available) return@withSelection
+        val ride = state.value.detail.ride ?: return@withSelection
+        if (editing != null && editing.source != ride.favoriteSource()) return@withSelection
+        val id = editing?.id ?: kotlin.uuid.Uuid.random().toString()
+        pendingFavoriteSave = PendingFavoriteSave(id, selection, windowIntent, ride.favoriteSource())
+        favorites.save(id, ride.favoriteSource(), range, name, editing?.revision)
+    }
+    override fun deleteFavorite(favorite: HistoryFavorite) { if (lifetime.isActive) favorites.delete(favorite) }
+    override fun openFavorite(favorite: HistoryFavorite) { openSelection(favorite.source.rideId, favorite) }
+    override fun retrySelectedRide() {
+        if (!lifetime.isActive) return
+        val id = selectedRideId ?: return
+        openSelection(id, state.value.selectedFavorite)
+    }
     private val previewImages = imageLoader?.let { HistoryPreviewImagesComponent(componentContext,scope,it) }
     private val mutableState = MutableStateFlow(HistoryUiState())
     override val state = mutableState.asStateFlow()
@@ -61,6 +87,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private var visiblePreviewIds = emptyList<String>()
     private var catalogIntent = Any()
     private var windowIntent = Any()
+    private data class PendingFavoriteSave(val id: String, val selection: Any, val windowIntent: Any, val source: HistoryFavoriteSource)
+    private var pendingFavoriteSave: PendingFavoriteSave? = null
     private var windowGesture: WindowGesture? = null
     private class WindowGesture(val token: HistoryWindowGestureToken, val selection: Any, val intent: Any,
         val rideId: String, val base: HistoryRange, val bounds: HistoryRange)
@@ -77,6 +105,25 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         scope.launch(start = CoroutineStart.UNDISPATCHED) { detail.state.collect(::onDetail) }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             presets.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(presets = it) }
+        }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            favorites.state.collect { next ->
+                if (lifetime.isActive) {
+                    val old = mutableState.value.selectedFavorite
+                    val captured = selection
+                    val pending = pendingFavoriteSave
+                    val activate = pending != null && pending.id == next.savedId && selection === pending.selection &&
+                        windowIntent === pending.windowIntent && mutableState.value.detail.ride?.favoriteSource() == pending.source
+                    val selected = (if (activate) next.items.singleOrNull { it.id == next.savedId } else null)
+                        ?: old?.takeUnless { it.id == next.deletedId }?.let { favorite ->
+                        next.items.singleOrNull { it.id == favorite.id } ?: favorite }
+                    mutableState.value = mutableState.value.copy(favorites = next, selectedFavorite = selected)
+                    if (lifetime.isActive && selection === captured && activate && selected != null && selected.id == next.savedId &&
+                        mutableState.value.detail.ride?.favoriteSource() == selected.source && mutableState.value.detail.range != selected.range)
+                        detail.selectRange(selected.range)
+                    if (!next.busy) pendingFavoriteSave = null
+                }
+            }
         }
         previewImages?.let { owner -> scope.launch(start = CoroutineStart.UNDISPATCHED) {
             owner.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(previewImages = it) }
@@ -116,17 +163,19 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     }
     override fun loadOlder() { if (lifetime.isActive) { catalogIntent = Any(); catalog.loadOlder() } }
 
-    override fun openRide(id: String) {
+    override fun openRide(id: String) { openSelection(id, null) }
+    private fun openSelection(id: String, favorite: HistoryFavorite?) {
         if (!lifetime.isActive) return
         require(id.isNotBlank())
         selectedRideId = id; selection = Any()
         windowIntent = Any(); windowGesture = null
         val captured = selection
         mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE, selectedRideId = id,
-            detail = HistoryDetailState(rideId = id, loading = true), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null)
+            detail = HistoryDetailState(rideId = id, loading = true), route = HistoryRouteState(), windowPreview = null,
+            mapMetricKey = null, selectedFavorite = favorite)
         if (!lifetime.isActive || selection !== captured) return
         route.clear()
-        if (lifetime.isActive && selection === captured) detail.openRide(id)
+        if (lifetime.isActive && selection === captured) detail.openRide(id, favorite)
     }
 
     override fun showCharts() = withSelection {
@@ -246,7 +295,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                 windowIntent = Any(); windowGesture = null
                 val captured = selection
                 mutableState.value = mutableState.value.copy(destination = HistoryDestination.CATALOG, selectedRideId = null,
-                    detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null)
+                    detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null, selectedFavorite = null)
                 if (lifetime.isActive && selection === captured) { detail.clear(); route.clear() }
             }
         }
@@ -255,7 +304,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     fun close() {
         selection = Any(); catalogIntent = Any(); selectedRideId = null
         windowIntent = Any(); windowGesture = null
-        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); previewImages?.close(); lifetime.cancel()
+        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); previewImages?.close(); lifetime.cancel()
     }
 }
 

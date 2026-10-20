@@ -10,6 +10,8 @@ These Kotlin/Compose files adapt Vescape's UI at pinned revision
 | `HistorySummaryPanel.kt` | `src/screens/main/history/HistoryStatsBar.tsx` | Compact/expand hierarchy adapted to source-qualified selected metrics. Flowing cells and bounded lazy expansion replace fixed tiny columns. Canonical persisted range statistics, independent per-field quality and Volty units replace upstream session aggregates; no reduced-sample recomputation or aggregate/contributor addition. |
 | `HistoryNavigationStrip.kt` | `src/modules/history/components/HistoryPanelNav.tsx` | Central clickable ride title/subtitle/dropdown with loaded-order previous/next and side actions. Compose Material3, 54dp touch targets, adaptive two-row layout for narrow windows/large fonts. Metrics action replaces the not-yet-integrated favorite action; no inactive favorite/media/share controls. |
 | `HistoryScreen.kt` | `src/screens/main/history/HistoryOverlay.tsx`, `HistoryRideDetail.tsx`, `HistoryTelemetryPanel.tsx` | Home composition responsibilities: one retained recorded map behind header/summary and the bottom chart/navigation panel, ride-list and metric sheets, shared fullscreen chart owner, 180ms panel size animation. Volty adds source-qualified facts, range/ride fences, off-UI map scene work, adaptive side panel, explicit GPS/read quality and measured camera padding. No React runtime, upstream map token, session aggregate/metric-button strip or inactive favorite/media/export actions. |
+| `HistoryFavoritesScreen.kt` | `src/modules/history/components/HistorySessionSheet.tsx`, `src/screens/main/history/useHistoryFavorites.ts` | Explicit history/favorites switch, named saved sections and selection workflow. Compose lazy list, bounded SQL pages, confirmation before removing a reference, hoisted list position and typed failures. No inferred route/distance or borrowed board data. |
+| `HistoryTrimPanel.kt` | `src/screens/main/history/useHistoryFavorites.ts` | Save/edit section workflow with bounded range selection, whole-recording reset, name field, visible start/end/duration and explicit save. Compose bottom sheet with scrolling and IME handling. Saves a source-pinned reference, never rewrites the recording. |
 
 These adaptations are marked `GPL-3.0-or-later`, matching upstream `package.json`.
 `LICENSE` is a verbatim copy of upstream's GNU GPL version 3 text (SHA-256
@@ -33,3 +35,10 @@ Retraction (2026-10-20): the earlier tile/cache-pending statement above describe
 the Canvas adaptation alone. Volty's separate image pipeline now provides bounded
 OFM background snapshots and PNG caches behind that fallback, without borrowing
 the upstream owner's Mapbox style/token.
+
+Retraction (2026-10-21): the earlier favorite-pending descriptions above record
+the prior home milestone. The home now exposes an active header star and a
+history/favorites catalog switch. Favorites use Volty's original transactional
+SQL repository, immutable recording identity and revision checks; the workflow
+adaptations are the two additional GPL-marked files listed above. Media and
+export controls remain absent until their real storage flows are integrated.

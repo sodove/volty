@@ -19,6 +19,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -40,7 +42,7 @@ import volty.composeapp.generated.resources.*
 /** One selected read owner and one native map across home/fullscreen charts.
  * The caller owns the component lifetime; this view never starts a recording or GPS.
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey) -> Long,
     gpsMaxAgeMillis: Long, modifier: Modifier = Modifier, vehicleNames: Map<String, String> = emptyMap(),
@@ -48,23 +50,46 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     val state by owner.state.collectAsState()
     val content = historyScreenContent(state)
     val catalogList = rememberLazyListState()
+    val favoritesList = rememberLazyListState()
     var listOpen by remember { mutableStateOf(false) }
     var metricsOpen by remember(state.selectedRideId) { mutableStateOf(false) }
+    var favoritesTab by remember { mutableStateOf(false) }
+    var trimOpen by remember(state.selectedRideId) { mutableStateOf(false) }
+    var submitted by remember { mutableStateOf(false) }
+    LaunchedEffect(state.favorites.busy, state.favorites.savedId, submitted) {
+        if (submitted && !state.favorites.busy && state.favorites.savedId != null) {
+            trimOpen = false; submitted = false
+        }
+    }
+    LaunchedEffect(favoritesTab, listOpen) {
+        if (favoritesTab && !state.favorites.loaded && !state.favorites.busy) owner.loadFavorites()
+    }
     var summaryExpanded by remember(state.selectedRideId) { mutableStateOf(false) }
     var chartsExpanded by remember { mutableStateOf(true) }
     LaunchedEffect(state.destination, state.mapMetricKey) {
         if (state.destination == HistoryDestination.RIDE && state.mapMetricKey != null) chartsExpanded = false
     }
-    BackHandler(enabled = !listOpen && !metricsOpen) { owner.back() }
+    BackHandler(enabled = !listOpen && !metricsOpen && !trimOpen) { owner.back() }
     LaunchedEffect(owner, content.phase, listOpen) {
         if ((content.phase == HistoryScreenPhase.CATALOG || listOpen) && !state.catalog.loaded && !state.catalog.refreshing)
             owner.refresh()
     }
     val openRide: (String) -> Unit = { id -> listOpen = false; metricsOpen = false; owner.openRide(id) }
     val catalog: @Composable (Modifier) -> Unit = { bodyModifier ->
-        HistoryRideList(state.catalog, state.selectedRideId, openRide, owner::refresh, owner::loadOlder, bodyModifier,
+        Column(bodyModifier) {
+        if (state.favorites.available) FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            FilterChip(!favoritesTab, { favoritesTab = false }, label = { Text(stringResource(Res.string.history_title), maxLines = 1) })
+            FilterChip(favoritesTab, { favoritesTab = true }, label = { Text(stringResource(Res.string.history_favorites), maxLines = 1) })
+        }
+        if (favoritesTab) HistoryFavoritesScreen(state.favorites, state.selectedFavorite?.id,
+            { listOpen = false; owner.openFavorite(it) }, owner::loadFavorites, owner::loadOlderFavorites,
+            owner::deleteFavorite, Modifier.fillMaxWidth().weight(1f), favoritesList)
+        else
+        HistoryRideList(state.catalog, state.selectedRideId, openRide, owner::refresh, owner::loadOlder, Modifier.fillMaxWidth().weight(1f),
             vehicleNames, state.previews, reduceMotion, owner::setVisibleRides, owner::retryPreview,
             catalogList, state.previewImages, state.previewRevision, owner::setVisiblePreviewImages)
+        }
     }
     BoxWithConstraints(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding()) {
         if (content.phase == HistoryScreenPhase.CATALOG) {
@@ -114,6 +139,11 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         HistoryBack(owner::back)
                         Text(stringResource(Res.string.history_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        if (state.favorites.available && content.detail?.availableRange?.let { it.endEpochMillis > it.startEpochMillis } == true)
+                            IconButton(onClick = { submitted = false; trimOpen = true }) {
+                                Icon(if (state.selectedFavorite == null) Icons.Default.StarBorder else Icons.Default.Star,
+                                    stringResource(if (state.selectedFavorite == null) Res.string.history_favorite_add else Res.string.history_favorite_edit))
+                            }
                         IconButton(onClick = { fitSequence++ }, enabled = scene.segments.isNotEmpty()) {
                             Icon(Icons.Default.MyLocation, stringResource(Res.string.history_fit_route))
                         }
@@ -130,7 +160,8 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                 Column((if (reduceMotion) Modifier else Modifier.animateContentSize(tween(180)))
                     .then(if (scrollChrome) Modifier.verticalScroll(rememberScrollState()) else Modifier)) {
                     val neighbors = historyRideNeighbors(state.catalog.rides.map { it.id }, state.selectedRideId)
-                    val title = content.detail?.ride?.let { vehicleNames[it.vehicleId] } ?: stringResource(Res.string.history_ride_title)
+                    val title = state.selectedFavorite?.name ?: content.detail?.ride?.let { vehicleNames[it.vehicleId] }
+                        ?: stringResource(Res.string.history_ride_title)
                     val subtitle = content.detail?.ride?.started?.epochMillis?.let { historyRideDate(it) }
                         ?: stringResource(Res.string.history_date_unknown)
                     HistoryNavigationStrip(title, subtitle, neighbors.previousId != null, neighbors.nextId != null,
@@ -154,7 +185,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                             { owner.selectMapMetric(null) }) }
                         HistoryTimelineControls(checkNotNull(content.detail).copy(range = state.windowPreview ?: content.detail.range),
                             owner::selectRange, owner::selectTime, compact = true, applyNavigationInsets = false)
-                    } else HistoryDetailStatus(content.phase) { state.selectedRideId?.let(owner::openRide) }
+                    } else HistoryDetailStatus(content.phase, owner::retrySelectedRide)
                     HistoryPreviewAttribution()
                 }
             }
@@ -174,6 +205,14 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     if (metricsOpen && content.detail != null) HistoryMetricDrawer(content.detail, owner::loadSourceMetrics,
         owner::addMetric, owner::removeMetric, { metricsOpen = false }, reduceMotion,
         state.presets, owner::loadPresets, owner::savePreset, owner::applyPreset, owner::deletePreset)
+    val bounds = content.detail?.availableRange
+    val selectedRange = content.detail?.range
+    if (trimOpen && bounds != null && selectedRange != null && bounds.endEpochMillis > bounds.startEpochMillis) {
+        HistoryTrimPanel(bounds, selectedRange, state.selectedFavorite?.name ?: stringResource(Res.string.history_ride_title),
+            state.selectedFavorite != null, state.favorites,
+            { name, range -> submitted = true; owner.saveFavorite(name, range, state.selectedFavorite) },
+            { trimOpen = false; submitted = false })
+    }
 }
 
 private data class BoundHistoryMap(val identity: HistoryMapIdentity, val route: HistoryRouteState?,
@@ -234,10 +273,11 @@ private fun HistoryRouteStatus(content: HistoryScreenContent, owner: HistoryComp
 }
 
 @Composable
-private fun historyRideDate(epoch: Long): String {
+internal fun historyRideDate(epoch: Long, includeSeconds: Boolean = false): String {
     val zone = TimeZone.currentSystemDefault()
-    return remember(epoch, zone) { runCatching {
+    return remember(epoch, zone, includeSeconds) { runCatching {
         val date = Instant.fromEpochMilliseconds(epoch).toLocalDateTime(zone)
-        "${date.date} · ${date.hour.toString().padStart(2, '0')}:${date.minute.toString().padStart(2, '0')}"
+        "${date.date} · ${date.hour.toString().padStart(2, '0')}:${date.minute.toString().padStart(2, '0')}" +
+            if (includeSeconds) ":${date.second.toString().padStart(2, '0')}" else ""
     }.getOrNull() } ?: stringResource(Res.string.history_date_unknown)
 }

@@ -52,7 +52,7 @@ class HistoryDetailComponent(
 
     init { componentContext.lifecycle.doOnDestroy { close() } }
 
-    fun openRide(id: String) {
+    fun openRide(id: String, favorite: HistoryFavorite? = null) {
         if (!lifetime.isActive) return
         require(id.isNotBlank())
         retireReads()
@@ -72,6 +72,7 @@ class HistoryDetailComponent(
                     return@launch
                 }
                 check(ride.id == id) { "Mismatched recorded ride" }
+                check(favorite == null || favorite.source == ride.favoriteSource()) { "Favorite recording was replaced" }
                 val sources = repository.sources(id).toList()
                 currentCoroutineContext().ensureActive()
                 if (request !== generation) return@launch
@@ -91,8 +92,9 @@ class HistoryDetailComponent(
                     checkNotNull(historyAxisEpochMillis(ride.started, now))
                 }
                 val range = recorded ?: HistoryRange(ride.started.epochMillis, end)
+                val selected = favorite?.range?.also { check(clampFavoriteRange(it, range) == it) } ?: range
                 availableRange = range
-                mutableState.value = mutableState.value.copy(ride = ride, sources = sources, range = range,
+                mutableState.value = mutableState.value.copy(ride = ride, sources = sources, range = selected,
                     availableRange = range, loading = false)
             } catch (cancel: CancellationException) {
                 throw cancel

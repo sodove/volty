@@ -114,3 +114,15 @@ camera padding. The Kotlin state-qualification/adjacency policy is original code
 No additional runtime dependency or upstream assets/token are introduced.
 Favorite/media/export actions remain omitted until their real owners are wired;
 this does not claim the complete experience or root/recorder activation is done.
+
+## Favorites workflow adaptation (2026-10-21)
+
+`ported/HistoryFavoritesScreen.kt` and `ported/HistoryTrimPanel.kt` adapt the
+favorites/list/trim interaction from pinned `HistorySessionSheet.tsx` and
+`useHistoryFavorites.ts` at revision
+`2527c346bbdb25d4e018fdd68e916621e20fac27` (Kacper Kozak). Both carry adjacent
+GPL-3.0-or-later notices and use the preserved upstream LICENSE. The original
+Kotlin repository, source fingerprint, SQLite migration, paging/revision rules
+and Decompose request ownership are Volty implementations. No new dependency,
+upstream media URI persistence or recording mutation was introduced here.
+The combined release audit above remains open; this entry records provenance.

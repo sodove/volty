@@ -33,7 +33,8 @@ import org.koin.android.ext.android.getKoin
 /** Native rendering/input fixture. Earlier revisions used synthetic data only;
  * stored=true now reads closed rides and persisted windows of unclosed legacy
  * rides through app DI. It has no qualified clock for a live v2 recording.
- * Neither mode writes recordings or starts BLE/location. Synthetic is default.
+ * Neither ordinary mode writes recordings or starts BLE/location. Synthetic is default.
+ * Explicit favorites=true seeds one named debug recording for persistent favorite UI checks.
  * This source/manifest belongs exclusively to the Android debug variant.
  */
 @OptIn(ExperimentalMaterial3Api::class)
@@ -48,8 +49,9 @@ class HistoryUiProbeActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        val stored = intent.getBooleanExtra("stored", false)
-        val home = intent.getBooleanExtra("home", false)
+        val favoriteFixture = intent.getBooleanExtra("favorites", false)
+        val stored = favoriteFixture || intent.getBooleanExtra("stored", false)
+        val home = favoriteFixture || intent.getBooleanExtra("home", false)
         val catalog = stored || intent.getBooleanExtra("catalog", false)
         val repository = if (stored) getKoin().get<HistoryReadRepository>()
             else ProbeReader(intent.getBooleanExtra("omitFirstSource", false),intent.getBooleanExtra("remotePreviewArea", false),
@@ -57,7 +59,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
                 home || intent.getBooleanExtra("charts", false), intent.getLongExtra("readDelayMillis", 0).coerceIn(0, 3000))
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
             { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish,
-            getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>())
+            getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>(),
+            favoriteStore = getKoin().get<HistoryFavoriteRepository>())
         if (intent.getBooleanExtra("charts", false)) lifecycleScope.launch {
             var previous: Pair<HistoryRange?,HistoryRange?>? = null
             owner.state.collect { state ->
@@ -65,7 +68,21 @@ class HistoryUiProbeActivity : ComponentActivity() {
                 if (windows != previous) { previous = windows; Log.d("HistoryProbeWindow", "committed=${windows.first} preview=${windows.second}") }
             }
         }
-        if (catalog) owner.refresh() else owner.openRide(if (home) "fixture-0" else "fixture")
+        if (favoriteFixture) lifecycleScope.launch {
+            val store = getKoin().get<HistoryStore>()
+            val id = "history-favorite-ui-probe"
+            if (store.ride(id) == null) {
+                val start = HistoryTick(1792400000000, 1000, 99)
+                store.begin(HistoryRide(id, "favorite-ui-bike", start, null, HistoryRideStatus.RECORDING),
+                    listOf(HistorySource("pack", HistorySourceKind.BATTERY, "Debug pack")))
+                val fixes = (0L..6L).map { i -> HistoryGpsFix(start.copy(epochMillis = start.epochMillis + i * 10000,
+                    elapsedMillis = start.elapsedMillis + i * 10000), 56.84 + i * 0.0001, 60.6 + i * 0.0001, 3.0, null) }
+                store.append(HistoryBatch(id, fixes.map { HistorySample(it.tick, HistorySeriesKey("pack", "voltage_v"), 72.0) },
+                    fixes, emptyList()))
+                store.finish(id, fixes.last().tick, HistoryRideStatus.COMPLETED)
+            }
+            owner.openRide(id)
+        } else if (catalog) owner.refresh() else owner.openRide(if (home) "fixture-0" else "fixture")
         setContent {
             VoltyTheme {
                 val state by owner.state.collectAsState()

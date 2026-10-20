@@ -44,6 +44,114 @@ class HistoryComponentTest {
     private fun TestScope.component(repo: Repo, onBack: () -> Unit = {}) = DefaultHistoryComponent(
         DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo, { HistoryTick(6000, 5010, 1) }, onBack)
 
+    private open inner class Favorites : HistoryFavoriteRepository {
+        var saved: HistoryFavorite? = null
+        override suspend fun get(id: String) = saved?.takeIf { it.id == id }
+        override suspend fun page(before: HistoryCursor?) = HistoryPage(listOfNotNull(saved), null, false)
+        override suspend fun save(id: String, source: HistoryFavoriteSource, range: HistoryRange, name: String, expectedRevision: Long?): HistoryFavorite {
+            return HistoryFavorite(id, source, range, name, (expectedRevision ?: 0) + 1, 9999).also { saved = it }
+        }
+        override suspend fun delete(id: String, expectedRevision: Long) { saved = null }
+    }
+    private fun TestScope.withFavorites(repo: Repo, favorites: Favorites) = DefaultHistoryComponent(
+        DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo,
+        { HistoryTick(6000, 5010, 1) }, {}, favoriteStore = favorites)
+
+    @Test fun favoriteSaveCapturesOriginalSelectionWithoutSwitchingTheNewRide() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        try {
+            c.openRide("a"); runCurrent()
+            c.saveFavorite("A", HistoryRange(2000, 4000)); c.openRide("b"); runCurrent()
+            assertEquals(ride("a").favoriteSource(), assertNotNull(store.saved).source)
+            assertEquals(HistoryRange(2000, 4000), store.saved?.range)
+            assertEquals("b", c.state.value.detail.ride?.id)
+        } finally { c.close() }
+    }
+    @Test fun openingFavoriteUsesSavedRangeWithWholeRecordingBounds() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), HistoryRange(2000, 4000), "A", 1, 9999)
+        try {
+            c.openFavorite(favorite); runCurrent()
+            assertEquals(favorite.range, c.state.value.detail.range)
+            assertEquals(full, c.state.value.detail.availableRange)
+            assertEquals(favorite.id, c.state.value.selectedFavorite?.id)
+            c.openRide("b"); runCurrent(); assertNull(c.state.value.selectedFavorite)
+        } finally { c.close() }
+    }
+    @Test fun favoriteCannotBindToReplacedVehicleOrExposeItsRoute() = runTest {
+        val repo = object : Repo() { override suspend fun ride(rideId: String) = this@HistoryComponentTest.ride(rideId).copy(vehicleId = "replacement") }
+        val c = withFavorites(repo, Favorites())
+        try {
+            c.openFavorite(HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)); runCurrent()
+            assertNull(c.state.value.detail.ride)
+            assertNotNull(c.state.value.detail.error)
+            assertTrue(repo.routeReads.isEmpty())
+        } finally { c.close() }
+    }
+    @Test fun deletingOpenFavoriteClearsFavoriteSelectionButKeepsRideAndRange() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), HistoryRange(2000, 4000), "A", 1, 9999)
+        try {
+            store.saved = favorite; c.loadFavorites(); runCurrent(); c.openFavorite(favorite); runCurrent()
+            assertEquals("f", c.state.value.selectedFavorite?.id)
+            c.deleteFavorite(favorite); runCurrent()
+            assertNull(c.state.value.selectedFavorite)
+            assertEquals("a", c.state.value.detail.ride?.id)
+            assertEquals(favorite.range, c.state.value.detail.range)
+        } finally { c.close() }
+    }
+    @Test fun editingOpenFavoriteAppliesPersistedRangeToSharedDetail() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)
+        try {
+            store.saved = favorite; c.loadFavorites(); runCurrent(); c.openFavorite(favorite); runCurrent()
+            val trimmed = HistoryRange(2000, 3000)
+            c.saveFavorite("Trimmed", trimmed, favorite); runCurrent()
+            assertEquals(trimmed, c.state.value.selectedFavorite?.range)
+            assertEquals(trimmed, c.state.value.detail.range)
+            assertEquals(full, c.state.value.detail.availableRange)
+        } finally { c.close() }
+    }
+    @Test fun retryingFavoriteNeverDropsSourceQualification() = runTest {
+        var replaced = true
+        val repo = object : Repo() { override suspend fun ride(rideId: String) = this@HistoryComponentTest.ride(rideId)
+            .let { if (replaced) it.copy(vehicleId = "replacement") else it } }
+        val c = withFavorites(repo, Favorites())
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), HistoryRange(2000, 4000), "A", 1, 9999)
+        try {
+            c.openFavorite(favorite); runCurrent(); assertNotNull(c.state.value.detail.error)
+            c.retrySelectedRide(); runCurrent()
+            assertNotNull(c.state.value.detail.error); assertTrue(repo.routeReads.isEmpty())
+            replaced = false; c.retrySelectedRide(); runCurrent()
+            assertNull(c.state.value.detail.error); assertEquals(favorite.range, c.state.value.detail.range)
+        } finally { c.close() }
+    }
+    @Test fun savingCurrentSectionSelectsSavedFavoriteAndShowsItsPersistedRange() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        try {
+            c.openRide("a"); runCurrent(); c.saveFavorite("New", HistoryRange(2000, 3000)); runCurrent()
+            assertEquals(assertNotNull(store.saved), c.state.value.selectedFavorite)
+            assertEquals(HistoryRange(2000, 3000), c.state.value.detail.range)
+        } finally { c.close() }
+    }
+    @Test fun lateFavoriteSaveCannotUndoNewerWindowSelection() = runTest {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val store = object : Favorites() {
+            override suspend fun save(id: String, source: HistoryFavoriteSource, range: HistoryRange, name: String,
+                expectedRevision: Long?): HistoryFavorite {
+                entered.complete(Unit); release.await(); return super.save(id, source, range, name, expectedRevision)
+            }
+        }
+        val c = withFavorites(Repo(), store)
+        try {
+            c.openRide("a"); runCurrent(); c.saveFavorite("Earlier", HistoryRange(2000, 3000)); runCurrent()
+            assertTrue(entered.isCompleted)
+            c.selectRange(HistoryRange(3000, 4000)); runCurrent(); release.complete(Unit); runCurrent()
+            assertEquals(HistoryRange(3000, 4000), c.state.value.detail.range)
+            assertNull(c.state.value.selectedFavorite); assertNotNull(store.saved)
+        } finally { release.complete(Unit); c.close(); runCurrent() }
+    }
+
     @Test fun gesturePreviewsIssueNoReadsAndSettlesExactlyOnceForAllOwners() = runTest {
         val repo = Repo(); val c = component(repo)
         try {

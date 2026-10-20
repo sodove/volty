@@ -331,14 +331,14 @@ interface HistoryFavoriteRepository {
 }
 ```
 
-- [ ] RED on range clamp/no empty trim, favorite source unchanged after editing,
+- [x] RED on range clamp/no empty trim, favorite source unchanged after editing,
   duplicate labels distinct IDs. Test preserved whole ride and selected interval.
   ```kotlin
   @Test fun trimStaysWithinRide() {
     assertEquals(HistoryRange(10, 90), clampFavoriteRange(HistoryRange(0, 90), HistoryRange(10, 100)))
   }
   ```
-- [ ] Port favorites/list/trim visual interaction; favorite is a reference/range,
+- [x] Port favorites/list/trim visual interaction; favorite is a reference/range,
   not destructive rewrite of recorded trace. Delete favorite leaves ride intact.
 - [ ] Explicit picker imports bounded files to temp app-owned path, computes hash,
   commits manifest with stable ID, atomically publishes final file. At startup

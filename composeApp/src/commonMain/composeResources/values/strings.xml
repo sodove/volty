@@ -1108,4 +1108,22 @@
     <string name="history_window_zoom_out">Zoom out on time</string>
     <string name="history_window_reset">Show whole recorded ride</string>
     <string name="history_window_cursor">Move shared cursor</string>
+    <string name="history_favorites">Favorites</string>
+    <string name="history_favorites_empty">Open a ride and tap the star to save it or a selected section.</string>
+    <string name="history_favorite_add">Save to favorites</string>
+    <string name="history_favorite_edit">Edit favorite</string>
+    <string name="history_favorite_name">Name</string>
+    <string name="history_favorite_save">Save</string>
+    <string name="history_favorite_delete">Remove from favorites</string>
+    <string name="history_favorite_cancel">Cancel</string>
+    <string name="history_favorite_delete_explanation">Remove «%1$s» from favorites? The recorded ride will remain.</string>
+    <string name="history_favorite_reference_only">Only the saved section changes. The original recording stays intact.</string>
+    <string name="history_favorite_start">Start: %1$s</string>
+    <string name="history_favorite_end">End: %1$s</string>
+    <string name="history_favorite_length">Duration: %1$s s</string>
+    <string name="history_favorite_invalid_name">Enter a name of 1–120 characters.</string>
+    <string name="history_favorite_invalid_range">Select a non-empty section of the recorded ride.</string>
+    <string name="history_favorite_source_missing">The original recording is unavailable or has changed.</string>
+    <string name="history_favorite_conflict">This favorite has changed. Refresh the list and try again.</string>
+    <string name="history_favorite_storage_error">Could not save or load favorites. Try again.</string>
 </resources>

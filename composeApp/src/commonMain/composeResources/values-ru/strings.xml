@@ -1106,4 +1106,22 @@
     <string name="history_window_zoom_out">Отдалить по времени</string>
     <string name="history_window_reset">Показать всю записанную поездку</string>
     <string name="history_window_cursor">Переместить общий курсор</string>
+    <string name="history_favorites">Избранное</string>
+    <string name="history_favorites_empty">Откройте поездку и нажмите звезду, чтобы сохранить её или выбранный участок.</string>
+    <string name="history_favorite_add">Сохранить в избранное</string>
+    <string name="history_favorite_edit">Изменить избранное</string>
+    <string name="history_favorite_name">Название</string>
+    <string name="history_favorite_save">Сохранить</string>
+    <string name="history_favorite_delete">Удалить из избранного</string>
+    <string name="history_favorite_cancel">Отмена</string>
+    <string name="history_favorite_delete_explanation">Удалить «%1$s» из избранного? Запись поездки останется.</string>
+    <string name="history_favorite_reference_only">Меняется только сохранённый участок. Исходная запись остаётся целой.</string>
+    <string name="history_favorite_start">Начало: %1$s</string>
+    <string name="history_favorite_end">Конец: %1$s</string>
+    <string name="history_favorite_length">Длительность: %1$s с</string>
+    <string name="history_favorite_invalid_name">Введите название от 1 до 120 символов.</string>
+    <string name="history_favorite_invalid_range">Выберите непустой участок записанной поездки.</string>
+    <string name="history_favorite_source_missing">Исходная запись недоступна или была заменена.</string>
+    <string name="history_favorite_conflict">Избранное изменилось. Обновите список и попробуйте ещё раз.</string>
+    <string name="history_favorite_storage_error">Не удалось сохранить или загрузить избранное. Попробуйте ещё раз.</string>
 </resources>

@@ -1,0 +1,40 @@
+CREATE TABLE HistoryFavorite (
+  id TEXT NOT NULL PRIMARY KEY,
+  rideId TEXT NOT NULL,
+  vehicleId TEXT NOT NULL,
+  storageKind TEXT NOT NULL,
+  startedEpochMillis INTEGER NOT NULL,
+  startedElapsedMillis INTEGER NOT NULL,
+  clockGeneration INTEGER NOT NULL,
+  rangeStart INTEGER NOT NULL,
+  rangeEnd INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  createdEpochMillis INTEGER NOT NULL,
+  CHECK(rangeEnd > rangeStart),
+  CHECK(revision > 0)
+);
+CREATE INDEX HistoryFavorite_created ON HistoryFavorite(createdEpochMillis DESC, id DESC);
+CREATE INDEX HistoryFavorite_source ON HistoryFavorite(rideId, storageKind);
+
+getFavorite:
+SELECT * FROM HistoryFavorite WHERE id = :id;
+
+pageFavorites:
+SELECT * FROM HistoryFavorite
+WHERE :beforeEpoch IS NULL OR createdEpochMillis < :beforeEpoch
+OR (createdEpochMillis = :beforeEpoch AND id < :beforeId)
+ORDER BY createdEpochMillis DESC, id DESC LIMIT :pageSize;
+
+insertFavorite:
+INSERT INTO HistoryFavorite VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+
+editFavorite:
+UPDATE HistoryFavorite SET rangeStart = :rangeStart, rangeEnd = :rangeEnd,
+name = :name, revision = :revision WHERE id = :id;
+
+deleteFavorite:
+DELETE FROM HistoryFavorite WHERE id = :id;
+
+sourceReferences:
+SELECT COUNT(*) FROM HistoryFavorite WHERE rideId = :rideId AND storageKind = :storageKind;

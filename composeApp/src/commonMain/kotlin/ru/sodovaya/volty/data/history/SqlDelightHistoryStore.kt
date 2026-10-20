@@ -159,6 +159,9 @@ class SqlDelightHistoryStore(
 
     override suspend fun delete(rideId: String) = withContext(dispatcher) {
         database.transaction {
+            check(database.historyFavoriteQueries.sourceReferences(rideId, "V2").executeAsOne() == 0L) {
+                "Recording is referenced by favorites"
+            }
             // Application foreign_keys are OFF. Explicit child deletion must work on that path too.
             sampleQueries.deleteSamples(rideId)
             gpsQueries.deleteGps(rideId)
