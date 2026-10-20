@@ -21,3 +21,18 @@ object RadioDuplicateRule {
         otherMembersUnknown: Boolean = true,
     ): Boolean = otherBssid.lowercase() < ownBssid.lowercase()
 }
+
+/** The decision a hub makes once a same-name foreign hub is confirmed present after the random back-off (ruling R14). */
+object RadioDuplicateDecision {
+    private const val REDACTED = "02:00:00:00:00:00"
+
+    /** Android hides the real MAC from apps; such an address cannot be compared, so the hub yields. */
+    fun isAddressUnknown(address: String?): Boolean {
+        if (address.isNullOrBlank()) return true
+        val a = address.lowercase()
+        return a == REDACTED || a.all { it == '0' || it == ':' }
+    }
+
+    fun shouldReport(ownAddress: String?, otherBssid: String, ownMembers: Int): Boolean =
+        isAddressUnknown(ownAddress) || RadioDuplicateRule.shouldYield(ownMembers, ownAddress!!, otherBssid)
+}

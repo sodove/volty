@@ -15,6 +15,7 @@ import kotlin.test.assertEquals
 @OptIn(ExperimentalCoroutinesApi::class)
 class RadioControllerTest {
     private class FakeLink(private val now: () -> Long = { 0L }) : RadioLink {
+        override var onDuplicateHub: ((String) -> Unit)? = null
         val calls = mutableListOf<String>()
         var joinResult: RadioLinkResult = RadioLinkResult.NotFound
         var hostResult: RadioLinkResult = RadioLinkResult.Hosting(4000)

@@ -30,3 +30,20 @@ class RadioDuplicateRuleTest {
         assertFalse(RadioDuplicateRule.shouldYield(1, low, low.uppercase()))
     }
 }
+
+class RadioDuplicateDecisionTest {
+    @Test
+    fun redactedOrMissingOwnAddressAlwaysYields() {
+        for (own in listOf(null, "", "02:00:00:00:00:00", "00:00:00:00:00:00")) {
+            assertTrue(RadioDuplicateDecision.shouldReport(own, "00:11:22:33:44:55", 1), "own=$own")
+            assertTrue(RadioDuplicateDecision.shouldReport(own, "ff:11:22:33:44:55", 1), "own=$own")
+        }
+    }
+
+    @Test
+    fun knownAddressFollowsTheRule() {
+        assertTrue(RadioDuplicateDecision.shouldReport("0a:11:22:33:44:55", "02:11:22:33:44:55", 1))
+        assertFalse(RadioDuplicateDecision.shouldReport("02:11:22:33:44:55", "0a:11:22:33:44:55", 1))
+        assertFalse(RadioDuplicateDecision.shouldReport("02:11:22:33:44:55", "02:11:22:33:44:55", 1))
+    }
+}

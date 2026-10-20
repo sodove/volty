@@ -37,7 +37,6 @@ import ru.sodovaya.volty.domain.radio.RadioMode
  * @param mode the hub's current mode; read on every packet.
  * @param bindAddress local P2P interface address, or null to bind the wildcard (tests only).
  * @param ownSender header sender for Hello: the client's slot, or 255 while unassigned.
- * @param session random per-process stream id; unique enough that two processes rarely share a nonce.
  */
 class RadioUdpTransport(
     codec: RadioPacketCodec,
@@ -46,11 +45,23 @@ class RadioUdpTransport(
     private val port: Int = DEFAULT_PORT,
     ownSender: () -> Int = { UNASSIGNED_SENDER },
     clock: () -> Long = System::currentTimeMillis,
-    val session: Int = SecureRandom().nextInt(),
 ) {
-    private val socket = DatagramSocket(null).apply {
-        reuseAddress = true
-        bind(InetSocketAddress(bindAddress, port))
+    /**
+     * Fresh random stream id per instance (ruling R15): a new transport starts a new header-seq
+     * space, so (session, seq) AES-GCM nonces never repeat across instances. Not injectable.
+     * Read-only for diagnostics; it is also what peers see as `Hello.streamId`.
+     */
+    val session: Int = SecureRandom().nextInt()
+
+    private val socket = DatagramSocket(null).let { s ->
+        try {
+            s.reuseAddress = true
+            s.bind(InetSocketAddress(bindAddress, port))
+            s
+        } catch (e: Exception) {
+            s.close()
+            throw e
+        }
     }
     private val closed = AtomicBoolean(false)
     private val inboundChannel = Channel<RadioDatagram>(INBOUND_CAPACITY, BufferOverflow.DROP_OLDEST)

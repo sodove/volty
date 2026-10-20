@@ -19,6 +19,9 @@ import java.net.NetworkInterface
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlin.random.Random
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -26,7 +29,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import ru.sodovaya.volty.domain.radio.RadioAddress
-import ru.sodovaya.volty.domain.radio.RadioDuplicateRule
+import ru.sodovaya.volty.domain.radio.RadioDuplicateDecision
 import ru.sodovaya.volty.domain.radio.RadioKeyStore
 import ru.sodovaya.volty.domain.radio.RadioLink
 import ru.sodovaya.volty.domain.radio.RadioLinkResult
@@ -44,10 +47,14 @@ import ru.sodovaya.volty.domain.radio.RadioLinkResult
  * - It does not request runtime permissions (the UI layer does); without them it returns
  *   [RadioLinkResult.Failed].
  *
- * Duplicate hubs: while hosting, a scan runs every [DUPLICATE_SCAN_MILLIS]. When another access
- * point with this group's network name has a smaller BSSID ([RadioDuplicateRule]), [onDuplicateHub]
- * is invoked with its BSSID. The link does not dissolve its own group: the controller owns the
- * state and must call leave() then join(), otherwise its state would disagree with the radio.
+ * Duplicate hubs (ruling R14): while hosting, a scan runs every [DUPLICATE_SCAN_MILLIS]. On seeing
+ * another access point with this group's network name the link waits a random 0..30 s, scans
+ * again, and only if it is still there and [RadioDuplicateDecision] says so (smaller BSSID, or
+ * our own address is unknown/redacted) invokes [onDuplicateHub]. The link does not dissolve its
+ * own group: the controller owns the state and re-runs raise semantics.
+ *
+ * Scanning needs ACCESS_FINE_LOCATION on every API level ([scanPermissionGranted]); without it
+ * radioNearby* returns null/false and duplicate detection stays quiet.
  *
  * Framework code: not unit-testable in this repo, verified only on a device. In particular
  * unverified until then: that `connect()` with only a network name and passphrase finds a group
@@ -70,18 +77,18 @@ class AndroidRadioLink(
     private val wifi: WifiManager? by lazy { app.getSystemService(Context.WIFI_SERVICE) as? WifiManager }
     private val channel: WifiP2pManager.Channel? by lazy { manager?.initialize(app, app.mainLooper, null) }
 
-    /** Network names seen per community by the last [host] or [join]; [radioNearby] cannot suspend to derive them. */
-    @Volatile
-    private var knownNames: Map<String, Set<String>> = emptyMap()
+    /** Day-keyed network names; filled by [credentials] and, on a miss, by [warmNames]. */
+    private val names = RadioNameCache()
+    private val warming = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     @Volatile
     private var ownInterface: String? = null
 
+    @Volatile
     private var duplicateJob: Job? = null
 
-    /** Invoked (on a background thread) with the other hub's BSSID when this hub should yield. */
     @Volatile
-    var onDuplicateHub: ((otherBssid: String) -> Unit)? = null
+    override var onDuplicateHub: ((community: String) -> Unit)? = null
 
     override suspend fun host(community: String): RadioLinkResult {
         if (!supported) return RadioLinkResult.Unsupported
@@ -93,9 +100,14 @@ class AndroidRadioLink(
         var failure = createGroup(m, ch, today, WifiP2pConfig.GROUP_OWNER_BAND_5GHZ)
         if (failure != null) failure = createGroup(m, ch, today, WifiP2pConfig.GROUP_OWNER_BAND_AUTO)
         if (failure != null) return failureResult(failure)
-        val group = awaitGroup(m, ch, GROUP_FORMATION_MILLIS) ?: return RadioLinkResult.Failed("group not formed")
+        val group = awaitGroup(m, ch, GROUP_FORMATION_MILLIS)
+        if (group == null) {
+            // createGroup was accepted but nothing formed: do not leave a half-made group behind.
+            withContext(NonCancellable) { p2p { m.removeGroup(ch, it) } }
+            return RadioLinkResult.Failed("group not formed")
+        }
         ownInterface = group.`interface`
-        startDuplicateWatch(today.networkName, group)
+        startDuplicateWatch(community, today.networkName, group)
         return RadioLinkResult.Hosting(port)
     }
 
@@ -120,8 +132,18 @@ class AndroidRadioLink(
                 throw e
             }
             if (info != null) {
+                val hubHost = info.groupOwnerAddress?.hostAddress
                 ownInterface = awaitGroup(m, ch, GROUP_FORMATION_MILLIS)?.`interface`
-                return RadioLinkResult.Joined(RadioAddress(info.groupOwnerAddress.hostAddress ?: continue, port))
+                if (hubHost == null || awaitLocalAddress() == null) {
+                    // Connected, but there is no interface to bind the socket to: not a usable link.
+                    withContext(NonCancellable) {
+                        p2p { m.cancelConnect(ch, it) }
+                        p2p { m.removeGroup(ch, it) }
+                    }
+                    ownInterface = null
+                    return RadioLinkResult.Failed("no local P2P address")
+                }
+                return RadioLinkResult.Joined(RadioAddress(hubHost, port))
             }
             m.cancelConnect(ch, null)
         }
@@ -138,22 +160,45 @@ class AndroidRadioLink(
         p2p { m.removeGroup(ch, it) }
     }
 
+    /** True when a scan sees this community's radio; a thin wrapper over [radioNearbyAny]. */
+    override fun radioNearby(community: String): Boolean = radioNearbyAny(listOf(community)) != null
+
     /**
-     * True when the last scan saw an access point named like this community's radio. Needs a prior
-     * [host] or [join] to know the names, and triggers a (system-throttled) scan for next time.
+     * Does ONE scan request and ONE read of the results and returns the first of [communities]
+     * whose network name is in them, or null (also when scanning is not permitted or names are not
+     * known yet). Names are derived from the key store on a miss or a new UTC day: that is
+     * asynchronous, so the first call after a cold start returns null and a later poll hits.
      */
     @SuppressLint("MissingPermission")
-    override fun radioNearby(community: String): Boolean {
-        if (!supported) return false
-        val names = knownNames[community] ?: return false
-        val w = wifi ?: return false
-        if (!hasWifiPermission()) return false
+    fun radioNearbyAny(communities: List<String>): String? {
+        if (!supported || communities.isEmpty() || !scanPermissionGranted()) return null
+        val day = clock() / DAY_MILLIS
+        val known = communities.mapNotNull { c -> names.get(c, day)?.let { c to it } }
+        communities.filter { c -> known.none { it.first == c } }.forEach(::warmNames)
+        if (known.isEmpty()) return null
+        val w = wifi ?: return null
         return try {
             @Suppress("DEPRECATION")
             w.startScan()
-            w.scanResults.any { it.SSID in names }
+            val seen = w.scanResults.mapTo(HashSet()) { it.SSID }
+            known.firstOrNull { (_, n) -> n.any { it in seen } }?.first
         } catch (_: SecurityException) {
-            false
+            null
+        }
+    }
+
+    /** Whether radioNearby* and duplicate detection can scan; the UI asks for ACCESS_FINE_LOCATION when false. */
+    fun scanPermissionGranted(): Boolean =
+        app.checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun warmNames(community: String) {
+        if (!warming.add(community)) return
+        scope.launch {
+            try {
+                credentials(community)
+            } finally {
+                warming.remove(community)
+            }
         }
     }
 
@@ -201,7 +246,7 @@ class AndroidRadioLink(
         val owner = actor() ?: return null
         val stored = keys.get(owner, community) ?: return null
         val list = RadioCredentialDerivation.joinCandidates(stored.key, clock())
-        knownNames = knownNames + (community to list.map { it.networkName }.toSet())
+        names.put(community, clock() / DAY_MILLIS, list.map { it.networkName }.toSet())
         return list
     }
 
@@ -303,31 +348,41 @@ class AndroidRadioLink(
         }
     }
 
-    private fun startDuplicateWatch(hostedName: String, group: WifiP2pGroup) {
+    private fun startDuplicateWatch(community: String, hostedName: String, group: WifiP2pGroup) {
         duplicateJob?.cancel()
-        val own = group.owner?.deviceAddress?.let(::normalizeMac) ?: return
-        duplicateJob = scope.launch {
+        val rawOwn = group.owner?.deviceAddress
+        val own = if (RadioDuplicateDecision.isAddressUnknown(rawOwn)) rawOwn else normalizeMac(rawOwn!!)
+        val members = group.clientList?.size ?: 0
+        lateinit var self: Job
+        self = scope.launch {
             while (isActive) {
                 delay(DUPLICATE_SCAN_MILLIS)
-                val w = wifi ?: continue
-                if (!hasWifiPermission()) continue
-                val other = try {
-                    @Suppress("DEPRECATION")
-                    w.startScan()
-                    @SuppressLint("MissingPermission")
-                    val results = w.scanResults
-                    results.filter { it.SSID == hostedName }
-                        .mapNotNull { it.BSSID?.let(::normalizeMac) }
-                        .filter { it != own }
-                        .firstOrNull { RadioDuplicateRule.shouldYield(group.clientList?.size ?: 0, own, it) }
-                } catch (_: SecurityException) {
-                    null
-                }
-                if (other != null) {
-                    onDuplicateHub?.invoke(other)
-                    return@launch
-                }
+                if (foreignHub(hostedName, own) == null) continue
+                delay(Random.nextLong(DUPLICATE_BACKOFF_MILLIS + 1)) // desynchronise two hubs seeing each other
+                val other = foreignHub(hostedName, own) ?: continue
+                if (!RadioDuplicateDecision.shouldReport(own, other, members)) continue
+                // Re-check right before acting: leave() may have cancelled this watch while we waited.
+                if (!isActive || duplicateJob !== self) return@launch
+                onDuplicateHub?.invoke(community)
+                return@launch
             }
+        }
+        duplicateJob = self
+    }
+
+    /** BSSID (normalised) of another access point with our group's name, or null; also null when scanning is unavailable. */
+    @SuppressLint("MissingPermission")
+    private fun foreignHub(hostedName: String, own: String?): String? {
+        val w = wifi ?: return null
+        if (!scanPermissionGranted()) return null
+        return try {
+            @Suppress("DEPRECATION")
+            w.startScan()
+            w.scanResults.filter { it.SSID == hostedName }
+                .mapNotNull { it.BSSID?.let(::normalizeMac) }
+                .firstOrNull { it != own }
+        } catch (_: SecurityException) {
+            null
         }
     }
 
@@ -336,6 +391,8 @@ class AndroidRadioLink(
         const val LOCAL_ADDRESS_MILLIS = 5_000L
         const val POLL_MILLIS = 250L
         const val DUPLICATE_SCAN_MILLIS = 30_000L
+        const val DUPLICATE_BACKOFF_MILLIS = 30_000L
+        const val DAY_MILLIS = 86_400_000L
 
         /**
          * A P2P group's interface address is the owner's device address with the locally

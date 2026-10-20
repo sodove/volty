@@ -25,6 +25,13 @@ interface RadioLink {
     suspend fun join(community: String, timeoutMillis: Long): RadioLinkResult
     suspend fun leave()
 
+    /**
+     * Set by the controller. The link calls it (on any thread) when a same-name hub from another
+     * phone is confirmed and this hub should give way; the link never dissolves its group itself,
+     * so the controller's mutex stays the only serialiser of link calls (ruling R14).
+     */
+    var onDuplicateHub: ((community: String) -> Unit)?
+
     /** True when the last scan saw this community's radio. */
     fun radioNearby(community: String): Boolean
 }
