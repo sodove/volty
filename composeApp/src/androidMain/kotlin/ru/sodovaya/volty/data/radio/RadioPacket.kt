@@ -34,6 +34,7 @@ class RadioPacketCodec(audioKey: ByteArray) {
     private val keySpec = SecretKeySpec(audioKey.copyOf(), "AES")
 
     fun encode(p: RadioPacket): ByteArray {
+        require(p.sender in 0..255) { "sender ${p.sender} out of range" }
         val header = ByteBuffer.allocate(HEADER)
             .put('V'.code.toByte()).put('R'.code.toByte()).put(VERSION.toByte())
             .put(p.type.wire.toByte()).put(p.sender.toByte())
@@ -41,7 +42,9 @@ class RadioPacketCodec(audioKey: ByteArray) {
         val cipher = Cipher.getInstance("AES/GCM/NoPadding")
         cipher.init(Cipher.ENCRYPT_MODE, keySpec, GCMParameterSpec(TAG_BITS, nonce(header)))
         cipher.updateAAD(header)
-        return header + cipher.doFinal(p.payload)
+        val datagram = header + cipher.doFinal(p.payload)
+        require(datagram.size <= MAX_DATAGRAM) { "datagram ${datagram.size} exceeds $MAX_DATAGRAM" }
+        return datagram
     }
 
     fun decode(bytes: ByteArray): RadioPacket? {
@@ -106,8 +109,10 @@ class RadioReplayGuard {
 
 private const val MAX_NAME = 80
 
-private fun DataOutputStream.writeText(s: String) {
-    val bytes = s.take(MAX_NAME).toByteArray(Charsets.UTF_8)
+private const val MAX_ROSTER_NAME = 24
+
+private fun DataOutputStream.writeText(s: String, max: Int = MAX_NAME) {
+    val bytes = s.take(max).toByteArray(Charsets.UTF_8)
     writeShort(bytes.size)
     write(bytes)
 }
@@ -163,12 +168,15 @@ data class RadioRoster(
     val echoMillis: Long?,
 ) {
     fun encode(): ByteArray = build {
+        require(mode in 0..255) { "mode $mode out of range" }
+        require(entries.size in 0..255) { "too many roster entries" }
         writeByte(mode)
         writeLong(sentAtMillis)
         writeEcho(echoMillis)
         writeByte(entries.size)
         for (e in entries) {
-            writeByte(e.slot); writeText(e.userId); writeText(e.displayName)
+            require(e.slot in 0..255) { "slot ${e.slot} out of range" }
+            writeByte(e.slot); writeText(e.userId); writeText(e.displayName, MAX_ROSTER_NAME)
         }
     }
 

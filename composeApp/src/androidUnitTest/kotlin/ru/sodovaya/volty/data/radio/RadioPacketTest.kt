@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.radio
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -118,5 +119,50 @@ class RadioPacketTest {
     fun audioFrameFitsDatagram() {
         val size = codec.encode(packet(RadioPacketType.AUDIO, ByteArray(640))).size
         assertTrue(size <= 1200, "size $size")
+    }
+
+    @Test
+    fun rosterOfTenLongCyrillicNamesFitsDatagram() {
+        val entries = (0..9).map {
+            RadioRosterEntry(it, java.util.UUID.randomUUID().toString(), "Ж".repeat(80))
+        }
+        val roster = RadioRoster(entries, mode = 1, sentAtMillis = 1L, echoMillis = 2L)
+        val bytes = codec.encode(packet(RadioPacketType.ROSTER, roster.encode()))
+        assertTrue(bytes.size <= 1200, "size ${bytes.size}")
+        val back = RadioRoster.decode(codec.decode(bytes)!!.payload)!!
+        assertEquals(10, back.entries.size)
+        assertTrue(back.entries.all { it.displayName == "Ж".repeat(24) })
+        assertEquals(entries.map { it.userId }, back.entries.map { it.userId })
+    }
+
+    @Test
+    fun encodeRejectsOversizedPayload() {
+        assertFailsWith<IllegalArgumentException> { codec.encode(packet(RadioPacketType.AUDIO, ByteArray(1200))) }
+    }
+
+    @Test
+    fun encodeRejectsOutOfRangeSender() {
+        val p = packet(RadioPacketType.AUDIO)
+        assertFailsWith<IllegalArgumentException> { codec.encode(RadioPacket(p.type, 256, p.session, p.seq, p.payload)) }
+        assertFailsWith<IllegalArgumentException> { codec.encode(RadioPacket(p.type, -1, p.session, p.seq, p.payload)) }
+    }
+
+    @Test
+    fun rejectsOversizeDatagram() {
+        val ok = codec.encode(packet(RadioPacketType.AUDIO, ByteArray(1100)))
+        assertNotNull(codec.decode(ok))
+        assertNull(codec.decode(ok + ByteArray(1201 - ok.size)))
+    }
+
+    @Test
+    fun rejectsRosterWithHugeCountAndNoData() {
+        val bytes = ByteArray(1 + 8 + 1 + 1).also { it[10] = 255.toByte() }
+        assertNull(RadioRoster.decode(bytes))
+    }
+
+    @Test
+    fun rejectsTrailingBytes() {
+        assertNull(RadioHello.decode(RadioHello("u", "n", 1L, null).encode() + 0))
+        assertNull(RadioRoster.decode(RadioRoster(emptyList(), 0, 1L, null).encode() + 0))
     }
 }
