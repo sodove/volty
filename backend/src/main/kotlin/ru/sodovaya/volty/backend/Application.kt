@@ -70,6 +70,7 @@ import ru.sodovaya.volty.backend.nearby.CommunityEndpointPort
 import ru.sodovaya.volty.backend.nearby.CommunityRemovalEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyCommunityRoutes
 import ru.sodovaya.volty.backend.nearby.installNearbyCommunityMembersRoutes
+import ru.sodovaya.volty.backend.nearby.installNearbyRadioKeyRoutes
 import ru.sodovaya.volty.backend.nearby.ChannelCommandsEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyChannelCommandsRoutes
 import ru.sodovaya.volty.backend.nearby.InvitationEndpointPort
@@ -104,6 +105,7 @@ class AppDependencies(
     val nearbyCompatibility: ru.sodovaya.volty.backend.nearby.NearbyCompatibility = ru.sodovaya.volty.backend.nearby.NearbyCompatibility.LEGACY,
     val nearbyMaintenance: ru.sodovaya.volty.backend.nearby.NearbyMaintenancePort? = null,
     val nearbyMembers: ru.sodovaya.volty.backend.nearby.CommunityMembersEndpointPort? = null,
+    val nearbyRadioKeys: ru.sodovaya.volty.backend.nearby.RadioKeyEndpointPort? = null,
     val nearbyPushDevices: ru.sodovaya.volty.backend.nearby.PushDeviceEndpointPort? = null,
     val nearbyPushDelivery: ru.sodovaya.volty.backend.nearby.PushDeliveryTick? = null,
     val nearbyPushTransport: AutoCloseable? = null,
@@ -147,8 +149,9 @@ class AppDependencies(
             }
             val json = backendJson()
             val store = JdbcStore(dataSource, json)
+            val radioKeys = config.nearby.radioSecret?.let { ru.sodovaya.volty.backend.nearby.JdbcRadioKeyRepository(dataSource, it) }
             if (config.nearby.mode == ru.sodovaya.volty.backend.nearby.NearbyCompatibility.LEGACY) {
-                return AppDependencies(config, store, json = json, passwordResetDelivery = passwordResetDelivery)
+                return AppDependencies(config, store, json = json, nearbyRadioKeys = radioKeys, passwordResetDelivery = passwordResetDelivery)
             }
             val media = checkNotNull(config.liveKitConfigOrNull())
             val sfu = ru.sodovaya.volty.backend.nearby.HttpSfuLeaseClient(
@@ -162,7 +165,7 @@ class AppDependencies(
             return try { AppDependencies(config, store, json = json,
                 nearbySessions = graph.sessions, nearbyRoster = graph.roster, nearbyMediaWebhook = graph.mediaWebhook,
                 nearbyCommunities = graph.communities, nearbyCommunityRemoval = graph.removal,
-                nearbyMembers = graph.members,
+                nearbyMembers = graph.members, nearbyRadioKeys = radioKeys,
                 nearbyChannelCommands = graph.channels, nearbyInvitations = graph.invitations,
                 nearbyCalls = graph.calls, nearbyChannelSharing = graph.sharing, nearbySharingPackets = graph.packets,
                 nearbyCompatibility = config.nearby.mode, nearbyMaintenance = graph, nearbyPushDevices = graph.pushDevices,
@@ -346,6 +349,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
         installNearbyMediaWebhookRoutes(dependencies)
         installNearbyCommunityRoutes(dependencies)
         installNearbyCommunityMembersRoutes(dependencies)
+        installNearbyRadioKeyRoutes(dependencies)
         installNearbyChannelCommandsRoutes(dependencies)
         installNearbyInvitationRoutes(dependencies)
         installNearbyDirectCallRoutes(dependencies)

@@ -34,3 +34,7 @@ optional `=` padding), or the LiveKit container will reject the configuration.
 Runtime media requires a VPS with public UDP reachability. NAT-only hosting or a proxy without public UDP will break LiveKit audio even if HTTPS works.
 
 If you already manage `.env` yourself, keep your real values there before running the script. The script never prints generated secrets to stdout.
+
+## Offline radio key
+
+`VOLTY_RADIO_SECRET` is the HMAC secret for the per-server radio key endpoint (`GET /v2/nearby/communities/{id}/radio-key`). Set it in `.env` to base64 of at least 32 random bytes (for example `openssl rand -base64 32`). Without it the endpoint answers 503 `nearby_unavailable`. Changing it invalidates every phone's cached radio key; they refetch on the next online start. Never log or commit it.
