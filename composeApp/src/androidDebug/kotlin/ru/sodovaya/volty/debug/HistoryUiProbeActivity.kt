@@ -40,10 +40,10 @@ class HistoryUiProbeActivity : ComponentActivity() {
         val stored = intent.getBooleanExtra("stored", false)
         val catalog = stored || intent.getBooleanExtra("catalog", false)
         val repository = if (stored) getKoin().get<HistoryReadRepository>()
-            else ProbeReader(intent.getBooleanExtra("omitFirstSource", false))
+            else ProbeReader(intent.getBooleanExtra("omitFirstSource", false),intent.getBooleanExtra("remotePreviewArea", false))
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
             { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish,
-            getKoin().get<HistoryMetricPresetStore>())
+            getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>())
         if (catalog) owner.refresh() else owner.openRide("fixture")
         setContent {
             VoltyTheme {
@@ -53,13 +53,18 @@ class HistoryUiProbeActivity : ComponentActivity() {
                 if (catalog) {
                     BackHandler(enabled = state.destination != HistoryDestination.CATALOG) { owner.back() }
                     if (state.destination == HistoryDestination.CATALOG) {
-                        Scaffold(topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_title)) },
+                        Scaffold(topBar = { TopAppBar(title = { Column {
+                            Text(stringResource(Res.string.history_title))
+                            Text("Images ${state.previewImages.images.size} · pending ${state.previewImages.loading.size} · fallback ${state.previewImages.unavailable.size}",
+                                style = MaterialTheme.typography.labelSmall)
+                        } },
                             navigationIcon = { IconButton(onClick = owner::back) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } }) }) { padding ->
                             HistoryRideList(state.catalog, state.selectedRideId, owner::openRide, owner::refresh, owner::loadOlder,
                                 Modifier.fillMaxSize().padding(padding),
                                 vehicleNames = if (stored) emptyMap() else mapOf("fixture-vehicle-0" to "Scooter", "fixture-vehicle-1" to "Bicycle", "fixture-vehicle-2" to "Wheel"),
                                 previews = state.previews, onVisibleChanged = owner::setVisibleRides, onRetryPreview = owner::retryPreview,
-                                listState = catalogListState)
+                                listState = catalogListState, previewImages = state.previewImages,
+                                previewRevision = state.previewRevision, onVisibleImagesChanged = owner::setVisiblePreviewImages)
                         }
                     } else MapProbe(owner, state)
                     return@VoltyTheme
@@ -105,7 +110,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
         }
     }
 
-    private class ProbeReader(private val omitFirstSource: Boolean = false) : HistoryReadRepository {
+    private class ProbeReader(private val omitFirstSource: Boolean = false,private val remotePreviewArea: Boolean = false) : HistoryReadRepository {
         private val failedReads = mutableSetOf<String>()
         private val sources = listOf(HistorySource("fixture-a", HistorySourceKind.BATTERY, "Pack"),
             HistorySource("fixture-b", HistorySourceKind.BATTERY, "Pack"))
@@ -129,7 +134,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?) = HistoryPage<HistoryGpsFix>(emptyList(), null, false)
         override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
             if (rideId.endsWith("-7") && failedReads.add(rideId)) error("Synthetic one-shot route read failure")
-            fun fix(time: Long, lat: Double, lon: Double) = HistoryGpsFix(HistoryTick(time, time - 990, 1), lat, lon, 3.0, null)
+            fun fix(time: Long, lat: Double, lon: Double) = HistoryGpsFix(HistoryTick(time, time - 990, 1), lat,
+                lon + if(remotePreviewArea) 50.0 else 0.0, 3.0, null)
             val fixes = listOf(fix(1000, 56.838, 60.600), fix(1500, 56.839, 60.603), fix(2000, 56.840, 60.603),
                 fix(3000, 56.843, 60.610), fix(3500, 56.844, 60.612), fix(4000, 56.845, 60.611))
             val partial = rideId.endsWith("-5") && after == null

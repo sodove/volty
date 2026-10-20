@@ -10,6 +10,9 @@ import androidx.compose.runtime.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.unit.dp
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
@@ -17,6 +20,7 @@ import kotlinx.datetime.toLocalDateTime
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.history.*
 import volty.composeapp.generated.resources.*
+import kotlin.math.roundToInt
 
 /** Paged recorded catalog. Preview ownership stays with the caller; drawing a
  * row never starts a route/series query or allocates a native map.
@@ -26,17 +30,36 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
     onRefresh: () -> Unit, onLoadOlder: () -> Unit, modifier: Modifier = Modifier,
     vehicleNames: Map<String, String> = emptyMap(), previews: HistoryPreviewsState = HistoryPreviewsState(),
     reduceMotion: Boolean = false, onVisibleChanged: (List<String>) -> Unit = {}, onRetryPreview: (String) -> Unit = {},
-    listState: LazyListState = rememberLazyListState()) {
+    listState: LazyListState = rememberLazyListState(), previewImages: HistoryPreviewImagesState = HistoryPreviewImagesState(),
+    previewRevision: Long = 0, onVisibleImagesChanged: (List<HistoryPreviewImageKey>) -> Unit = {}) {
     val zone = TimeZone.currentSystemDefault()
     val latestVisible by rememberUpdatedState(onVisibleChanged)
+    val latestImages by rememberUpdatedState(onVisibleImagesChanged)
+    val density = LocalDensity.current.density
+    val imageHeight = (88*density).roundToInt().coerceIn(1,512)
+    val imageWidth = (imageHeight*86.0/88).roundToInt().coerceIn(1,512)
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    val primary = MaterialTheme.colorScheme.primary.toArgb(); val tertiary = MaterialTheme.colorScheme.tertiary.toArgb()
+    val renderKeys = remember(previews.previews,selectedRideId,previewRevision,imageWidth,imageHeight,dark,primary,tertiary) {
+        previews.previews.mapNotNull { (id,data) ->
+            if (data.segments.all { it.fixes.isEmpty() }) null else id to HistoryPreviewImageKey(id,previewRevision,imageWidth,imageHeight,
+                dark,if (id == selectedRideId) primary else tertiary,data.segments)
+        }.toMap()
+    }
     val rideKeys = remember(state.rides) { state.rides.associateBy { "ride:${it.id}" } }
     LaunchedEffect(listState, rideKeys) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } }.distinctUntilChanged().collect { keys ->
             latestVisible(keys.mapNotNull { rideKeys[it]?.id }.take(20))
         }
     }
-    DisposableEffect(Unit) { onDispose { latestVisible(emptyList()) } }
-    LazyColumn(modifier, state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    LaunchedEffect(listState,renderKeys) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { it.key as? String } }.distinctUntilChanged().collect { keys ->
+            latestImages(keys.mapNotNull { rideKeys[it]?.id?.let(renderKeys::get) }.take(20))
+        }
+    }
+    DisposableEffect(Unit) { onDispose { latestVisible(emptyList()); latestImages(emptyList()) } }
+    Column(modifier) {
+    LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item("refresh") { TextButton(onClick = onRefresh, enabled = !state.refreshing && !state.loadingOlder) {
             Text(stringResource(Res.string.history_refresh))
         } }
@@ -64,7 +87,9 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
                 previews.previews[ride.id]?.segments.orEmpty(), ride.id == selectedRideId, { onOpen(ride.id) },
                 if (reduceMotion) Modifier else Modifier.animateItem(), previewLoading = ride.id in previews.loading,
                 previewPartial = previews.previews[ride.id]?.partial == true, previewError = ride.id in previews.errors,
-                onRetry = { onRetryPreview(ride.id) })
+                onRetry = { onRetryPreview(ride.id) }, image = previewImages.images[ride.id]?.takeIf {
+                    renderKeys[ride.id] != null && previewImages.renderKeys[ride.id] == renderKeys[ride.id]
+                })
         }
         if (state.error != null) item("error") {
             Text(stringResource(Res.string.history_load_error), color = MaterialTheme.colorScheme.error)
@@ -78,5 +103,7 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
         if (state.truncated && !state.hasMore) item("partial") {
             Text(stringResource(Res.string.history_catalog_partial), color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+    }
+    if (previewImages.images.isNotEmpty()) HistoryPreviewAttribution()
     }
 }

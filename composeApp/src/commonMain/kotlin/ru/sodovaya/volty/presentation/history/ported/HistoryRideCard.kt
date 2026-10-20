@@ -29,7 +29,8 @@ data class HistoryRideCardText(val title: String, val subtitle: String, val deta
 @Composable
 fun HistoryRideCard(text: HistoryRideCardText, segments: List<HistoryMapSegment>, selected: Boolean,
     onClick: () -> Unit, modifier: Modifier = Modifier, previewLoading: Boolean = false,
-    previewPartial: Boolean = false, previewError: Boolean = false, onRetry: () -> Unit = {}) {
+    previewPartial: Boolean = false, previewError: Boolean = false, onRetry: () -> Unit = {},
+    image: HistoryPreviewImage? = null) {
     val accent = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
     Surface(onClick = onClick, modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -43,7 +44,10 @@ fun HistoryRideCard(text: HistoryRideCardText, segments: List<HistoryMapSegment>
                         CircularProgressIndicator(Modifier.size(20.dp).semantics { contentDescription = label }, strokeWidth = 2.dp)
                     }
                     previewError -> IconButton(onClick = onRetry) { Icon(Icons.Default.Refresh, stringResource(Res.string.history_retry)) }
-                    else -> HistoryRoutePreview(segments, accent, Modifier.fillMaxSize())
+                    else -> {
+                        HistoryRoutePreview(segments, accent, Modifier.fillMaxSize())
+                        image?.let { PlatformHistoryPreviewImage(it,Modifier.fillMaxSize()) }
+                    }
                 }
             }
             Column(Modifier.weight(1f).padding(vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {

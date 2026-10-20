@@ -29,6 +29,7 @@ interface HistoryComponent {
     fun savePreset(name: String)
     fun applyPreset(id: String)
     fun deletePreset(id: String)
+    fun setVisiblePreviewImages(keys: List<HistoryPreviewImageKey>)
     fun back()
 }
 
@@ -37,14 +38,16 @@ interface HistoryComponent {
  */
 class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: CoroutineScope,
     repository: HistoryReadRepository, readTick: () -> HistoryTick, private val onBack: () -> Unit,
-    presetStore: HistoryMetricPresetStore? = null) : HistoryComponent {
+    presetStore: HistoryMetricPresetStore? = null, imageLoader: HistoryPreviewImageLoader? = null,
+    previewDispatcher: CoroutineDispatcher = Dispatchers.Default) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
     private val detail = HistoryDetailComponent(componentContext, scope, repository, readTick)
     private val route = HistoryRouteComponent(componentContext, scope, repository)
-    private val previews = HistoryPreviewComponent(componentContext, scope, repository, PREVIEW_GPS_SILENCE_MILLIS)
+    private val previews = HistoryPreviewComponent(componentContext, scope, repository, PREVIEW_GPS_SILENCE_MILLIS,previewDispatcher)
     private val presets = HistoryPresetsComponent(componentContext, scope, presetStore)
+    private val previewImages = imageLoader?.let { HistoryPreviewImagesComponent(componentContext,scope,it) }
     private val mutableState = MutableStateFlow(HistoryUiState())
     override val state = mutableState.asStateFlow()
     private var selectedRideId: String? = null
@@ -66,6 +69,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             presets.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(presets = it) }
         }
+        previewImages?.let { owner -> scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            owner.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(previewImages = it) }
+        } }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             previews.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(previews = it) }
         }
@@ -95,6 +101,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         if (!lifetime.isActive) return
         val captured = Any(); catalogIntent = captured
         previewRevision = if (previewRevision == Long.MAX_VALUE) 0 else previewRevision + 1
+        mutableState.value = mutableState.value.copy(previewRevision = previewRevision)
         syncVisiblePreviews()
         if (lifetime.isActive && catalogIntent === captured) catalog.refresh()
     }
@@ -150,6 +157,13 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         detail.replaceMetrics(resolved.keys)
     }
     override fun deletePreset(id: String) { if (lifetime.isActive) presets.delete(id) }
+    override fun setVisiblePreviewImages(keys: List<HistoryPreviewImageKey>) {
+        if (!lifetime.isActive) return
+        require(keys.size <= 20 && keys.map { it.rideId }.distinct().size == keys.size)
+        val data = previews.state.value.previews
+        previewImages?.setVisible(keys.filter { it.rideId in visiblePreviewIds && it.revision == previewRevision &&
+            data[it.rideId]?.segments == it.segments })
+    }
 
     private fun syncVisiblePreviews() {
         if (!lifetime.isActive) return
@@ -178,7 +192,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
 
     fun close() {
         selection = Any(); catalogIntent = Any(); selectedRideId = null
-        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); lifetime.cancel()
+        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); previewImages?.close(); lifetime.cancel()
     }
 }
 

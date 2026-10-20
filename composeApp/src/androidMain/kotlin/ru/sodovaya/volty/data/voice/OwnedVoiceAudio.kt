@@ -11,7 +11,6 @@ import android.os.Process
 import android.os.SystemClock
 import java.nio.ByteBuffer
 import livekit.org.webrtc.audio.JavaAudioDeviceModule
-import livekit.org.webrtc.audio.resetVoltyPreferredInput
 import ru.sodovaya.volty.domain.voice.*
 
 /** Owns the injected ADM; LiveKit explicitly does not release injected modules. */
@@ -29,7 +28,7 @@ internal class OwnedVoiceAudio(
     private val captureLock = Any()
     private var sdkInput: AudioDeviceInfo? = null
     val preferredInputId: Int? get() = synchronized(captureLock) { if (phoneCapture) capture.preferredInputId else sdkInput?.id }
-    private val captureHandoff = VoiceCaptureHandoff()
+    private var handoffFrames = 0
     private var callbackMaxMicros = 0L
     private var nextCaptureSample = 0L
     private var levelBytes = ByteArray(0)
@@ -54,14 +53,11 @@ internal class OwnedVoiceAudio(
             synchronized(captureLock) {
                 val started = System.nanoTime()
                 val result = when {
-                    nativeStopped -> {
-                        silence(buffer)
-                        if (bytesRead != buffer.capacity()) SystemClock.sleep(10)
-                        timestamp
-                    }
-                    !captureHandoff.permitsFrame() -> {
+                    nativeStopped -> { silence(buffer); timestamp }
+                    phoneCapture && handoffFrames > 0 -> {
                         // One callback may finish an in-flight SDK read. The next SDK
                         // loop releases its AudioRecord before our recorder may start.
+                        handoffFrames--
                         silence(buffer)
                         SystemClock.sleep(10)
                         started
@@ -73,11 +69,6 @@ internal class OwnedVoiceAudio(
                         if (bytesRead == buffer.capacity()) {
                             diagnostics.addCaptureBytes(bytesRead)
                             if (diagnostics.state.value.captureRunning != true) captureState(true)
-                        } else {
-                            // An SDK init/start failure can leave its callback alive with
-                            // AudioRecord disabled until session cleanup catches up.
-                            silence(buffer)
-                            SystemClock.sleep(10)
                         }
                         timestamp
                     }
@@ -143,12 +134,10 @@ internal class OwnedVoiceAudio(
                     if (changed) {
                         capture.stop()
                         captureState(false)
+                        module.setAudioRecordEnabled(!phone)
+                        handoffFrames = if (phone) 2 else 0
                         nextCaptureSample = 0L
                     }
-                    // Do not enable native capture until requestInput applies the
-                    // new preference. Gate also discards a possible in-flight read.
-                    module.setAudioRecordEnabled(false)
-                    captureHandoff.request(voiceAudioCapturePath(preference.input))
                     phoneCapture = phone
                     diagnostics.update { it.copy(capturePath = voiceAudioCapturePath(preference.input),
                         ownedCaptureDeviceType = null, captureRms = null, capturePeak = null) }
@@ -165,7 +154,6 @@ internal class OwnedVoiceAudio(
     fun stopNative() {
         synchronized(captureLock) { nativeStopped = true; capture.close() }
         playback.close()
-        playback.sampleDiagnostics()
     }
 
     /** Reset and enqueue under the same boundary as native start/stop callbacks. */
@@ -219,11 +207,7 @@ internal class OwnedVoiceAudio(
         if (released) return VoiceAudioChangeResult.STALE
         return try {
             synchronized(captureLock) {
-                if (preference == VoiceInputPreference.PHONE) {
-                    val result = capture.request(manager, preference)
-                    if (result == VoiceAudioChangeResult.REQUESTED) captureHandoff.applied()
-                    return@synchronized result
-                }
+                if (preference == VoiceInputPreference.PHONE) return@synchronized capture.request(manager, preference)
                 val selected = if (preference == VoiceInputPreference.AUTO) null else
                     manager.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
                         it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
@@ -231,10 +215,8 @@ internal class OwnedVoiceAudio(
                             (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
                     }
                 if (preference != VoiceInputPreference.AUTO && selected == null) return@synchronized VoiceAudioChangeResult.UNAVAILABLE
-                if (selected == null) module.resetVoltyPreferredInput() else module.setPreferredInputDevice(selected)
+                module.setPreferredInputDevice(selected)
                 sdkInput = selected
-                captureHandoff.applied()
-                module.setAudioRecordEnabled(true)
                 VoiceAudioChangeResult.REQUESTED
             }
         } catch (_: Exception) { VoiceAudioChangeResult.FAILED }

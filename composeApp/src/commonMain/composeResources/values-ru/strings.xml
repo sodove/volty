@@ -1054,4 +1054,7 @@
     <string name="history_presets_name">Название набора</string>
     <string name="history_presets_save">Сохранить выбранные метрики</string>
     <string name="history_presets_metric_limit">В наборе может быть до 128 метрик.</string>
+    <string name="history_preview_source_ofm">© OpenFreeMap</string>
+    <string name="history_preview_source_omt">© OpenMapTiles</string>
+    <string name="history_preview_source_osm">© OpenStreetMap</string>
 </resources>

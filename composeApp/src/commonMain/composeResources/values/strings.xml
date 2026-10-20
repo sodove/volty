@@ -1056,4 +1056,7 @@
     <string name="history_presets_name">Layout name</string>
     <string name="history_presets_save">Save selected metrics</string>
     <string name="history_presets_metric_limit">A layout can contain up to 128 metrics.</string>
+    <string name="history_preview_source_ofm">© OpenFreeMap</string>
+    <string name="history_preview_source_omt">© OpenMapTiles</string>
+    <string name="history_preview_source_osm">© OpenStreetMap</string>
 </resources>

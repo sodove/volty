@@ -95,6 +95,9 @@ val androidModule = module {
         )
     }
     single { DataStoreFactory(androidContext()) }
+    single<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader> {
+        ru.sodovaya.volty.data.history.MapLibreHistoryPreviewLoader(androidContext())
+    }
     single<BleAdapterStateProvider> { AndroidBleAdapterStateProvider(androidContext()) }
     single<RideLocationRepository> { AndroidRideLocationRepository(androidContext()) }
     // Independent from Nearby's coordinator/authority. Registrations are inert until requested.

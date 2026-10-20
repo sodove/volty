@@ -186,6 +186,25 @@ class HistoryComponentTest {
         } finally { c.close() }
     }
 
+    @Test fun renderedImagesAreBoundToVisibleRecordedGeometryAndCatalogRevision()=runTest {
+        val reads=mutableListOf<HistoryPreviewImageKey>()
+        val c=DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),backgroundScope,Repo(),{origin},{},
+            imageLoader=HistoryPreviewImageLoader{reads+=it;HistoryPreviewImage(byteArrayOf(1))},previewDispatcher=StandardTestDispatcher(testScheduler))
+        try{
+            c.refresh();runCurrent();c.setVisibleRides(listOf("a"));runCurrent()
+            val known=HistoryPreviewImageKey("a",c.state.value.previewRevision,128,128,false,0,c.state.value.previews.previews.getValue("a").segments)
+            c.setVisiblePreviewImages(listOf(known));runCurrent();assertEquals(listOf(known),reads)
+            assertTrue(c.state.value.previewImages.images.containsKey("a"))
+            for(invalid in listOf(known.copy(rideId="unknown"),known.copy(revision=known.revision+1),known.copy(segments=emptyList()))){
+                c.setVisiblePreviewImages(listOf(invalid));runCurrent();assertEquals(1,reads.size);assertTrue(c.state.value.previewImages.images.isEmpty())
+            }
+            c.refresh();runCurrent();c.setVisiblePreviewImages(listOf(known));runCurrent();assertEquals(1,reads.size)
+            val fresh=known.copy(revision=c.state.value.previewRevision)
+            c.setVisiblePreviewImages(listOf(fresh));runCurrent();assertEquals(listOf(known,fresh),reads)
+            c.close();val closed=c.state.value;c.setVisiblePreviewImages(listOf(known));runCurrent();assertEquals(closed,c.state.value)
+        }finally{c.close()}
+    }
+
     @Test fun synchronousSelectionObserverCannotStartSupersededDetailOrRoute() = runTest {
         val repo = Repo(); val c = component(repo); var replaced = false
         val observer = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {

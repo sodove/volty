@@ -127,7 +127,10 @@ kotlin {
             implementation(libs.bouncycastle)
             implementation(libs.ktor.client.cio)
             implementation(libs.ktor.client.okhttp)
-            implementation("org.maplibre.gl:android-sdk:13.0.2")
+            // 13's default artifact is Vulkan-only. Keep the same public API
+            // without making Vulkan a prerequisite for offscreen thumbnails:
+            // API34 Snapshotter otherwise aborted natively on a non-Vulkan GPU.
+            implementation("org.maplibre.gl:android-sdk-opengl:13.0.2")
             implementation("io.livekit:livekit-android:2.28.0") {
                 exclude(group = "com.github.davidliu", module = "audioswitch")
             }
