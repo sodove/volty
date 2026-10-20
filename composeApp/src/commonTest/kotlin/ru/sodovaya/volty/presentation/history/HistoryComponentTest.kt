@@ -17,6 +17,8 @@ class HistoryComponentTest {
     private open inner class Repo : HistoryReadRepository {
         val detailReads = mutableListOf<String>(); val routeReads = mutableListOf<Pair<String, HistoryRange>>()
         var catalogReads = 0
+        val seriesReads = mutableListOf<HistoryRange>()
+        val statsReads = mutableListOf<HistoryRange>()
         override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> {
             catalogReads++; return HistoryPage(listOf(this@HistoryComponentTest.ride(if (before == null) "a" else "b")),
                 if (before == null) HistoryCursor(1000, "a") else null, before == null)
@@ -24,9 +26,13 @@ class HistoryComponentTest {
         override suspend fun ride(rideId: String): HistoryRide? { detailReads += rideId; return this@HistoryComponentTest.ride(rideId) }
         override suspend fun sources(rideId: String) = listOf(HistorySource("pack", HistorySourceKind.BATTERY, "Pack"))
         override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int) = HistoryRecordedKeys(listOf(key), false)
-        override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int) = HistorySeries(key,
-            listOf(HistorySample(HistoryTick(range.startEpochMillis, range.startEpochMillis - 990, 1), key, 63.0)), emptyList(), false, origin)
-        override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) = HistoryStats(63.0, 63.0, null, true)
+        override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries {
+            seriesReads += range
+            return HistorySeries(key, listOf(HistorySample(HistoryTick(range.startEpochMillis, range.startEpochMillis - 990, 1), key, 63.0)), emptyList(), false, origin)
+        }
+        override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats {
+            statsReads += range; return HistoryStats(63.0, 63.0, null, true)
+        }
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryPage<HistoryGpsFix> = error("Use route snapshot")
         override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
             routeReads += rideId to range
@@ -37,6 +43,103 @@ class HistoryComponentTest {
     }
     private fun TestScope.component(repo: Repo, onBack: () -> Unit = {}) = DefaultHistoryComponent(
         DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo, { HistoryTick(6000, 5010, 1) }, onBack)
+
+    @Test fun gesturePreviewsIssueNoReadsAndSettlesExactlyOnceForAllOwners() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent(); c.addMetric(key); runCurrent(); c.selectTime(2500)
+            val token = assertNotNull(c.beginWindowGesture())
+            repeat(50) {
+                c.transformWindowGesture(token, 2.0, 0.5, 0.0)
+                assertEquals(HistoryRange(2000, 4000), c.state.value.windowPreview)
+                c.transformWindowGesture(token, 0.5, 0.5, 0.0)
+                assertEquals(full, c.state.value.windowPreview)
+            }
+            c.transformWindowGesture(token, 2.0, 0.5, 0.0); runCurrent()
+            assertEquals(HistoryRange(2000, 4000), c.state.value.windowPreview)
+            assertEquals(full, c.state.value.detail.range); assertEquals(listOf(full), repo.seriesReads)
+            assertEquals(listOf(full), repo.statsReads); assertEquals(listOf("a" to full), repo.routeReads)
+            c.finishWindowGesture(token); runCurrent(); c.finishWindowGesture(token); runCurrent()
+            assertNull(c.state.value.windowPreview)
+            assertEquals(listOf(full, HistoryRange(2000, 4000)), repo.seriesReads)
+            assertEquals(repo.seriesReads, repo.statsReads)
+            assertEquals(HistoryRange(2000, 4000), repo.routeReads.last().second)
+            assertEquals(2500L, c.state.value.detail.cursorEpochMillis)
+        } finally { c.close() }
+    }
+
+    @Test fun cancelledAndSupersededGestureCannotClearTheNewPreviewOrCommit() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent()
+            val old = assertNotNull(c.beginWindowGesture()); c.transformWindowGesture(old, 2.0, 0.5, 0.0)
+            c.cancelWindowGesture(old); assertNull(c.state.value.windowPreview)
+            val fresh = assertNotNull(c.beginWindowGesture()); c.transformWindowGesture(fresh, 2.0, 0.0, 0.0)
+            c.cancelWindowGesture(old); c.finishWindowGesture(old); runCurrent()
+            assertEquals(HistoryRange(1000, 3000), c.state.value.windowPreview)
+            assertEquals(listOf("a" to full), repo.routeReads)
+            c.cancelWindowGesture(fresh); assertNull(c.state.value.windowPreview); assertEquals(full, c.state.value.detail.range)
+        } finally { c.close() }
+    }
+
+    @Test fun explicitRangeCommandRetiresPendingGesture() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent(); val token = assertNotNull(c.beginWindowGesture())
+            c.transformWindowGesture(token, 2.0, 0.5, 0.0)
+            assertEquals(HistoryRange(2000, 4000), c.state.value.windowPreview)
+            val buttonWindow = HistoryRange(1000, 2000); c.selectRange(buttonWindow); runCurrent()
+            c.finishWindowGesture(token); runCurrent()
+            assertNull(c.state.value.windowPreview); assertEquals(buttonWindow, c.state.value.detail.range)
+            assertEquals(listOf("a" to full, "a" to buttonWindow), repo.routeReads)
+        } finally { c.close() }
+    }
+
+    @Test fun rideNavigationAndCloseFenceLateGestureCallbacks() = runTest {
+        for (action in 0..2) {
+            val repo = Repo(); val c = component(repo)
+            try {
+                c.openRide("a"); runCurrent(); c.showCharts()
+                val token = assertNotNull(c.beginWindowGesture()); c.transformWindowGesture(token, 2.0, 0.5, 0.0)
+                assertEquals(HistoryRange(2000, 4000), c.state.value.windowPreview)
+                when (action) { 0 -> c.openRide("b"); 1 -> c.back(); else -> c.close() }
+                runCurrent(); val snapshot = c.state.value
+                c.transformWindowGesture(token, 2.0, 0.5, 0.0); c.finishWindowGesture(token); runCurrent()
+                assertEquals(snapshot, c.state.value)
+                assertFalse(repo.routeReads.any { it.second != full })
+                if (action != 2) assertNull(c.state.value.windowPreview)
+            } finally { c.close() }
+        }
+    }
+
+    @Test fun synchronousNavigationDuringPreviewRetirementStopsOldCommit() = runTest {
+        val repo = Repo(); val c = component(repo); var sawPreview = false
+        val observer = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            c.state.collect { state ->
+                if (state.windowPreview != null) sawPreview = true
+                else if (sawPreview && state.selectedRideId == "a") { sawPreview = false; c.openRide("b") }
+            }
+        }
+        try {
+            c.openRide("a"); runCurrent(); val token = assertNotNull(c.beginWindowGesture())
+            c.transformWindowGesture(token, 2.0, 0.5, 0.0); assertTrue(sawPreview)
+            c.finishWindowGesture(token); runCurrent()
+            assertEquals("b", c.state.value.selectedRideId); assertEquals(full, c.state.value.detail.range)
+            assertEquals(listOf("a" to full, "b" to full), repo.routeReads)
+        } finally { observer.cancel(); c.close() }
+    }
+
+    @Test fun invalidUpdateAndNoOpCompletionDoNotStartReads() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            assertNull(c.beginWindowGesture()); c.openRide("a"); runCurrent()
+            val token = assertNotNull(c.beginWindowGesture())
+            c.transformWindowGesture(token, Double.NaN, 0.5, 0.0)
+            assertEquals(full, c.state.value.windowPreview)
+            c.finishWindowGesture(token); runCurrent()
+            assertEquals(listOf("a" to full), repo.routeReads); assertNull(c.state.value.windowPreview)
+        } finally { c.close() }
+    }
 
     @Test fun explicitPresetSaveApplyUsesCapturedVehicleAndNeverPreloadsOnRead()=runTest {
         val repo=Repo();var saved=emptyList<HistoryMetricPreset>()

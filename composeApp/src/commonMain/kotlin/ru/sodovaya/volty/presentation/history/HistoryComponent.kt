@@ -21,6 +21,10 @@ interface HistoryComponent {
     fun moveMetric(key: HistorySeriesKey, index: Int)
     fun selectTime(epochMillis: Long?)
     fun selectRange(range: HistoryRange)
+    fun beginWindowGesture(): HistoryWindowGestureToken?
+    fun transformWindowGesture(token: HistoryWindowGestureToken, zoom: Double, anchor: Double, pan: Double)
+    fun finishWindowGesture(token: HistoryWindowGestureToken)
+    fun cancelWindowGesture(token: HistoryWindowGestureToken)
     fun loadMoreRoute()
     fun retryRoute()
     fun setVisibleRides(ids: List<String>)
@@ -55,6 +59,10 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private var previewRevision = 0L
     private var visiblePreviewIds = emptyList<String>()
     private var catalogIntent = Any()
+    private var windowIntent = Any()
+    private var windowGesture: WindowGesture? = null
+    private class WindowGesture(val token: HistoryWindowGestureToken, val selection: Any, val intent: Any,
+        val rideId: String, val base: HistoryRange, val bounds: HistoryRange)
 
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -111,23 +119,68 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         if (!lifetime.isActive) return
         require(id.isNotBlank())
         selectedRideId = id; selection = Any()
+        windowIntent = Any(); windowGesture = null
         val captured = selection
         mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE, selectedRideId = id,
-            detail = HistoryDetailState(rideId = id, loading = true), route = HistoryRouteState())
+            detail = HistoryDetailState(rideId = id, loading = true), route = HistoryRouteState(), windowPreview = null)
         if (!lifetime.isActive || selection !== captured) return
         route.clear()
         if (lifetime.isActive && selection === captured) detail.openRide(id)
     }
 
     override fun showCharts() = withSelection {
-        if (mutableState.value.detail.ride != null) mutableState.value = mutableState.value.copy(destination = HistoryDestination.CHARTS)
+        if (mutableState.value.detail.ride != null) {
+            windowIntent = Any(); windowGesture = null
+            mutableState.value = mutableState.value.copy(destination = HistoryDestination.CHARTS, windowPreview = null)
+        }
     }
     override fun loadSourceMetrics(sourceId: String) = withSelection { detail.loadSourceMetrics(sourceId) }
     override fun addMetric(key: HistorySeriesKey) = withSelection { detail.addMetric(key) }
     override fun removeMetric(key: HistorySeriesKey) = withSelection { detail.removeMetric(key) }
     override fun moveMetric(key: HistorySeriesKey, index: Int) = withSelection { detail.moveMetric(key, index) }
     override fun selectTime(epochMillis: Long?) = withSelection { detail.selectTime(epochMillis) }
-    override fun selectRange(range: HistoryRange) = withSelection { detail.selectRange(range) }
+    override fun selectRange(range: HistoryRange) = withSelection {
+        val captured = selection; val intent = Any(); windowIntent = intent; windowGesture = null
+        mutableState.value = mutableState.value.copy(windowPreview = null)
+        if (lifetime.isActive && selection === captured && windowIntent === intent) detail.selectRange(range)
+    }
+    override fun beginWindowGesture(): HistoryWindowGestureToken? {
+        if (!lifetime.isActive) return null
+        val current = mutableState.value
+        val id = selectedRideId ?: return null
+        val base = current.detail.range ?: return null
+        val bounds = current.detail.availableRange ?: return null
+        if (current.detail.ride?.id != id || historyTransformWindow(base, bounds) == null) return null
+        val gesture = WindowGesture(HistoryWindowGestureToken(), selection, Any(), id, base, bounds)
+        windowIntent = gesture.intent; windowGesture = gesture
+        mutableState.value = current.copy(windowPreview = base)
+        return gesture.token.takeIf { currentGesture(it) === gesture }
+    }
+    override fun transformWindowGesture(token: HistoryWindowGestureToken, zoom: Double, anchor: Double, pan: Double) {
+        val gesture = currentGesture(token) ?: return
+        val current = mutableState.value
+        val next = historyTransformWindow(current.windowPreview ?: gesture.base, gesture.bounds, zoom, anchor, pan) ?: return
+        mutableState.value = current.copy(windowPreview = next)
+    }
+    override fun finishWindowGesture(token: HistoryWindowGestureToken) {
+        val gesture = currentGesture(token) ?: return
+        val next = mutableState.value.windowPreview ?: gesture.base
+        val intent = Any(); windowIntent = intent; windowGesture = null
+        mutableState.value = mutableState.value.copy(windowPreview = null)
+        // Clearing preview can synchronously navigate or begin a newer gesture.
+        if (lifetime.isActive && windowIntent === intent && selection === gesture.selection &&
+            detail.state.value.range == gesture.base && detail.state.value.availableRange == gesture.bounds)
+            detail.selectRange(next)
+    }
+    override fun cancelWindowGesture(token: HistoryWindowGestureToken) {
+        if (currentGesture(token) == null) return
+        windowIntent = Any(); windowGesture = null
+        mutableState.value = mutableState.value.copy(windowPreview = null)
+    }
+    private fun currentGesture(token: HistoryWindowGestureToken): WindowGesture? = windowGesture?.takeIf {
+        lifetime.isActive && it.token === token && it.selection === selection && it.intent === windowIntent &&
+            selectedRideId == it.rideId && detail.state.value.range == it.base && detail.state.value.availableRange == it.bounds
+    }
     override fun loadMoreRoute() = withSelection { route.loadMore() }
     override fun retryRoute() = withSelection { route.retry() }
     override fun setVisibleRides(ids: List<String>) {
@@ -178,13 +231,17 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     override fun back() {
         if (!lifetime.isActive) return
         when (mutableState.value.destination) {
-            HistoryDestination.CHARTS -> mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE)
+            HistoryDestination.CHARTS -> {
+                windowIntent = Any(); windowGesture = null
+                mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE, windowPreview = null)
+            }
             HistoryDestination.CATALOG -> onBack()
             HistoryDestination.RIDE -> {
                 selectedRideId = null; selection = Any()
+                windowIntent = Any(); windowGesture = null
                 val captured = selection
                 mutableState.value = mutableState.value.copy(destination = HistoryDestination.CATALOG, selectedRideId = null,
-                    detail = HistoryDetailState(), route = HistoryRouteState())
+                    detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null)
                 if (lifetime.isActive && selection === captured) { detail.clear(); route.clear() }
             }
         }
@@ -192,6 +249,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
 
     fun close() {
         selection = Any(); catalogIntent = Any(); selectedRideId = null
+        windowIntent = Any(); windowGesture = null
         catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); previewImages?.close(); lifetime.cancel()
     }
 }

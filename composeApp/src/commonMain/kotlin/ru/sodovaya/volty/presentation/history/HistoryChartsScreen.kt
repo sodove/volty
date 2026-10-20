@@ -17,14 +17,16 @@ import volty.composeapp.generated.resources.*
 fun HistoryChartsScreen(owner: HistoryComponent, state: HistoryUiState,
     cursorMaxAgeMillis: (HistorySeriesKey) -> Long, modifier: Modifier = Modifier) {
     var drawer by remember(state.selectedRideId) { mutableStateOf(false) }
-    Scaffold(modifier, bottomBar = { HistoryTimelineControls(state.detail, owner::selectRange, owner::selectTime) },
+    Scaffold(modifier, bottomBar = { HistoryTimelineControls(state.detail.copy(range = state.windowPreview ?: state.detail.range),
+        owner::selectRange, owner::selectTime) },
         topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_charts_title)) },
         navigationIcon = { IconButton(onClick = owner::back) {
             Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(Res.string.history_charts_back))
         } }, actions = { IconButton(onClick = { drawer = true }) {
             Icon(Icons.Default.Add, stringResource(Res.string.history_metrics_title))
         } }) }) { padding ->
-        HistoryChartPanel(state.detail, owner::selectTime, cursorMaxAgeMillis, Modifier.fillMaxSize().padding(padding))
+        HistoryChartPanel(state.detail, owner::selectTime, cursorMaxAgeMillis, Modifier.fillMaxSize().padding(padding),
+            state.windowPreview, owner)
     }
     if (drawer) HistoryMetricDrawer(state.detail, owner::loadSourceMetrics, owner::addMetric, owner::removeMetric,
         onDismiss = { drawer = false }, presets = state.presets, onLoadPresets = owner::loadPresets,

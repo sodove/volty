@@ -1,6 +1,10 @@
 package ru.sodovaya.volty.debug
 
 import android.os.Bundle
+import android.content.Intent
+import android.util.Log
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.BackHandler
@@ -34,6 +38,13 @@ import org.koin.android.ext.android.getKoin
  */
 @OptIn(ExperimentalMaterial3Api::class)
 class HistoryUiProbeActivity : ComponentActivity() {
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.getStringExtra("nativeGesture") == "pinch") dispatchHistoryProbePinch(window.decorView,
+            intent.getFloatExtra("centerX", Float.NaN), intent.getFloatExtra("centerY", Float.NaN),
+            intent.getFloatExtra("startSpan", Float.NaN), intent.getFloatExtra("endSpan", Float.NaN),
+            intent.getBooleanExtra("cancelGesture", false))
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -45,6 +56,13 @@ class HistoryUiProbeActivity : ComponentActivity() {
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
             { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish,
             getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>())
+        if (intent.getBooleanExtra("charts", false)) lifecycleScope.launch {
+            var previous: Pair<HistoryRange?,HistoryRange?>? = null
+            owner.state.collect { state ->
+                val windows = state.detail.range to state.windowPreview
+                if (windows != previous) { previous = windows; Log.d("HistoryProbeWindow", "committed=${windows.first} preview=${windows.second}") }
+            }
+        }
         if (catalog) owner.refresh() else owner.openRide("fixture")
         setContent {
             VoltyTheme {
@@ -147,6 +165,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
             return HistoryRecordedKeys(keys.take(limit), keys.size > limit)
         }
         override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries {
+            if (chartFixture) Log.d("HistoryProbeRead", "series $range")
             if (!chartFixture) return HistorySeries(key, emptyList(), emptyList(), false, origin)
             val markers = chartMarkers(key, range)
             return HistorySeries(key, historyOverview(chartSamples(key, range), markers), markers, false, origin)
@@ -161,16 +180,19 @@ class HistoryUiProbeActivity : ComponentActivity() {
         private fun chartMarkers(key: HistorySeriesKey, range: HistoryRange) =
             listOf(HistoryMarker(HistoryTick(3500, 2510, 1), HistoryMarkerKind.BLE_GAP, key.sourceId))
                 .filter { it.tick.epochMillis in range.startEpochMillis..range.endEpochMillis }
-        override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) =
-            if (chartFixture) historyStats(chartSamples(key, range), chartMarkers(key, range),
+        override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats {
+            if (chartFixture) Log.d("HistoryProbeRead", "stats $range")
+            return if (chartFixture) historyStats(chartSamples(key, range), chartMarkers(key, range),
                 HistoryMetricRegistry.descriptor(key.metricId)?.consumptionMultiplier)
             else if (!summaryFixture) HistoryStats(null, null, null, false) else when (key.metricId) {
                 "power_w" -> HistoryStats(-4200.0, 200.0, 12.0, false)
                 "voltage_v" -> HistoryStats(60.0, 84.0, null, true)
                 else -> HistoryStats(null, null, null, true)
             }
+        }
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?) = HistoryPage<HistoryGpsFix>(emptyList(), null, false)
         override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
+            if (chartFixture) Log.d("HistoryProbeRead", "route $range")
             if (rideId.endsWith("-7") && failedReads.add(rideId)) error("Synthetic one-shot route read failure")
             fun fix(time: Long, lat: Double, lon: Double) = HistoryGpsFix(HistoryTick(time, time - 990, 1), lat,
                 lon + if(remotePreviewArea) 50.0 else 0.0, 3.0, null)

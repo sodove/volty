@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
@@ -27,7 +28,8 @@ import volty.composeapp.generated.resources.*
  */
 @Composable
 fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
-    cursorMaxAgeMillis: (HistorySeriesKey) -> Long, modifier: Modifier = Modifier) {
+    cursorMaxAgeMillis: (HistorySeriesKey) -> Long, modifier: Modifier = Modifier,
+    windowPreview: HistoryRange? = null, gestureOwner: HistoryComponent? = null) {
     val text = historyMetricText()
     val labels = historySourceLabels(state.sources)
     LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -46,7 +48,8 @@ fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
                         else -> {
                             val series = state.series[key]; val range = state.range
                             if (series == null || range == null) Text(stringResource(Res.string.history_summary_unavailable))
-                            else RecordedChart(series, range, state.cursorEpochMillis, cursorMaxAgeMillis(key), onSelectTime)
+                            else RecordedChart(series, range, windowPreview, state.cursorEpochMillis,
+                                cursorMaxAgeMillis(key), onSelectTime, gestureOwner)
                         }
                     }
                 }
@@ -58,19 +61,20 @@ fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
 private data class BoundHistoryChart(val source: HistorySeries, val range: HistoryRange, val scene: HistoryChartScene?)
 
 @Composable
-private fun RecordedChart(series: HistorySeries, range: HistoryRange, cursor: Long?, maxAgeMillis: Long,
-    onSelectTime: (Long?) -> Unit) {
+private fun RecordedChart(series: HistorySeries, range: HistoryRange, preview: HistoryRange?, cursor: Long?, maxAgeMillis: Long,
+    onSelectTime: (Long?) -> Unit, gestureOwner: HistoryComponent?) {
     val bound by produceState<BoundHistoryChart?>(null, series, range) {
         value = withContext(Dispatchers.Default) { BoundHistoryChart(series, range, historyChartScene(series, range)) }
     }
     val matching = bound?.takeIf { it.source === series && it.range == range }
-    val scene = matching?.scene
+    val window = preview ?: range
+    val scene = remember(matching, window) { matching?.scene?.let { historyChartViewport(it, window) } }
     val latestSelect by rememberUpdatedState(onSelectTime)
     val chartPadding = with(LocalDensity.current) { 6.dp.toPx() }
     val unit = historyUnitText(HistoryMetricRegistry.descriptor(series.key.metricId)?.unit)
     val sample = cursor?.let { historyCursorSample(series, it, maxAgeMillis) }
     val sampleTime = sample?.tick?.let { tick -> series.origin?.let { historyAxisEpochMillis(it, tick) } ?: tick.epochMillis }
-    val selected = scene?.segments?.flatten()?.firstOrNull { it.epochMillis == sampleTime }
+    val selected = scene?.segments?.flatten()?.firstOrNull { it.epochMillis == sampleTime && it.x in 0f..1f }
     val reading = selected?.let { "${it.value} $unit" } ?: "—"
     Text(stringResource(Res.string.history_chart_cursor, reading), style = MaterialTheme.typography.labelMedium)
     when {
@@ -85,8 +89,9 @@ private fun RecordedChart(series: HistorySeries, range: HistoryRange, cursor: Lo
             val cursorColor = MaterialTheme.colorScheme.tertiary
             val description = stringResource(Res.string.history_chart_description)
             Canvas(Modifier.fillMaxWidth().height(132.dp).semantics { contentDescription = description }
-                .pointerInput(range) {
-                    detectTapGestures { offset ->
+                .pointerInput(range, gestureOwner) {
+                    if (gestureOwner != null) detectHistoryChartGestures(gestureOwner, range, chartPadding) { latestSelect(it) }
+                    else detectTapGestures { offset ->
                         val width = size.width - 2 * chartPadding
                         if (width > 0) latestSelect(historyTimeAtFraction(range, (offset.x - chartPadding) / width))
                     }
@@ -96,6 +101,7 @@ private fun RecordedChart(series: HistorySeries, range: HistoryRange, cursor: Lo
                 val height = (size.height - 2 * padding).coerceAtLeast(0f)
                 fun point(p: HistoryChartPoint) = Offset(padding + p.x * width, padding + p.y * height)
                 drawLine(grid, Offset(padding, size.height - padding), Offset(size.width - padding, size.height - padding))
+                clipRect(padding, padding, size.width - padding, size.height - padding) {
                 for (segment in scene.segments) {
                     if (segment.size == 1) drawCircle(line, 2.dp.toPx(), point(segment.single()))
                     else {
@@ -105,11 +111,13 @@ private fun RecordedChart(series: HistorySeries, range: HistoryRange, cursor: Lo
                         drawPath(path, line, style = Stroke(2.dp.toPx()))
                     }
                 }
-                cursor?.let { historyTimeFraction(range, it) }?.let { fraction ->
+                cursor?.takeIf { it in window.startEpochMillis..window.endEpochMillis }
+                    ?.let { historyTimeFraction(window, it) }?.let { fraction ->
                     val x = padding + width * fraction
                     drawLine(cursorColor, Offset(x, padding), Offset(x, size.height - padding), 1.dp.toPx())
                 }
                 selected?.let { drawCircle(cursorColor, 4.dp.toPx(), point(it)) }
+                }
             }
             if (scene.truncated) Text(stringResource(Res.string.history_chart_partial),
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

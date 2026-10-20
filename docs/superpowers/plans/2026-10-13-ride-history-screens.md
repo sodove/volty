@@ -242,7 +242,7 @@ Tests `HistoryScreenStatePolicyTest.kt`; actual Compose checked natively.
   expandable summary, bottom series stack/navigation/drawers. Port source tokens/
   card shapes/spacing with Volty fonts/branding; add original/source attribution.
   Summary current cursor, selected range and whole-ride stats have distinct labels.
-- [ ] Charts share time window/cursor, allow pan/pinch and selection, render gaps,
+- [x] Charts share time window/cursor, allow pan/pinch and selection, render gaps,
   units and unavailable cards. Stack is lazy; source data loading is bounded.
   Fullscreen charts reuses component state, not duplicate live streams.
 - [ ] Animate panel height, drawer, route highlight and data transitions without
@@ -279,6 +279,15 @@ checks cover all series plus map/range summary. Evidence:
 `../specs/2026-10-20-history-time-window-acceptance.md`. Pinch/drag preview with
 settled read commit remains required, as do product retention and full home/root
 integration. The gesture checkbox above stays open.
+
+Shared gesture checkpoint (2026-10-20): parent-owned transient preview now moves
+all visible recorded plots without per-frame reads; release commits once, while
+cancel/navigation/newer commands fence old callbacks. Real native pinch, horizontal
+pan, ACTION_CANCEL, vertical-list cooperation and shared cursor were checked,
+including Russian font200% landscape. See
+`../specs/2026-10-20-history-window-gestures-acceptance.md`. This supersedes the
+preceding gesture-pending statement only. Complete home/navigation/transitions,
+product retention/root cutover and all later tasks remain required.
 
 ## Task6 — favorites, trim and curated media
 

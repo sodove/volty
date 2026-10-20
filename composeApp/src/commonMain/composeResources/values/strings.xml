@@ -1077,7 +1077,7 @@
     <string name="history_unit_wh">Wh</string>
     <string name="history_unit_ah">Ah</string>
     <string name="history_chart_cursor">Cursor: %1$s</string>
-    <string name="history_chart_description">Recorded chart. Tap to place the shared cursor.</string>
+    <string name="history_chart_description">Recorded chart. Tap for the shared cursor; drag horizontally or pinch to change the time window.</string>
     <string name="history_chart_partial">Only part of the recorded series is loaded</string>
     <string name="history_chart_scale">Plot scale: %1$s … %2$s %3$s</string>
     <string name="history_charts_title">Ride charts</string>

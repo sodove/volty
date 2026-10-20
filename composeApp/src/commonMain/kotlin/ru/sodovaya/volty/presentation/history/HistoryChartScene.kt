@@ -6,6 +6,25 @@ data class HistoryChartPoint(val epochMillis: Long, val value: Double, val x: Fl
 data class HistoryChartScene(val segments: List<List<HistoryChartPoint>>, val minimum: Double?,
     val maximum: Double?, val truncated: Boolean)
 
+/** Graphical clipping only: keep real points/segments and the loaded Y scale.
+ * Outside points are drawn under a Canvas clip, never published as fake samples.
+ */
+fun historyChartViewport(scene: HistoryChartScene, window: HistoryRange): HistoryChartScene? {
+    val span = window.endEpochMillis - window.startEpochMillis
+    if (span < 0 || scene.segments.flatten().any { !it.value.isFinite() || !it.y.isFinite() }) return null
+    val segments = scene.segments.mapNotNull { segment ->
+        val points = if (span == 0L) segment.filter { it.epochMillis == window.startEpochMillis } else segment
+        points.takeIf { it.isNotEmpty() }?.map { point ->
+            val delta = point.epochMillis - window.startEpochMillis
+            val overflow = (point.epochMillis >= window.startEpochMillis && delta < 0) ||
+                (point.epochMillis < window.startEpochMillis && delta > 0)
+            val elapsed = if (overflow) point.epochMillis.toDouble() - window.startEpochMillis.toDouble() else delta.toDouble()
+            point.copy(x = if (span == 0L) 0f else (elapsed / span.toDouble()).toFloat())
+        }
+    }
+    return scene.copy(segments = segments)
+}
+
 /** Projects a bounded recorded overview, never the source of exact statistics.
  * Acquisition gaps were inserted BEFORE thinning. Sparse retained timestamps
  * must not invent further cadence gaps, interpolated values or viewport tails.
