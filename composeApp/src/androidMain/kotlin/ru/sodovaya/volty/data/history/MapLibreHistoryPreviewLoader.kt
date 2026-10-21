@@ -28,12 +28,14 @@ import kotlin.coroutines.resumeWithException
  * errors before its resources can back an image. Unsupported/failed views fall
  * back to the caller's Canvas route. Attribution/logo defaults are preserved.
  */
-class MapLibreHistoryPreviewLoader(context: Context, provider: ru.sodovaya.volty.data.db.VoltyDatabaseProvider) : HistoryPreviewImageLoader {
+class MapLibreHistoryPreviewLoader(context: Context, provider: ru.sodovaya.volty.data.db.VoltyDatabaseProvider,
+    private val derived: HistoryDerivedFiles = HistoryDerivedFiles(
+        HistoryPreviewFileCache(File(context.applicationContext.cacheDir, "history-preview-images-v1")),
+        File(context.applicationContext.cacheDir, "history-exports-v1"), provider)) : HistoryPreviewImageLoader {
     private val app = context.applicationContext
-    private val files = HistoryPreviewFileCache(File(app.cacheDir,"history-preview-images-v1"))
-    private val serial = Mutex()
+    private val files = derived.previewFiles
+    private val serial = derived.gate
     private val database = provider.database
-    private val purge = HistoryPreviewPurgeRecovery(HistoryPreviewPurgeJournal(provider), files::clearOwned)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var needsCleanup = true
     private val styles = mutableMapOf<Boolean,PreparedStyle>()
@@ -43,11 +45,11 @@ class MapLibreHistoryPreviewLoader(context: Context, provider: ru.sodovaya.volty
     // only bundled public style bytes over loopback; map tiles remain OFM URLs.
 
     override suspend fun reconcileDeletedRides(): Boolean = serial.withLock {
-        withContext(Dispatchers.IO) { purge.reconcile() }
+        withContext(Dispatchers.IO) { derived.reconcileLocked() }
     }
 
     override suspend fun load(key: HistoryPreviewImageKey): HistoryPreviewImage? = try { serial.withLock {
-        if (!withContext(Dispatchers.IO) { purge.reconcile() && exists(key.rideId) }) return@withLock null
+        if (!withContext(Dispatchers.IO) { derived.reconcileLocked() && exists(key.rideId) }) return@withLock null
         val camera = historyPreviewCamera(key) ?: return@withLock null
         val style = withContext(Dispatchers.IO) { prepareStyle(key.darkTheme) } ?: return@withLock null
         val digest = digest(key,style.hash)

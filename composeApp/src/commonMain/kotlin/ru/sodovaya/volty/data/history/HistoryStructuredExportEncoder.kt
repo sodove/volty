@@ -6,8 +6,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.serialization.json.*
 import ru.sodovaya.volty.domain.history.*
+import kotlin.time.Instant
 
 /** One record at a time. Original storage identities stay inside this owner. */
+@OptIn(kotlin.time.ExperimentalTime::class)
 internal class StructuredHistoryExportEncoder(private val metadata: HistoryExportMetadata) {
     private data class Source(val alias: String, val kind: HistorySourceKind, val label: String)
     private val legacy = metadata.ride.status == HistoryRideStatus.LEGACY
@@ -40,11 +42,13 @@ internal class StructuredHistoryExportEncoder(private val metadata: HistoryExpor
                 is HistoryExportRecord.Location -> counts.copy(locations = counts.locations + 1)
                 is HistoryExportRecord.Event -> counts.copy(events = counts.events + 1)
                 is HistoryExportRecord.Summary -> counts.copy(summaries = counts.summaries + 1)
+                is HistoryExportRecord.LegacyUnmapped -> counts.copy(unmapped = counts.unmapped + 1)
             }
         }
         if (json) output("],\"counts\":" + buildJsonObject {
             put("samples", counts.samples); put("locations", counts.locations)
             put("events", counts.events); put("summaries", counts.summaries)
+            put("unmapped", counts.unmapped)
         } + "}\n")
         return counts
     }
@@ -64,7 +68,18 @@ internal class StructuredHistoryExportEncoder(private val metadata: HistoryExpor
     }
 
     private fun encode(record: HistoryExportRecord): JsonObject = when (record) {
-        is HistoryExportRecord.Numeric -> sample(record.sample)
+        is HistoryExportRecord.LegacyUnmapped -> buildJsonObject {
+            if (!legacy) fail(HistoryExportFailure.INVALID_DATA)
+            base("legacy_unmapped", record.tick)
+            legacyFields(record.tick, record.capturedTimestamp, record.metric)
+            put("dataQuality", "LEGACY_UNMAPPED")
+            put("source", JsonNull); put("unit", JsonNull); put("value", JsonNull)
+            put("cell", record.cellIndex?.let(::JsonPrimitive) ?: JsonNull)
+            val raw = record.rawValue?.takeIf { record.known && it.isFinite() }
+            put("legacyRawValue", raw?.let(::JsonPrimitive) ?: JsonNull)
+            put("unknownReason", if (!record.known) "LEGACY" else if (raw == null) "INVALID_VALUE" else "LEGACY_UNMAPPED")
+        }
+        is HistoryExportRecord.Numeric -> sample(record.sample, capturedTimestamp = record.capturedTimestamp, legacyMetric = record.legacyMetric)
         is HistoryExportRecord.Location -> buildJsonObject {
             if (legacy) fail(HistoryExportFailure.INVALID_DATA)
             val fix = record.fix
@@ -102,11 +117,22 @@ internal class StructuredHistoryExportEncoder(private val metadata: HistoryExpor
         }
     }
 
-    private fun sample(value: HistorySample, checkRange: Boolean = true) = buildJsonObject {
+    private fun sample(value: HistorySample, checkRange: Boolean = true,
+        capturedTimestamp: String? = null, legacyMetric: String? = null) = buildJsonObject {
         base("sample", value.tick, checkRange)
+        legacyFields(value.tick, capturedTimestamp, legacyMetric)
         metric(value.key)
         put("value", value.value?.let(::JsonPrimitive) ?: JsonNull)
         put("unknownReason", value.unknown?.name?.let(::JsonPrimitive) ?: JsonNull)
+    }
+    private fun JsonObjectBuilder.legacyFields(value: HistoryTick, capturedTimestamp: String?, metric: String?) {
+        if ((capturedTimestamp != null || metric != null) && !legacy) fail(HistoryExportFailure.INVALID_DATA)
+        capturedTimestamp?.let {
+            val parsed = try { Instant.parse(it).toEpochMilliseconds() } catch (_: IllegalArgumentException) { fail(HistoryExportFailure.INVALID_DATA) }
+            if (parsed != value.epochMillis) fail(HistoryExportFailure.INVALID_DATA)
+            put("capturedTimestamp", it)
+        }
+        metric?.let { put("legacyMetric", historyExportLabel(it)) }
     }
     private fun JsonObjectBuilder.base(type: String, value: HistoryTick, checkRange: Boolean = true) {
         val captured = if (legacy) value.epochMillis else axis(value)
@@ -159,8 +185,9 @@ internal class StructuredHistoryExportEncoder(private val metadata: HistoryExpor
             "display_multiplier" to "displayMultiplier", "consumption_multiplier" to "consumptionMultiplier",
             "latitude" to "latitude", "longitude" to "longitude", "accuracy_meters" to "accuracyMeters",
             "heading_degrees" to "heading", "provider" to "provider", "event" to "event",
-            "summary_json" to "summaryJson", "data_quality" to "dataQuality", "range_axis" to "rangeAxis")
+            "summary_json" to "summaryJson", "data_quality" to "dataQuality", "range_axis" to "rangeAxis",
+            "captured_timestamp" to "capturedTimestamp", "legacy_metric" to "legacyMetric", "legacy_raw_value" to "legacyRawValue")
         val numericColumns = setOf("epochMillis", "elapsedMillis", "clockGeneration", "cell", "value", "displayMultiplier",
-            "consumptionMultiplier", "latitude", "longitude", "accuracyMeters", "heading")
+            "consumptionMultiplier", "latitude", "longitude", "accuracyMeters", "heading", "legacyRawValue")
     }
 }

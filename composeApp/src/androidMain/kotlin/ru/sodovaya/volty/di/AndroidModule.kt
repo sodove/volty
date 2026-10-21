@@ -95,8 +95,20 @@ val androidModule = module {
         )
     }
     single { DataStoreFactory(androidContext()) }
+    single {
+        val context = androidContext()
+        ru.sodovaya.volty.data.history.HistoryDerivedFiles(
+            ru.sodovaya.volty.data.history.HistoryPreviewFileCache(java.io.File(context.cacheDir, "history-preview-images-v1")),
+            java.io.File(context.cacheDir, "history-exports-v1"), get())
+    }
+    single<ru.sodovaya.volty.domain.history.HistoryExportRepository> {
+        val files = get<ru.sodovaya.volty.data.history.HistoryDerivedFiles>()
+        ru.sodovaya.volty.data.history.FileHistoryExportRepository(files.exportDirectory,
+            ru.sodovaya.volty.data.history.SqlDelightHistoryExportSource(get(), Dispatchers.IO),
+            gate = files.gate, reconcile = files::reconcileLocked)
+    }
     single<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader> {
-        ru.sodovaya.volty.data.history.MapLibreHistoryPreviewLoader(androidContext(), get())
+        ru.sodovaya.volty.data.history.MapLibreHistoryPreviewLoader(androidContext(), get(), get())
     }
     single<ru.sodovaya.volty.domain.history.HistoryRideDeletionRepository> {
         val media = get<ru.sodovaya.volty.domain.history.HistoryMediaRepository>()

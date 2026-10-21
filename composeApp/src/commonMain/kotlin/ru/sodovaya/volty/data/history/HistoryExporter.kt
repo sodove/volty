@@ -72,7 +72,7 @@ class StreamingHistoryExportEncoder(private val maxGpsGapMillis: Long = 5_000) :
                         originalLongitude + "</extensions></trkpt>\n")
                     previous = fix; boundary = false; points++
                 }
-                is HistoryExportRecord.Numeric, is HistoryExportRecord.Summary -> Unit
+                is HistoryExportRecord.Numeric, is HistoryExportRecord.Summary, is HistoryExportRecord.LegacyUnmapped -> Unit
             }
         }
         if (points == 0L) fail(HistoryExportFailure.NO_ROUTE)

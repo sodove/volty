@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -79,7 +80,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         if (state.destination == HistoryDestination.RIDE && state.mapMetricKey != null) chartsExpanded = false
     }
     BackHandler(enabled = !listOpen && !metricsOpen && !trimOpen && !mediaOpen && state.media.open == null &&
-        state.deletion.target == null && state.deletion.result == null) { owner.back() }
+        state.deletion.target == null && state.deletion.result == null && state.export.source == null) { owner.back() }
     LaunchedEffect(owner, content.phase, listOpen) {
         if ((content.phase == HistoryScreenPhase.CATALOG || listOpen) && !state.catalog.loaded && !state.catalog.refreshing)
             owner.refresh()
@@ -151,6 +152,8 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         HistoryBack(owner::back)
                         Text(stringResource(Res.string.history_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        if (state.export.available && content.phase == HistoryScreenPhase.READY)
+                            IconButton(onClick = owner::openExport) { Icon(Icons.Default.Share, stringResource(Res.string.history_export_title)) }
                         if (state.media.available && state.media.favoriteId != null) IconButton(onClick = { mediaOpen = true }) {
                             Icon(Icons.Default.PhotoLibrary, stringResource(Res.string.history_media_title))
                         }
@@ -222,6 +225,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         state.presets, owner::loadPresets, owner::savePreset, owner::applyPreset, owner::deletePreset)
     if (mediaOpen && state.media.favoriteId != null) HistoryMediaDrawer(owner, state.media, mediaPositions.keys) { mediaOpen = false }
     state.media.open?.let { HistoryMediaViewer(it, owner::consumeMediaOpen) }
+    HistoryExportSheet(state.export, owner::export, owner::dismissExport)
     HistoryRideDeletionDialog(state.deletion, owner::confirmRideDeletion, owner::dismissRideDeletion,
         owner::requestRideDeletion, owner::dismissRideDeletionResult)
     val bounds = content.detail?.availableRange

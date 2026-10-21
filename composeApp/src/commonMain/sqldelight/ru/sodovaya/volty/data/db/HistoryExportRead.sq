@@ -1,0 +1,76 @@
+exportV2Shape:
+SELECT
+ (SELECT COUNT(*) FROM HistorySampleV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS sampleCount,
+ (SELECT COUNT(*) FROM HistoryGpsV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS gpsCount,
+ (SELECT COUNT(*) FROM HistoryMarkerV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS markerCount,
+ (SELECT COUNT(*) FROM HistoryBucketV2 WHERE rideId = :rideId
+  AND firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed
+  AND firstEpochMillis IS NOT NULL AND lastEpochMillis IS NOT NULL) AS bucketCount;
+
+exportSources:
+SELECT * FROM HistorySourceV2 WHERE rideId = :rideId ORDER BY id LIMIT 2049;
+
+exportSamples:
+SELECT * FROM HistorySampleV2 WHERE rideId = :rideId
+AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed
+AND sequence > :afterSequence ORDER BY sequence LIMIT :pageSize;
+
+exportRouteFacts:
+WITH facts AS (
+ SELECT 1 AS routeOrder, sequence, epochMillis, elapsedMillis, clockGeneration,
+ latitude, longitude, accuracyMeters, headingDegrees, provider, '' AS markerKind, '' AS sourceId, 0 AS sourcePresent
+ FROM HistoryGpsV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed
+ UNION ALL
+ SELECT 0 AS routeOrder, sequence, epochMillis, elapsedMillis, clockGeneration,
+ 0.0 AS latitude, 0.0 AS longitude, 0.0 AS accuracyMeters, NULL AS headingDegrees, NULL AS provider,
+ kind AS markerKind, COALESCE(sourceId, '') AS sourceId, CASE WHEN sourceId IS NULL THEN 0 ELSE 1 END AS sourcePresent
+ FROM HistoryMarkerV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed
+)
+SELECT * FROM facts
+WHERE :afterElapsed IS NULL OR elapsedMillis > :afterElapsed
+OR (elapsedMillis = :afterElapsed AND routeOrder > :afterOrder)
+OR (elapsedMillis = :afterElapsed AND routeOrder = :afterOrder AND sequence > :afterSequence)
+ORDER BY elapsedMillis, routeOrder, sequence LIMIT :pageSize;
+
+exportBuckets:
+SELECT * FROM HistoryBucketV2 WHERE rideId = :rideId
+AND firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed
+AND firstEpochMillis IS NOT NULL AND lastEpochMillis IS NOT NULL
+AND (:afterSource IS NULL OR sourceId > :afterSource
+ OR (sourceId = :afterSource AND metricId > :afterMetric)
+ OR (sourceId = :afterSource AND metricId = :afterMetric AND cellIndex > :afterCell)
+ OR (sourceId = :afterSource AND metricId = :afterMetric AND cellIndex = :afterCell AND startElapsedMillis > :afterStart))
+ORDER BY sourceId, metricId, cellIndex, startElapsedMillis LIMIT :pageSize;
+
+exportLegacyKnownKeys:
+SELECT DISTINCT metricKey FROM RidePointRow WHERE rideId = :rideId AND metricKey IN :recognizedKeys
+ORDER BY metricKey LIMIT 17;
+
+exportLegacyCount:
+WITH fractions AS (
+ SELECT *, CASE WHEN substr(timestamp, 20, 1) = '.' THEN
+ max(instr(substr(timestamp, 21), 'Z'), instr(substr(timestamp, 21), '+'), instr(substr(timestamp, 21), '-'))
+ ELSE 0 END AS zoneStart FROM RidePointRow WHERE rideId = :rideId
+), timed AS (
+ SELECT *, CAST(strftime('%s', CASE WHEN zoneStart > 0 THEN substr(timestamp, 1, 19) || substr(timestamp, 20 + zoneStart)
+ ELSE timestamp END) AS INTEGER) * 1000 + CASE WHEN zoneStart > 0
+ THEN CAST(substr(substr(timestamp, 21, zoneStart - 1) || '000', 1, 3) AS INTEGER) ELSE 0 END AS capturedMillis FROM fractions
+)
+SELECT COUNT(*) FROM timed WHERE capturedMillis >= :fromEpoch AND capturedMillis <= :toEpoch;
+
+exportLegacyRows:
+WITH fractions AS (
+ SELECT *, CASE WHEN substr(timestamp, 20, 1) = '.' THEN
+ max(instr(substr(timestamp, 21), 'Z'), instr(substr(timestamp, 21), '+'), instr(substr(timestamp, 21), '-'))
+ ELSE 0 END AS zoneStart FROM RidePointRow WHERE rideId = :rideId
+), timed AS (
+ SELECT *, CAST(strftime('%s', CASE WHEN zoneStart > 0 THEN substr(timestamp, 1, 19) || substr(timestamp, 20 + zoneStart)
+ ELSE timestamp END) AS INTEGER) * 1000 + CASE WHEN zoneStart > 0
+ THEN CAST(substr(substr(timestamp, 21, zoneStart - 1) || '000', 1, 3) AS INTEGER) ELSE 0 END AS capturedMillis FROM fractions
+)
+SELECT rideId, metricKey, timestamp, cellIndex, value, isKnown FROM timed
+WHERE capturedMillis >= :fromEpoch AND capturedMillis <= :toEpoch
+AND (:afterTimestamp IS NULL OR timestamp > :afterTimestamp
+ OR (timestamp = :afterTimestamp AND metricKey > :afterMetric)
+ OR (timestamp = :afterTimestamp AND metricKey = :afterMetric AND cellIndex > :afterCell))
+ORDER BY timestamp, metricKey, cellIndex LIMIT :pageSize;

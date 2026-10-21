@@ -133,6 +133,26 @@ class HistoryStructuredExportTest {
             assertTrue("Pack [path]" in output, format.name)
         }
     }
+    @Test fun unmappedLegacyFactsRetainRawEvidenceWithoutInventingSourceUnitOrCanonicalValue() = runTest {
+        val selected = metadata().copy(ride = metadata().ride.copy(status = HistoryRideStatus.LEGACY), sources = emptyList())
+        val raw = HistoryExportRecord.LegacyUnmapped(HistoryTick(1000, 0, 0), "1970-01-01T00:00:01.000100Z",
+            "=FUTURE_VALUE", null, 321.0, true)
+        val output = StringBuilder()
+        val counts = StreamingHistoryExportEncoder().write(HistoryExportFormat.JSON, selected, flowOf(raw)) { output.append(it) }
+        val record = Json.parseToJsonElement(output.toString()).jsonObject.getValue("records").jsonArray.single().jsonObject
+        assertEquals("legacy_unmapped", record.getValue("type").jsonPrimitive.content)
+        assertEquals(JsonNull, record.getValue("source")); assertEquals(JsonNull, record.getValue("unit"))
+        assertEquals(JsonNull, record.getValue("value")); assertEquals(JsonNull, record.getValue("elapsedMillis"))
+        assertEquals("LEGACY_UNMAPPED", record.getValue("unknownReason").jsonPrimitive.content)
+        assertEquals(321.0, record.getValue("legacyRawValue").jsonPrimitive.double)
+        assertEquals(raw.capturedTimestamp, record.getValue("capturedTimestamp").jsonPrimitive.content)
+        assertEquals(1L, counts.unmapped)
+        val csv = StringBuilder()
+        StreamingHistoryExportEncoder().write(HistoryExportFormat.CSV, selected, flowOf(raw.copy(known = false))) { csv.append(it) }
+        val rows = readCsv(csv.toString()); val header = rows.first()
+        assertEquals("", rows[1][header.indexOf("value")]); assertEquals("", rows[1][header.indexOf("legacy_raw_value")])
+        assertEquals("'=FUTURE_VALUE", rows[1][header.indexOf("legacy_metric")])
+    }
 
     /** Independent RFC4180 reader for the small synthetic fixtures, including embedded CR/LF. */
     private fun readCsv(text: String): List<List<String>> {

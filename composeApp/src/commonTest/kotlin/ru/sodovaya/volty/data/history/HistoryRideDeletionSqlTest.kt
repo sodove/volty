@@ -115,7 +115,9 @@ class HistoryRideDeletionSqlTest {
         assertNull(f.db.rideRowQueries.selectById("ride").executeAsOneOrNull()); assertEquals(0L, f.count("RidePointRow", "ride"))
         assertNull(f.favorites.get("old-fav")); assertNotNull(f.favorites.get("fav")); assertEquals(v2, f.store.ride("ride"))
         tables.forEach { assertEquals(1L, f.count(it, "ride"), it) }
-        assertNull(HistoryPreviewPurgeJournal(f.provider).pendingGeneration())
+        // Retraction: legacy deletion previously needed no preview purge. It
+        // now owns derived CSV/JSON too, so cleanup must be durable for both stores.
+        assertNotNull(HistoryPreviewPurgeJournal(f.provider).pendingGeneration())
     }
     @Test fun cleanupFailureReportsPendingAfterCommittedDeletionInsteadOfFalseFailure() = runTest {
         val f = fixture(); val ride = f.closed(); f.favorite(ride); f.media.reserve(id, "fav", "image/png")

@@ -58,3 +58,10 @@ action callback. The separate confirmation owner, source-qualified transactional
 deletion and durable private-route preview purge are original Volty code. They
 do not change the upstream notices or import additional assets. Whole-recording
 deletion preserves gallery originals; export and production cutover remain open.
+
+Volty extension (2026-10-21): the stored-history toolbar now opens an export
+sheet implemented outside this ported directory. Paged SQLite readers, encoders,
+file ownership, Android share/save actions and their tests are original Volty
+code. They add no upstream files or assets. Export integration acceptance is
+recorded in `docs/superpowers/specs/2026-10-21-history-export-integration.md`;
+production cutover and the remaining export acceptance gates remain open.

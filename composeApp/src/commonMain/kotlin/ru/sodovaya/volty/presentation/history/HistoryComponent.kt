@@ -51,6 +51,9 @@ interface HistoryComponent {
     fun confirmRideDeletion()
     fun dismissRideDeletion()
     fun dismissRideDeletionResult()
+    fun openExport() {}
+    fun export(format: HistoryExportFormat) {}
+    fun dismissExport() {}
     fun setVisiblePreviewImages(keys: List<HistoryPreviewImageKey>)
     fun back()
 }
@@ -64,7 +67,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     previewDispatcher: CoroutineDispatcher = Dispatchers.Default,
     favoriteStore: HistoryFavoriteRepository? = null,
     mediaRepository: HistoryMediaRepository? = null,
-    deletionRepository: HistoryRideDeletionRepository? = null) : HistoryComponent {
+    deletionRepository: HistoryRideDeletionRepository? = null,
+    exportRepository: HistoryExportRepository? = null) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -75,6 +79,15 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val favorites = HistoryFavoritesComponent(componentContext, scope, favoriteStore)
     private val media = HistoryMediaComponent(componentContext, scope, mediaRepository)
     private val deletion = HistoryRideDeletionComponent(componentContext, scope, deletionRepository)
+    private val exports = HistoryExportComponent(componentContext, scope, exportRepository)
+    override fun openExport() {
+        if (!lifetime.isActive || state.value.detail.loading || state.value.detail.error != null) return
+        val ride = state.value.detail.ride ?: return
+        val range = state.value.detail.range ?: return
+        if (ride.id == selectedRideId) exports.open(ride.favoriteSource(), range)
+    }
+    override fun export(format: HistoryExportFormat) { if (lifetime.isActive) exports.start(format) }
+    override fun dismissExport() { if (lifetime.isActive) exports.dismiss() }
     override fun requestRideDeletion(ride: HistoryRide) {
         if (!lifetime.isActive) return
         val current = state.value
@@ -143,6 +156,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         val rideId: String, val base: HistoryRange, val bounds: HistoryRange)
 
     init {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            exports.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(export = it) }
+        }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             deletion.state.collect { next ->
                 if (!lifetime.isActive) return@collect
@@ -242,6 +258,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         if (!lifetime.isActive) return
         require(id.isNotBlank())
         deletion.dismiss()
+        exports.dismiss()
         selectedSource = favorite?.source ?: state.value.catalog.rides.singleOrNull { it.id == id }?.favoriteSource()
             ?: state.value.detail.ride?.takeIf { it.id == id }?.favoriteSource()
         selectedRideId = id; selection = Any()
@@ -363,6 +380,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     override fun back() {
         if (!lifetime.isActive) return
         deletion.dismiss()
+        exports.dismiss()
         when (mutableState.value.destination) {
             HistoryDestination.CHARTS -> {
                 windowIntent = Any(); windowGesture = null
@@ -374,6 +392,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     }
 
     private fun clearSelection() {
+        exports.dismiss()
         selectedRideId = null; selectedSource = null; selection = Any(); pendingFavoriteSave = null
         windowIntent = Any(); windowGesture = null
         val captured = selection
@@ -387,7 +406,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     fun close() {
         selection = Any(); catalogIntent = Any(); selectedRideId = null; selectedSource = null
         windowIntent = Any(); windowGesture = null
-        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); deletion.close(); previewImages?.close(); lifetime.cancel()
+        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); deletion.close(); exports.close(); previewImages?.close(); lifetime.cancel()
     }
 }
 

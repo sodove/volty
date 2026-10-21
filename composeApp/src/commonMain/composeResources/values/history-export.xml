@@ -1,0 +1,21 @@
+<resources>
+    <string name="history_export_title">Export ride</string>
+    <string name="history_export_window">Selected interval: %1$s — %2$s</string>
+    <string name="history_export_privacy">The file may contain your recorded location and telemetry. Share it only with people you trust. Export does not change the original ride.</string>
+    <string name="history_export_gpx">GPX · recorded route</string>
+    <string name="history_export_csv">CSV · telemetry table</string>
+    <string name="history_export_json">JSON · telemetry and route</string>
+    <string name="history_export_working">Preparing file… You can cancel.</string>
+    <string name="history_export_no_route">No recorded route in this interval. Choose CSV or JSON to export telemetry.</string>
+    <string name="history_export_active">Stop recording this ride before exporting it.</string>
+    <string name="history_export_changed">The recording was removed or changed. Reopen the ride and try again.</string>
+    <string name="history_export_invalid">Some saved data cannot be exported. The original ride has not changed.</string>
+    <string name="history_export_limit">This file is too large. Select a shorter interval.</string>
+    <string name="history_export_storage">Could not write the file. Check available storage and try again.</string>
+    <string name="history_export_ready">File ready · %1$s KiB</string>
+    <string name="history_export_share">Share file</string>
+    <string name="history_export_save">Save file</string>
+    <string name="history_export_saved">File saved.</string>
+    <string name="history_export_unavailable">Could not open or send the file. Prepare it again and try another app.</string>
+    <string name="history_export_close">Close</string>
+</resources>

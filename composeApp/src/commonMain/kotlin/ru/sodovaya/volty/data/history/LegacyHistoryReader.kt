@@ -133,12 +133,12 @@ class LegacyHistoryReader(provider: VoltyDatabaseProvider,
     private fun wallTick(text: String) = HistoryTick(Instant.parse(text).toEpochMilliseconds(), 0, 0)
 }
 
-private data class LegacyMetric(val id: String, val sourceId: String, val canonicalMultiplier: Double = 1.0)
+internal data class LegacyMetric(val id: String, val sourceId: String, val canonicalMultiplier: Double = 1.0)
 
 /** The retired recorder persisted GraphTelemetryMapper's display values, not wire values. */
-private fun legacyMetric(key: String): LegacyMetric? = legacyMetrics[key]
+internal fun legacyMetric(key: String): LegacyMetric? = legacyMetrics[key]
 
-private val legacyMetrics = mapOf(
+internal val legacyMetrics = mapOf(
     "SOC" to LegacyMetric("soc_percent", "legacy-battery"),
     "POWER" to LegacyMetric("power_w", "legacy-battery", -1.0),
     "CURRENT" to LegacyMetric("current_a", "legacy-battery", -1.0),

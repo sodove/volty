@@ -3,4 +3,5 @@
     <!-- Matches File(context.cacheDir, "logs") in LogExporter. -->
     <cache-path name="logs" path="logs/" />
     <files-path name="history_media" path="history-media-v1/" />
+    <cache-path name="history_exports" path="history-exports-v1/" />
 </paths>

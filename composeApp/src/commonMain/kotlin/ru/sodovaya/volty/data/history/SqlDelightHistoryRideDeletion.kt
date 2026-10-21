@@ -39,11 +39,13 @@ class SqlDelightHistoryRideDeletion(provider: VoltyDatabaseProvider,
                 source.started.epochMillis, source.started.elapsedMillis, source.started.clockGeneration)
             queries.deleteRecordingFavorites(source.rideId, source.kind.name, source.vehicleId,
                 source.started.epochMillis, source.started.elapsedMillis, source.started.clockGeneration)
+            // Retraction: originally only V2 had derived preview files. Legacy
+            // CSV/JSON exports now share the same durable derived-file purge.
+            previewPurge.request()
             if (source.kind == HistoryStorageKind.LEGACY) {
                 database.ridePointRowQueries.deleteByRide(source.rideId)
                 database.rideRowQueries.delete(source.rideId)
             } else {
-                previewPurge.request()
                 // Explicit children, including receipt/bucket state, are required
                 // even on SQLite connections with foreign_keys disabled.
                 database.rideHistorySampleQueries.deleteSamples(source.rideId)
