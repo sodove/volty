@@ -1,3 +1,28 @@
+# Native recipient acceptance on minified release (2026-10-21)
+
+The earlier recipient-read gate is now satisfied by h628. A separate local
+acceptance application, UID 10191 versus Volty UID 10190, received actual Android
+shares from the production History screen in signed, minified ReleaseX86 build
+06f9ab88. The helper requested no Internet/storage/Volty permissions. It read and
+hashed JSON (4977 bytes, 14 records) and GPX (2271 bytes, seven recorded fixes in
+seven gap-separated segments). Both hashes matched the original private cache
+files exactly. Android showed activity-owned mode 0x1 grants, no write grant,
+no persistable or persisted permission. After recipient tasks were destroyed,
+both grants disappeared; relaunching the same reader with the JSON URI without
+a grant failed with SecurityException. Back alone retained an activity task and
+its grant, so Back is not claimed to revoke task-owned permissions immediately.
+
+The helper was uninstalled after acceptance. It is an ignored local test artifact,
+not a Volty dependency or shipped component. Quiescent before/after SQLite rows
+were identical: 18 original legacy rides, 191504 original points, and the explicitly
+seeded closed V2 fixture with seven samples/seven GPS fixes. This is native sharing
+acceptance using synthetic persisted GPS; it is not physical recording acceptance.
+
+Task 7 remains open for the older-V2 summary timing policy and parent export
+integration coverage. The whole history goal and final distribution audit remain
+open. The execution ledger carries checksums, screenshots and machine-readable
+proof; no previous unverified recipient-read claim is retroactively upgraded.
+
 # Ride History export integration — 2026-10-21
 
 The stored-history screen can now export its selected interval as GPX, CSV or

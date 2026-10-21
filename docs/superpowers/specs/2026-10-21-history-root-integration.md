@@ -120,6 +120,12 @@ history resource keys match across EN/RU and the original GPL license is unchang
 
 ## Remaining gates
 
+Retraction/update: the following four-argument-factory paragraph describes the
+state before 06f9ab88. Production now uses the native runtime and catalog controls;
+saved/current labels are qualified by vehicle ID and legacy export/deletion has
+an explicit inactive-recorder authority. See the recording-cutover specification
+and execution ledger for actual native evidence and remaining physical checks.
+
 The four-argument production Kable constructor still chooses the old recorder.
 Task 8 must switch to the prepared native runtime, expose its recording/GPS
 controls, bind actual legacy inactivity, and retire obsolete activation/pruning
