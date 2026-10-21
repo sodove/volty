@@ -11,6 +11,7 @@ import kotlin.time.Instant
 @OptIn(ExperimentalTime::class)
 class SqlDelightHistoryFavorites(provider: VoltyDatabaseProvider,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val onDeleted: suspend () -> Unit = {},
     private val nowEpochMillis: () -> Long) : HistoryFavoriteRepository {
     private val database = provider.database
     private val queries = database.historyFavoriteQueries
@@ -55,8 +56,15 @@ class SqlDelightHistoryFavorites(provider: VoltyDatabaseProvider,
         database.transaction {
             val existing = queries.getFavorite(id).executeAsOneOrNull() ?: return@transaction
             if (existing.revision != expectedRevision) fail(HistoryFavoriteFailure.CONFLICT)
+            database.historyMediaQueries.retireFavoriteMedia(id)
             queries.deleteFavorite(id)
         }
+        // The parent/child retirement is already committed. A filesystem
+        // failure must retain its durable tombstones, not report a false
+        // failure to delete the favorite or attempt to recreate it.
+        try { onDeleted() }
+        catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+        catch (_: Exception) { /* Startup/normal reconciliation retries cleanup. */ }
     }
 
     /** Runs inside the write transaction: source validation cannot race a deletion. */

@@ -51,7 +51,9 @@ val appModule = module {
     single { SqlDelightHistoryStore(get()) } bind HistoryStore::class
     single { SqlDelightHistoryReadRepository(get()) } bind HistoryReadRepository::class
     single<ru.sodovaya.volty.domain.history.HistoryFavoriteRepository> {
-        ru.sodovaya.volty.data.history.SqlDelightHistoryFavorites(get()) { kotlin.time.Clock.System.now().toEpochMilliseconds() }
+        ru.sodovaya.volty.data.history.SqlDelightHistoryFavorites(get(), onDeleted = {
+            get<ru.sodovaya.volty.domain.history.HistoryMediaRepository>().cleanupRetired()
+        }) { kotlin.time.Clock.System.now().toEpochMilliseconds() }
     }
     single<ru.sodovaya.volty.domain.history.HistoryMetricPresetStore> {
         ru.sodovaya.volty.data.history.DataStoreHistoryMetricPresets(get<DataStoreFactory>().create())

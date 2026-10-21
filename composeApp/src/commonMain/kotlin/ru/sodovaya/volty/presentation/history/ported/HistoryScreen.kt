@@ -21,6 +21,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,12 +50,17 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     reduceMotion: Boolean = false) {
     val state by owner.state.collectAsState()
     val content = historyScreenContent(state)
+    val mediaPositions = rememberHistoryMediaPositions(state, gpsMaxAgeMillis)
     val catalogList = rememberLazyListState()
     val favoritesList = rememberLazyListState()
     var listOpen by remember { mutableStateOf(false) }
     var metricsOpen by remember(state.selectedRideId) { mutableStateOf(false) }
     var favoritesTab by remember { mutableStateOf(false) }
     var trimOpen by remember(state.selectedRideId) { mutableStateOf(false) }
+    var mediaOpen by remember(state.media.favoriteId) { mutableStateOf(false) }
+    LaunchedEffect(owner, state.media.favoriteId) {
+        if (state.media.favoriteId != null) owner.loadMedia()
+    }
     var submitted by remember { mutableStateOf(false) }
     LaunchedEffect(state.favorites.busy, state.favorites.savedId, submitted) {
         if (submitted && !state.favorites.busy && state.favorites.savedId != null) {
@@ -69,7 +75,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     LaunchedEffect(state.destination, state.mapMetricKey) {
         if (state.destination == HistoryDestination.RIDE && state.mapMetricKey != null) chartsExpanded = false
     }
-    BackHandler(enabled = !listOpen && !metricsOpen && !trimOpen) { owner.back() }
+    BackHandler(enabled = !listOpen && !metricsOpen && !trimOpen && !mediaOpen && state.media.open == null) { owner.back() }
     LaunchedEffect(owner, content.phase, listOpen) {
         if ((content.phase == HistoryScreenPhase.CATALOG || listOpen) && !state.catalog.loaded && !state.catalog.refreshing)
             owner.refresh()
@@ -118,7 +124,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
             val geometry = rememberHistoryScreenMap(identity, content, state.detail.cursorEpochMillis, gpsMaxAgeMillis)
             val coloring = rememberHistoryMapColoring(identity, content.detail, content.route, state.mapMetricKey,
                 gpsMaxAgeMillis, state.mapMetricKey?.let(cursorMaxAgeMillis) ?: 0)
-            val scene = geometry.copy(coloring = coloring)
+            val scene = geometry.copy(coloring = coloring, mediaFixes = mediaPositions)
             val insets = HistoryMapInsets(sidePadding, topPixels + sidePadding,
                 if (wide) with(density) { panelWidth.roundToPx() } + sidePadding else sidePadding,
                 if (wide) sidePadding else panelPixels + sidePadding)
@@ -131,7 +137,8 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                     fit = MapCameraRequest.FitHistory(fitSequence, identity, insets, reduceMotion)
             }
             PlatformRideMapLayer(historyMapNavigationScene(scene, fit),
-                MaterialTheme.colorScheme.surface.luminance() < 0.5f, {}, Modifier.fillMaxSize())
+                MaterialTheme.colorScheme.surface.luminance() < 0.5f, {}, Modifier.fillMaxSize(),
+                onHistoryMediaClick = { id -> state.media.items.singleOrNull { it.id == id }?.let(owner::openMedia) })
             if (state.destination != HistoryDestination.CHARTS) {
             Column(Modifier.align(Alignment.TopStart).fillMaxWidth(if (wide) 0.5f else 1f)
                 .onSizeChanged { topPixels = it.height }.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -139,6 +146,9 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         HistoryBack(owner::back)
                         Text(stringResource(Res.string.history_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                        if (state.media.available && state.media.favoriteId != null) IconButton(onClick = { mediaOpen = true }) {
+                            Icon(Icons.Default.PhotoLibrary, stringResource(Res.string.history_media_title))
+                        }
                         if (state.favorites.available && content.detail?.availableRange?.let { it.endEpochMillis > it.startEpochMillis } == true)
                             IconButton(onClick = { submitted = false; trimOpen = true }) {
                                 Icon(if (state.selectedFavorite == null) Icons.Default.StarBorder else Icons.Default.Star,
@@ -205,6 +215,8 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     if (metricsOpen && content.detail != null) HistoryMetricDrawer(content.detail, owner::loadSourceMetrics,
         owner::addMetric, owner::removeMetric, { metricsOpen = false }, reduceMotion,
         state.presets, owner::loadPresets, owner::savePreset, owner::applyPreset, owner::deletePreset)
+    if (mediaOpen && state.media.favoriteId != null) HistoryMediaDrawer(owner, state.media, mediaPositions.keys) { mediaOpen = false }
+    state.media.open?.let { HistoryMediaViewer(it, owner::consumeMediaOpen) }
     val bounds = content.detail?.availableRange
     val selectedRange = content.detail?.range
     if (trimOpen && bounds != null && selectedRange != null && bounds.endEpochMillis > bounds.startEpochMillis) {
@@ -213,6 +225,21 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
             { name, range -> submitted = true; owner.saveFavorite(name, range, state.selectedFavorite) },
             { trimOpen = false; submitted = false })
     }
+}
+
+@Composable
+private fun rememberHistoryMediaPositions(state: HistoryUiState, gpsMaxAgeMillis: Long): Map<String, HistoryGpsFix> {
+    val favorite = state.selectedFavorite; val ride = state.detail.ride; val route = state.route; val media = state.media
+    data class Bound(val favorite: HistoryFavorite?, val ride: HistoryRide?, val route: HistoryRouteState,
+        val items: List<HistoryMediaRecord>, val favoriteId: String?, val age: Long, val fixes: Map<String, HistoryGpsFix>)
+    val bound by produceState<Bound?>(null, favorite, ride, route, media.items, media.favoriteId, gpsMaxAgeMillis) {
+        value = withContext(Dispatchers.Default) { Bound(favorite, ride, route, media.items, media.favoriteId, gpsMaxAgeMillis,
+            historyMediaPositions(favorite, ride, route, media, gpsMaxAgeMillis)) }
+    }
+    // produceState keys use value equality. A refreshed immutable list may be
+    // equal but have a new identity, which must not hide its earned positions.
+    return bound?.takeIf { it.favorite == favorite && it.ride == ride && it.route == route &&
+        it.items == media.items && it.favoriteId == media.favoriteId && it.age == gpsMaxAgeMillis }?.fixes.orEmpty()
 }
 
 private data class BoundHistoryMap(val identity: HistoryMapIdentity, val route: HistoryRouteState?,

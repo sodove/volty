@@ -340,12 +340,12 @@ interface HistoryFavoriteRepository {
   ```
 - [x] Port favorites/list/trim visual interaction; favorite is a reference/range,
   not destructive rewrite of recorded trace. Delete favorite leaves ride intact.
-- [ ] Explicit picker imports bounded files to temp app-owned path, computes hash,
+- [x] Explicit picker imports bounded files to temp app-owned path, computes hash,
   commits manifest with stable ID, atomically publishes final file. At startup
   reconcile pending imports/deletes across filesystem/SQLite. Report failed copy;
   no manifest claiming an absent file. Don't persist arbitrary content URI access
   as permanent truth or scan gallery automatically.
-- [ ] Media positions use nearest recorded fix inside SAME continuous segment,
+- [x] Media positions use nearest recorded fix inside SAME continuous segment,
   within30s; unknown capture time retains unpositioned item. EXIF location is not
   fallback. Tests import cancellation/oversize/no permission, corrupt file, process
   interruption, deletion overlap, noGPS/outage and source file later removed.

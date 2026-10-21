@@ -60,7 +60,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
             { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish,
             getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>(),
-            favoriteStore = getKoin().get<HistoryFavoriteRepository>())
+            favoriteStore = getKoin().get<HistoryFavoriteRepository>(), mediaRepository = getKoin().get<HistoryMediaRepository>())
         if (intent.getBooleanExtra("charts", false)) lifecycleScope.launch {
             var previous: Pair<HistoryRange?,HistoryRange?>? = null
             owner.state.collect { state ->
@@ -69,6 +69,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
             }
         }
         if (favoriteFixture) lifecycleScope.launch {
+            if (intent.getBooleanExtra("seedPickedMedia", false)) kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) { seedPickedMedia() }
             val store = getKoin().get<HistoryStore>()
             val id = "history-favorite-ui-probe"
             if (store.ride(id) == null) {
@@ -146,6 +147,42 @@ class HistoryUiProbeActivity : ComponentActivity() {
                     onApplyPreset = owner::applyPreset, onDeletePreset = owner::deletePreset)
             }
         }
+    }
+
+    /** Explicit debug-only gallery fixture, never an ordinary startup scan. */
+    private fun seedPickedMedia() {
+        if (android.os.Build.VERSION.SDK_INT < 29) return
+        val name = "volty-history-probe.jpg"
+        val collection = android.provider.MediaStore.Images.Media.getContentUri(android.provider.MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        contentResolver.query(collection, arrayOf(android.provider.MediaStore.Images.Media._ID),
+            "${android.provider.MediaStore.Images.Media.DISPLAY_NAME} = ?", arrayOf(name), null)?.use { if (it.moveToFirst()) return }
+        val file = java.io.File(cacheDir, "history-picked-fixture.jpg")
+        val bitmap = android.graphics.Bitmap.createBitmap(320, 240, android.graphics.Bitmap.Config.ARGB_8888)
+        try {
+            val canvas = android.graphics.Canvas(bitmap)
+            canvas.drawColor(android.graphics.Color.rgb(36, 64, 96))
+            canvas.drawRect(0f, 160f, 320f, 240f, android.graphics.Paint().apply { color = android.graphics.Color.rgb(64, 140, 96) })
+            canvas.drawText("VOLTY RIDE", 30f, 110f, android.graphics.Paint().apply { color = android.graphics.Color.WHITE; textSize = 32f })
+            file.outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 95, it)) }
+            android.media.ExifInterface(file).apply {
+                setAttribute(android.media.ExifInterface.TAG_DATETIME_ORIGINAL, "2026:10:19 13:53:40")
+                setAttribute(android.media.ExifInterface.TAG_OFFSET_TIME_ORIGINAL, "+05:00")
+                setAttribute(android.media.ExifInterface.TAG_ORIENTATION, android.media.ExifInterface.ORIENTATION_ROTATE_90.toString())
+                saveAttributes()
+            }
+            val values = android.content.ContentValues().apply {
+                put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
+                put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+                put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/VoltyHistoryProbe")
+                put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+            }
+            val uri = checkNotNull(contentResolver.insert(collection, values))
+            try {
+                checkNotNull(contentResolver.openOutputStream(uri)).use { target -> file.inputStream().use { it.copyTo(target) } }
+                contentResolver.update(uri, android.content.ContentValues().apply { put(android.provider.MediaStore.Images.Media.IS_PENDING, 0) }, null, null)
+                Log.i("HistoryMediaProbe", "Gallery fixture ready")
+            } catch (failure: Exception) { contentResolver.delete(uri, null, null); throw failure }
+        } finally { bitmap.recycle(); file.delete() }
     }
 
     @Composable

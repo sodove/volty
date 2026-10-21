@@ -98,6 +98,17 @@ val androidModule = module {
     single<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader> {
         ru.sodovaya.volty.data.history.MapLibreHistoryPreviewLoader(androidContext())
     }
+    single { ru.sodovaya.volty.data.history.HistoryMediaJournal(get()) }
+    single<ru.sodovaya.volty.domain.history.HistoryMediaRepository> {
+        val context = androidContext()
+        ru.sodovaya.volty.data.history.HistoryMediaImport(get(),
+            ru.sodovaya.volty.data.history.HistoryMediaFiles(java.io.File(context.filesDir, "history-media-v1")),
+            openSource = { uri -> context.contentResolver.openInputStream(android.net.Uri.parse(uri))
+                ?: throw ru.sodovaya.volty.domain.history.HistoryMediaException(ru.sodovaya.volty.domain.history.HistoryMediaFailure.ACCESS_DENIED) },
+            inspect = { file, hint -> ru.sodovaya.volty.data.history.inspectAndroidHistoryMedia(file, hint) },
+            toReadableUri = { file -> androidx.core.content.FileProvider.getUriForFile(context,
+                "${context.packageName}.fileprovider", file).toString() })
+    }
     single<BleAdapterStateProvider> { AndroidBleAdapterStateProvider(androidContext()) }
     single<RideLocationRepository> { AndroidRideLocationRepository(androidContext()) }
     // Independent from Nearby's coordinator/authority. Registrations are inert until requested.

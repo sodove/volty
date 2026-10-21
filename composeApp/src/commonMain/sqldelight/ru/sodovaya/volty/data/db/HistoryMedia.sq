@@ -1,0 +1,45 @@
+CREATE TABLE HistoryMedia (
+  id TEXT NOT NULL PRIMARY KEY,
+  favoriteId TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  capturedEpochMillis INTEGER,
+  byteCount INTEGER NOT NULL DEFAULT 0,
+  sha256 TEXT,
+  state TEXT NOT NULL,
+  createdEpochMillis INTEGER NOT NULL,
+  CHECK(state IN ('IMPORTING', 'READY', 'DELETING')),
+  CHECK(byteCount >= 0),
+  CHECK(state != 'READY' OR (byteCount > 0 AND sha256 IS NOT NULL AND length(sha256) = 64))
+);
+CREATE INDEX HistoryMedia_favorite ON HistoryMedia(favoriteId, state, id);
+
+getMedia:
+SELECT * FROM HistoryMedia WHERE id = :id;
+
+allMedia:
+SELECT * FROM HistoryMedia ORDER BY id LIMIT :pageSize;
+
+readyMedia:
+SELECT HistoryMedia.* FROM HistoryMedia
+INNER JOIN HistoryFavorite ON HistoryFavorite.id = HistoryMedia.favoriteId
+WHERE favoriteId = :favoriteId AND state = 'READY' ORDER BY HistoryMedia.id LIMIT :pageSize;
+
+reserveMedia:
+INSERT INTO HistoryMedia(id, favoriteId, mime, state, createdEpochMillis) VALUES (:id, :favoriteId, :mime, 'IMPORTING', :createdEpochMillis);
+
+completeMedia:
+UPDATE HistoryMedia SET byteCount = :byteCount, sha256 = :sha256,
+capturedEpochMillis = :capturedEpochMillis, mime = :mime, state = 'READY' WHERE id = :id AND state = 'IMPORTING';
+
+retireMedia:
+UPDATE HistoryMedia SET state = 'DELETING' WHERE id = :id;
+
+retireFavoriteMedia:
+UPDATE HistoryMedia SET state = 'DELETING' WHERE favoriteId = :favoriteId;
+
+retireIncompleteMedia:
+UPDATE HistoryMedia SET state = 'DELETING'
+WHERE state = 'IMPORTING' OR NOT EXISTS (SELECT 1 FROM HistoryFavorite WHERE HistoryFavorite.id = HistoryMedia.favoriteId);
+
+forgetDeletedMedia:
+DELETE FROM HistoryMedia WHERE id = :id AND state = 'DELETING';

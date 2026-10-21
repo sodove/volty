@@ -126,3 +126,21 @@ Kotlin repository, source fingerprint, SQLite migration, paging/revision rules
 and Decompose request ownership are Volty implementations. No new dependency,
 upstream media URI persistence or recording mutation was introduced here.
 The combined release audit above remains open; this entry records provenance.
+
+## Curated media gallery adaptation (2026-10-21)
+
+`ported/HistoryMediaDrawer.kt` adapts the thumbnail-grid, explicit picker and
+favorite media drawer workflow from pinned `HistoryRideMediaDrawer.tsx` and
+`MediaHistoryGallery.tsx` (same revision and author as above), with its adjacent
+GPL notice. The upstream `MediaHistoryViewer.tsx` was also inspected; the Android
+viewer here is an original platform `BitmapFactory`/`VideoView` implementation,
+without the upstream synchronized video telemetry overlay. No upstream media
+assets, gallery scans, access-token configuration or new runtime SDK is added.
+
+Volty stores bounded private copies behind a narrow FileProvider path, with a
+SQLite IMPORTING/READY/DELETING journal and recovery, streaming SHA-256, and
+source/favorite-qualified nearest **recorded** fix placement. EXIF capture time
+requires an explicit UTC offset; the Android video metadata DATE field is not
+used as a capture-time claim. Android framework behavior is checked natively;
+JVM tests exercise the original ownership/files/SQLite policies only.
+Combined-APK distribution/source/notice audit remains open.

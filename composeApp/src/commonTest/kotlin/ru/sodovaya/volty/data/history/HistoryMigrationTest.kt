@@ -10,6 +10,31 @@ import java.nio.file.Files
 import kotlin.test.*
 
 class HistoryMigrationTest {
+    @Test fun realVersion20FavoriteAndRecordingRemainUnchangedByMediaJournalMigration() {
+        val snapshot = listOf(File("src/commonMain/sqldelight/databases/20.db"),
+            File("composeApp/src/commonMain/sqldelight/databases/20.db")).firstOrNull { it.isFile }
+        assertNotNull(snapshot)
+        val copy = Files.createTempFile("history-v20-media-", ".db").toFile()
+        try {
+            snapshot.copyTo(copy, overwrite = true)
+            val driver = JdbcSqliteDriver("jdbc:sqlite:${copy.absolutePath}")
+            try {
+                val db = VoltyDatabase(driver)
+                db.rideHistoryV2Queries.insertRide("ride", "bike", 10000, 100, 1, "RECORDING")
+                db.historyFavoriteQueries.insertFavorite("favorite", "ride", "bike", "V2", 10000, 100, 1, 10000, 11000, "Keep", 3, 12000)
+                val rideBefore = db.rideHistoryV2Queries.getRide("ride").executeAsOne()
+                val favoriteBefore = db.historyFavoriteQueries.getFavorite("favorite").executeAsOne()
+                VoltyDatabase.Schema.migrate(driver, 20, VoltyDatabase.Schema.version)
+                assertEquals(rideBefore, db.rideHistoryV2Queries.getRide("ride").executeAsOne())
+                assertEquals(favoriteBefore, db.historyFavoriteQueries.getFavorite("favorite").executeAsOne())
+                val journal = HistoryMediaJournal(VoltyDatabaseProvider(driver))
+                val pending = journal.reserve("aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb", "favorite", "image/png")
+                assertEquals(HistoryMediaStatus.IMPORTING, pending.status)
+                assertEquals(favoriteBefore, db.historyFavoriteQueries.getFavorite("favorite").executeAsOne())
+            } finally { driver.close() }
+        } finally { copy.delete() }
+    }
+
     @Test fun realVersion19RecordingSurvivesFavoriteMigration() = runTest {
         val snapshot = listOf(File("src/commonMain/sqldelight/databases/19.db"),
             File("composeApp/src/commonMain/sqldelight/databases/19.db")).firstOrNull { it.isFile }

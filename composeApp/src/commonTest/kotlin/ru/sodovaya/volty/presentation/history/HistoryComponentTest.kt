@@ -57,6 +57,63 @@ class HistoryComponentTest {
         DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo,
         { HistoryTick(6000, 5010, 1) }, {}, favoriteStore = favorites)
 
+    private inner class Media : HistoryMediaRepository {
+        var reads = 0; val picks = mutableListOf<HistoryMediaPick>()
+        override suspend fun list(favoriteId: String): HistoryMediaListing {
+            reads++; return HistoryMediaListing(listOf(mediaItem(favoriteId)), HistoryMediaRecovery())
+        }
+        override suspend fun importItem(pick: HistoryMediaPick): HistoryMediaRecord { picks += pick; return mediaItem(pick.favoriteId) }
+        override suspend fun delete(id: String) {}
+        override suspend fun reconcile() = HistoryMediaRecovery()
+        override suspend fun readableUri(id: String) = "content://private/$id"
+    }
+    private fun mediaItem(favoriteId: String) = HistoryMediaRecord("photo", favoriteId, "image/png", null, 3,
+        "a".repeat(64), HistoryMediaStatus.READY, 3000)
+    private fun TestScope.withMedia(repo: Repo, store: Favorites, media: Media) = DefaultHistoryComponent(
+        DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo,
+        { HistoryTick(6000, 5010, 1) }, {}, favoriteStore = store, mediaRepository = media)
+
+    @Test fun mediaBindsOnlyAfterQualifiedFavoriteAndClearsOnPlainRide() = runTest {
+        val media = Media(); val c = withMedia(Repo(), Favorites(), media)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)
+        try {
+            c.openFavorite(favorite); runCurrent(); assertEquals("f", c.state.value.media.favoriteId)
+            assertEquals(0, media.reads); c.loadMedia(); runCurrent()
+            assertEquals(listOf(mediaItem("f")), c.state.value.media.items)
+            c.openRide("b"); runCurrent(); assertNull(c.state.value.media.favoriteId); assertTrue(c.state.value.media.items.isEmpty())
+        } finally { c.close() }
+    }
+    @Test fun failedFavoriteSourceCannotOpenItsMediaPickerOrLoadAttachments() = runTest {
+        val repo = object : Repo() { override suspend fun ride(rideId: String) = this@HistoryComponentTest.ride(rideId).copy(vehicleId = "replacement") }
+        val media = Media(); val c = withMedia(repo, Favorites(), media)
+        try {
+            c.openFavorite(HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)); runCurrent()
+            assertNotNull(c.state.value.detail.error); assertNull(c.beginMediaPick())
+            c.loadMedia(); runCurrent(); assertEquals(0, media.reads); assertNull(c.state.value.media.favoriteId)
+        } finally { c.close() }
+    }
+    @Test fun savingCurrentFavoriteActivatesItsOwnMediaTarget() = runTest {
+        val media = Media(); val c = withMedia(Repo(), Favorites(), media)
+        try {
+            c.openRide("a"); runCurrent(); c.saveFavorite("New", full); runCurrent()
+            val favorite = assertNotNull(c.state.value.selectedFavorite)
+            assertEquals(favorite.id, c.state.value.media.favoriteId)
+            c.mediaPicked(assertNotNull(c.beginMediaPick()), "content://picked/new", "image/png"); runCurrent()
+            assertEquals(favorite.id, media.picks.single().favoriteId)
+            assertEquals(listOf(mediaItem(favorite.id)), c.state.value.media.items)
+        } finally { c.close() }
+    }
+    @Test fun parentNavigationRetiresPickerEvenWhenSameFavoriteIsReentered() = runTest {
+        val media = Media(); val c = withMedia(Repo(), Favorites(), media)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)
+        try {
+            c.openFavorite(favorite); runCurrent(); val old = assertNotNull(c.beginMediaPick())
+            c.openRide("b"); c.openFavorite(favorite); runCurrent()
+            c.mediaPicked(old, "content://picked/old", "image/png"); runCurrent()
+            assertTrue(media.picks.isEmpty()); assertTrue(c.state.value.media.items.isEmpty())
+        } finally { c.close() }
+    }
+
     @Test fun favoriteSaveCapturesOriginalSelectionWithoutSwitchingTheNewRide() = runTest {
         val store = Favorites(); val c = withFavorites(Repo(), store)
         try {

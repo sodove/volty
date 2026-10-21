@@ -1116,7 +1116,7 @@
     <string name="history_favorite_save">Save</string>
     <string name="history_favorite_delete">Remove from favorites</string>
     <string name="history_favorite_cancel">Cancel</string>
-    <string name="history_favorite_delete_explanation">Remove «%1$s» from favorites? The recorded ride will remain.</string>
+    <string name="history_favorite_delete_explanation">Remove «%1$s» and its attachments from Volty? The recorded ride and gallery originals will remain.</string>
     <string name="history_favorite_reference_only">Only the saved section changes. The original recording stays intact.</string>
     <string name="history_favorite_start">Start: %1$s</string>
     <string name="history_favorite_end">End: %1$s</string>
@@ -1126,4 +1126,23 @@
     <string name="history_favorite_source_missing">The original recording is unavailable or has changed.</string>
     <string name="history_favorite_conflict">This favorite has changed. Refresh the list and try again.</string>
     <string name="history_favorite_storage_error">Could not save or load favorites. Try again.</string>
+    <string name="history_media_title">Favorite media</string>
+    <string name="history_media_add">Add photos and videos</string>
+    <string name="history_media_open">Open attachment</string>
+    <string name="history_media_delete">Delete attachment</string>
+    <string name="history_media_delete_explanation">Delete the copy stored in Volty? The original in your gallery will remain.</string>
+    <string name="history_media_empty">Add a photo or video to this favorite. Volty stores its own copy.</string>
+    <string name="history_media_limits">Up to 256 MiB per file, 64 files and 1 GiB per favorite. App total: 512 files and 2 GiB.</string>
+    <string name="history_media_time_unknown">Capture time unknown</string>
+    <string name="history_media_limit">Storage limit reached. Choose a smaller file or delete attachments.</string>
+    <string name="history_media_access">Cannot read this file. Choose it again and allow access.</string>
+    <string name="history_media_invalid">This photo or video could not be verified. It was not imported.</string>
+    <string name="history_media_storage">Cannot read or save attachments. Retry after checking free space.</string>
+    <string name="history_media_favorite_unavailable">This favorite is no longer available.</string>
+    <string name="history_media_picker_unavailable">The system file picker is unavailable.</string>
+    <string name="history_media_recovery">Unavailable copies removed: %1$s. Cleanup pending: %2$s.</string>
+    <string name="history_media_unavailable">Cannot display this attachment. Close the viewer and refresh the list.</string>
+    <string name="history_media_close">Close viewer</string>
+    <string name="history_media_on_map">On recorded route</string>
+    <string name="history_media_unpositioned">Not positioned on map</string>
 </resources>

@@ -42,3 +42,13 @@ history/favorites catalog switch. Favorites use Volty's original transactional
 SQL repository, immutable recording identity and revision checks; the workflow
 adaptations are the two additional GPL-marked files listed above. Media and
 export controls remain absent until their real storage flows are integrated.
+
+Retraction (2026-10-21, media integration): media controls are now present for a
+source-qualified saved favorite. `HistoryMediaDrawer.kt` adapts the pinned
+`HistoryRideMediaDrawer.tsx` and `MediaHistoryGallery.tsx` gallery/grid workflow
+and carries its GPL notice. Android Photo Picker, bounded app-private copy,
+transactional journal/recovery, checksum verification, strict EXIF clock parser,
+recorded-fix placement and Android image/video rendering are Volty code. The
+original media file is never a durable storage fallback. The native viewer uses
+platform controls; this does not claim the upstream synchronized video telemetry
+overlay or complete root/recorder/release acceptance. Export remains pending.

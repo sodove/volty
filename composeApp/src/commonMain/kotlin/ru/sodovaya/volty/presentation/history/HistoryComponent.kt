@@ -40,6 +40,13 @@ interface HistoryComponent {
     fun deleteFavorite(favorite: HistoryFavorite)
     fun openFavorite(favorite: HistoryFavorite)
     fun retrySelectedRide()
+    fun loadMedia()
+    fun beginMediaPick(): HistoryMediaPickerToken?
+    fun mediaPicked(token: HistoryMediaPickerToken, uri: String?, mime: String?)
+    fun deleteMedia(item: HistoryMediaRecord)
+    fun openMedia(item: HistoryMediaRecord)
+    fun consumeMediaOpen()
+    fun cancelMediaImport()
     fun setVisiblePreviewImages(keys: List<HistoryPreviewImageKey>)
     fun back()
 }
@@ -51,7 +58,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     repository: HistoryReadRepository, readTick: () -> HistoryTick, private val onBack: () -> Unit,
     presetStore: HistoryMetricPresetStore? = null, imageLoader: HistoryPreviewImageLoader? = null,
     previewDispatcher: CoroutineDispatcher = Dispatchers.Default,
-    favoriteStore: HistoryFavoriteRepository? = null) : HistoryComponent {
+    favoriteStore: HistoryFavoriteRepository? = null,
+    mediaRepository: HistoryMediaRepository? = null) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -60,6 +68,26 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val previews = HistoryPreviewComponent(componentContext, scope, repository, PREVIEW_GPS_SILENCE_MILLIS,previewDispatcher)
     private val presets = HistoryPresetsComponent(componentContext, scope, presetStore)
     private val favorites = HistoryFavoritesComponent(componentContext, scope, favoriteStore)
+    private val media = HistoryMediaComponent(componentContext, scope, mediaRepository)
+    override fun loadMedia() { if (qualifiedMediaFavorite() != null) media.refresh() }
+    override fun beginMediaPick(): HistoryMediaPickerToken? = if (qualifiedMediaFavorite() != null) media.beginPick() else null
+    override fun mediaPicked(token: HistoryMediaPickerToken, uri: String?, mime: String?) {
+        if (qualifiedMediaFavorite() != null) media.picked(token, uri, mime)
+    }
+    override fun deleteMedia(item: HistoryMediaRecord) { if (qualifiedMediaFavorite() != null) media.delete(item) }
+    override fun openMedia(item: HistoryMediaRecord) { if (qualifiedMediaFavorite() != null) media.open(item) }
+    override fun consumeMediaOpen() { if (lifetime.isActive) media.consumeOpen() }
+    override fun cancelMediaImport() { if (lifetime.isActive) media.cancelImport() }
+
+    private fun qualifiedMediaFavorite(): String? {
+        if (!lifetime.isActive || selectedRideId == null) return null
+        val current = mutableState.value
+        val favorite = current.selectedFavorite ?: return null
+        val detail = current.detail
+        return favorite.id.takeIf { !detail.loading && detail.error == null && detail.ride?.id == selectedRideId &&
+            detail.ride?.favoriteSource() == favorite.source }
+    }
+    private fun syncMediaFavorite() { media.selectFavorite(qualifiedMediaFavorite()) }
     override fun loadFavorites() { if (lifetime.isActive) favorites.refresh() }
     override fun loadOlderFavorites() { if (lifetime.isActive) favorites.loadOlder() }
     @OptIn(kotlin.uuid.ExperimentalUuidApi::class)
@@ -118,11 +146,18 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                         ?: old?.takeUnless { it.id == next.deletedId }?.let { favorite ->
                         next.items.singleOrNull { it.id == favorite.id } ?: favorite }
                     mutableState.value = mutableState.value.copy(favorites = next, selectedFavorite = selected)
+                    syncMediaFavorite()
                     if (lifetime.isActive && selection === captured && activate && selected != null && selected.id == next.savedId &&
                         mutableState.value.detail.ride?.favoriteSource() == selected.source && mutableState.value.detail.range != selected.range)
                         detail.selectRange(selected.range)
                     if (!next.busy) pendingFavoriteSave = null
                 }
+            }
+        }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            media.state.collect { next ->
+                if (lifetime.isActive && next.favoriteId == qualifiedMediaFavorite())
+                    mutableState.value = mutableState.value.copy(media = next)
             }
         }
         previewImages?.let { owner -> scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -149,6 +184,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         val current = mutableState.value
         mutableState.value = current.copy(detail = next, mapMetricKey = current.mapMetricKey?.takeIf { it in next.selectedKeys }, route = if (needsRoute)
             HistoryRouteState(rideId = ride?.id, range = range, loading = true) else current.route)
+        syncMediaFavorite()
         // UI publication can synchronously choose another ride or leave history.
         if (lifetime.isActive && selection === captured && needsRoute) route.open(checkNotNull(ride), checkNotNull(range))
     }
@@ -172,7 +208,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         val captured = selection
         mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE, selectedRideId = id,
             detail = HistoryDetailState(rideId = id, loading = true), route = HistoryRouteState(), windowPreview = null,
-            mapMetricKey = null, selectedFavorite = favorite)
+            mapMetricKey = null, selectedFavorite = favorite, media = HistoryMediaState(available = media.state.value.available))
+        media.selectFavorite(null)
         if (!lifetime.isActive || selection !== captured) return
         route.clear()
         if (lifetime.isActive && selection === captured) detail.openRide(id, favorite)
@@ -295,7 +332,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                 windowIntent = Any(); windowGesture = null
                 val captured = selection
                 mutableState.value = mutableState.value.copy(destination = HistoryDestination.CATALOG, selectedRideId = null,
-                    detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null, selectedFavorite = null)
+                    detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null, selectedFavorite = null,
+                    media = HistoryMediaState(available = media.state.value.available))
+                media.selectFavorite(null)
                 if (lifetime.isActive && selection === captured) { detail.clear(); route.clear() }
             }
         }
@@ -304,7 +343,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     fun close() {
         selection = Any(); catalogIntent = Any(); selectedRideId = null
         windowIntent = Any(); windowGesture = null
-        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); previewImages?.close(); lifetime.cancel()
+        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); previewImages?.close(); lifetime.cancel()
     }
 }
 

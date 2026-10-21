@@ -1114,7 +1114,7 @@
     <string name="history_favorite_save">Сохранить</string>
     <string name="history_favorite_delete">Удалить из избранного</string>
     <string name="history_favorite_cancel">Отмена</string>
-    <string name="history_favorite_delete_explanation">Удалить «%1$s» из избранного? Запись поездки останется.</string>
+    <string name="history_favorite_delete_explanation">Удалить «%1$s» и его вложения из Volty? Запись поездки и оригиналы в галерее останутся.</string>
     <string name="history_favorite_reference_only">Меняется только сохранённый участок. Исходная запись остаётся целой.</string>
     <string name="history_favorite_start">Начало: %1$s</string>
     <string name="history_favorite_end">Конец: %1$s</string>
@@ -1124,4 +1124,23 @@
     <string name="history_favorite_source_missing">Исходная запись недоступна или была заменена.</string>
     <string name="history_favorite_conflict">Избранное изменилось. Обновите список и попробуйте ещё раз.</string>
     <string name="history_favorite_storage_error">Не удалось сохранить или загрузить избранное. Попробуйте ещё раз.</string>
+    <string name="history_media_title">Медиа избранного</string>
+    <string name="history_media_add">Добавить фото и видео</string>
+    <string name="history_media_open">Открыть вложение</string>
+    <string name="history_media_delete">Удалить вложение</string>
+    <string name="history_media_delete_explanation">Удалить копию в Volty? Оригинал в галерее останется.</string>
+    <string name="history_media_empty">Добавьте фото или видео к избранному. Volty сохранит отдельную копию.</string>
+    <string name="history_media_limits">До 256 МиБ на файл, 64 файлов и 1 ГиБ на избранное. Всего в приложении: 512 файлов и 2 ГиБ.</string>
+    <string name="history_media_time_unknown">Время съёмки неизвестно</string>
+    <string name="history_media_limit">Достигнут лимит хранения. Выберите файл поменьше или удалите вложения.</string>
+    <string name="history_media_access">Нет доступа к файлу. Выберите его снова и разрешите доступ.</string>
+    <string name="history_media_invalid">Не удалось проверить фото или видео. Файл не добавлен.</string>
+    <string name="history_media_storage">Не удалось прочитать или сохранить вложения. Проверьте свободное место и повторите.</string>
+    <string name="history_media_favorite_unavailable">Это избранное больше недоступно.</string>
+    <string name="history_media_picker_unavailable">Системный выбор файлов недоступен.</string>
+    <string name="history_media_recovery">Удалено недоступных копий: %1$s. Ожидают очистки: %2$s.</string>
+    <string name="history_media_unavailable">Не удалось показать вложение. Закройте просмотр и обновите список.</string>
+    <string name="history_media_close">Закрыть просмотр</string>
+    <string name="history_media_on_map">На записанном маршруте</string>
+    <string name="history_media_unpositioned">Без точки на карте</string>
 </resources>
