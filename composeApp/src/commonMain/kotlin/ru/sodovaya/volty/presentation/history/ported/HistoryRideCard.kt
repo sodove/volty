@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -30,7 +31,7 @@ data class HistoryRideCardText(val title: String, val subtitle: String, val deta
 fun HistoryRideCard(text: HistoryRideCardText, segments: List<HistoryMapSegment>, selected: Boolean,
     onClick: () -> Unit, modifier: Modifier = Modifier, previewLoading: Boolean = false,
     previewPartial: Boolean = false, previewError: Boolean = false, onRetry: () -> Unit = {},
-    image: HistoryPreviewImage? = null) {
+    image: HistoryPreviewImage? = null, onDelete: (() -> Unit)? = null) {
     val accent = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
     Surface(onClick = onClick, modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -59,7 +60,9 @@ fun HistoryRideCard(text: HistoryRideCardText, segments: List<HistoryMapSegment>
                 if (previewError) Text(stringResource(Res.string.history_preview_unavailable), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (onDelete != null) IconButton(onClick = onDelete) {
+                Icon(Icons.Default.DeleteOutline, stringResource(Res.string.history_ride_delete_title), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

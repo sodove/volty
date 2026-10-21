@@ -44,6 +44,12 @@ class HistoryCatalogComponent(
         val cursor = current.nextCursor ?: return
         readPage(append = true, before = cursor)
     }
+    fun forget(source: HistoryFavoriteSource) {
+        if (!lifetime.isActive) return
+        request = null; val old = job; job = null; old?.cancel()
+        mutableState.value = state.value.copy(rides = state.value.rides.filterNot { it.favoriteSource() == source },
+            refreshing = false, loadingOlder = false)
+    }
 
     private fun readPage(append: Boolean, before: HistoryCursor?) {
         val token = Any()

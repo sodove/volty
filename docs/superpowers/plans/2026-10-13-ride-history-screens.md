@@ -349,9 +349,17 @@ interface HistoryFavoriteRepository {
   within30s; unknown capture time retains unpositioned item. EXIF location is not
   fallback. Tests import cancellation/oversize/no permission, corrupt file, process
   interruption, deletion overlap, noGPS/outage and source file later removed.
-- [ ] User deletes a ride with favorites/media only after UI confirmation, expected
+- [x] User deletes a ride with favorites/media only after UI confirmation, expected
   cascades visible. Native verify picker/back/gallery lifecycle plus restore.
-- [ ] Full suite/migration/native checks, commit favorites/media.
+- [x] Full suite/migration/native checks, commit favorites/media.
+
+Task6 deletion acceptance (2026-10-21): original recording/count revalidation,
+explicit FK-off SQL cascades and durable media/preview purge are now connected
+to catalog confirmation. Final h558: 4483 tests / 465 fresh XML reports, zero
+failures/errors/skips/stale reports; migration and debug build passed. Native
+cancel/confirm preserved other recorded data and gallery originals. Details:
+`docs/superpowers/specs/2026-10-21-history-ride-deletion-acceptance.md`.
+Task7 export and Task8 production/release acceptance remain open.
 
 ## Task7 — honest export and sharing
 

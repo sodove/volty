@@ -60,7 +60,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
         val owner = DefaultHistoryComponent(defaultComponentContext(), lifecycleScope, repository,
             { if (stored) error("Stored debug probe has no active v2 recording clock") else origin }, ::finish,
             getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>(),
-            favoriteStore = getKoin().get<HistoryFavoriteRepository>(), mediaRepository = getKoin().get<HistoryMediaRepository>())
+            favoriteStore = getKoin().get<HistoryFavoriteRepository>(), mediaRepository = getKoin().get<HistoryMediaRepository>(),
+            deletionRepository = if (stored) getKoin().get<HistoryRideDeletionRepository>() else null)
         if (intent.getBooleanExtra("charts", false)) lifecycleScope.launch {
             var previous: Pair<HistoryRange?,HistoryRange?>? = null
             owner.state.collect { state ->

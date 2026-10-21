@@ -115,6 +115,18 @@ class HistoryPreviewFileCache(
         deleteOwnedRegularFile(directoryPath.resolve("$key.png"))
     }
 
+    @Synchronized
+    fun clearOwned() {
+        if (!Files.exists(directoryPath, LinkOption.NOFOLLOW_LINKS)) return
+        if (!isRealDirectory()) throw IOException("Preview cache root is not a real directory")
+        Files.newDirectoryStream(directoryPath).use { entries ->
+            for (path in entries) {
+                val name = path.fileName.toString()
+                if (keyFromPngName(name) != null || OWNED_TEMP.matches(name)) deleteOwnedRegularFile(path)
+            }
+        }
+    }
+
     private fun validateKey(key: String) {
         require(key.length == KEY_LENGTH && key.all { it in '0'..'9' || it in 'a'..'f' }) {
             "Preview cache keys must be 64 lowercase hexadecimal characters"

@@ -96,7 +96,15 @@ val androidModule = module {
     }
     single { DataStoreFactory(androidContext()) }
     single<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader> {
-        ru.sodovaya.volty.data.history.MapLibreHistoryPreviewLoader(androidContext())
+        ru.sodovaya.volty.data.history.MapLibreHistoryPreviewLoader(androidContext(), get())
+    }
+    single<ru.sodovaya.volty.domain.history.HistoryRideDeletionRepository> {
+        val media = get<ru.sodovaya.volty.domain.history.HistoryMediaRepository>()
+        val previews = get<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader>()
+        ru.sodovaya.volty.data.history.SqlDelightHistoryRideDeletion(get(), cleanup = {
+            val result = media.cleanupRetired()
+            result.copy(pendingCleanup = result.pendingCleanup + if (previews.reconcileDeletedRides()) 0 else 1)
+        })
     }
     single { ru.sodovaya.volty.data.history.HistoryMediaJournal(get()) }
     single<ru.sodovaya.volty.domain.history.HistoryMediaRepository> {

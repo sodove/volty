@@ -1,0 +1,30 @@
+CREATE TABLE HistoryPreviewPurge (
+  id INTEGER NOT NULL PRIMARY KEY,
+  generation INTEGER NOT NULL DEFAULT 0,
+  acknowledgedGeneration INTEGER NOT NULL DEFAULT 0,
+  CHECK(id = 1),
+  CHECK(typeof(generation) = 'integer'),
+  CHECK(typeof(acknowledgedGeneration) = 'integer'),
+  CHECK(generation >= 0),
+  CHECK(acknowledgedGeneration >= 0),
+  CHECK(acknowledgedGeneration <= generation)
+);
+
+pendingPreviewPurgeGeneration:
+SELECT generation FROM HistoryPreviewPurge
+WHERE id = 1 AND generation > acknowledgedGeneration;
+
+ensurePreviewPurgeJournal:
+INSERT OR IGNORE INTO HistoryPreviewPurge(id, generation, acknowledgedGeneration)
+VALUES (1, 0, 0);
+
+currentPreviewPurgeGeneration:
+SELECT generation FROM HistoryPreviewPurge WHERE id = 1;
+
+incrementPreviewPurgeGeneration:
+UPDATE HistoryPreviewPurge SET generation = generation + 1
+WHERE id = 1 AND generation < 9223372036854775807;
+
+acknowledgePreviewPurge:
+UPDATE HistoryPreviewPurge SET acknowledgedGeneration = :generation
+WHERE id = 1 AND generation = :generation AND acknowledgedGeneration < :generation;

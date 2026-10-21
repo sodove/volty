@@ -9,6 +9,15 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryPreviewImagesComponentTest {
+    @Test fun forgettingDeletedRideEvictsEncodedCacheAndPreservesOtherRide() = runTest {
+        val reads = mutableListOf<String>(); val c = owner { reads += it.rideId; image }
+        try {
+            c.setVisible(listOf(key(), key("b"))); runCurrent()
+            c.forget("a"); assertEquals(setOf("b"), c.state.value.images.keys)
+            c.setVisible(listOf(key(), key("b"))); runCurrent()
+            assertEquals(2, reads.count { it == "a" }); assertEquals(1, reads.count { it == "b" })
+        } finally { c.close() }
+    }
     private val image = HistoryPreviewImage(byteArrayOf(1,2,3))
     private fun key(id:String="a",revision:Long=0) = HistoryPreviewImageKey(id,revision,128,128,false,0,
         listOf(HistoryMapSegment(listOf(HistoryGpsFix(HistoryTick(1000,10,1),56.0,60.0,2.0,null)))))

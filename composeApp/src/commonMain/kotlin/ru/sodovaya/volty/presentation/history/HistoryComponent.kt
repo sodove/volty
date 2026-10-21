@@ -47,6 +47,10 @@ interface HistoryComponent {
     fun openMedia(item: HistoryMediaRecord)
     fun consumeMediaOpen()
     fun cancelMediaImport()
+    fun requestRideDeletion(ride: HistoryRide)
+    fun confirmRideDeletion()
+    fun dismissRideDeletion()
+    fun dismissRideDeletionResult()
     fun setVisiblePreviewImages(keys: List<HistoryPreviewImageKey>)
     fun back()
 }
@@ -59,7 +63,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     presetStore: HistoryMetricPresetStore? = null, imageLoader: HistoryPreviewImageLoader? = null,
     previewDispatcher: CoroutineDispatcher = Dispatchers.Default,
     favoriteStore: HistoryFavoriteRepository? = null,
-    mediaRepository: HistoryMediaRepository? = null) : HistoryComponent {
+    mediaRepository: HistoryMediaRepository? = null,
+    deletionRepository: HistoryRideDeletionRepository? = null) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -69,6 +74,20 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val presets = HistoryPresetsComponent(componentContext, scope, presetStore)
     private val favorites = HistoryFavoritesComponent(componentContext, scope, favoriteStore)
     private val media = HistoryMediaComponent(componentContext, scope, mediaRepository)
+    private val deletion = HistoryRideDeletionComponent(componentContext, scope, deletionRepository)
+    override fun requestRideDeletion(ride: HistoryRide) {
+        if (!lifetime.isActive) return
+        val current = state.value
+        if (current.detail.ride?.favoriteSource() == ride.favoriteSource() ||
+            current.catalog.rides.any { it.favoriteSource() == ride.favoriteSource() }) deletion.prepare(ride)
+    }
+    override fun confirmRideDeletion() { if (lifetime.isActive) deletion.confirm() }
+    override fun dismissRideDeletion() { if (lifetime.isActive) deletion.dismiss() }
+    override fun dismissRideDeletionResult() {
+        if (!lifetime.isActive) return
+        deletion.consumeResult()
+        mutableState.value = mutableState.value.copy(deletion = deletion.state.value)
+    }
     override fun loadMedia() { if (qualifiedMediaFavorite() != null) media.refresh() }
     override fun beginMediaPick(): HistoryMediaPickerToken? = if (qualifiedMediaFavorite() != null) media.beginPick() else null
     override fun mediaPicked(token: HistoryMediaPickerToken, uri: String?, mime: String?) {
@@ -110,6 +129,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val mutableState = MutableStateFlow(HistoryUiState())
     override val state = mutableState.asStateFlow()
     private var selectedRideId: String? = null
+    private var selectedSource: HistoryFavoriteSource? = null
     private var selection = Any()
     private var previewRevision = 0L
     private var visiblePreviewIds = emptyList<String>()
@@ -117,11 +137,28 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private var windowIntent = Any()
     private data class PendingFavoriteSave(val id: String, val selection: Any, val windowIntent: Any, val source: HistoryFavoriteSource)
     private var pendingFavoriteSave: PendingFavoriteSave? = null
+    private var handledDeletion: HistoryRideDeletionResult? = null
     private var windowGesture: WindowGesture? = null
     private class WindowGesture(val token: HistoryWindowGestureToken, val selection: Any, val intent: Any,
         val rideId: String, val base: HistoryRange, val bounds: HistoryRange)
 
     init {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            deletion.state.collect { next ->
+                if (!lifetime.isActive) return@collect
+                mutableState.value = mutableState.value.copy(deletion = next)
+                val result = next.result
+                if (result != null && result !== handledDeletion) {
+                    handledDeletion = result
+                    if (selectedSource == result.source) clearSelection()
+                    visiblePreviewIds = visiblePreviewIds.filterNot { it == result.source.rideId }
+                    previewImages?.forget(result.source.rideId)
+                    catalog.forget(result.source)
+                    refresh()
+                    favorites.refresh()
+                }
+            }
+        }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             catalog.state.collect { next ->
                 if (lifetime.isActive) {
@@ -178,6 +215,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
 
     private fun onDetail(next: HistoryDetailState) {
         if (!lifetime.isActive || selectedRideId == null || next.rideId != selectedRideId) return
+        if (next.error == null && next.ride != null) selectedSource = next.ride.favoriteSource()
         val captured = selection
         val ride = next.ride; val range = next.range
         val needsRoute = ride != null && range != null && (route.state.value.rideId != ride.id || route.state.value.range != range)
@@ -203,6 +241,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private fun openSelection(id: String, favorite: HistoryFavorite?) {
         if (!lifetime.isActive) return
         require(id.isNotBlank())
+        deletion.dismiss()
+        selectedSource = favorite?.source ?: state.value.catalog.rides.singleOrNull { it.id == id }?.favoriteSource()
+            ?: state.value.detail.ride?.takeIf { it.id == id }?.favoriteSource()
         selectedRideId = id; selection = Any()
         windowIntent = Any(); windowGesture = null
         val captured = selection
@@ -321,29 +362,32 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
 
     override fun back() {
         if (!lifetime.isActive) return
+        deletion.dismiss()
         when (mutableState.value.destination) {
             HistoryDestination.CHARTS -> {
                 windowIntent = Any(); windowGesture = null
                 mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE, windowPreview = null)
             }
             HistoryDestination.CATALOG -> onBack()
-            HistoryDestination.RIDE -> {
-                selectedRideId = null; selection = Any()
-                windowIntent = Any(); windowGesture = null
-                val captured = selection
-                mutableState.value = mutableState.value.copy(destination = HistoryDestination.CATALOG, selectedRideId = null,
-                    detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null, selectedFavorite = null,
-                    media = HistoryMediaState(available = media.state.value.available))
-                media.selectFavorite(null)
-                if (lifetime.isActive && selection === captured) { detail.clear(); route.clear() }
-            }
+            HistoryDestination.RIDE -> clearSelection()
         }
     }
 
-    fun close() {
-        selection = Any(); catalogIntent = Any(); selectedRideId = null
+    private fun clearSelection() {
+        selectedRideId = null; selectedSource = null; selection = Any(); pendingFavoriteSave = null
         windowIntent = Any(); windowGesture = null
-        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); previewImages?.close(); lifetime.cancel()
+        val captured = selection
+        mutableState.value = mutableState.value.copy(destination = HistoryDestination.CATALOG, selectedRideId = null,
+            detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null,
+            selectedFavorite = null, media = HistoryMediaState(available = media.state.value.available))
+        media.selectFavorite(null)
+        if (lifetime.isActive && selection === captured) { detail.clear(); route.clear() }
+    }
+
+    fun close() {
+        selection = Any(); catalogIntent = Any(); selectedRideId = null; selectedSource = null
+        windowIntent = Any(); windowGesture = null
+        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); deletion.close(); previewImages?.close(); lifetime.cancel()
     }
 }
 

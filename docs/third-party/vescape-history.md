@@ -144,3 +144,11 @@ requires an explicit UTC offset; the Android video metadata DATE field is not
 used as a capture-time claim. Android framework behavior is checked natively;
 JVM tests exercise the original ownership/files/SQLite policies only.
 Combined-APK distribution/source/notice audit remains open.
+
+## Whole-recording deletion extension (2026-10-21)
+
+The adapted catalog card exposes an optional trash action. Its confirmation
+component, exact recording/count revalidation, SQL cascade, bounded post-commit
+file cleanup and durable route-preview purge are original Volty implementations.
+No additional upstream source, asset or runtime dependency is introduced here.
+This does not close the combined distribution audit or production cutover gates.

@@ -28,10 +28,12 @@ import kotlin.coroutines.resumeWithException
  * errors before its resources can back an image. Unsupported/failed views fall
  * back to the caller's Canvas route. Attribution/logo defaults are preserved.
  */
-class MapLibreHistoryPreviewLoader(context: Context) : HistoryPreviewImageLoader {
+class MapLibreHistoryPreviewLoader(context: Context, provider: ru.sodovaya.volty.data.db.VoltyDatabaseProvider) : HistoryPreviewImageLoader {
     private val app = context.applicationContext
     private val files = HistoryPreviewFileCache(File(app.cacheDir,"history-preview-images-v1"))
     private val serial = Mutex()
+    private val database = provider.database
+    private val purge = HistoryPreviewPurgeRecovery(HistoryPreviewPurgeJournal(provider), files::clearOwned)
     private val mainHandler = Handler(Looper.getMainLooper())
     private var needsCleanup = true
     private val styles = mutableMapOf<Boolean,PreparedStyle>()
@@ -40,14 +42,19 @@ class MapLibreHistoryPreviewLoader(context: Context) : HistoryPreviewImageLoader
     // 0/1 on API34/SDK13.0.2. Like the existing PMTiles transport, this serves
     // only bundled public style bytes over loopback; map tiles remain OFM URLs.
 
+    override suspend fun reconcileDeletedRides(): Boolean = serial.withLock {
+        withContext(Dispatchers.IO) { purge.reconcile() }
+    }
+
     override suspend fun load(key: HistoryPreviewImageKey): HistoryPreviewImage? = try { serial.withLock {
+        if (!withContext(Dispatchers.IO) { purge.reconcile() && exists(key.rideId) }) return@withLock null
         val camera = historyPreviewCamera(key) ?: return@withLock null
         val style = withContext(Dispatchers.IO) { prepareStyle(key.darkTheme) } ?: return@withLock null
         val digest = digest(key,style.hash)
         val cached = withContext(Dispatchers.IO) {
             try { files.read(digest)?.takeIf { validPng(it,key) } } catch (_: IOException) { null }
         }
-        if (cached != null) return@withLock HistoryPreviewImage(cached)
+        if (cached != null) return@withLock if (withContext(Dispatchers.IO) { exists(key.rideId) }) HistoryPreviewImage(cached) else null
         val styleUri=withContext(Dispatchers.IO) { styleServer.register(style.hash,style.json) }
         var phase="cleanup"
         val image = withContext(Dispatchers.Main.immediate) {
@@ -74,12 +81,16 @@ class MapLibreHistoryPreviewLoader(context: Context) : HistoryPreviewImageLoader
             }
         } ?: run { Log.w(TAG,"Preview background timeout at $phase"); return@withLock null }
         currentCoroutineContext().ensureActive()
-        withContext(Dispatchers.IO) {
+        val retained = withContext(Dispatchers.IO) {
+            if (!exists(key.rideId)) return@withContext false
             try { files.write(digest,image.copyBytes()) } catch (_: IOException) { Log.w(TAG,"Cannot cache history preview") }
+            true
         }
-        image
+        if (retained) image else null
     } } catch (cancel: CancellationException) { throw cancel }
     catch (failure: IOException) { Log.w(TAG,"Preview background unavailable: ${failure.message}"); null }
+
+    private fun exists(rideId: String) = database.rideHistoryV2Queries.getRide(rideId).executeAsOneOrNull() != null
 
     private suspend fun create(manager: OfflineManager,definition: OfflineTilePyramidRegionDefinition,digest: String,
         acquired: (OfflineRegion) -> Unit) = suspendCancellableCoroutine<Unit> { cont ->

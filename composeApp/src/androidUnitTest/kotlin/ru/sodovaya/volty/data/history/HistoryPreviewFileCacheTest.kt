@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.history
 
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -11,6 +12,51 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class HistoryPreviewFileCacheTest {
+    @Test
+    fun clearOwnedDeletesOnlyOwnedFilesAndIsIdempotent() = withTempDirectory { root ->
+        val directory = File(root, "preview").apply { mkdirs() }
+        val cache = HistoryPreviewFileCache(directory)
+        val png = File(directory, "$keyA.png")
+        cache.write(keyA, byteArrayOf(1, 2, 3))
+
+        val ownedTemp = File(directory, "volty-preview-tmp-v1-$keyB-456.tmp")
+            .apply { writeBytes(byteArrayOf(4, 5)) }
+        val foreign = File(directory, "foreign.tmp").apply { writeBytes(byteArrayOf(6, 7)) }
+        val nested = File(directory, "nested").apply { mkdirs() }
+        val nestedFile = File(nested, "keep.bin").apply { writeBytes(byteArrayOf(8, 9)) }
+
+        cache.clearOwned()
+
+        assertFalse(png.exists())
+        assertFalse(ownedTemp.exists())
+        assertContentEquals(byteArrayOf(6, 7), foreign.readBytes())
+        assertTrue(nested.isDirectory)
+        assertContentEquals(byteArrayOf(8, 9), nestedFile.readBytes())
+
+        cache.clearOwned()
+
+        assertFalse(png.exists())
+        assertFalse(ownedTemp.exists())
+        assertContentEquals(byteArrayOf(6, 7), foreign.readBytes())
+        assertTrue(nested.isDirectory)
+        assertContentEquals(byteArrayOf(8, 9), nestedFile.readBytes())
+
+        val missingDirectory = File(root, "missing")
+        HistoryPreviewFileCache(missingDirectory).clearOwned()
+        assertFalse(missingDirectory.exists())
+    }
+
+    @Test
+    fun clearOwnedRejectsAnOrdinaryFileAtTheRootWithoutChangingIt() = withTempDirectory { root ->
+        val ordinaryFile = File(root, "preview-file").apply { writeBytes(byteArrayOf(10, 11, 12)) }
+        val cache = HistoryPreviewFileCache(ordinaryFile)
+
+        assertFailsWith<IOException> { cache.clearOwned() }
+
+        assertTrue(ordinaryFile.isFile)
+        assertContentEquals(byteArrayOf(10, 11, 12), ordinaryFile.readBytes())
+    }
+
     @Test
     fun nextWriteReclaimsOnlyOwnedTempsLeftByAnInterruptedProcess() = withTempDirectory { root ->
         val directory=File(root,"preview").apply{mkdirs()}

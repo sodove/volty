@@ -52,3 +52,9 @@ recorded-fix placement and Android image/video rendering are Volty code. The
 original media file is never a durable storage fallback. The native viewer uses
 platform controls; this does not claim the upstream synchronized video telemetry
 overlay or complete root/recorder/release acceptance. Export remains pending.
+
+Volty extension (2026-10-21): catalog cards now accept an optional destructive
+action callback. The separate confirmation owner, source-qualified transactional
+deletion and durable private-route preview purge are original Volty code. They
+do not change the upstream notices or import additional assets. Whole-recording
+deletion preserves gallery originals; export and production cutover remain open.

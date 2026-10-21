@@ -15,6 +15,7 @@ data class HistoryUiState(
     val favorites: HistoryFavoritesState = HistoryFavoritesState(),
     val selectedFavorite: ru.sodovaya.volty.domain.history.HistoryFavorite? = null,
     val media: HistoryMediaState = HistoryMediaState(),
+    val deletion: HistoryRideDeletionState = HistoryRideDeletionState(),
     val previewImages: HistoryPreviewImagesState = HistoryPreviewImagesState(),
     val previewRevision: Long = 0,
     val windowPreview: ru.sodovaya.volty.domain.history.HistoryRange? = null,

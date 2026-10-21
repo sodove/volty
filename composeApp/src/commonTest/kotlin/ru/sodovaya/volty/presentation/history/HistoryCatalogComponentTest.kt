@@ -10,6 +10,22 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryCatalogComponentTest {
+    @Test fun forgettingDeletedSourceRetiresLatePageAndPreservesDifferentIdentity() = runTest {
+        val gate = CompletableDeferred<Unit>(); val entered = CompletableDeferred<Unit>(); var reads = 0
+        val other = ride("a").copy(vehicleId = "other")
+        val repo = Repo {
+            if (++reads == 1) HistoryPage(listOf(ride("a"), ride("b")), cursor, false)
+            else withContext(NonCancellable) { entered.complete(Unit); gate.await(); HistoryPage(listOf(ride("a")), null, false) }
+        }
+        val c = component(repo)
+        try {
+            c.refresh(); runCurrent(); c.loadOlder(); runCurrent(); assertTrue(entered.isCompleted)
+            c.forget(other.favoriteSource()); assertEquals(2, c.state.value.rides.size)
+            c.forget(ride("a").favoriteSource()); assertEquals(listOf("b"), c.state.value.rides.map { it.id })
+            gate.complete(Unit); runCurrent(); assertEquals(listOf("b"), c.state.value.rides.map { it.id })
+            assertFalse(c.state.value.loadingOlder)
+        } finally { gate.complete(Unit); c.close(); runCurrent() }
+    }
     private val cursor = HistoryCursor(1000, "b")
     private fun ride(id: String, status: HistoryRideStatus = HistoryRideStatus.COMPLETED) =
         HistoryRide(id, "bike", HistoryTick(1000, 10, 1), HistoryTick(2000, 1010, 1), status)

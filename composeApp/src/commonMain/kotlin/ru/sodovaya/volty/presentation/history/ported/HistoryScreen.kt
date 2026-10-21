@@ -58,6 +58,9 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     var favoritesTab by remember { mutableStateOf(false) }
     var trimOpen by remember(state.selectedRideId) { mutableStateOf(false) }
     var mediaOpen by remember(state.media.favoriteId) { mutableStateOf(false) }
+    LaunchedEffect(state.deletion.result) {
+        if (state.deletion.result != null) { listOpen = false; metricsOpen = false; trimOpen = false; mediaOpen = false }
+    }
     LaunchedEffect(owner, state.media.favoriteId) {
         if (state.media.favoriteId != null) owner.loadMedia()
     }
@@ -75,7 +78,8 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     LaunchedEffect(state.destination, state.mapMetricKey) {
         if (state.destination == HistoryDestination.RIDE && state.mapMetricKey != null) chartsExpanded = false
     }
-    BackHandler(enabled = !listOpen && !metricsOpen && !trimOpen && !mediaOpen && state.media.open == null) { owner.back() }
+    BackHandler(enabled = !listOpen && !metricsOpen && !trimOpen && !mediaOpen && state.media.open == null &&
+        state.deletion.target == null && state.deletion.result == null) { owner.back() }
     LaunchedEffect(owner, content.phase, listOpen) {
         if ((content.phase == HistoryScreenPhase.CATALOG || listOpen) && !state.catalog.loaded && !state.catalog.refreshing)
             owner.refresh()
@@ -94,7 +98,8 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         else
         HistoryRideList(state.catalog, state.selectedRideId, openRide, owner::refresh, owner::loadOlder, Modifier.fillMaxWidth().weight(1f),
             vehicleNames, state.previews, reduceMotion, owner::setVisibleRides, owner::retryPreview,
-            catalogList, state.previewImages, state.previewRevision, owner::setVisiblePreviewImages)
+            catalogList, state.previewImages, state.previewRevision, owner::setVisiblePreviewImages,
+            onDelete = if (state.deletion.available) owner::requestRideDeletion else null)
         }
     }
     BoxWithConstraints(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding()) {
@@ -217,6 +222,8 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         state.presets, owner::loadPresets, owner::savePreset, owner::applyPreset, owner::deletePreset)
     if (mediaOpen && state.media.favoriteId != null) HistoryMediaDrawer(owner, state.media, mediaPositions.keys) { mediaOpen = false }
     state.media.open?.let { HistoryMediaViewer(it, owner::consumeMediaOpen) }
+    HistoryRideDeletionDialog(state.deletion, owner::confirmRideDeletion, owner::dismissRideDeletion,
+        owner::requestRideDeletion, owner::dismissRideDeletionResult)
     val bounds = content.detail?.availableRange
     val selectedRange = content.detail?.range
     if (trimOpen && bounds != null && selectedRange != null && bounds.endEpochMillis > bounds.startEpochMillis) {
