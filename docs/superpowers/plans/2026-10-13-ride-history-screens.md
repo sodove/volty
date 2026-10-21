@@ -34,7 +34,7 @@
 4. GPS-less old ride/offline preview tiles must remain usable (Tasks3/4).
 5. Interrupted media copy/delete and corrupt export must not damage original rides (Tasks6/7).
 
-## Task1 — history component and selection ownership
+## Task 1 — history component and selection ownership
 
 **Files:** Create commonMain `presentation/history/HistoryComponent.kt`,
 `HistoryState.kt`, `HistoryCursorPolicy.kt`, `HistoryRequestOwner.kt`;
@@ -89,7 +89,7 @@ Checkpoint: `a0b88673` owns the shared selection/range/cursor and atomic route
 read composition. Subsequent preview ownership adds no eager source/series read.
 This completes the component task, not production root/recorder activation.
 
-## Task2 — metric drawer for contributors and cells
+## Task 2 — metric drawer for contributors and cells
 
 **Files:** Create `presentation/history/HistoryMetricPickerPolicy.kt`,
 `HistoryMetricDrawer.kt`, `HistorySelectedMetrics.kt`;
@@ -130,7 +130,7 @@ unavailable, versioned atomic preferences and native process-restart acceptance.
 This completes the drawer/preset task; production screen/root activation remains
 part of Task5 rather than being implied by this checkpoint.
 
-## Task3 — historical map scene, cursor and animation
+## Task 3 — historical map scene, cursor and animation
 
 **Files:** Create `presentation/history/HistoryMapScene.kt`, `HistoryMapScenePolicy.kt`;
 modify common `presentation/map/NavigationMapScene.kt`,
@@ -180,7 +180,7 @@ route paging, unknown second pack, font200% and retained MapView evidence are in
 metric-coloring-pending statement only. Remaining camera/motion/native/root gates
 are still open; Task3 as a whole is not marked complete.
 
-## Task4 — route previews and history list
+## Task 4 — route previews and history list
 
 **Files:** Create `presentation/history/HistoryRoutePreview.kt`, `HistoryRideList.kt`,
 `HistoryRideCard.kt`, `data/history/HistoryPreviewCache.kt`,
@@ -226,7 +226,7 @@ This supersedes the earlier image-cache-pending statement only. Remaining Task4
 items include full row metadata/date groups/favorites, future trim/delete binding
 and measured long-list performance; Task4 as a whole stays open.
 
-## Task5 — full history home, summary and fullscreen charts
+## Task 5 — full history home, summary and fullscreen charts
 
 **Files:** Create `presentation/history/HistoryScreen.kt`, `HistorySummaryPanel.kt`,
 `HistoryChartPanel.kt`, `HistoryChartsScreen.kt`, `HistoryNavigationStrip.kt`;
@@ -308,7 +308,7 @@ checkbox only. Product root/rotation retention, remaining motion/map/native
 matrix, favorites/media/export, recorder activation and signed acceptance remain
 required; Task5 and the full rewrite are not marked complete.
 
-## Task6 — favorites, trim and curated media
+## Task 6 — favorites, trim and curated media
 
 **Files:** Create `domain/history/HistoryFavorite.kt`, `FavoriteRangePolicy.kt`,
 `data/history/HistoryFavoriteRepository.kt`, `HistoryMediaManifest.kt`,
@@ -361,7 +361,7 @@ cancel/confirm preserved other recorded data and gallery originals. Details:
 `docs/superpowers/specs/2026-10-21-history-ride-deletion-acceptance.md`.
 Task7 export and Task8 production/release acceptance remain open.
 
-## Task7 — honest export and sharing
+## Task 7 — honest export and sharing
 
 **Files:** Create `domain/history/HistoryExport.kt`, `data/history/HistoryExporter.kt`,
 `presentation/history/HistoryExportSheet.kt`, android `HistoryShare.android.kt`;
@@ -383,7 +383,7 @@ where format=GPX/CSV/JSON and result=Success(relativePath,bytes)/Failed(typedRea
 - [ ] Native verify recipient receives readable bounded file, canceled chooser
   does not delete original ride; full suite, commit export.
 
-## Task8 — cutover, visual/device acceptance and final provenance
+## Task 8 — cutover, visual/device acceptance and final provenance
 
 **Files:** Modify existing graph HistoryDialog navigation and root destinations;
 update `docs/third-party/vescape-history.md`, THIRD_PARTY_NOTICES, release notes,
