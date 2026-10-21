@@ -1,11 +1,17 @@
 package ru.sodovaya.volty.data.history
 
 import kotlinx.coroutines.Deferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -15,6 +21,11 @@ internal interface HistoryRecordingLocationSession {
     fun start(): Deferred<Boolean>
     suspend fun close(): Boolean
 }
+
+internal data class HistoryRecordingLocationSnapshot(
+    val recording: CapturedHistoryGpsRecording,
+    val state: HistoryLocationCaptureState,
+)
 
 /** Runtime-owned adapter. The runtime must release it with setEnabled(false) on shutdown. */
 internal class HistoryRecordingGpsDemand(
@@ -26,6 +37,13 @@ internal class HistoryRecordingGpsDemand(
     private val controls = Mutex()
     private var enabled = false
     private var owned: Owned? = null
+    private val observed = MutableStateFlow<Owned?>(null)
+    // A cold observer does not acquire/release native GPS. Preserve the exact
+    // original owner while failed cleanup still owns its provider obligation.
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val locationStates: Flow<HistoryRecordingLocationSnapshot?> = observed.flatMapLatest { current ->
+        current?.session?.state?.map { HistoryRecordingLocationSnapshot(current.recording, it) } ?: flowOf(null)
+    }
 
     override suspend fun setEnabled(enabled: Boolean) = control {
         this.enabled = enabled
@@ -55,6 +73,7 @@ internal class HistoryRecordingGpsDemand(
         if (owned == null) {
             val session = createSession(target)
             owned = Owned(target, session) // Reserve before start can throw or call back.
+            observed.value = owned
             if (!isCurrent(target)) { retire(); return }
             try {
                 session.start() // Native foreground/provider ACK is asynchronous; telemetry proceeds.
@@ -77,6 +96,7 @@ internal class HistoryRecordingGpsDemand(
         val previous = owned ?: return
         check(previous.session.close()) { "History location cleanup pending" }
         owned = null
+        observed.value = null
     }
 
     private suspend fun control(action: suspend () -> Unit) {

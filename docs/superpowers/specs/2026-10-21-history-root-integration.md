@@ -74,6 +74,50 @@ Back share that root fallback.
 - History resources still contain 199 matching unique EN/RU keys. Original GPL
   port license SHA-256 is unchanged. No new upstream files, assets or SDKs.
 
+## Recording control bridge
+
+The data/domain bridge is implemented, but is not yet wired into the production
+history component or Koin recorder choice. `HistoryRecordingRuntime.status`
+publishes a binding only after complete assembly. Observing it does not prepare
+or allocate a writer. A terminal closing tombstone removes UI controls before
+awaiting resource cleanup; a failed close retains the original private resources
+for retry without republishing controls.
+
+GPS observation is a cold stream of the original capture owner plus the actual
+native session state. Submitted startup is not capture readiness, and failed
+retirement does not relabel an old session as a replacement recording. The
+repository also observes admission fences, so a pending durable Stop reports
+STOPPING even before controller intent or native session state changes. Its
+RECORDING route state denotes admitted native capture readiness, not proof that
+a particular GPS fix has passed quality checks or been durably saved.
+
+`HistoryRecordingRepository.captureControls` takes the displayed status. Its
+opaque issued target pins the exact runtime binding and physical selection.
+The UI must pass that rendered snapshot before scheduling Start/Stop, not query
+the latest status inside the deferred action. Targets compare by issuer,
+binding and selection, preserving status deduplication while making a replaced
+physical selection observable. Stop additionally carries the displayed ride ID.
+Writer acceptance/failure is reported independently of recording intent; raw
+exception text is not part of the UI model.
+
+Two concrete observer/control defects were reproduced and fixed during this
+integration. h611 issued an unintended second begin when an old displayed Start
+was redirected to a replacement selection; h612's 35 focused tests passed after
+issuing targets with the status. h614 reported RECORDING while an issued finish
+was waiting for its receipt and GPS admission was already closed; h615's 36
+focused tests passed after observing admission changes. These are real controller
+and native selection fixtures with a controlled writer, not physical BLE/GPS
+acceptance. Production recorder activation remains the next integration gate.
+
+h616 verified the final bridge with 4542 tests in 474 fresh XML reports and zero
+failures, errors, skips or stale results. Migration verification and debug
+assembly repeated with all 55 tasks executed in 168 seconds, offline and without
+build-cache reuse. APK SHA-256:
+`3701802A72E6E042BB5549B3402F95DD01771B9A52C4F68E852326DC79FF8CB8`.
+The bridge has not received new native UI acceptance: its Koin/presentation
+binding and the production recorder switch are still pending. Existing 199
+history resource keys match across EN/RU and the original GPL license is unchanged.
+
 ## Remaining gates
 
 The four-argument production Kable constructor still chooses the old recorder.

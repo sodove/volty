@@ -23,6 +23,7 @@ internal class NativeHistoryRecordingLifecycle(
     private val selectPhysicalPaths: Boolean = false,
 ) {
     internal class ManualControls internal constructor(
+        internal val identity: Any,
         private val begin: suspend () -> Boolean,
         private val end: suspend (String) -> Boolean,
     ) {
@@ -36,6 +37,7 @@ internal class NativeHistoryRecordingLifecycle(
         val captured = plan ?: return null
         if (!isAccepting || captured.links.isEmpty() || !captured.owns()) return null
         return ManualControls(
+            identity = captured.selection,
             begin = { manualControl(captured) { connections.start(captured.selection) } },
             end = { rideId -> manualControl(captured) { connections.stop(captured.selection, rideId) } },
         )

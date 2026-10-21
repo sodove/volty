@@ -2,12 +2,57 @@ package ru.sodovaya.volty.data.history
 
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.*
 import ru.sodovaya.volty.domain.history.*
 import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryRecordingGpsDemandTest {
+    @Test fun routeObservationDoesNotAllocateAndReportsActualCaptureRatherThanSubmittedLaunch() = runTest {
+        val f = Fixture()
+        try {
+            assertNull(f.demand.locationStates.first())
+            assertTrue(f.sessions.isEmpty()); assertTrue(f.services.isEmpty())
+            f.demand.setEnabled(true)
+            val session = f.sessions.single()
+            val published = assertNotNull(f.demand.locationStates.first())
+            assertSame(assertNotNull(f.recording).identity, published.recording.identity)
+            val starting = published.state
+            assertTrue(starting.wanted); assertFalse(starting.capturing)
+            session.state.value = session.state.value.copy(capturing = true)
+            assertTrue(assertNotNull(f.demand.locationStates.first()).state.capturing)
+            f.demand.setEnabled(false); assertNull(f.demand.locationStates.first())
+        } finally { f.demand.setEnabled(false) }
+    }
+    @Test fun failedRetirementKeepsOriginalRouteObservationUntilActualCleanupAcknowledges() = runTest {
+        val f = Fixture()
+        try {
+            f.demand.setEnabled(true); val session = f.sessions.single(); session.release = false
+            assertFailsWith<IllegalStateException> { f.demand.setEnabled(false) }
+            assertEquals(session.state.value, assertNotNull(f.demand.locationStates.first()).state)
+            assertFalse(assertNotNull(f.demand.locationStates.first()).state.wanted)
+            assertEquals(1, session.closes); assertEquals(1, f.sessions.size)
+            session.release = true; f.demand.setEnabled(false)
+            assertEquals(2, session.closes); assertNull(f.demand.locationStates.first())
+        } finally { f.sessions.forEach { it.release = true }; f.demand.setEnabled(false) }
+    }
+    @Test fun retainedRouteStatusCannotBeRelabeledAsAReplacementRecordingEvenWithSameRideId() = runTest {
+        val f = Fixture(); val original = assertNotNull(f.recording)
+        try {
+            f.demand.setEnabled(true); val session = f.sessions.single(); session.release = false
+            f.recording = CapturedHistoryGpsRecording(original.rideId, original.generation + 1, Any())
+            assertFailsWith<IllegalStateException> { f.demand.setEnabled(true) }
+            val retained = assertNotNull(f.demand.locationStates.first())
+            assertSame(original.identity, retained.recording.identity)
+            assertEquals(original.generation, retained.recording.generation)
+            assertEquals(1, f.sessions.size)
+            session.release = true; f.demand.setEnabled(true)
+            val replacement = assertNotNull(f.demand.locationStates.first())
+            assertSame(assertNotNull(f.recording).identity, replacement.recording.identity)
+            assertEquals(2, f.sessions.size)
+        } finally { f.sessions.forEach { it.release = true }; f.demand.setEnabled(false) }
+    }
     private class Writer : HistoryWriter {
         override val diagnostics = MutableStateFlow(HistoryWriterDiagnostics())
         val begun = mutableListOf<String>()
