@@ -115,6 +115,7 @@ private val PlotColors = listOf(
 @Composable
 fun GraphScreen(
     component: GraphComponent,
+    onOpenHistory: (() -> Unit)? = null,
 ) {
     val state by component.state.collectAsState()
     var showHistory by remember { mutableStateOf(false) }
@@ -145,8 +146,8 @@ fun GraphScreen(
                             text = stringResource(Res.string.graph_history),
                             modifier = Modifier
                                 .clickable {
-                                    component.onHistoryRequested()
-                                    showHistory = true
+                                    if (onOpenHistory != null) onOpenHistory()
+                                    else { component.onHistoryRequested(); showHistory = true }
                                 }
                                 .minimumInteractiveComponentSize()
                                 .padding(horizontal = 6.dp, vertical = 8.dp),

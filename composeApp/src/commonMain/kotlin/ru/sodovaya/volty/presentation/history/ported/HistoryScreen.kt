@@ -30,6 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -48,9 +49,10 @@ import volty.composeapp.generated.resources.*
 @Composable
 fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey) -> Long,
     gpsMaxAgeMillis: Long, modifier: Modifier = Modifier, vehicleNames: Map<String, String> = emptyMap(),
-    reduceMotion: Boolean = false) {
+    reduceMotion: Boolean = false, mapHost: HistoryMapHost? = null) {
     val state by owner.state.collectAsState()
     val content = historyScreenContent(state)
+    DisposableEffect(mapHost, owner) { onDispose { mapHost?.clear(owner) } }
     val mediaPositions = rememberHistoryMediaPositions(state, gpsMaxAgeMillis)
     val catalogList = rememberLazyListState()
     val favoritesList = rememberLazyListState()
@@ -103,7 +105,9 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
             onDelete = if (state.deletion.available) owner::requestRideDeletion else null)
         }
     }
-    BoxWithConstraints(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding()) {
+    BoxWithConstraints(modifier.fillMaxSize().background(
+        if (mapHost != null && content.phase != HistoryScreenPhase.CATALOG) androidx.compose.ui.graphics.Color.Transparent
+        else MaterialTheme.colorScheme.background).safeDrawingPadding()) {
         if (content.phase == HistoryScreenPhase.CATALOG) {
             Scaffold(topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_title)) },
                 windowInsets = WindowInsets(0), navigationIcon = { HistoryBack(owner::back) }) }) { padding ->
@@ -112,6 +116,13 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         } else {
             val wide = maxWidth >= 600.dp && maxWidth > maxHeight
             val density = LocalDensity.current
+            val direction = LocalLayoutDirection.current
+            // The standalone map is inside safeDrawingPadding. The retained
+            // root map is outside it, so its fit needs those measured pixels too.
+            val externalTop = if (mapHost != null) WindowInsets.safeDrawing.getTop(density) else 0
+            val externalBottom = if (mapHost != null) WindowInsets.safeDrawing.getBottom(density) else 0
+            val externalLeft = if (mapHost != null) WindowInsets.safeDrawing.getLeft(density, direction) else 0
+            val externalRight = if (mapHost != null) WindowInsets.safeDrawing.getRight(density, direction) else 0
             val panelWidth = if (wide) maxWidth * 0.5f else maxWidth
             val panelHeight = if (wide) maxHeight else maxHeight * 0.55f
             val summaryHeight = maxHeight * when {
@@ -126,14 +137,16 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
             // Loading/ready is included so reopening the SAME ride issues a fresh fit,
             // while range/cursor changes never do. Native map itself stays mounted.
             LaunchedEffect(state.selectedRideId, content.phase == HistoryScreenPhase.LOADING) { fitSequence++ }
-            val identity = remember(state.selectedRideId) { HistoryMapIdentity(checkNotNull(state.selectedRideId), 0) }
+            val identity = remember(state.selectedRideId, mapHost?.viewportGeneration) {
+                HistoryMapIdentity(checkNotNull(state.selectedRideId), mapHost?.viewportGeneration ?: 0)
+            }
             val geometry = rememberHistoryScreenMap(identity, content, state.detail.cursorEpochMillis, gpsMaxAgeMillis)
             val coloring = rememberHistoryMapColoring(identity, content.detail, content.route, state.mapMetricKey,
                 gpsMaxAgeMillis, state.mapMetricKey?.let(cursorMaxAgeMillis) ?: 0)
             val scene = geometry.copy(coloring = coloring, mediaFixes = mediaPositions)
-            val insets = HistoryMapInsets(sidePadding, topPixels + sidePadding,
-                if (wide) with(density) { panelWidth.roundToPx() } + sidePadding else sidePadding,
-                if (wide) sidePadding else panelPixels + sidePadding)
+            val insets = HistoryMapInsets(sidePadding + externalLeft, topPixels + sidePadding + externalTop,
+                (if (wide) with(density) { panelWidth.roundToPx() } + sidePadding else sidePadding) + externalRight,
+                (if (wide) sidePadding else panelPixels + sidePadding) + externalBottom)
             var fit by remember(identity, fitSequence) { mutableStateOf<MapCameraRequest.FitHistory?>(null) }
             val measured = topPixels > 0 && (wide || panelPixels > 0)
             // Freeze measured padding for this command. A panel animation must not
@@ -142,9 +155,16 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                 if (fit == null && measured && scene.segments.isNotEmpty())
                     fit = MapCameraRequest.FitHistory(fitSequence, identity, insets, reduceMotion)
             }
-            PlatformRideMapLayer(historyMapNavigationScene(scene, fit),
+            val mapScene = historyMapNavigationScene(scene, fit)
+            if (mapHost == null) PlatformRideMapLayer(mapScene,
                 MaterialTheme.colorScheme.surface.luminance() < 0.5f, {}, Modifier.fillMaxSize(),
                 onHistoryMediaClick = { id -> state.media.items.singleOrNull { it.id == id }?.let(owner::openMedia) })
+            else SideEffect {
+                val source = content.detail?.ride?.favoriteSource()
+                val range = content.detail?.range
+                if (source != null && range != null) mapHost.publish(owner, HistoryHostedMap(source, range, mapScene))
+                else mapHost.clear(owner)
+            }
             if (state.destination != HistoryDestination.CHARTS) {
             Column(Modifier.align(Alignment.TopStart).fillMaxWidth(if (wide) 0.5f else 1f)
                 .onSizeChanged { topPixels = it.height }.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {

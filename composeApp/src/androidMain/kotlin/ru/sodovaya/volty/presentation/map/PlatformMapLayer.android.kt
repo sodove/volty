@@ -134,6 +134,7 @@ actual fun PlatformRideMapLayer(
     onCameraGesture: (Long) -> Unit,
     modifier: Modifier,
     onHistoryMediaClick: (String) -> Unit,
+    showAttribution: Boolean,
 ) {
     AndroidMapLibreView(
         cacheKey = "ride",
@@ -141,6 +142,7 @@ actual fun PlatformRideMapLayer(
         scene = scene,
         onCameraGesture = onCameraGesture,
         onHistoryMediaClick = onHistoryMediaClick,
+        showAttribution = showAttribution,
         modifier = modifier,
     )
 }
@@ -181,6 +183,7 @@ private fun AndroidMapLibreView(
     onCameraGesture: (Long) -> Unit,
     modifier: Modifier,
     onHistoryMediaClick: (String) -> Unit = {},
+    showAttribution: Boolean = true,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -430,7 +433,7 @@ private fun AndroidMapLibreView(
                 .hazeSource(state = hazeState, zIndex = 0f),
         )
         MapTopBottomBlur(hazeState = hazeState, modifier = Modifier.fillMaxSize())
-        Text(
+        if (showAttribution) Text(
             text = "© OpenFreeMap © OpenMapTiles © OpenStreetMap",
             color = if (darkTheme) ComposeColor(0xB8C8D4DA) else ComposeColor(0x88364048),
             fontSize = 9.sp,

@@ -12,6 +12,7 @@ expect fun PlatformRideMapLayer(
     onCameraGesture: (Long) -> Unit,
     modifier: Modifier = Modifier,
     onHistoryMediaClick: (String) -> Unit = {},
+    showAttribution: Boolean = true,
 )
 
 /** Compatibility surface for the root host until Task 11 supplies the retained scene. */

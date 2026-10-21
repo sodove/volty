@@ -44,6 +44,10 @@ import kotlin.time.ExperimentalTime
  */
 @OptIn(ExperimentalTime::class, DelicateDecomposeApi::class)
 class RootNavigationTest {
+    @Test fun historyBackPopsToRetainedGraphButHasAHomeFallbackForRestoredSoleEntry() {
+        assertTrue(shouldPopOnBack(Config.History, 3))
+        assertFalse(shouldPopOnBack(Config.History, 1))
+    }
 
     private fun vehicle(
         controllers: List<Controller> = emptyList(),

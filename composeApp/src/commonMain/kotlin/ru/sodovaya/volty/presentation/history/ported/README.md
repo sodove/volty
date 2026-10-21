@@ -65,3 +65,11 @@ file ownership, Android share/save actions and their tests are original Volty
 code. They add no upstream files or assets. Export integration acceptance is
 recorded in `docs/superpowers/specs/2026-10-21-history-export-integration.md`;
 production cutover and the remaining export acceptance gates remain open.
+
+Volty extension (2026-10-21): HistoryScreen can publish its recorded scene into
+the retained root map instead of creating another native map. Host ownership,
+full source/range qualification and per-viewport camera generations are original
+Volty integration code. The production graph entry now uses this mode. Required
+map attribution remains in the measured history panel; the root suppresses its
+duplicate line. See `docs/superpowers/specs/2026-10-21-history-root-integration.md`
+for evidence and the still-open recording/release acceptance gates.
