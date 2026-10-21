@@ -9,6 +9,7 @@ import kotlin.time.Instant
 @OptIn(ExperimentalTime::class)
 class SqlDelightHistoryRideDeletion(provider: VoltyDatabaseProvider,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val isLegacyActive: (String) -> Boolean? = { null },
     private val cleanup: suspend () -> HistoryMediaRecovery = { HistoryMediaRecovery() }) : HistoryRideDeletionRepository {
     private val database = provider.database
     private val queries = database.historyRideDeletionQueries
@@ -79,6 +80,12 @@ class SqlDelightHistoryRideDeletion(provider: VoltyDatabaseProvider,
         }
     }
     private fun requireClosed(ride: HistoryRide) {
+        if (ride.status == HistoryRideStatus.LEGACY) {
+            val active = isLegacyActive(ride.id)
+            if (active == true || (ride.ended == null && active != false))
+                fail(HistoryRideDeletionFailure.ACTIVE_RECORDING)
+            return
+        }
         if (ride.status == HistoryRideStatus.RECORDING || ride.ended == null) fail(HistoryRideDeletionFailure.ACTIVE_RECORDING)
     }
     private fun impact(source: HistoryFavoriteSource) = queries.deletionImpact(source.rideId, source.kind.name, source.vehicleId,

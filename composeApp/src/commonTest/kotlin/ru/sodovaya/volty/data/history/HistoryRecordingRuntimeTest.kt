@@ -14,6 +14,22 @@ import kotlin.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 class HistoryRecordingRuntimeTest {
+    @Test fun locationRetryUsesExistingDemandWithoutAllocatingAnotherWriterOrStartingAnUnpreparedRuntime() = runTest {
+        val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        try {
+            assertEquals(HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.UNAVAILABLE), repository.retryLocation())
+            assertEquals(0, f.allocations); assertEquals(0, f.preparations)
+            f.failService = true
+            val binding = f.runtime.prepare(); f.start(binding, channel)
+            assertTrue(f.natives.isEmpty()); assertEquals(listOf("ride"), f.writer.begins)
+            f.failService = false
+            assertEquals(HistoryRecordingActionResult.Applied, repository.retryLocation())
+            assertEquals(1, f.natives.size); assertEquals(1, f.natives.single().starts)
+            assertEquals(1, f.allocations); assertEquals(1, f.preparations); assertEquals(listOf("ride"), f.writer.begins)
+            assertEquals(HistoryRecordingRouteStatus.STARTING, repository.states.first().route)
+        } finally { f.failService = false; f.runtime.close(); channel.close() }
+    }
     @Test fun routeObserverSeesAdmissionFenceWhileDurableStopStillAwaitsItsReceipt() = runTest {
         val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
         val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)

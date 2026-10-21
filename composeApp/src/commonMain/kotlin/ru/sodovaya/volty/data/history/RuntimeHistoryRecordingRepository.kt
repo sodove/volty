@@ -47,6 +47,19 @@ internal class RuntimeHistoryRecordingRepository(private val runtime: HistoryRec
         return target.controls
     }
 
+    override suspend fun retryLocation(): HistoryRecordingActionResult {
+        val status = runtime.status.value
+        val binding = status.binding ?: return HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.UNAVAILABLE)
+        if (status.closing) return HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.UNAVAILABLE)
+        return try {
+            // Permission/foreground opportunities reconcile the current desired
+            // capture; they do not create a writer or start another recording.
+            binding.controller.retryDemand()
+            HistoryRecordingActionResult.Applied
+        } catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.STORAGE) }
+    }
+
     private fun wrap(binding: HistoryRecordingRuntime.Binding,
         captured: NativeHistoryRecordingLifecycle.ManualControls): HistoryRecordingControls = object : HistoryRecordingControls {
             override suspend fun start() = apply { captured.start() }

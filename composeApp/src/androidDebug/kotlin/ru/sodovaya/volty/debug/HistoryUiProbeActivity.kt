@@ -62,7 +62,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
             getKoin().get<HistoryMetricPresetStore>(),getKoin().get<HistoryPreviewImageLoader>(),
             favoriteStore = getKoin().get<HistoryFavoriteRepository>(), mediaRepository = getKoin().get<HistoryMediaRepository>(),
             deletionRepository = if (stored) getKoin().get<HistoryRideDeletionRepository>() else null,
-            exportRepository = if (stored) getKoin().get<ru.sodovaya.volty.domain.history.HistoryExportRepository>() else null)
+            exportRepository = if (stored) getKoin().get<ru.sodovaya.volty.domain.history.HistoryExportRepository>() else null,
+            recordingRepository = intent.getStringExtra("recordingPanel")?.let { HistoryRecordingUiProbeRepository(it) })
         if (intent.getBooleanExtra("charts", false)) lifecycleScope.launch {
             var previous: Pair<HistoryRange?,HistoryRange?>? = null
             owner.state.collect { state ->

@@ -245,7 +245,7 @@ class KableBmsRepository private constructor(
     override fun stopCapture() = diagnosticBuffer.stop()
     override fun clearCapture() = diagnosticBuffer.clear()
 
-    /** Production constructor used by Koin. */
+    /** Legacy compatibility constructor. Production Koin uses the native runtime overload below. */
     constructor(
         vehicleRepository: VehicleRepository,
         serviceController: ru.sodovaya.volty.service.ServiceController,

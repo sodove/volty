@@ -30,4 +30,6 @@ interface HistoryRecordingRepository {
     val states: Flow<HistoryRecordingStatus>
     /** Use the displayed snapshot before scheduling work. Never retarget a queued click. */
     fun captureControls(observed: HistoryRecordingStatus): HistoryRecordingControls?
+    /** Reconcile current GPS demand after an explicit permission/settings opportunity; never prepare a writer. */
+    suspend fun retryLocation(): HistoryRecordingActionResult = HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.UNAVAILABLE)
 }

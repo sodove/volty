@@ -51,6 +51,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     gpsMaxAgeMillis: Long, modifier: Modifier = Modifier, vehicleNames: Map<String, String> = emptyMap(),
     reduceMotion: Boolean = false, mapHost: HistoryMapHost? = null) {
     val state by owner.state.collectAsState()
+    val requestRecordingLocation = rememberHistoryRecordingLocationRequest(owner)
     val content = historyScreenContent(state)
     DisposableEffect(mapHost, owner) { onDispose { mapHost?.clear(owner) } }
     val mediaPositions = rememberHistoryMediaPositions(state, gpsMaxAgeMillis)
@@ -88,8 +89,11 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
             owner.refresh()
     }
     val openRide: (String) -> Unit = { id -> listOpen = false; metricsOpen = false; owner.openRide(id) }
-    val catalog: @Composable (Modifier) -> Unit = { bodyModifier ->
+    val catalog: @Composable (Modifier, androidx.compose.ui.unit.Dp) -> Unit = { bodyModifier, recordingHeight ->
         Column(bodyModifier) {
+        if (content.phase == HistoryScreenPhase.CATALOG) HistoryRecordingPanel(state.recording,
+            owner::startRecording, owner::stopRecording, requestRecordingLocation,
+            Modifier.fillMaxWidth().heightIn(max = recordingHeight), reduceMotion)
         if (state.favorites.available) FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(!favoritesTab, { favoritesTab = false }, label = { Text(stringResource(Res.string.history_title), maxLines = 1) })
@@ -111,7 +115,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         if (content.phase == HistoryScreenPhase.CATALOG) {
             Scaffold(topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_title)) },
                 windowInsets = WindowInsets(0), navigationIcon = { HistoryBack(owner::back) }) }) { padding ->
-                catalog(Modifier.fillMaxSize().padding(padding))
+                catalog(Modifier.fillMaxSize().padding(padding), (maxHeight / 3).coerceAtMost(240.dp))
             }
         } else {
             val wide = maxWidth >= 600.dp && maxWidth > maxHeight
@@ -238,7 +242,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Text(stringResource(Res.string.history_title), Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall)
-        catalog(Modifier.fillMaxWidth().heightIn(max = 640.dp).imePadding())
+        catalog(Modifier.fillMaxWidth().heightIn(max = 640.dp).imePadding(), 240.dp)
     }
     if (metricsOpen && content.detail != null) HistoryMetricDrawer(content.detail, owner::loadSourceMetrics,
         owner::addMetric, owner::removeMetric, { metricsOpen = false }, reduceMotion,

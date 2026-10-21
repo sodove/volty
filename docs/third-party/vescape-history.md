@@ -152,3 +152,14 @@ component, exact recording/count revalidation, SQL cascade, bounded post-commit
 file cleanup and durable route-preview purge are original Volty implementations.
 No additional upstream source, asset or runtime dependency is introduced here.
 This does not close the combined distribution audit or production cutover gates.
+
+## Recording controls and factory cutover (2026-10-21)
+
+The adapted history catalog now hosts an original Volty current-recording panel.
+Its parent, native permission/settings launcher, status/control repository and
+debug-only visual fixture introduce no upstream source/assets or dependency.
+The production factory selects the app-owned native recorder; legacy rows remain
+readable and use an explicit inactive-recorder authority for export and deletion.
+See `docs/superpowers/specs/2026-10-21-history-recording-cutover.md` for evidence
+and remaining acceptance gates. The earlier root-integration note describing the
+four-argument factory as still active is superseded by this actual cutover.

@@ -379,7 +379,8 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
                     is RootComponent.Child.Graph -> GraphScreen(component = instance.component, onOpenHistory = component::onOpenHistory)
                     is RootComponent.Child.History -> HistoryScreen(instance.component,
-                        cursorMaxAgeMillis = { 5_000L }, gpsMaxAgeMillis = 5_000L, mapHost = historyHost)
+                        cursorMaxAgeMillis = { 5_000L }, gpsMaxAgeMillis = 5_000L, mapHost = historyHost,
+                        vehicleNames = instance.vehicleNames.collectAsState(emptyMap()).value)
                     is RootComponent.Child.Nearby -> VoiceSpacesNearbyScreen(instance.component)
                     is RootComponent.Child.GroupMap -> ChannelMapScreen(
                         statusText = when {

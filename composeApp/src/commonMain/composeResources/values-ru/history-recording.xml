@@ -1,0 +1,18 @@
+<resources>
+    <string name="history_recording_title">Запись поездки</string>
+    <string name="history_recording_active">Запись включена</string>
+    <string name="history_recording_stopped">Запись остановлена вручную. Когда будете готовы, начните новую поездку.</string>
+    <string name="history_recording_connect">Для записи подключите поддерживаемый сохранённый транспорт.</string>
+    <string name="history_recording_link_lost">Нет связи с транспортом</string>
+    <string name="history_recording_connected">Транспорт подключён</string>
+    <string name="history_recording_gps_starting">Подключение GPS…</string>
+    <string name="history_recording_gps_connected">GPS подключён</string>
+    <string name="history_recording_gps_stopping">Остановка GPS…</string>
+    <string name="history_recording_gps_unavailable">GPS недоступен. Данные транспорта и маршрут могут быть доступны независимо.</string>
+    <string name="history_recording_unavailable">Управление записью недоступно. Переподключите транспорт и попробуйте снова.</string>
+    <string name="history_recording_changed">Состояние записи изменилось. Проверьте его и попробуйте снова.</string>
+    <string name="history_recording_storage_error">Ошибка хранилища записи. Данные могут не сохраниться.</string>
+    <string name="history_recording_start">Начать запись</string>
+    <string name="history_recording_stop">Остановить запись</string>
+    <string name="history_recording_gps_action">Настроить GPS</string>
+</resources>

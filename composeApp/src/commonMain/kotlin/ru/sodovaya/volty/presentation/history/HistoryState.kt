@@ -17,6 +17,7 @@ data class HistoryUiState(
     val media: HistoryMediaState = HistoryMediaState(),
     val deletion: HistoryRideDeletionState = HistoryRideDeletionState(),
     val export: HistoryExportState = HistoryExportState(),
+    val recording: HistoryRecordingUiState = HistoryRecordingUiState(),
     val previewImages: HistoryPreviewImagesState = HistoryPreviewImagesState(),
     val previewRevision: Long = 0,
     val windowPreview: ru.sodovaya.volty.domain.history.HistoryRange? = null,

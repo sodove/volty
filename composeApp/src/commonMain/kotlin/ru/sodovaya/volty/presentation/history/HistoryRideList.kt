@@ -90,7 +90,8 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
                 previewPartial = previews.previews[ride.id]?.partial == true, previewError = ride.id in previews.errors,
                 onRetry = { onRetryPreview(ride.id) }, image = previewImages.images[ride.id]?.takeIf {
                     renderKeys[ride.id] != null && previewImages.renderKeys[ride.id] == renderKeys[ride.id]
-                }, onDelete = onDelete?.takeIf { ride.status != HistoryRideStatus.RECORDING && ride.ended != null }?.let { action -> { action(ride) } })
+                }, onDelete = onDelete?.takeIf { ride.status == HistoryRideStatus.LEGACY ||
+                    (ride.status != HistoryRideStatus.RECORDING && ride.ended != null) }?.let { action -> { action(ride) } })
         }
         if (state.error != null) item("error") {
             Text(stringResource(Res.string.history_load_error), color = MaterialTheme.colorScheme.error)

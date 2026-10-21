@@ -115,7 +115,8 @@ interface RootComponent {
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
         data class Graph(val component: GraphComponent) : Child
-        data class History(val component: ru.sodovaya.volty.presentation.history.HistoryComponent) : Child
+        data class History(val component: ru.sodovaya.volty.presentation.history.HistoryComponent,
+            val vehicleNames: kotlinx.coroutines.flow.Flow<Map<String, String>> = kotlinx.coroutines.flow.flowOf(emptyMap())) : Child
         data class Nearby(val component: DefaultVoiceSpacesNearbyComponent) : Child
         /** Retained channel map; serialized GroupMap route name remains compatible. */
         data object GroupMap : Child
@@ -772,7 +773,11 @@ class DefaultRootComponent(
                 RootComponent.Child.History(ru.sodovaya.volty.presentation.history.DefaultHistoryComponent(
                     context, scope, reads, clock::readTick, ::onBack,
                     presetStore = get(), imageLoader = get(), favoriteStore = get(),
-                    mediaRepository = get(), deletionRepository = get(), exportRepository = get()).also { it.refresh() })
+                    mediaRepository = get(), deletionRepository = get(), exportRepository = get(),
+                    recordingRepository = get()).also { it.refresh() },
+                    combine(vehicleRepository.vehicles, bmsRepository.activeVehicle) { saved, current ->
+                        (saved + listOfNotNull(current)).associate { it.id to it.name }
+                    })
             }
             is Config.Graph -> RootComponent.Child.Graph(
                 DefaultGraphComponent(

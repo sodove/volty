@@ -10,6 +10,48 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryComponentTest {
+    @Test fun recordingActionsKeepRenderedIdentityRefreshCatalogAndRetireWithScreen() = runTest {
+        val reads = Repo()
+        val statuses = kotlinx.coroutines.flow.MutableStateFlow(HistoryRecordingStatus(
+            available = true, ride = ride("active"), canStop = true))
+        val captured = mutableListOf<HistoryRecordingStatus>()
+        val calls = mutableListOf<String>()
+        val recording = object : HistoryRecordingRepository {
+            override val states = statuses
+            override fun captureControls(observed: HistoryRecordingStatus): HistoryRecordingControls {
+                captured += observed
+                return object : HistoryRecordingControls {
+                    override suspend fun start(): HistoryRecordingActionResult {
+                        calls += "start"; return HistoryRecordingActionResult.Applied
+                    }
+                    override suspend fun stop(rideId: String): HistoryRecordingActionResult {
+                        calls += "stop:$rideId"; return HistoryRecordingActionResult.Applied
+                    }
+                }
+            }
+            override suspend fun retryLocation(): HistoryRecordingActionResult {
+                calls += "gps"; return HistoryRecordingActionResult.Applied
+            }
+        }
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),
+            backgroundScope, reads, { origin }, {}, recordingRepository = recording)
+        try {
+            runCurrent()
+            assertTrue(c.state.value.recording.present)
+            val rendered = c.state.value.recording.status
+            statuses.value = rendered.copy(ride = ride("replacement")); runCurrent()
+            c.stopRecording(rendered)
+            assertEquals(listOf(rendered), captured)
+            runCurrent()
+            assertEquals(listOf("stop:active"), calls)
+            assertEquals(1, reads.catalogReads)
+            c.retryRecordingLocation(); runCurrent()
+            assertEquals(listOf("stop:active", "gps"), calls)
+            c.close()
+            c.startRecording(rendered.copy(canStart = true)); c.retryRecordingLocation(); runCurrent()
+            assertEquals(listOf("stop:active", "gps"), calls)
+        } finally { c.close() }
+    }
     private val origin = HistoryTick(1000, 10, 1)
     private val full = HistoryRange(1000, 5000)
     private val key = HistorySeriesKey("pack", "voltage_v")

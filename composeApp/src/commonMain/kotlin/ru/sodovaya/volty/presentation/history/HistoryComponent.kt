@@ -54,6 +54,9 @@ interface HistoryComponent {
     fun openExport() {}
     fun export(format: HistoryExportFormat) {}
     fun dismissExport() {}
+    fun startRecording(observed: HistoryRecordingStatus) {}
+    fun stopRecording(observed: HistoryRecordingStatus) {}
+    fun retryRecordingLocation() {}
     fun setVisiblePreviewImages(keys: List<HistoryPreviewImageKey>)
     fun back()
 }
@@ -68,7 +71,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     favoriteStore: HistoryFavoriteRepository? = null,
     mediaRepository: HistoryMediaRepository? = null,
     deletionRepository: HistoryRideDeletionRepository? = null,
-    exportRepository: HistoryExportRepository? = null) : HistoryComponent {
+    exportRepository: HistoryExportRepository? = null,
+    recordingRepository: HistoryRecordingRepository? = null) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -80,6 +84,10 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val media = HistoryMediaComponent(componentContext, scope, mediaRepository)
     private val deletion = HistoryRideDeletionComponent(componentContext, scope, deletionRepository)
     private val exports = HistoryExportComponent(componentContext, scope, exportRepository)
+    private val recording = HistoryRecordingComponent(componentContext, scope, recordingRepository) { refresh() }
+    override fun startRecording(observed: HistoryRecordingStatus) { if (lifetime.isActive) recording.start(observed) }
+    override fun stopRecording(observed: HistoryRecordingStatus) { if (lifetime.isActive) recording.stop(observed) }
+    override fun retryRecordingLocation() { if (lifetime.isActive) recording.retryLocation() }
     override fun openExport() {
         if (!lifetime.isActive || state.value.detail.loading || state.value.detail.error != null) return
         val ride = state.value.detail.ride ?: return
@@ -156,6 +164,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         val rideId: String, val base: HistoryRange, val bounds: HistoryRange)
 
     init {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            recording.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(recording = it) }
+        }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             exports.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(export = it) }
         }
@@ -406,7 +417,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     fun close() {
         selection = Any(); catalogIntent = Any(); selectedRideId = null; selectedSource = null
         windowIntent = Any(); windowGesture = null
-        catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); deletion.close(); exports.close(); previewImages?.close(); lifetime.cancel()
+        recording.close(); catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); deletion.close(); exports.close(); previewImages?.close(); lifetime.cancel()
     }
 }
 

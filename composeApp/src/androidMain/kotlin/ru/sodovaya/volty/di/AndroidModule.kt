@@ -85,7 +85,7 @@ import org.maplibre.android.offline.OfflineManager
 
 val androidModule = module {
     single { SqlDriverFactory(androidContext()) }
-    // Inert until the future recording runtime awaits prepare(); one clock for BLE/GPS/detail.
+    // Inert until native connection startup awaits prepare(); one clock for BLE/GPS/detail.
     single {
         val store = get<ru.sodovaya.volty.data.history.SqlDelightHistoryStore>()
         ru.sodovaya.volty.data.history.HistoryRecordingClock(
@@ -104,7 +104,9 @@ val androidModule = module {
     single<ru.sodovaya.volty.domain.history.HistoryExportRepository> {
         val files = get<ru.sodovaya.volty.data.history.HistoryDerivedFiles>()
         ru.sodovaya.volty.data.history.FileHistoryExportRepository(files.exportDirectory,
-            ru.sodovaya.volty.data.history.SqlDelightHistoryExportSource(get(), Dispatchers.IO),
+            // The production Kable factory seals native ingress before every
+            // connection; it never starts or falls back to the legacy recorder.
+            ru.sodovaya.volty.data.history.SqlDelightHistoryExportSource(get(), Dispatchers.IO, isLegacyActive = { false }),
             gate = files.gate, reconcile = files::reconcileLocked)
     }
     single<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader> {
@@ -113,7 +115,8 @@ val androidModule = module {
     single<ru.sodovaya.volty.domain.history.HistoryRideDeletionRepository> {
         val media = get<ru.sodovaya.volty.domain.history.HistoryMediaRepository>()
         val previews = get<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader>()
-        ru.sodovaya.volty.data.history.SqlDelightHistoryRideDeletion(get(), cleanup = {
+        // Legacy storage is read-only after native recorder cutover.
+        ru.sodovaya.volty.data.history.SqlDelightHistoryRideDeletion(get(), isLegacyActive = { false }, cleanup = {
             val result = media.cleanupRetired()
             result.copy(pendingCleanup = result.pendingCleanup + if (previews.reconcileDeletedRides()) 0 else 1)
         })
@@ -169,6 +172,9 @@ val androidModule = module {
         )
     }
     single<SocialCredentialStore> { AndroidSocialCredentialStore(androidContext()) }
+    single<ru.sodovaya.volty.domain.history.HistoryRecordingRepository> {
+        ru.sodovaya.volty.data.history.RuntimeHistoryRecordingRepository(get())
+    }
     single(named(NEARBY_HTTP_CLIENT)) {
         HttpClient(OkHttp) {
             install(HttpTimeout) {

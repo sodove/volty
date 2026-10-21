@@ -47,6 +47,42 @@ class HistoryRideDeletionSqlTest {
     }
     @AfterTest fun close() { drivers.forEach { it.close() } }
 
+    @Test fun explicitLegacyInactivityAllowsDeletingUnclosedPersistedDataWithoutInventingEnd() = runTest {
+        val f = fixture()
+        f.db.rideRowQueries.insert("old", "bike", "1970-01-01T00:00:01Z", null)
+        f.db.ridePointRowQueries.insert("old", "voltage", "1970-01-01T00:00:02Z", -1, 72.0, 1)
+        val ride = assertNotNull(LegacyHistoryReader(f.provider).ride("old"))
+        val deletion = SqlDelightHistoryRideDeletion(f.provider, isLegacyActive = { false })
+        val request = deletion.prepare(ride)
+        assertNull(request.ride.ended)
+        assertNull(f.db.rideRowQueries.selectById("old").executeAsOne().endedAt)
+        deletion.confirm(request)
+        assertNull(f.db.rideRowQueries.selectById("old").executeAsOneOrNull())
+        assertEquals(0L, f.count("RidePointRow", "old"))
+    }
+    @Test fun legacyAuthorityIsRecheckedAtConfirmationAndKeepsRowsOnChangedActivity() = runTest {
+        val f = fixture()
+        f.db.rideRowQueries.insert("old", "bike", "1970-01-01T00:00:01Z", null)
+        val ride = assertNotNull(LegacyHistoryReader(f.provider).ride("old"))
+        var active: Boolean? = false
+        val deletion = SqlDelightHistoryRideDeletion(f.provider, isLegacyActive = { active })
+        val request = deletion.prepare(ride)
+        active = true
+        expect(HistoryRideDeletionFailure.ACTIVE_RECORDING) { deletion.confirm(request) }
+        active = null
+        expect(HistoryRideDeletionFailure.ACTIVE_RECORDING) { deletion.confirm(request) }
+        assertNull(f.db.rideRowQueries.selectById("old").executeAsOne().endedAt)
+        assertNull(HistoryPreviewPurgeJournal(f.provider).pendingGeneration())
+    }
+    @Test fun explicitLegacyActivityBlocksEvenIncoherentClosedMetadata() = runTest {
+        val f = fixture()
+        f.db.rideRowQueries.insert("old", "bike", "1970-01-01T00:00:01Z", "1970-01-01T00:00:02Z")
+        val ride = assertNotNull(LegacyHistoryReader(f.provider).ride("old"))
+        val deletion = SqlDelightHistoryRideDeletion(f.provider, isLegacyActive = { true })
+        expect(HistoryRideDeletionFailure.ACTIVE_RECORDING) { deletion.prepare(ride) }
+        assertNotNull(f.db.rideRowQueries.selectById("old").executeAsOneOrNull())
+    }
+
     @Test fun previewEarnsCountsWithoutDeletingAnythingAndCountsPendingCopies() = runTest {
         val f = fixture(); val ride = f.closed(); f.favorite(ride); f.favorite(ride, "second")
         f.media.reserve(id, "fav", "image/png"); f.media.complete(id, 3, "a".repeat(64), null)
