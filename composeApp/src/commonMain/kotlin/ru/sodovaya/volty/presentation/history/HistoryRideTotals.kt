@@ -12,7 +12,7 @@ enum class HistoryTotalKind {
 data class HistoryTotal(val kind: HistoryTotalKind, val value: Double, val approximate: Boolean = false)
 
 private val motionTiers = listOf(setOf(HistorySourceKind.VEHICLE_MOTION), setOf(HistorySourceKind.CONTROLLER))
-private val batteryTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY), setOf(HistorySourceKind.BATTERY))
+internal val batteryTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY), setOf(HistorySourceKind.BATTERY))
 private val batteryTemperatureTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY),
     setOf(HistorySourceKind.BATTERY, HistorySourceKind.BATTERY_ASSEMBLY))
 
@@ -24,7 +24,7 @@ private val batteryMetrics = listOf("soc_percent", "power_w")
  * One tier of sources per metric: a vehicle aggregate when there is one, else its contributors.
  * Never both — an aggregate summed with the batteries it aggregates double-counts.
  */
-private fun tier(sources: List<HistorySource>, tiers: List<Set<HistorySourceKind>>): List<HistorySource> =
+internal fun tier(sources: List<HistorySource>, tiers: List<Set<HistorySourceKind>>): List<HistorySource> =
     tiers.firstNotNullOfOrNull { kinds -> sources.filter { it.kind in kinds }.takeIf { it.isNotEmpty() } }.orEmpty()
 
 /** Stats to read for the tiles of a ride with these sources. */

@@ -76,7 +76,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     /** Open the ride being recorded, else the newest, once the first catalog page arrives. */
     private val openLatestOnLoad: Boolean = false,
     /** Reads whole-ride totals for the tiles; null shows none (its reads would otherwise join every selection). */
-    totalsRepository: HistoryReadRepository? = null) : HistoryComponent {
+    totalsRepository: HistoryReadRepository? = null,
+    /** Open this ride first (a restored view still wins); replaces the newest-ride default. */
+    initialRideId: String? = null) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -256,6 +258,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
             pendingRestoration ?: HistorySavedSelection.capture(mutableState.value)
         }
         pendingRestoration?.let { saved -> openSelection(saved.rideId, saved.favorite(), saved) }
+            ?: initialRideId?.let { openSelection(it, null) }
         componentContext.lifecycle.doOnDestroy { close() }
     }
 

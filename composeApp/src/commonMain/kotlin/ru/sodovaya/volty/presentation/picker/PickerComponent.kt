@@ -19,6 +19,7 @@ import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import ru.sodovaya.volty.domain.model.isDemo
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -44,11 +45,14 @@ interface PickerComponent {
 
     /** Start "Try demo" for [profile] — the two profiles are different vehicles. */
     fun onTryDemo(profile: DemoProfile)
+    fun onOpenSaved(vehicle: Vehicle)
     fun onBack()
 
     data class State(
         val mode: String = "cold",
         val myInRange: List<Vehicle> = emptyList(),
+        /** Every saved vehicle; those not in [myInRange] are offered for an offline look. */
+        val saved: List<Vehicle> = emptyList(),
         val otherNearby: List<DiscoveredDevice> = emptyList(),   // detected (bmsType != null)
         val otherDevices: List<DiscoveredDevice> = emptyList(),  // undetected (bmsType == null)
         val showAll: Boolean = false,
@@ -69,7 +73,8 @@ class DefaultPickerComponent(
     private val onConnectedGuestNoSave: () -> Unit,
     private val onAddNewBatteryRequested: () -> Unit,
     private val onDemoConnected: () -> Unit,
-    private val onCancelled: () -> Unit
+    private val onCancelled: () -> Unit,
+    private val onOpenSavedRequested: (vehicleId: String) -> Unit = {}
 ) : PickerComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -85,6 +90,7 @@ class DefaultPickerComponent(
 
     private suspend fun startScan() {
         val saved = vehicleRepository.vehicles.first()
+        _state.update { it.copy(saved = saved.filterNot { v -> v.isGuest || v.isDemo }) }
         // Indexed by every address of every vehicle, not just the primary pack's:
         // a controller-only vehicle has no pack address, so keying on that alone
         // meant its own advertisement never matched it. See [vehiclesByAddress].
@@ -330,4 +336,5 @@ class DefaultPickerComponent(
     }
 
     override fun onBack() { onCancelled() }
+    override fun onOpenSaved(vehicle: Vehicle) { onOpenSavedRequested(vehicle.id) }
 }

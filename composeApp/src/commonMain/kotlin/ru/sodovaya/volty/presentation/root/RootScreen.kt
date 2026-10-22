@@ -391,6 +391,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     is RootComponent.Child.SetupWizard -> SetupWizardScreen(instance.component)
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
                     is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
+                    is RootComponent.Child.VehicleOverview -> ru.sodovaya.volty.presentation.vehicle.VehicleOverviewScreen(instance.component)
                     is RootComponent.Child.History -> HistoryScreen(instance.component,
                         cursorMaxAgeMillis = { 5_000L }, gpsMaxAgeMillis = 5_000L, mapHost = historyHost,
                         vehicleNames = instance.vehicleNames.collectAsState(emptyMap()).value)

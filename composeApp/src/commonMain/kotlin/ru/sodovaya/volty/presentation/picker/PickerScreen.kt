@@ -59,6 +59,8 @@ import volty.composeapp.generated.resources.picker_found_nearby
 import volty.composeapp.generated.resources.picker_guest_subtitle
 import volty.composeapp.generated.resources.picker_guest_title
 import volty.composeapp.generated.resources.picker_my_in_range
+import volty.composeapp.generated.resources.picker_my_away
+import volty.composeapp.generated.resources.picker_my_away_hint
 import volty.composeapp.generated.resources.picker_other_nearby
 import volty.composeapp.generated.resources.picker_pick_type_title
 import volty.composeapp.generated.resources.picker_scanning
@@ -125,6 +127,12 @@ fun PickerScreen(component: PickerComponent) {
                             onClick = { component.onConnectKnown(v) }
                         )
                     }
+                }
+
+                val away = state.saved.filter { v -> state.myInRange.none { it.id == v.id } }
+                if (state.mode == "cold" && away.isNotEmpty()) {
+                    item { SectionHeader(stringResource(Res.string.picker_my_away)) }
+                    items(away, key = { "away-" + it.id }) { v -> AwayVehicleRow(v) { component.onOpenSaved(v) } }
                 }
 
                 if (state.otherNearby.isNotEmpty()) {
@@ -289,6 +297,28 @@ private fun SectionHeader(text: String) {
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 12.dp, bottom = 4.dp)
     )
+}
+
+/** A saved vehicle not seen nearby: opens its recorded data instead of trying to connect. */
+@Composable
+private fun AwayVehicleRow(vehicle: Vehicle, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .clickable(onClick = onClick)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Avatar(letter = iconKeyToEmoji(vehicle.iconKey), bg = MaterialTheme.colorScheme.outline)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(vehicle.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(Res.string.picker_my_away_hint), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
 }
 
 @Composable

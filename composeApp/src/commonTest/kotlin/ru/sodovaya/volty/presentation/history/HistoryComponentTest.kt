@@ -210,6 +210,14 @@ class HistoryComponentTest {
             assertEquals(HistoryDestination.CATALOG, c.state.value.destination, "the list the rider went back to stays")
         } finally { c.close() }
     }
+    @Test fun aRequestedRideOpensInsteadOfTheNewest() = runTest {
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
+            Repo(), { HistoryTick(6000, 5010, 1) }, {}, openLatestOnLoad = true, initialRideId = "b")
+        try {
+            c.refresh(); runCurrent()
+            assertEquals(HistoryDestination.RIDE, c.state.value.destination); assertEquals("b", c.state.value.selectedRideId)
+        } finally { c.close() }
+    }
     @Test fun openingHistoryPrefersTheRideBeingRecorded() = runTest {
         val recording = object : HistoryRecordingRepository {
             override val states = kotlinx.coroutines.flow.MutableStateFlow(HistoryRecordingStatus(available = true, ride = ride("live")))

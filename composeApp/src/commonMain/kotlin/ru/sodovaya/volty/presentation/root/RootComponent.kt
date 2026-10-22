@@ -114,6 +114,7 @@ interface RootComponent {
         data class SetupWizard(val component: SetupWizardComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
+        data class VehicleOverview(val component: ru.sodovaya.volty.presentation.vehicle.VehicleOverviewComponent) : Child
         data class History(val component: ru.sodovaya.volty.presentation.history.HistoryComponent,
             val vehicleNames: kotlinx.coroutines.flow.Flow<Map<String, String>> = kotlinx.coroutines.flow.flowOf(emptyMap())) : Child
         data class Nearby(val component: DefaultVoiceSpacesNearbyComponent) : Child
@@ -159,7 +160,10 @@ sealed class Config {
      * does not exist yet has nothing to configure alerts on.
      */
     @Serializable data class VehicleAlerts(val vehicleId: String) : Config()
-    @Serializable data object History : Config()
+    /** A saved vehicle seen without connecting: last recorded state, rides, settings. */
+    @Serializable data class VehicleOverview(val vehicleId: String) : Config()
+    /** History, opened on [rideId] when given, else on the ride being recorded or the newest. */
+    @Serializable data class History(val rideId: String? = null) : Config()
     @Serializable data object Nearby : Config()
     @Serializable data object GroupMap : Config()
     @Serializable data object Settings : Config()
@@ -525,7 +529,7 @@ class DefaultRootComponent(
         nav.bringToFront(configForTab(tab))
     }
 
-    override fun onOpenHistory() { goTo(Config.History) }
+    override fun onOpenHistory() { goTo(Config.History()) }
 
     override fun onOpenGroupMap() {
         goTo(Config.GroupMap)
@@ -632,6 +636,7 @@ class DefaultRootComponent(
                         goTo(Config.SetupWizard(prefillFromActiveConnection = false))
                     },
                     onDemoConnected = { replaceAll(homeConfig()) },
+                    onOpenSavedRequested = { id -> goTo(Config.VehicleOverview(id)) },
                     onCancelled = { nav.pop() }
                 )
             )
@@ -641,7 +646,7 @@ class DefaultRootComponent(
                     bmsRepository = get(),
                     vehicleRepository = get(),
                     appPrefs = get<AppPrefs>(),
-                    onOpenGraphRequested = { goTo(Config.History) },
+                    onOpenGraphRequested = { goTo(Config.History()) },
                     onOpenSettingsRequested = { goTo(Config.Settings) },
                     onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     // Mirrors Config.Dashboard's onOpenAddBattery: the sheet's
@@ -657,7 +662,7 @@ class DefaultRootComponent(
                     componentContext = context,
                     bmsRepository = get(),
                     vehicleRepository = get(),
-                    onOpenGraphRequested = { goTo(Config.History) },
+                    onOpenGraphRequested = { goTo(Config.History()) },
                     onOpenSettings = { goTo(Config.Settings) },
                     onOpenAddBattery = {
                         goTo(configForCreateVehicle(CreateVehicleEntry.DASHBOARD))
@@ -770,6 +775,18 @@ class DefaultRootComponent(
                     onBackRequested = { nav.pop() }
                 )
             )
+            is Config.VehicleOverview -> {
+                val clock = get<ru.sodovaya.volty.data.history.HistoryRecordingClock>()
+                RootComponent.Child.VehicleOverview(ru.sodovaya.volty.presentation.vehicle.DefaultVehicleOverviewComponent(
+                    context, scope, config.vehicleId, get(),
+                    ru.sodovaya.volty.data.history.PreparedHistoryReadRepository(get(), clock::prepare), clock::readTick,
+                    onConnectRequested = { id -> replaceAll(Config.AutoConnect(id)) },
+                    onOpenRideRequested = { rideId -> goTo(Config.History(rideId)) },
+                    onEditRequested = { id -> goTo(Config.VehicleEdit(id)) },
+                    onAlertsRequested = { id -> goTo(Config.VehicleAlerts(id)) },
+                    onBackRequested = { nav.pop() },
+                ))
+            }
             is Config.History -> {
                 val clock = get<ru.sodovaya.volty.data.history.HistoryRecordingClock>()
                 val reads = ru.sodovaya.volty.data.history.PreparedHistoryReadRepository(get(), clock::prepare)
@@ -777,7 +794,8 @@ class DefaultRootComponent(
                     context, scope, reads, clock::readTick, ::onBack,
                     presetStore = get(), imageLoader = get(), favoriteStore = get(),
                     mediaRepository = get(), deletionRepository = get(), exportRepository = get(),
-                    recordingRepository = get(), openLatestOnLoad = true, totalsRepository = reads).also { it.refresh() },
+                    recordingRepository = get(), openLatestOnLoad = true, totalsRepository = reads,
+                    initialRideId = config.rideId).also { it.refresh() },
                     combine(vehicleRepository.vehicles, bmsRepository.activeVehicle) { saved, current ->
                         (saved + listOfNotNull(current)).associate { it.id to it.name }
                     })
