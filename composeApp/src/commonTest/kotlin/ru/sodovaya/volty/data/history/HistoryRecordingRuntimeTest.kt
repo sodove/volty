@@ -50,6 +50,12 @@ class HistoryRecordingRuntimeTest {
             assertEquals(listOf<String?>("ride"), f.writer.finishes)
             assertFalse(stopping.isCompleted); assertNull(binding.controller.captureGpsRecording())
             assertEquals(HistoryRecordingRouteStatus.STOPPING, observed.last().route)
+            assertNotNull(observed.last().ride, "Stop has not received its durable finish acknowledgement")
+            f.writer.diagnostics.value = HistoryWriterDiagnostics(accepting = false)
+            runCurrent()
+            assertEquals(HistoryRecordingRouteStatus.STOPPING, observed.last().route)
+            assertFalse(observed.last().storageFailure,
+                "The writer fences intake while draining; that alone is not a storage failure")
             gate.complete(Unit); assertEquals(HistoryRecordingActionResult.Applied, stopping.await())
             runCurrent(); assertEquals(HistoryRecordingRouteStatus.IDLE, observed.last().route)
         } finally {
@@ -73,7 +79,11 @@ class HistoryRecordingRuntimeTest {
         val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)
         try {
             val binding = f.runtime.prepare(); f.start(binding, channel)
-            // Intent alone is not evidence that the writer accepts observations.
+            // A temporary intake fence is not evidence that persistence failed.
+            assertFalse(repository.states.first().storageFailure)
+            f.writer.diagnostics.value = HistoryWriterDiagnostics(failure = "append failed")
+            assertTrue(repository.states.first().storageFailure)
+            f.writer.diagnostics.value = HistoryWriterDiagnostics(closed = true)
             assertTrue(repository.states.first().storageFailure)
             f.writer.diagnostics.value = HistoryWriterDiagnostics(accepting = true)
             val recording = repository.states.first()

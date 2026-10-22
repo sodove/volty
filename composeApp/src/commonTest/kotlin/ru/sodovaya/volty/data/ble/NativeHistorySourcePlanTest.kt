@@ -17,6 +17,20 @@ class NativeHistorySourcePlanTest {
     private fun controller(index: Int = 7) = Controller(index, "ESC", ControllerType.VESC, address,
         motor = MotorConfig(15, 254, 1f))
 
+    @Test fun veteranSeparatesControllerRailFromBothPhysicalSmartBmsBranches() {
+        val p = pack(type = BmsType.LEAPERKIM)
+        val c = controller().copy(controllerType = ControllerType.VETERAN)
+        val spec = LinkSpec(address, ProtocolKind.VETERAN, listOf(OwnedSource(3), OwnedSource(4)), listOf(OwnedSource(7)))
+        val sources = nativeHistorySourcesForSelectedLink(spec, vehicle(listOf(p), listOf(c)))
+        assertEquals(4, sources.size)
+        assertEquals(4, sources.values.map { it.id }.distinct().size)
+        assertEquals(HistorySourceKind.CONTROLLER, sources.getValue(HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, 0)).kind)
+        assertEquals(HistorySourceKind.DERIVED_BATTERY,
+            sources.getValue(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED)).kind)
+        for (index in 0..1) assertEquals(HistorySourceKind.BATTERY,
+            sources.getValue(HistoryTelemetrySource(TelemetryOrigin.BATTERY, index)).kind)
+    }
+
     @Test fun plain_controller_plan_declares_distinct_reporter_scope_without_a_virtual_pack() {
         val c = controller()
         val external = pack().copy(bmsAddress = "AA:BB:CC:DD:EE:02")

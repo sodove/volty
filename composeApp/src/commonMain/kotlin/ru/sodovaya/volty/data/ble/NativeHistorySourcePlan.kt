@@ -93,9 +93,16 @@ private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singl
             add(TelemetryOrigin.CONTROLLER, 0, "${controller.label} · CAN", TelemetryRole.REPORTED_CAN)
             if (derived) add(TelemetryOrigin.BATTERY, 0, controller.label, TelemetryRole.DERIVED)
         }
+        ProtocolKind.VETERAN -> {
+            require(spec.ownedPacks.size == 2 && controllers.size <= 1)
+            require(packs.any { it != null } || controllers.isNotEmpty())
+            add(TelemetryOrigin.CONTROLLER, 0, nativeLinkController(spec, profile)?.label ?: profile.name)
+            add(TelemetryOrigin.BATTERY, 0, nativeLinkController(spec, profile)?.label ?: profile.name, TelemetryRole.DERIVED)
+            for (branch in 0..1) add(TelemetryOrigin.BATTERY, branch, packs[branch]?.label ?: "${profile.name} · ${branch + 1}")
+        }
         ProtocolKind.VESC_BMS, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,
         ProtocolKind.NINEBOT, ProtocolKind.NINEBOT_LEGACY, ProtocolKind.KINGSONG,
-        ProtocolKind.INMOTION, ProtocolKind.VETERAN -> throw IllegalArgumentException("Native recording producer is not qualified")
+        ProtocolKind.INMOTION -> throw IllegalArgumentException("Native recording producer is not qualified")
     }
     return result.toMap()
 }

@@ -26,6 +26,8 @@ class BufferedHistoryWriter(
 ) : HistoryWriter {
     private data class Session(val generation: Long, val ride: HistoryRide)
     private data class Packet(val batch: HistoryBatch, val events: Long, val bytes: Long)
+    private data class PreparedCommit(val packets: Int, val events: Long, val bytes: Long,
+        val batch: HistoryBatch, val next: HistoryRecordingProjection?)
     private data class State(
         val session: Session? = null,
         val accepting: Boolean = false,
@@ -56,7 +58,7 @@ class BufferedHistoryWriter(
     private val controlLock = Mutex()
     // Accessed only by the persistence actor. A lost ACK retains both exact payload and candidate state.
     private var projection: HistoryRecordingProjection? = null
-    private var prepared: PreparedHistoryProjection? = null
+    private var prepared: PreparedCommit? = null
     override val diagnostics: StateFlow<HistoryWriterDiagnostics> = state.map {
         HistoryWriterDiagnostics(it.events, it.bytes, it.committed, it.dropped, it.failure, it.accepting, it.closed)
     }.stateIn(scope, SharingStarted.Eagerly, HistoryWriterDiagnostics())
@@ -177,8 +179,8 @@ class BufferedHistoryWriter(
 
     private suspend fun drain() {
         // Bound each pass to its admitted prefix. New offers must not starve controls indefinitely.
-        val count = state.value.pending.size
-        repeat(count) { index -> commitFirst(flushDetail = index == count - 1) }
+        var remaining = state.value.pending.size
+        while (remaining > 0) remaining -= commitPrefix(remaining)
         // Reserved metadata lane: a full telemetry queue must still record its loss boundary.
         while (true) {
             val current = state.value
@@ -188,24 +190,48 @@ class BufferedHistoryWriter(
                 token(session, current.nextToken)), 0, 0)
             if (state.compareAndSet(current, current.copy(pending = listOf(gap) + current.pending,
                     loss = null, nextToken = current.nextToken + 1))) {
-                commitFirst(flushDetail = true)
+                commitPrefix(1)
                 break
             }
         }
         state.update { it.copy(failure = null) }
     }
 
-    private suspend fun commitFirst(flushDetail: Boolean) {
-        val packet = checkNotNull(state.value.pending.firstOrNull())
-        val candidate = prepared ?: projection?.prepare(packet.batch, flushDetail)?.also { prepared = it }
-        store.append(candidate?.batch ?: packet.batch)
-        // Install only after ACK. A failure above leaves the original packet and prepared receipt unchanged.
-        if (candidate != null) projection = candidate.next
+    private suspend fun commitPrefix(available: Int): Int {
+        val candidate = prepared ?: run {
+            val pending = state.value.pending
+            val prefix = mutableListOf(checkNotNull(pending.firstOrNull()))
+            var events = prefix.single().events
+            for (index in 1 until minOf(available, pending.size)) {
+                val packet = pending[index]
+                if (events + packet.events > FLUSH_EVENTS) break
+                prefix += packet
+                events += packet.events
+            }
+            // One transaction per bounded prefix, rather than per BLE notification.
+            // The first packet's unique token remains reserved for this exact payload;
+            // a lost ACK keeps the prepared prefix even when newer packets arrive.
+            val batch = prefix.first().batch.copy(
+                samples = prefix.flatMap { it.batch.samples },
+                gps = prefix.flatMap { it.batch.gps },
+                markers = prefix.flatMap { it.batch.markers },
+                buckets = prefix.flatMap { it.batch.buckets })
+            val projected = projection?.prepare(batch, flushDetail = prefix.size == available)
+            PreparedCommit(prefix.size, events, prefix.sumOf { it.bytes }, projected?.batch ?: batch,
+                projected?.next).also { prepared = it }
+        }
+        store.append(candidate.batch)
+        // Install only after ACK. Failure retains the exact payload, receipt and prefix length.
+        if (candidate.next != null) projection = candidate.next
         prepared = null
-        state.update { it.copy(pending = it.pending.drop(1), events = it.events - packet.events,
-            bytes = it.bytes - packet.bytes, committed = it.committed + packet.events, failure = null) }
+        state.update { it.copy(pending = it.pending.drop(candidate.packets), events = it.events - candidate.events,
+            bytes = it.bytes - candidate.bytes, committed = it.committed + candidate.events, failure = null) }
+        return candidate.packets
     }
     private fun failed(error: Exception) {
+        // Frames identify the failing contract without logging ride IDs, coordinates or readings.
+        println("[VOLTY-HISTORY] persistence failure: ${error::class.simpleName}\n" +
+            error.stackTraceToString().lineSequence().drop(1).take(8).joinToString("\n"))
         state.update { it.copy(accepting = false, failure = error.message ?: "Persistence failed") }
     }
     private fun token(session: Session, sequence: Long) = "${session.ride.id}:${session.ride.started.clockGeneration}:$sequence"
