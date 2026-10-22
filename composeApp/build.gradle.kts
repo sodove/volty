@@ -51,8 +51,8 @@ abstract class VerifyProductionReleaseTask : DefaultTask() {
     }
 }
 
-val appVersionCode = 52
-val appVersionName = "0.7.29"
+val appVersionCode = 53
+val appVersionName = "0.7.30"
 val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
     value.toBooleanStrictOrNull()
         ?: error("voltyProductionRelease must be true or false")
@@ -242,6 +242,11 @@ android {
         // Firebase documents direct string resources as an alternative to the
         // Google-services plugin. Only the matching Android client's fields are used.
         val firebaseConfig = file("google-services.json")
+        // 0.7.29 shipped without this git-ignored file: no FCM token, so incoming
+        // call pushes silently never registered. A production release must carry it.
+        require(!productionReleaseGate || firebaseConfig.isFile) {
+            "Production release requires composeApp/google-services.json (FCM call pushes)"
+        }
         if (firebaseConfig.isFile) {
             val config = JsonSlurper().parse(firebaseConfig) as Map<*, *>
             val project = config["project_info"] as Map<*, *>
