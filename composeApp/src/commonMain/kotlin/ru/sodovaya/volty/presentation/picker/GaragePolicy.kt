@@ -9,15 +9,16 @@ import ru.sodovaya.volty.domain.model.Vehicle
 data class GarageLayout(val hero: Vehicle?, val others: List<Vehicle>)
 
 /**
- * The hero is the vehicle the rider most likely means: a pinned one, else one in range, else the
- * last connected. The rest follow: in range first, then most recently connected.
+ * The hero is the vehicle the rider most likely means: a pinned one, else the last connected; being
+ * in range only breaks ties. Retraction: in-range used to outrank recency, so a scooter's BMS parked
+ * next to the rider took the top over the wheel they had just ridden.
  */
 @OptIn(ExperimentalTime::class)
 fun garageLayout(saved: List<Vehicle>, inRangeIds: Set<String>): GarageLayout {
     val ordered = saved.sortedWith(
         compareByDescending<Vehicle> { it.isPinned }
-            .thenByDescending { it.id in inRangeIds }
             .thenByDescending { it.lastConnectedAt?.toEpochMilliseconds() ?: Long.MIN_VALUE }
+            .thenByDescending { it.id in inRangeIds }
     )
     return GarageLayout(ordered.firstOrNull(), ordered.drop(1))
 }

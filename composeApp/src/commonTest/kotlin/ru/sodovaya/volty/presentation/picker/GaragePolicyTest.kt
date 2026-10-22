@@ -13,13 +13,15 @@ class GaragePolicyTest {
         chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0),
         lastConnectedAt = connectedAt?.let { Instant.fromEpochSeconds(it) }, isPinned = pinned)
 
-    @Test fun heroIsPinnedThenNearbyThenLastConnected() {
+    @Test fun heroIsPinnedThenLastConnectedAndNearbyOnlyBreaksTies() {
         val old = v("old", 100); val recent = v("recent", 900); val near = v("near", 50); val pinned = v("pinned", 10, pinned = true)
         assertEquals("recent", garageLayout(listOf(old, recent), emptySet()).hero?.id)
-        assertEquals("near", garageLayout(listOf(old, recent, near), setOf("near")).hero?.id)
+        // The scooter parked nearby must not take the top from the wheel just ridden.
+        assertEquals("recent", garageLayout(listOf(old, recent, near), setOf("near")).hero?.id)
         val layout = garageLayout(listOf(old, recent, near, pinned), setOf("near"))
         assertEquals("pinned", layout.hero?.id)
-        assertEquals(listOf("near", "recent", "old"), layout.others.map { it.id })
+        assertEquals(listOf("recent", "old", "near"), layout.others.map { it.id })
+        assertEquals("b", garageLayout(listOf(v("a"), v("b")), setOf("b")).hero?.id, "never connected: nearby first")
     }
 
     @Test fun neverConnectedVehiclesGoLastAndAnEmptyGarageHasNoHero() {

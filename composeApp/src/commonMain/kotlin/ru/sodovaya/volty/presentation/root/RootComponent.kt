@@ -220,6 +220,14 @@ internal const val ABSENT_SUMMARY_DELAY_MILLIS = ru.sodovaya.volty.domain.histor
 /** Only a dashboard is replaced by the summary; Nearby, maps, settings or history stay where the rider put them. */
 internal fun absentSummaryApplies(active: Config): Boolean = active is Config.Ride || active is Config.Dashboard
 
+/**
+ * A rider who pressed Disconnect lands in the garage, which marks nearby vehicles but never connects
+ * on its own. Retraction: this used to be Config.Scanning, the cold-start screen, which connects at
+ * once to a lone saved vehicle in range: disconnecting from a wheel next to a scooter connected the
+ * scooter's BMS and recorded a ten-second ride. Auto-connect stays a cold-start behaviour only.
+ */
+internal fun configAfterDisconnect(): Config = Config.Picker(mode = "cold")
+
 internal fun configForTab(tab: RootComponent.Tab): Config = when (tab) {
     RootComponent.Tab.Ride -> Config.Ride
     RootComponent.Tab.Battery -> Config.Dashboard
@@ -702,7 +710,7 @@ class DefaultRootComponent(
                     onAddVehicleRequested = {
                         goTo(configForCreateVehicle(CreateVehicleEntry.RIDE))
                     },
-                    onDisconnectRequested = { replaceAll(Config.Scanning) }
+                    onDisconnectRequested = { replaceAll(configAfterDisconnect()) }
                 )
             )
             is Config.Dashboard -> RootComponent.Child.Dashboard(
@@ -716,7 +724,7 @@ class DefaultRootComponent(
                         goTo(configForCreateVehicle(CreateVehicleEntry.DASHBOARD))
                     },
                     onOpenPackDetail = { packIndex -> goTo(Config.PackDetail(packIndex)) },
-                    onDisconnectRequested = { replaceAll(Config.Scanning) }
+                    onDisconnectRequested = { replaceAll(configAfterDisconnect()) }
                 )
             )
             is Config.PackDetail -> RootComponent.Child.PackDetail(

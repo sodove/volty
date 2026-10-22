@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
@@ -99,6 +100,12 @@ class RootNavigationTest {
         // Guest / cold-start: never strand the user on a Ride screen with no
         // motion source behind it.
         assertEquals(Config.Dashboard, homeConfigFor(null))
+    }
+
+    @Test
+    fun disconnecting_lands_in_the_garage_not_the_auto_connecting_scan() {
+        assertEquals(Config.Picker(mode = "cold"), configAfterDisconnect())
+        assertNotEquals<Config>(Config.Scanning, configAfterDisconnect())
     }
 
     @Test
