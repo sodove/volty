@@ -22,6 +22,8 @@ class RootNavigationChromePolicyTest {
         assertTrue(bottomTabBarVisible(RootChromeDestination.BATTERY, null))
         assertTrue(bottomTabBarVisible(RootChromeDestination.NEARBY, null))
         assertTrue(bottomTabBarVisible(RootChromeDestination.SETTINGS, null))
+        // Without a vehicle the cold picker is home: Nearby and Settings stay one tap away.
+        assertTrue(bottomTabBarVisible(RootChromeDestination.PICKER, null))
     }
 
     @Test

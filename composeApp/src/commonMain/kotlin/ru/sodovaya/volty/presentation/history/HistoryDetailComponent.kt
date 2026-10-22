@@ -77,21 +77,9 @@ class HistoryDetailComponent(
                 currentCoroutineContext().ensureActive()
                 if (request !== generation) return@launch
                 check(sources.map { it.id }.distinct().size == sources.size)
-                // Retraction: an unclosed legacy row used to borrow today's wall
-                // clock. That manufactured a potentially multi-day viewport for
-                // an old recording. Use stored evidence without inventing endedAt.
-                val recorded = if (ride.status == HistoryRideStatus.LEGACY && ride.ended == null) {
-                    checkNotNull(repository.legacyRecordedRange(id)) { "Recorded legacy window unavailable" }
-                } else null
+                val range = historyRecordedRange(repository, ride, readTick)
                 currentCoroutineContext().ensureActive()
                 if (request !== generation) return@launch
-                val end = recorded?.endEpochMillis ?: ride.ended?.let {
-                    if (ride.status == HistoryRideStatus.LEGACY) it.epochMillis
-                    else checkNotNull(historyAxisEpochMillis(ride.started, it))
-                } ?: readTick().let { now ->
-                    checkNotNull(historyAxisEpochMillis(ride.started, now))
-                }
-                val range = recorded ?: HistoryRange(ride.started.epochMillis, end)
                 val selected = favorite?.range?.also { check(clampFavoriteRange(it, range) == it) } ?: range
                 availableRange = range
                 mutableState.value = mutableState.value.copy(ride = ride, sources = sources, range = selected,
@@ -292,4 +280,18 @@ class HistoryDetailComponent(
         retireSourceReads()
         lifetime.cancel()
     }
+}
+
+/** A ride's whole recorded window: its end, or now while it is still recording. */
+internal suspend fun historyRecordedRange(repository: HistoryReadRepository, ride: HistoryRide, readTick: () -> HistoryTick): HistoryRange {
+    // Retraction: an unclosed legacy row used to borrow today's wall
+    // clock. That manufactured a potentially multi-day viewport for
+    // an old recording. Use stored evidence without inventing endedAt.
+    if (ride.status == HistoryRideStatus.LEGACY && ride.ended == null)
+        return checkNotNull(repository.legacyRecordedRange(ride.id)) { "Recorded legacy window unavailable" }
+    val end = ride.ended?.let {
+        if (ride.status == HistoryRideStatus.LEGACY) it.epochMillis
+        else checkNotNull(historyAxisEpochMillis(ride.started, it))
+    } ?: checkNotNull(historyAxisEpochMillis(ride.started, readTick()))
+    return HistoryRange(ride.started.epochMillis, end)
 }

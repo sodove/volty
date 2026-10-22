@@ -7,6 +7,8 @@ internal enum class RootChromeDestination {
     RIDE,
     BATTERY,
     NEARBY,
+    /** The cold picker: no vehicle yet, but Nearby and Settings must stay reachable. */
+    PICKER,
     GROUP_MAP,
     SETTINGS,
     OTHER,
@@ -23,6 +25,7 @@ internal fun bottomTabBarVisible(
     RootChromeDestination.RIDE -> rideStyle != DashboardStyle.LIGHT
     RootChromeDestination.BATTERY,
     RootChromeDestination.NEARBY,
+    RootChromeDestination.PICKER,
     RootChromeDestination.GROUP_MAP,
     RootChromeDestination.SETTINGS -> true
     RootChromeDestination.OTHER -> false

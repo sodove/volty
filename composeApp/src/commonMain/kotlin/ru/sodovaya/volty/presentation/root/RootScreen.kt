@@ -104,6 +104,7 @@ import volty.composeapp.generated.resources.nearby_map_loading
 import volty.composeapp.generated.resources.nearby_map_positions
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.tab_battery
+import volty.composeapp.generated.resources.tab_connect
 import volty.composeapp.generated.resources.tab_nearby
 import volty.composeapp.generated.resources.tab_ride
 import volty.composeapp.generated.resources.settings_offline_download_mobile
@@ -148,6 +149,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val markerLabel = stringResource(volty.composeapp.generated.resources.Res.string.nearby_map_participant)
     val channelMarkers = nearbyChannelMarkers(channelMap,markerLabel)
     val rideAvailable by component.rideAvailable.subscribeAsState()
+    val vehicleConnected by component.vehicleConnected.subscribeAsState()
     val offlineRegions: OfflineRegionPackageRepository = koinInject()
     val offlinePreparation: OfflineRegionPreparationCoordinator = koinInject()
     val offlineRegionStates by offlineRegions.states.collectAsState()
@@ -422,6 +424,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             active = active,
             groupMapVisible = groupMapVisible,
             rideAvailable = rideAvailable,
+            vehicleConnected = vehicleConnected,
             rideStyle = activeRideState?.style,
             onTab = { tab ->
                 component.onTab(tab)
@@ -481,6 +484,7 @@ private fun BottomTabBar(
     active: RootComponent.Child,
     groupMapVisible: Boolean,
     rideAvailable: Boolean,
+    vehicleConnected: Boolean,
     rideStyle: DashboardStyle?,
     onTab: (RootComponent.Tab) -> Unit,
     onGroupMap: () -> Unit,
@@ -493,6 +497,9 @@ private fun BottomTabBar(
         is RootComponent.Child.Dashboard -> RootChromeDestination.BATTERY
         is RootComponent.Child.Nearby -> RootChromeDestination.NEARBY
         is RootComponent.Child.Settings -> RootChromeDestination.SETTINGS
+        // Only the cold picker is a home; the add/guest pickers are flows with their own back.
+        is RootComponent.Child.Picker -> if (active.component.state.value.mode == "cold") RootChromeDestination.PICKER
+            else RootChromeDestination.OTHER
         else -> RootChromeDestination.OTHER
         }
     }
@@ -509,6 +516,7 @@ private fun BottomTabBar(
             is RootComponent.Child.Dashboard -> RootComponent.Tab.Battery
             is RootComponent.Child.Nearby -> RootComponent.Tab.Nearby
             is RootComponent.Child.Settings -> RootComponent.Tab.Settings
+            is RootComponent.Child.Picker -> RootComponent.Tab.Connect
             else -> null
         }
     }
@@ -524,16 +532,24 @@ private fun BottomTabBar(
     ) {
         // Ride is available for BMS-only vehicles too; controller-only metrics
         // simply remain unavailable on that limited Ride surface.
-        if (rideAvailable) {
+        if (!vehicleConnected) {
+            // Nothing connected: the dashboards would be empty, so offer the picker in their place.
             Tab(
-                stringResource(Res.string.tab_ride),
-                current == RootComponent.Tab.Ride
-            ) { onTab(RootComponent.Tab.Ride) }
+                stringResource(Res.string.tab_connect),
+                current == RootComponent.Tab.Connect
+            ) { onTab(RootComponent.Tab.Connect) }
+        } else {
+            if (rideAvailable) {
+                Tab(
+                    stringResource(Res.string.tab_ride),
+                    current == RootComponent.Tab.Ride
+                ) { onTab(RootComponent.Tab.Ride) }
+            }
+            Tab(
+                stringResource(Res.string.tab_battery),
+                current == RootComponent.Tab.Battery
+            ) { onTab(RootComponent.Tab.Battery) }
         }
-        Tab(
-            stringResource(Res.string.tab_battery),
-            current == RootComponent.Tab.Battery
-        ) { onTab(RootComponent.Tab.Battery) }
         Tab(
             stringResource(Res.string.tab_nearby),
             current == RootComponent.Tab.Nearby

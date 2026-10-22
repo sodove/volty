@@ -102,6 +102,11 @@ class RootNavigationTest {
     }
 
     @Test
+    fun the_connect_tab_reaches_the_cold_picker() {
+        assertEquals(Config.Picker(mode = "cold"), configForTab(RootComponent.Tab.Connect))
+    }
+
+    @Test
     fun the_battery_tab_reaches_the_existing_dashboard() {
         assertEquals(Config.Dashboard, configForTab(RootComponent.Tab.Battery))
     }

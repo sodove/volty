@@ -87,6 +87,8 @@ interface RootComponent {
 
     /** True when an active vehicle can show the Ride dashboard. */
     val rideAvailable: Value<Boolean>
+    /** False while no vehicle is connected: the tab bar then offers Connect instead of the dashboards. */
+    val vehicleConnected: Value<Boolean>
 
     /** Root borrows the process conversation; navigation never owns voice or sharing. */
     val nearby: NearbyRootPresentation
@@ -96,7 +98,7 @@ interface RootComponent {
     fun onOpenGroupMap()
     fun onOpenHistory()
 
-    enum class Tab { Ride, Battery, Nearby, Settings }
+    enum class Tab { Ride, Battery, Nearby, Settings, Connect }
 
     sealed interface Child {
         /** Transient cold-start state while we read the saved-vehicle DB. */
@@ -209,6 +211,8 @@ internal fun configForTab(tab: RootComponent.Tab): Config = when (tab) {
     RootComponent.Tab.Battery -> Config.Dashboard
     RootComponent.Tab.Nearby -> Config.Nearby
     RootComponent.Tab.Settings -> Config.Settings
+    // Without a vehicle there is no dashboard to return to: the cold picker is "home".
+    RootComponent.Tab.Connect -> Config.Picker(mode = "cold")
 }
 
 /**
@@ -410,6 +414,8 @@ class DefaultRootComponent(
     private val _rideAvailable =
         MutableValue(homeConfigFor(bmsRepository.activeVehicle.value) is Config.Ride)
     override val rideAvailable: Value<Boolean> = _rideAvailable
+    private val _vehicleConnected = MutableValue(bmsRepository.activeVehicle.value != null)
+    override val vehicleConnected: Value<Boolean> = _vehicleConnected
 
     init {
         lifecycle.doOnDestroy {
@@ -447,6 +453,7 @@ class DefaultRootComponent(
                 }
                 val home = homeConfigFor(v)
                 _rideAvailable.value = home is Config.Ride
+                _vehicleConnected.value = v != null
                 // Switching to a source-less vehicle must not leave a Ride
                 // entry anywhere in the stack — see [shouldLeaveRide].
                 if (shouldLeaveRide(v, stack.value.items.map { it.configuration })) {
