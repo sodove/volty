@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Volty — гараж без подключения</title>
+<style>
+  :root {
+    --ground:#EEF2F4; --panel:#FFFFFF; --panel-2:#F3F6F7; --panel-3:#E6ECEE;
+    --line:#DCE3E6; --ink:#121A1E; --ink-2:#4C5C63; --ink-3:#83949B;
+    --accent:#2F5BD3; --accent-soft:#E3EAFB; --accent-ink:#FFFFFF;
+    --live:#13806F; --live-soft:#D7EEEA; --warn:#B27409; --warn-soft:#F7EBD2;
+    --shadow:0 1px 2px rgba(18,26,30,.06),0 10px 30px rgba(18,26,30,.08);
+    --sans:ui-sans-serif,system-ui,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --ground:#0C1114; --panel:#151C20; --panel-2:#1B2429; --panel-3:#233038;
+    --line:#26323A; --ink:#E7EEF1; --ink-2:#A2B3BA; --ink-3:#6F848C;
+    --accent:#8EA9FF; --accent-soft:#1D2A4D; --accent-ink:#0C1430;
+    --live:#55C7B2; --live-soft:#11312C; --warn:#E3B04B; --warn-soft:#33270E;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 10px 30px rgba(0,0,0,.35);
+  }}
+  :root[data-theme="dark"] {
+    --ground:#0C1114; --panel:#151C20; --panel-2:#1B2429; --panel-3:#233038;
+    --line:#26323A; --ink:#E7EEF1; --ink-2:#A2B3BA; --ink-3:#6F848C;
+    --accent:#8EA9FF; --accent-soft:#1D2A4D; --accent-ink:#0C1430;
+    --live:#55C7B2; --live-soft:#11312C; --warn:#E3B04B; --warn-soft:#33270E;
+    --shadow:0 1px 2px rgba(0,0,0,.45),0 10px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.45}
+  .wrap{max-width:1240px;margin:0 auto;padding:40px 16px 80px;display:flex;flex-direction:column;gap:44px}
+  .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-3);margin:0 0 8px}
+  h1{font-size:clamp(26px,3.4vw,36px);letter-spacing:-.02em;margin:0 0 10px;font-weight:650}
+  h2{font-size:20px;margin:0 0 6px;font-weight:620;letter-spacing:-.01em}
+  .lede,.note{color:var(--ink-2);max-width:70ch;margin:0}
+  .note{font-size:14.5px;margin-bottom:20px}
+  .row{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:28px;align-items:start}
+  .cap{font-size:14px;font-weight:600;margin:0 0 4px}
+  .capd{font-size:13px;color:var(--ink-2);margin:0 0 12px}
+  .theme{position:fixed;top:12px;right:12px;display:flex;gap:6px;z-index:5}
+  .theme button{border:1px solid var(--line);background:var(--panel);color:var(--ink-2);border-radius:999px;padding:6px 12px;font:inherit;font-size:12px;cursor:pointer}
+
+  /* phone */
+  .phone{width:100%;max-width:340px;height:700px;background:var(--ground);border:1px solid var(--line);border-radius:28px;box-shadow:var(--shadow);overflow:hidden;display:flex;flex-direction:column;position:relative}
+  .status{height:26px;display:flex;justify-content:space-between;align-items:center;padding:0 18px;font-size:11px;color:var(--ink-2);flex:none}
+  .screen{flex:1;overflow:hidden;display:flex;flex-direction:column;padding:6px 14px 0;gap:12px;min-height:0}
+  .tabs{flex:none;margin:8px 10px 10px;background:var(--panel);border-radius:22px;padding:4px;display:flex;gap:4px;box-shadow:var(--shadow)}
+  .tab{flex:1;text-align:center;font-size:12.5px;padding:9px 0;border-radius:18px;color:var(--ink-2);font-weight:550}
+  .tab.on{background:var(--accent);color:var(--accent-ink)}
+  .top{display:flex;align-items:center;justify-content:space-between}
+  .title{font-size:24px;font-weight:700;letter-spacing:-.02em}
+  .sub{font-size:12.5px;color:var(--ink-3)}
+  .scanchip{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--ink-2);background:var(--panel);border:1px solid var(--line);padding:6px 10px;border-radius:999px}
+  .pulse{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 0 var(--accent);animation:p 1.6s infinite}
+  @keyframes p{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--accent) 55%,transparent)}100%{box-shadow:0 0 0 9px transparent}}
+  @media (prefers-reduced-motion: reduce){.pulse{animation:none}}
+
+  .card{background:var(--panel);border-radius:20px;box-shadow:var(--shadow)}
+  .hero{padding:16px;display:flex;flex-direction:column;gap:14px}
+  .vh{display:flex;align-items:center;gap:12px}
+  .icon{width:46px;height:46px;border-radius:14px;background:var(--accent-soft);display:grid;place-items:center;font-size:24px;flex:none}
+  .vname{font-weight:650;font-size:17px;letter-spacing:-.01em}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:3px 8px;border-radius:999px}
+  .chip.away{background:var(--panel-3);color:var(--ink-2)}
+  .chip.near{background:var(--live-soft);color:var(--live)}
+  .stats{display:flex;align-items:center;gap:16px}
+  .ring{--v:78;width:92px;height:92px;border-radius:50%;flex:none;display:grid;place-items:center;
+    background:conic-gradient(var(--live) calc(var(--v)*1%),var(--panel-3) 0)}
+  .ring>div{width:76px;height:76px;border-radius:50%;background:var(--panel);display:grid;place-items:center;text-align:center}
+  .ring b{font-size:22px;letter-spacing:-.02em}
+  .ring span{display:block;font-size:10px;color:var(--ink-3);margin-top:-2px}
+  .kv{display:grid;grid-template-columns:1fr 1fr;gap:8px 14px;flex:1}
+  .kv div{font-size:11px;color:var(--ink-3)}
+  .kv b{display:block;font-size:15px;color:var(--ink);font-weight:620}
+  .asof{font-size:11.5px;color:var(--ink-3)}
+  .btns{display:flex;gap:8px}
+  .btn{flex:1;text-align:center;padding:11px 0;border-radius:14px;font-weight:620;font-size:13.5px}
+  .btn.p{background:var(--accent);color:var(--accent-ink)}
+  .btn.s{background:var(--panel-2);color:var(--ink)}
+  .mini{display:flex;gap:6px;flex-wrap:wrap}
+  .tile{background:var(--panel-2);border-radius:12px;padding:7px 10px}
+  .tile i{font-style:normal;display:block;font-size:10.5px;color:var(--ink-3)}
+  .tile b{font-size:14px;font-weight:620}
+  .sec{font-size:12px;font-weight:650;color:var(--ink-3);text-transform:uppercase;letter-spacing:.08em;margin:4px 2px -4px}
+  .listrow{display:flex;align-items:center;gap:11px;padding:11px 12px}
+  .listrow+.listrow{border-top:1px solid var(--line)}
+  .listrow .icon{width:36px;height:36px;border-radius:11px;font-size:18px}
+  .grow{flex:1;min-width:0}
+  .grow b{font-size:14px;font-weight:620;display:block}
+  .grow span{font-size:11.5px;color:var(--ink-3)}
+  .soc{font-size:13px;font-weight:650}
+  .links{display:flex;justify-content:center;gap:18px;font-size:12.5px;color:var(--accent);font-weight:600;padding:2px 0 4px}
+  .dots{display:flex;justify-content:center;gap:5px}
+  .dots i{width:6px;height:6px;border-radius:50%;background:var(--panel-3)} .dots i.on{background:var(--ink-2);width:16px;border-radius:3px}
+  .peek{display:flex;gap:10px;overflow:hidden}
+  .peek .card{flex:0 0 88%}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .gcard{padding:12px;display:flex;flex-direction:column;gap:10px}
+  .gcard .ring{width:62px;height:62px}.gcard .ring>div{width:50px;height:50px}.gcard .ring b{font-size:15px}
+  .route{height:96px;border-radius:14px;background:
+     radial-gradient(circle at 20% 30%,color-mix(in srgb,var(--live) 18%,transparent),transparent 40%),
+     linear-gradient(135deg,var(--panel-2),var(--panel-3));position:relative;overflow:hidden}
+  .route svg{position:absolute;inset:0}
+  .sticky{flex:none;padding:10px 14px 4px;background:linear-gradient(transparent,var(--ground) 30%)}
+  .appbar{display:flex;align-items:center;gap:8px}
+  .appbar .ib{width:36px;height:36px;border-radius:12px;display:grid;place-items:center;color:var(--ink-2);font-size:17px}
+  .bars{display:flex;gap:3px;align-items:flex-end;height:34px}
+  .bars i{flex:1;background:var(--live);border-radius:2px;opacity:.85}
+  .legend{display:flex;justify-content:space-between;font-size:10.5px;color:var(--ink-3)}
+  .why{background:var(--panel);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow);font-size:13.5px;color:var(--ink-2)}
+  .why b{color:var(--ink)}
+</style>
+</head>
+<body>
+<div class="theme"><button onclick="document.documentElement.dataset.theme='light'">Светлая</button><button onclick="document.documentElement.dataset.theme='dark'">Тёмная</button></div>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Volty · без подключения</p>
+    <h1>Гараж: приложение, которое есть и без колеса</h1>
+    <p class="lede">Сейчас без подключения пользователь видит «Pick a vehicle», «0 found nearby» и три текстовые ссылки. Ниже — три варианта главного экрана и карточка транспорта. Все цифры — из записанных поездок, всегда с подписью «на когда». Поиск рядом идёт в фоне и не занимает экран.</p>
+  </header>
+
+  <section>
+    <h2>Главный экран без подключения</h2>
+    <p class="note">Общее для всех трёх: вкладка «Гараж» вместо «Подключение», сканирование — маленький чип вверху, найденный рядом транспорт становится зелёным и подключается одним тапом. «Добавить» и «Демо» уходят вниз, мелко.</p>
+    <div class="row">
+
+      <div>
+        <p class="cap">A · Карусель героев</p>
+        <p class="capd">Один транспорт на экран, крупно: заряд кольцом, последняя поездка, «Подключиться». Свайп — следующий. Лучше всего, если транспорта 1–3.</p>
+        <div class="phone">
+          <div class="status"><span>21:42</span><span>●●● 82%</span></div>
+          <div class="screen">
+            <div class="top"><div><div class="title">Гараж</div><div class="sub">3 транспорта</div></div>
+              <span class="scanchip"><span class="pulse"></span>Ищу рядом…</span></div>
+            <div class="peek">
+              <div class="card hero">
+                <div class="vh"><div class="icon">🛞</div><div class="grow"><div class="vname">Begode ET Max</div><span class="chip away">Не рядом</span></div></div>
+                <div class="stats">
+                  <div class="ring" style="--v:78"><div><div><b>78%</b><span>заряд</span></div></div></div>
+                  <div class="kv"><div>Напряжение<b>100.4 В</b></div><div>Ячейки<b>4.13–4.14</b></div><div>Разбаланс<b>12 мВ</b></div><div>Батарея<b>27 °C</b></div></div>
+                </div>
+                <div class="asof">Данные на вчера, 21:40</div>
+                <div class="mini"><div class="tile"><i>Последняя</i><b>24.1 км</b></div><div class="tile"><i>Время</i><b>1 ч 05</b></div><div class="tile"><i>Расход</i><b>25 Вт·ч/км</b></div></div>
+                <div class="btns"><div class="btn p">Подключиться</div><div class="btn s">Подробнее</div></div>
+              </div>
+              <div class="card hero"></div>
+            </div>
+            <div class="dots"><i class="on"></i><i></i><i></i></div>
+            <div class="links"><span>+ Добавить</span><span>Демо</span></div>
+          </div>
+          <div class="tabs"><div class="tab on">Гараж</div><div class="tab">Nearby</div><div class="tab">⚙</div></div>
+        </div>
+      </div>
+
+      <div>
+        <p class="cap">B · Список с заглавным</p>
+        <p class="capd">Последний использованный — большой карточкой сверху, остальные — компактными строками с зарядом. Масштабируется на любое количество транспорта.</p>
+        <div class="phone">
+          <div class="status"><span>21:42</span><span>●●● 82%</span></div>
+          <div class="screen">
+            <div class="top"><div class="title">Гараж</div><span class="scanchip"><span class="pulse"></span>Ищу рядом…</span></div>
+            <div class="card hero">
+              <div class="vh"><div class="icon">🛞</div><div class="grow"><div class="vname">Begode ET Max</div><span class="asof">вчера, 21:40 · 24.1 км</span></div><span class="chip away">Не рядом</span></div>
+              <div class="stats">
+                <div class="ring" style="--v:78"><div><div><b>78%</b><span>заряд</span></div></div></div>
+                <div class="kv"><div>Напряжение<b>100.4 В</b></div><div>Разбаланс<b>12 мВ</b></div><div>Расход<b>25 Вт·ч/км</b></div><div>Батарея<b>27 °C</b></div></div>
+              </div>
+              <div class="btns"><div class="btn p">Подключиться</div><div class="btn s">Подробнее</div></div>
+            </div>
+            <div class="sec">Ещё в гараже</div>
+            <div class="card">
+              <div class="listrow"><div class="icon">🛴</div><div class="grow"><b>Самокат nyxdash</b><span>3 дня назад · 11.8 км</span></div><span class="chip near">Рядом</span></div>
+              <div class="listrow"><div class="icon">🚲</div><div class="grow"><b>Велосипед</b><span>2 недели назад</span></div><span class="soc">64%</span></div>
+            </div>
+            <div class="links"><span>+ Добавить</span><span>Демо</span></div>
+          </div>
+          <div class="tabs"><div class="tab on">Гараж</div><div class="tab">Nearby</div><div class="tab">⚙</div></div>
+        </div>
+      </div>
+
+      <div>
+        <p class="cap">C · Плитки 2×N</p>
+        <p class="capd">Все транспорты равноправны, сеткой. Видно всё сразу, но меньше деталей в каждом — для подробностей нужен тап.</p>
+        <div class="phone">
+          <div class="status"><span>21:42</span><span>●●● 82%</span></div>
+          <div class="screen">
+            <div class="top"><div class="title">Гараж</div><span class="scanchip"><span class="pulse"></span>Ищу рядом…</span></div>
+            <div class="grid2">
+              <div class="card gcard"><div class="vh"><div class="icon" style="width:34px;height:34px;font-size:18px">🛞</div><span class="chip away">Не рядом</span></div>
+                <div class="vname" style="font-size:14.5px">Begode ET Max</div>
+                <div class="stats"><div class="ring" style="--v:78"><div><b>78%</b></div></div><div class="asof">вчера<br>24.1 км</div></div></div>
+              <div class="card gcard"><div class="vh"><div class="icon" style="width:34px;height:34px;font-size:18px">🛴</div><span class="chip near">Рядом</span></div>
+                <div class="vname" style="font-size:14.5px">Самокат nyxdash</div>
+                <div class="stats"><div class="ring" style="--v:41"><div><b>41%</b></div></div><div class="asof">3 дня<br>11.8 км</div></div></div>
+              <div class="card gcard"><div class="vh"><div class="icon" style="width:34px;height:34px;font-size:18px">🚲</div><span class="chip away">Не рядом</span></div>
+                <div class="vname" style="font-size:14.5px">Велосипед</div>
+                <div class="stats"><div class="ring" style="--v:64"><div><b>64%</b></div></div><div class="asof">2 нед.<br>6.0 км</div></div></div>
+              <div class="card gcard" style="border:1.5px dashed var(--line);box-shadow:none;background:transparent;align-items:center;justify-content:center;color:var(--accent);font-weight:620;font-size:13px">+ Добавить</div>
+            </div>
+            <div class="links"><span>Демо-режим</span></div>
+          </div>
+          <div class="tabs"><div class="tab on">Гараж</div><div class="tab">Nearby</div><div class="tab">⚙</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Карточка транспорта</h2>
+    <p class="note">Открывается по «Подробнее». Настройки и алерты — иконками в шапке, «Подключиться» всегда под пальцем внизу. Батарея — кольцо и ячейки, поездка — с картой маршрута и плитками.</p>
+    <div class="row">
+      <div>
+        <p class="cap">Карточка, верх</p>
+        <p class="capd">Состояние батареи на момент последней записи и последняя поездка.</p>
+        <div class="phone">
+          <div class="status"><span>21:42</span><span>●●● 82%</span></div>
+          <div class="screen">
+            <div class="appbar"><div class="ib">←</div><div class="grow"><div class="vname">Begode ET Max</div><div class="sub">Не подключено · данные на вчера, 21:40</div></div><div class="ib">🔔</div><div class="ib">⚙</div></div>
+            <div class="card hero">
+              <div class="stats">
+                <div class="ring" style="--v:78"><div><div><b>78%</b><span>заряд</span></div></div></div>
+                <div class="kv"><div>Напряжение<b>100.4 В</b></div><div>Температура<b>27 °C</b></div><div>Мин. ячейка<b>4.128 В</b></div><div>Макс. ячейка<b>4.140 В</b></div></div>
+              </div>
+              <div><div class="bars"><i style="height:92%"></i><i style="height:95%"></i><i style="height:90%"></i><i style="height:96%"></i><i style="height:93%"></i><i style="height:91%"></i><i style="height:94%"></i><i style="height:97%"></i><i style="height:92%"></i><i style="height:93%"></i><i style="height:95%"></i><i style="height:90%"></i></div>
+                <div class="legend"><span>ячейки · разбаланс 12 мВ</span><span>норма</span></div></div>
+            </div>
+            <div class="sec">Последняя поездка · вчера</div>
+            <div class="card hero" style="gap:10px">
+              <div class="route"><svg viewBox="0 0 300 96" preserveAspectRatio="none"><path d="M18 76 C60 70 70 30 110 34 S170 70 200 48 S260 18 284 22" fill="none" stroke="var(--live)" stroke-width="3.5" stroke-linecap="round"/></svg></div>
+              <div class="mini"><div class="tile"><i>Дистанция</i><b>24.1 км</b></div><div class="tile"><i>В пути</i><b>1 ч 05</b></div><div class="tile"><i>Средняя</i><b>22.2 км/ч</b></div><div class="tile"><i>Макс.</i><b>48.5 км/ч</b></div><div class="tile"><i>Расход</i><b>25 Вт·ч/км</b></div><div class="tile"><i>Батарея</i><b>−31%</b></div></div>
+            </div>
+          </div>
+          <div class="sticky"><div class="btn p">Подключиться</div></div>
+        </div>
+      </div>
+      <div>
+        <p class="cap">Карточка, прокрутка вниз</p>
+        <p class="capd">История этого транспорта: каждая поездка с маленьким маршрутом и главными цифрами. Тап — поездка в истории.</p>
+        <div class="phone">
+          <div class="status"><span>21:42</span><span>●●● 82%</span></div>
+          <div class="screen">
+            <div class="appbar"><div class="ib">←</div><div class="grow"><div class="vname">Begode ET Max</div></div><div class="ib">🔔</div><div class="ib">⚙</div></div>
+            <div class="sec">Поездки</div>
+            <div class="card">
+              <div class="listrow"><div class="route" style="width:58px;height:44px;border-radius:10px;flex:none"><svg viewBox="0 0 58 44"><path d="M6 36 C16 30 20 10 32 14 S48 30 52 8" fill="none" stroke="var(--live)" stroke-width="2.5"/></svg></div><div class="grow"><b>Вчера, 20:35</b><span>24.1 км · 1 ч 05 · 25 Вт·ч/км</span></div><span>›</span></div>
+              <div class="listrow"><div class="route" style="width:58px;height:44px;border-radius:10px;flex:none"><svg viewBox="0 0 58 44"><path d="M6 10 C20 14 22 34 36 30 S50 12 52 36" fill="none" stroke="var(--live)" stroke-width="2.5"/></svg></div><div class="grow"><b>19 окт, 18:10</b><span>11.8 км · 38 мин · 23 Вт·ч/км</span></div><span>›</span></div>
+              <div class="listrow"><div class="route" style="width:58px;height:44px;border-radius:10px;flex:none"><svg viewBox="0 0 58 44"><path d="M8 22 C18 6 30 40 40 20 S50 10 52 30" fill="none" stroke="var(--live)" stroke-width="2.5"/></svg></div><div class="grow"><b>17 окт, 09:02</b><span>6.4 км · 21 мин · 27 Вт·ч/км</span></div><span>›</span></div>
+              <div class="listrow"><div class="route" style="width:58px;height:44px;border-radius:10px;flex:none"></div><div class="grow"><b>15 окт, 19:44</b><span>32.0 км · 1 ч 31</span></div><span>›</span></div>
+            </div>
+            <div class="links"><span>Все поездки в истории ›</span></div>
+          </div>
+          <div class="sticky"><div class="btn p">Подключиться</div></div>
+        </div>
+      </div>
+      <div>
+        <div class="why"><b>Принципы.</b><br>• Нет цифры без «на когда»: время записи у батареи, дата у поездки.<br>• Нет данных — нет плитки, а не «0».<br>• Поиск рядом не прячет гараж: найденный транспорт помечается «Рядом» и подключается тапом по «Подключиться».<br>• Технические вещи (гостевое подключение, ручной выбор типа устройства) — за «+ Добавить».<br><br><b>Чего пока нет в данных</b> и потребует доработки: расход и дистанция в строке списка поездок (нужно читать итоги каждой поездки — сделаем с кешем), мини-маршрут в строке (есть превью из истории — переиспользуем).</div>
+      </div>
+    </div>
+  </section>
+</div>
+</body>
+</html>
