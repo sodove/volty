@@ -14,6 +14,7 @@ import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
+import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
@@ -66,6 +67,9 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -210,6 +214,12 @@ internal fun homeConfigFor(vehicle: Vehicle?): Config =
  * [homeConfigFor] — the Battery tab must keep reaching the existing
  * [Config.Dashboard], and that is worth pinning in a test.
  */
+/** Past the ride's own absence window, so the summary reads the ride already closed. */
+internal const val ABSENT_SUMMARY_DELAY_MILLIS = ru.sodovaya.volty.domain.history.RIDE_ABSENCE_MILLIS + 5_000L
+
+/** Only a dashboard is replaced by the summary; Nearby, maps, settings or history stay where the rider put them. */
+internal fun absentSummaryApplies(active: Config): Boolean = active is Config.Ride || active is Config.Dashboard
+
 internal fun configForTab(tab: RootComponent.Tab): Config = when (tab) {
     RootComponent.Tab.Ride -> Config.Ride
     RootComponent.Tab.Battery -> Config.Dashboard
@@ -465,6 +475,31 @@ class DefaultRootComponent(
                 }
             }
         }
+
+        // A vehicle switched off: its dashboard would only show frozen numbers, so after the ride
+        // has been closed show what it recorded. Coming back returns to the dashboard by itself.
+        scope.launch {
+            combine(bmsRepository.connectionState, bmsRepository.activeVehicle) { state, vehicle ->
+                (state is ConnectionState.Connected) to vehicle?.takeUnless { it.isDemo || it.isGuest }?.id
+            }.distinctUntilChanged().collectLatest { (connected, vehicleId) ->
+                if (connected) { leaveAbsentSummary(); return@collectLatest }
+                if (vehicleId == null) return@collectLatest
+                delay(ABSENT_SUMMARY_DELAY_MILLIS)
+                if ((stack.value.active.configuration as? Config)?.let(::absentSummaryApplies) == true) {
+                    absentSummaryVehicleId = vehicleId
+                    goTo(Config.VehicleOverview(vehicleId))
+                }
+            }
+        }
+    }
+
+    /** Set only while the summary was opened for an absent vehicle, so a rider-opened card is never closed. */
+    private var absentSummaryVehicleId: String? = null
+
+    private fun leaveAbsentSummary() {
+        val id = absentSummaryVehicleId ?: return
+        absentSummaryVehicleId = null
+        if (stack.value.active.configuration == Config.VehicleOverview(id) && stack.value.items.size > 1) nav.pop()
     }
 
     /**

@@ -102,6 +102,16 @@ class RootNavigationTest {
     }
 
     @Test
+    fun only_a_dashboard_gives_way_to_the_absent_vehicle_summary() {
+        assertTrue(absentSummaryApplies(Config.Ride)); assertTrue(absentSummaryApplies(Config.Dashboard))
+        listOf(Config.Nearby, Config.Settings, Config.GroupMap, Config.History(), Config.VehicleOverview("v")).forEach {
+            assertFalse(absentSummaryApplies(it), "$it is where the rider chose to be")
+        }
+        // The summary must read a ride the recorder has already closed.
+        assertTrue(ABSENT_SUMMARY_DELAY_MILLIS > ru.sodovaya.volty.domain.history.RIDE_ABSENCE_MILLIS)
+    }
+
+    @Test
     fun the_connect_tab_reaches_the_cold_picker() {
         assertEquals(Config.Picker(mode = "cold"), configForTab(RootComponent.Tab.Connect))
     }
