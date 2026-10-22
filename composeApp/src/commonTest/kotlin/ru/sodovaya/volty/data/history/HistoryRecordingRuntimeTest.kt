@@ -278,6 +278,35 @@ class HistoryRecordingRuntimeTest {
         }
     }
 
+    @Test fun vehicleGoneForTheAbsenceWindowFinishesTheRideAndReleasesGps() = runTest {
+        val f = Fixture(this)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        try {
+            val binding = f.runtime.prepare(); f.start(binding, channel)
+            val generation = assertNotNull(binding.controller.state.value.intent.connectionGeneration)
+            f.elapsed = 1_000; binding.controller.execute(RecordingInput.LinkLost(generation, f.clock.readTick()))
+            advanceTimeBy(RIDE_ABSENCE_MILLIS - 1); runCurrent()
+            assertTrue(f.writer.finishes.isEmpty())
+            advanceTimeBy(2); runCurrent()
+            assertEquals(listOf<String?>("ride"), f.writer.finishes)
+            assertNull(binding.controller.state.value.intent.ride); assertEquals(false, f.service.last())
+        } finally { f.runtime.close(); channel.close() }
+    }
+    @Test fun vehicleBackWithinTheAbsenceWindowKeepsTheRide() = runTest {
+        val f = Fixture(this)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        try {
+            val binding = f.runtime.prepare(); f.start(binding, channel)
+            val generation = assertNotNull(binding.controller.state.value.intent.connectionGeneration)
+            f.elapsed = 1_000; binding.controller.execute(RecordingInput.LinkLost(generation, f.clock.readTick()))
+            advanceTimeBy(RIDE_ABSENCE_MILLIS / 2); runCurrent()
+            f.elapsed = 2_000; binding.controller.execute(RecordingInput.Connected("bike", generation, f.clock.readTick()))
+            advanceTimeBy(RIDE_ABSENCE_MILLIS * 2); runCurrent()
+            assertTrue(f.writer.finishes.isEmpty())
+            assertEquals("ride", binding.controller.state.value.intent.ride?.id)
+        } finally { f.runtime.close(); channel.close() }
+    }
+
     @Test fun writerFactoryFailureCanRetryWithoutRunningRecoveryAgain() = runTest {
         val f = Fixture(this); f.failAllocation = true
         try {

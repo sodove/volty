@@ -139,4 +139,35 @@ class RideRecordingPolicyTest {
         assertFalse(acceptsRecordingTick(active.intent, 1, HistoryTick(1, 0, 2)))
         assertFalse(acceptsRecordingTick(active.intent, 1, HistoryTick(99999, 999, 0)))
     }
+
+    @Test fun absenceEndsTheRideAtTheLossAndTheMorningReconnectStartsANewOne() {
+        val lost = recordingTransition(connected().intent, RecordingInput.LinkLost(1, tick(100))) { error("no start") }
+        assertEquals(tick(100), lost.intent.lostAt)
+        val absent = recordingTransition(lost.intent, RecordingInput.Absent(1, tick(100))) { error("no start") }
+        assertEquals("ride", absent.finish?.id); assertEquals(tick(100), absent.finish?.ended)
+        assertEquals(HistoryRideStatus.COMPLETED, absent.finish?.status)
+        assertEquals(RecordingIntent(), absent.intent); assertNull(absent.begin)
+        // Same selection generation: without forgetting it this reconnect hits the tombstone.
+        val morning = recordingTransition(absent.intent, RecordingInput.Connected("bike", 1, tick(8 * 3_600_000L))) { "next" }
+        assertEquals("next", morning.begin?.id); assertNull(morning.finish)
+    }
+
+    @Test fun absenceIsIgnoredOnceTheVehicleIsBackOrForAnotherGeneration() {
+        val lost = recordingTransition(connected().intent, RecordingInput.LinkLost(1, tick(100))) { error("no start") }
+        val stale = recordingTransition(lost.intent, RecordingInput.Absent(0, tick(100))) { error("no start") }
+        assertEquals(lost.intent, stale.intent); assertNull(stale.finish)
+        val back = recordingTransition(lost.intent, RecordingInput.Connected("bike", 1, tick(200))) { error("same ride") }
+        assertNull(back.intent.lostAt)
+        val late = recordingTransition(back.intent, RecordingInput.Absent(1, tick(100))) { error("no start") }
+        assertEquals(back.intent, late.intent); assertNull(late.finish)
+    }
+
+    @Test fun reconnectAfterALongAbsenceStartsANewRideEvenIfTheTimerNeverFired() {
+        val lost = recordingTransition(connected().intent, RecordingInput.LinkLost(1, tick(100))) { error("no start") }
+        val soon = recordingTransition(lost.intent, RecordingInput.Connected("bike", 1, tick(100 + RIDE_ABSENCE_MILLIS - 1))) { error("same ride") }
+        assertEquals("ride", soon.intent.ride?.id); assertNull(soon.finish)
+        val late = recordingTransition(lost.intent, RecordingInput.Connected("bike", 1, tick(100 + RIDE_ABSENCE_MILLIS))) { "next" }
+        assertEquals("ride", late.finish?.id); assertEquals("next", late.begin?.id)
+        assertTrue(late.finishedMarkers.isEmpty(), "An absence is not a source change")
+    }
 }

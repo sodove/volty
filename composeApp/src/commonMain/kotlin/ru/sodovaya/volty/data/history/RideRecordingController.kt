@@ -352,6 +352,7 @@ private fun RecordingInput.tick(): HistoryTick = when (this) {
     is RecordingInput.Stop -> tick
     is RecordingInput.ExplicitDisconnect -> tick
     is RecordingInput.Start -> tick
+    is RecordingInput.Absent -> tick
 }
 
 private fun RecordingInput.withTick(value: HistoryTick): RecordingInput = when (this) {
@@ -361,4 +362,5 @@ private fun RecordingInput.withTick(value: HistoryTick): RecordingInput = when (
     is RecordingInput.Stop -> copy(tick = value)
     is RecordingInput.ExplicitDisconnect -> copy(tick = value)
     is RecordingInput.Start -> copy(tick = value)
+    is RecordingInput.Absent -> copy(tick = value)
 }

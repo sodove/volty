@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import ru.sodovaya.volty.data.ble.HistoryTelemetryIngress
+import ru.sodovaya.volty.domain.history.RIDE_ABSENCE_MILLIS
+import ru.sodovaya.volty.domain.history.RecordingInput
 import ru.sodovaya.volty.domain.location.RideLocationState
 
 /** App-owned explicit lifecycle; screens do not own this supervisor. prepare() must
@@ -30,7 +32,7 @@ internal class HistoryRecordingRuntime(
     val status = mutableStatus.asStateFlow()
     private class Owned(val binding: Binding, val writer: HistoryWriter,
         val demand: HistoryRecordingGpsDemand, val scope: CoroutineScope,
-        val gps: HistoryGpsRecorder, val retries: Job)
+        val gps: HistoryGpsRecorder, val retries: Job, val absence: Job)
     private val controls = Mutex()
     @Volatile private var closing = false
     private var owned: Owned? = null
@@ -68,8 +70,9 @@ internal class HistoryRecordingRuntime(
                         } catch (cancel: CancellationException) { throw cancel }
                         catch (error: Exception) { mutableOpportunityFailure.value = error::class.simpleName ?: "OpportunityFailure" }
                     }
+                    val absence = scope.launch { finishAbsentRides(controller) }
                     check(!closing) { "Recording runtime closed during assembly" }
-                    owned = Owned(binding, writer, demand, scope, gps, retries)
+                    owned = Owned(binding, writer, demand, scope, gps, retries, absence)
                     pendingWriter = null
                     // Publication is observation only. Closing is a tombstone:
                     // a delayed prepare may not put UI controls back afterwards.
@@ -90,6 +93,24 @@ internal class HistoryRecordingRuntime(
         }
     }
 
+    /** Each loss of the whole vehicle arms one timer; a reconnect, stop or new loss replaces it. */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun finishAbsentRides(controller: RideRecordingController) {
+        controller.state
+            .map { state -> state.intent.takeIf { it.ride != null && !it.linkConnected } }
+            .map { intent -> intent?.lostAt?.let { lostAt -> intent.connectionGeneration?.let { it to lostAt } } }
+            .distinctUntilChanged()
+            .collectLatest { loss ->
+                val (generation, lostAt) = loss ?: return@collectLatest
+                delay(RIDE_ABSENCE_MILLIS)
+                if (closing) return@collectLatest
+                // Optional history must not crash the app; the next loss arms a fresh timer.
+                try { controller.execute(RecordingInput.Absent(generation, lostAt)) }
+                catch (cancel: CancellationException) { throw cancel }
+                catch (error: Exception) { mutableOpportunityFailure.value = error::class.simpleName ?: "AbsenceFailure" }
+            }
+    }
+
     suspend fun close() {
         currentCoroutineContext().ensureActive()
         withContext(NonCancellable) {
@@ -102,6 +123,7 @@ internal class HistoryRecordingRuntime(
                     return@withLock
                 }
                 current.retries.cancelAndJoin()
+                current.absence.cancelAndJoin()
                 current.gps.closeAndJoin()
                 // This fences new native work and drains original accepted receipts.
                 // Durable failure propagates; neither writer nor native owner is discarded.
