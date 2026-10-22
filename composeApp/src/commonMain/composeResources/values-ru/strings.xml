@@ -193,10 +193,13 @@
     <string name="settings_units_metric">Метрические</string>
     <string name="settings_units_imperial">Имперские</string>
     <string name="settings_voice_microphone">Микрофон Nearby</string>
-    <string name="settings_voice_microphone_subtitle">Микрофон и вывод звука выбираются отдельно. Изменения применятся при следующем подключении к войсу.</string>
+    <string name="settings_voice_microphone_subtitle">Микрофон и вывод звука выбираются отдельно. Изменения применятся при следующем подключении к войсу или рации.</string>
     <string name="settings_voice_microphone_auto">Авто</string>
     <string name="settings_voice_microphone_phone">Телефон</string>
     <string name="settings_voice_microphone_headset">Гарнитура</string>
+    <string name="settings_voice_microphone_auto_hint">Микрофон гарнитуры, если она подключена. Минимальная задержка.</string>
+    <string name="settings_voice_microphone_phone_hint">Вас слышно лучше, но в Bluetooth-наушниках звук собеседников запаздывает примерно на 0,2 с.</string>
+    <string name="settings_voice_microphone_headset_hint">Минимальная задержка. Качество зависит от микрофона гарнитуры.</string>
     <string name="settings_dashboard_style">Стиль приборной панели</string>
     <string name="settings_fault_display_duration">Время показа ошибок</string>
     <string name="settings_fault_display_duration_active">Пока ошибка активна</string>
@@ -1085,9 +1088,9 @@
     <string name="history_preview_source_omt">© OpenMapTiles</string>
     <string name="history_preview_source_osm">© OpenStreetMap</string>
     <string name="radio_title">Рация</string>
-    <string name="radio_raise">Поднять рацию</string>
-    <string name="radio_join">Подключиться к рации</string>
-    <string name="radio_leave">Выйти из рации</string>
+    <string name="radio_raise">Поднять</string>
+    <string name="radio_join">Подключиться</string>
+    <string name="radio_leave">Выйти</string>
     <string name="radio_reraise">Поднять заново</string>
     <string name="radio_starting">Подключение…</string>
     <string name="radio_lost">Рация потеряна</string>

@@ -109,6 +109,9 @@ import volty.composeapp.generated.resources.settings_units_metric
 import volty.composeapp.generated.resources.settings_voice_microphone
 import volty.composeapp.generated.resources.settings_voice_microphone_auto
 import volty.composeapp.generated.resources.settings_voice_microphone_headset
+import volty.composeapp.generated.resources.settings_voice_microphone_auto_hint
+import volty.composeapp.generated.resources.settings_voice_microphone_phone_hint
+import volty.composeapp.generated.resources.settings_voice_microphone_headset_hint
 import volty.composeapp.generated.resources.settings_voice_microphone_phone
 import volty.composeapp.generated.resources.settings_voice_microphone_subtitle
 import volty.composeapp.generated.resources.settings_voice_audio
@@ -304,6 +307,16 @@ fun SettingsScreen(component: SettingsComponent) {
                     ) { Text(microphoneLabels[source] ?: source.name) }
                 }
             }
+            // Phone vs headset is a latency trade on Bluetooth: the phone mic forces A2DP playback.
+            if (state.voiceOutputPreference != null) Text(
+                stringResource(when (state.voiceMicrophoneSource) {
+                    VoiceMicrophoneSource.AUTO -> Res.string.settings_voice_microphone_auto_hint
+                    VoiceMicrophoneSource.PHONE -> Res.string.settings_voice_microphone_phone_hint
+                    VoiceMicrophoneSource.HEADSET -> Res.string.settings_voice_microphone_headset_hint
+                }),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             SectionLabel(stringResource(Res.string.settings_voice_output))
             val outputChoices = VoiceOutputPreference.entries
             val outputLabels = mapOf(

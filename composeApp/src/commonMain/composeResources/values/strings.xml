@@ -195,10 +195,13 @@
     <string name="settings_units_metric">Metric</string>
     <string name="settings_units_imperial">Imperial</string>
     <string name="settings_voice_microphone">Nearby microphone</string>
-    <string name="settings_voice_microphone_subtitle">Microphone and playback are independent. Changes apply on the next voice connection.</string>
+    <string name="settings_voice_microphone_subtitle">Microphone and playback are independent. Changes apply on the next voice or radio connection.</string>
     <string name="settings_voice_microphone_auto">Auto</string>
     <string name="settings_voice_microphone_phone">Phone</string>
     <string name="settings_voice_microphone_headset">Headset</string>
+    <string name="settings_voice_microphone_auto_hint">The headset microphone when one is connected. Lowest delay.</string>
+    <string name="settings_voice_microphone_phone_hint">You are heard better, but Bluetooth headphones play others about 0.2 s late.</string>
+    <string name="settings_voice_microphone_headset_hint">Lowest delay. Quality depends on the headset microphone.</string>
     <string name="settings_dashboard_style">Dashboard style</string>
     <string name="settings_fault_display_duration">Fault display duration</string>
     <string name="settings_fault_display_duration_active">While the fault is active</string>
@@ -1087,9 +1090,9 @@
     <string name="history_preview_source_omt">© OpenMapTiles</string>
     <string name="history_preview_source_osm">© OpenStreetMap</string>
     <string name="radio_title">Radio</string>
-    <string name="radio_raise">Start radio</string>
-    <string name="radio_join">Join radio</string>
-    <string name="radio_leave">Leave radio</string>
+    <string name="radio_raise">Start</string>
+    <string name="radio_join">Join</string>
+    <string name="radio_leave">Leave</string>
     <string name="radio_reraise">Start again</string>
     <string name="radio_starting">Connecting…</string>
     <string name="radio_lost">Radio lost</string>
