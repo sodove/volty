@@ -18,7 +18,8 @@ import android.util.Log
 import ru.sodovaya.volty.domain.radio.RADIO_FRAME_SAMPLES
 import ru.sodovaya.volty.domain.radio.RadioDeviceKind
 import ru.sodovaya.volty.domain.radio.RadioOutputChoice
-import ru.sodovaya.volty.domain.radio.radioOutputChoice
+import ru.sodovaya.volty.domain.radio.radioAudioPlan
+import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
 
 /**
  * Microphone and speaker for the radio: 16 kHz mono PCM16, 20 ms frames.
@@ -32,9 +33,16 @@ import ru.sodovaya.volty.domain.radio.radioOutputChoice
  * API 31+, a Bluetooth SCO / LE headset is selected as the communication device if one is present.
  * That is audio routing only; no Bluetooth connection is made or required.
  *
+ * With the voice setting "Phone microphone" none of that happens: the built-in mic is recorded and
+ * the radio plays as media, so a Bluetooth headset gets it over A2DP (see [radioAudioPlan]).
+ *
  * Framework audio cannot be unit-tested in this repo; verified only on a device.
  */
-class RadioAudioIo(context: Context) {
+class RadioAudioIo(
+    context: Context,
+    /** The rider's server-voice microphone/output settings, read at each start. */
+    private val preferences: () -> VoiceAudioPreferences = { VoiceAudioPreferences() },
+) {
     private val app = context.applicationContext ?: context
     private val audioManager = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
@@ -103,6 +111,7 @@ class RadioAudioIo(context: Context) {
     }
 
     private fun openAll() {
+        val plan = radioAudioPlan(preferences(), presentDevices())
         val format = AudioFormat.Builder()
             .setSampleRate(SAMPLE_RATE)
             .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
@@ -110,12 +119,18 @@ class RadioAudioIo(context: Context) {
             .build()
         val minIn = AudioRecord.getMinBufferSize(SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
         val recorder = AudioRecord.Builder()
-            .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+            // Same source as server voice's phone capture: VOICE_COMMUNICATION may still be pulled to the SCO mic.
+            .setAudioSource(if (plan.phoneMic) MediaRecorder.AudioSource.VOICE_RECOGNITION else MediaRecorder.AudioSource.VOICE_COMMUNICATION)
             .setAudioFormat(format)
             .setBufferSizeInBytes(maxOf(minIn, FRAME_BYTES * 4))
             .build()
         record = recorder
         check(recorder.state == AudioRecord.STATE_INITIALIZED) { "AudioRecord not initialised" }
+        if (plan.phoneMic) {
+            audioManager.getDevices(AudioManager.GET_DEVICES_INPUTS)
+                .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC }
+                ?.let { recorder.setPreferredDevice(it) }
+        }
 
         if (AcousticEchoCanceler.isAvailable()) {
             echo = try { AcousticEchoCanceler.create(recorder.audioSessionId)?.also { it.enabled = true } } catch (_: Exception) { null }
@@ -128,7 +143,7 @@ class RadioAudioIo(context: Context) {
         val player = AudioTrack.Builder()
             .setAudioAttributes(
                 AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
+                    .setUsage(if (plan.phoneMic) AudioAttributes.USAGE_MEDIA else AudioAttributes.USAGE_VOICE_COMMUNICATION)
                     .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
                     .build(),
             )
@@ -146,20 +161,25 @@ class RadioAudioIo(context: Context) {
         track = player
         check(player.state == AudioTrack.STATE_INITIALIZED) { "AudioTrack not initialised" }
 
-        savedMode = audioManager.mode
-        audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
-        routeToHeadset()
+        if (plan.phoneMic) {
+            // Media follows the system route (the headset when connected); only the speaker needs asking for.
+            if (plan.output == RadioOutputChoice.BUILT_IN_SPEAKER) {
+                audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+                    .firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+                    ?.let { player.setPreferredDevice(it) }
+            }
+        } else {
+            savedMode = audioManager.mode
+            audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
+            routeTo(plan.output)
+        }
 
         recorder.startRecording()
         check(recorder.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "AudioRecord did not start" }
         player.play()
     }
 
-    /**
-     * Picks the output by [radioOutputChoice] (rulings R17/R19): a Bluetooth headset when present,
-     * a wired or USB headset left in charge, and the loudspeaker only when nothing is plugged in.
-     */
-    private fun routeToHeadset() {
+    private fun presentDevices(): Set<RadioDeviceKind> {
         val present = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).mapTo(HashSet()) { kindOf(it.type) }
         // On API 31+ a connected Bluetooth headset may show up in the output list only as A2DP, while the
         // communication-device list names its SCO / LE endpoint: look at both so it is not mistaken for "no headset".
@@ -170,7 +190,15 @@ class RadioAudioIo(context: Context) {
                 Log.w(TAG, "communication devices unreadable", e)
             }
         }
-        val choice = radioOutputChoice(present)
+        return present
+    }
+
+    /**
+     * Applies the output picked by [radioAudioPlan] (rulings R17/R19): a Bluetooth headset when present,
+     * a wired or USB headset left in charge, and the loudspeaker when nothing is plugged in or the
+     * rider's voice setting asks for it.
+     */
+    private fun routeTo(choice: RadioOutputChoice) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
             // No SCO is started below API 31, so a wired headset can only be kept by not forcing the speaker.
             if (choice == RadioOutputChoice.BUILT_IN_SPEAKER) {

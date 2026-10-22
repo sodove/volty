@@ -113,6 +113,9 @@ class RadioRuntime(
     private val appVisible: () -> Boolean = { false },
     /** True while this phone's ordinary server voice is connected or connecting (I1: never auto-join over it). */
     private val serverVoiceActive: () -> Boolean = { false },
+    /** The rider's voice microphone/output settings; the radio follows them too. */
+    private val audioPreferences: () -> ru.sodovaya.volty.domain.voice.VoiceAudioPreferences =
+        { ru.sodovaya.volty.domain.voice.VoiceAudioPreferences() },
 ) {
     private val app = context.applicationContext ?: context
     private val _members = MutableStateFlow<List<RadioMember>>(emptyList())
@@ -302,7 +305,7 @@ class RadioRuntime(
     ) {
         private val isHub = hubAddress == null
         private val inbox = ArrayBlockingQueue<Inbox>(INBOX_CAPACITY)
-        private val io = RadioAudioIo(app)
+        private val io = RadioAudioIo(app, audioPreferences)
         private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         private var transport: RadioUdpTransport? = null
 

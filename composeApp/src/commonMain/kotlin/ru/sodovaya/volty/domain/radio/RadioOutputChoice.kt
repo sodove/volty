@@ -17,3 +17,24 @@ fun radioOutputChoice(devices: Set<RadioDeviceKind>): RadioOutputChoice = when {
         RadioDeviceKind.USB_HEADSET in devices -> RadioOutputChoice.WIRED_HEADSET
     else -> RadioOutputChoice.BUILT_IN_SPEAKER
 }
+
+/** How the radio wires its audio for the rider's voice settings — the same switches as server voice. */
+data class RadioAudioPlan(
+    /** Record the phone's own microphone and play as media, never opening the headset's SCO link. */
+    val phoneMic: Boolean,
+    val output: RadioOutputChoice,
+)
+
+/**
+ * An earlier revision ignored the voice settings and always took the headset's SCO microphone,
+ * which a rider with a half-dead headset mic could not override. A Phone microphone cannot share
+ * a Bluetooth headset's SCO link, so it plays as media (A2DP): better mic, more headset latency.
+ */
+fun radioAudioPlan(preferences: ru.sodovaya.volty.domain.voice.VoiceAudioPreferences, devices: Set<RadioDeviceKind>): RadioAudioPlan {
+    val automatic = radioOutputChoice(devices)
+    val output = when (preferences.output) {
+        ru.sodovaya.volty.domain.voice.VoiceOutputPreference.SPEAKER -> RadioOutputChoice.BUILT_IN_SPEAKER
+        else -> automatic
+    }
+    return RadioAudioPlan(phoneMic = preferences.input == ru.sodovaya.volty.domain.voice.VoiceInputPreference.PHONE, output = output)
+}

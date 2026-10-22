@@ -2,6 +2,9 @@ package ru.sodovaya.volty.domain.radio
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
+import ru.sodovaya.volty.domain.voice.VoiceInputPreference
+import ru.sodovaya.volty.domain.voice.VoiceOutputPreference
 
 class RadioOutputChoiceTest {
     private fun choice(vararg kinds: RadioDeviceKind) = radioOutputChoice(kinds.toSet())
@@ -30,5 +33,17 @@ class RadioOutputChoiceTest {
     @Test
     fun unrelatedDevicesDoNotCountAsHeadset() {
         assertEquals(RadioOutputChoice.BUILT_IN_SPEAKER, choice(RadioDeviceKind.OTHER))
+    }
+
+    @Test
+    fun voiceMicrophoneAndOutputSettingsAlsoDriveTheRadio() {
+        val bt = setOf(RadioDeviceKind.BLUETOOTH_SCO, RadioDeviceKind.BUILTIN_SPEAKER)
+        assertEquals(RadioAudioPlan(phoneMic = false, output = RadioOutputChoice.BLUETOOTH_HEADSET),
+            radioAudioPlan(VoiceAudioPreferences(), bt))
+        assertEquals(RadioAudioPlan(phoneMic = true, output = RadioOutputChoice.BLUETOOTH_HEADSET),
+            radioAudioPlan(VoiceAudioPreferences(input = VoiceInputPreference.PHONE), bt))
+        assertEquals(RadioAudioPlan(phoneMic = false, output = RadioOutputChoice.BUILT_IN_SPEAKER),
+            radioAudioPlan(VoiceAudioPreferences(output = VoiceOutputPreference.SPEAKER), bt))
+        assertEquals(false, radioAudioPlan(VoiceAudioPreferences(input = VoiceInputPreference.HEADSET), bt).phoneMic)
     }
 }

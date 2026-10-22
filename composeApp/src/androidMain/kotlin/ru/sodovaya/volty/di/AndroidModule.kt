@@ -82,6 +82,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import org.maplibre.android.offline.OfflineManager
 
 val androidModule = module {
@@ -347,6 +348,10 @@ val androidModule = module {
             autoJoin = { get<AppPrefs>().radioAutoJoin.value },
             appVisible = { get<ru.sodovaya.volty.data.radio.AppVisibility>().isVisible },
             serverVoiceActive = { get<ru.sodovaya.volty.domain.radio.RadioServerVoice>().isActive() },
+            audioPreferences = get<AppPrefs>().voiceAudioPreferences
+                .stateIn(get<CoroutineScope>(named(RADIO_SCOPE)), kotlinx.coroutines.flow.SharingStarted.Eagerly,
+                    ru.sodovaya.volty.domain.voice.VoiceAudioPreferences())
+                .let { state -> { state.value } },
         )
     }
     single { ru.sodovaya.volty.data.radio.AppVisibility() }
