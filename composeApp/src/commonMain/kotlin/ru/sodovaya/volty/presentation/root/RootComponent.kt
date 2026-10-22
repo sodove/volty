@@ -32,8 +32,6 @@ import ru.sodovaya.volty.presentation.autoconnect.AutoConnectComponent
 import ru.sodovaya.volty.presentation.autoconnect.DefaultAutoConnectComponent
 import ru.sodovaya.volty.presentation.dashboard.DashboardComponent
 import ru.sodovaya.volty.presentation.dashboard.DefaultDashboardComponent
-import ru.sodovaya.volty.presentation.graph.DefaultGraphComponent
-import ru.sodovaya.volty.presentation.graph.GraphComponent
 import ru.sodovaya.volty.presentation.permissions.DefaultPermissionsGateComponent
 import ru.sodovaya.volty.presentation.permissions.PermissionsGateComponent
 import ru.sodovaya.volty.presentation.pack.DefaultPackDetailComponent
@@ -114,7 +112,6 @@ interface RootComponent {
         data class SetupWizard(val component: SetupWizardComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
-        data class Graph(val component: GraphComponent) : Child
         data class History(val component: ru.sodovaya.volty.presentation.history.HistoryComponent,
             val vehicleNames: kotlinx.coroutines.flow.Flow<Map<String, String>> = kotlinx.coroutines.flow.flowOf(emptyMap())) : Child
         data class Nearby(val component: DefaultVoiceSpacesNearbyComponent) : Child
@@ -160,7 +157,6 @@ sealed class Config {
      * does not exist yet has nothing to configure alerts on.
      */
     @Serializable data class VehicleAlerts(val vehicleId: String) : Config()
-    @Serializable data object Graph : Config()
     @Serializable data object History : Config()
     @Serializable data object Nearby : Config()
     @Serializable data object GroupMap : Config()
@@ -306,7 +302,7 @@ internal fun stackAfterGoTo(stack: List<Config>, config: Config): List<Config> =
  * Graph/Settings in the ordinary case.
  */
 internal fun shouldPopOnBack(current: Any?, stackSize: Int): Boolean =
-    (current !is Config.Graph && current !is Config.Settings && current !is Config.History) || stackSize > 1
+    (current !is Config.Settings && current !is Config.History) || stackSize > 1
 
 /**
  * Give a retained vehicle composer first refusal over an action that destroys
@@ -638,7 +634,7 @@ class DefaultRootComponent(
                     bmsRepository = get(),
                     vehicleRepository = get(),
                     appPrefs = get<AppPrefs>(),
-                    onOpenGraphRequested = { goTo(Config.Graph) },
+                    onOpenGraphRequested = { goTo(Config.History) },
                     onOpenSettingsRequested = { goTo(Config.Settings) },
                     onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     // Mirrors Config.Dashboard's onOpenAddBattery: the sheet's
@@ -654,7 +650,7 @@ class DefaultRootComponent(
                     componentContext = context,
                     bmsRepository = get(),
                     vehicleRepository = get(),
-                    onOpenGraphRequested = { goTo(Config.Graph) },
+                    onOpenGraphRequested = { goTo(Config.History) },
                     onOpenSettings = { goTo(Config.Settings) },
                     onOpenAddBattery = {
                         goTo(configForCreateVehicle(CreateVehicleEntry.DASHBOARD))
@@ -774,19 +770,11 @@ class DefaultRootComponent(
                     context, scope, reads, clock::readTick, ::onBack,
                     presetStore = get(), imageLoader = get(), favoriteStore = get(),
                     mediaRepository = get(), deletionRepository = get(), exportRepository = get(),
-                    recordingRepository = get()).also { it.refresh() },
+                    recordingRepository = get(), openLatestOnLoad = true).also { it.refresh() },
                     combine(vehicleRepository.vehicles, bmsRepository.activeVehicle) { saved, current ->
                         (saved + listOfNotNull(current)).associate { it.id to it.name }
                     })
             }
-            is Config.Graph -> RootComponent.Child.Graph(
-                DefaultGraphComponent(
-                    componentContext = context,
-                    bmsRepository = get(),
-                    rideHistoryRepository = get<RideHistoryRepository>(),
-                    onBackRequested = { nav.pop() }
-                )
-            )
             is Config.Nearby -> {
                 lateinit var nearby: DefaultVoiceSpacesNearbyComponent
                 nearby = DefaultVoiceSpacesNearbyComponent(context,scope,get(),get(),

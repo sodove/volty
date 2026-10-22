@@ -132,7 +132,7 @@ class RootNavigationTest {
 
     @Test
     fun a_stack_without_ride_is_left_alone() {
-        assertFalse(shouldLeaveRide(vehicle(), listOf(Config.Dashboard, Config.Graph)))
+        assertFalse(shouldLeaveRide(vehicle(), listOf(Config.Dashboard, Config.History)))
         assertFalse(shouldLeaveRide(vehicle(), emptyList<Config>()))
     }
 
@@ -157,7 +157,7 @@ class RootNavigationTest {
 
     @Test
     fun back_from_graph_pops_when_a_home_entry_is_underneath() {
-        assertTrue(shouldPopOnBack(Config.Graph, stackSize = 2))
+        assertTrue(shouldPopOnBack(Config.History, stackSize = 2))
     }
 
     @Test
@@ -169,7 +169,7 @@ class RootNavigationTest {
     fun back_from_graph_or_settings_falls_back_to_replaceAll_with_no_entry_to_pop_to() {
         // Defensive only — no push onto Graph/Settings today ever leaves it as
         // the stack's sole entry — but onBack() must still be total.
-        assertFalse(shouldPopOnBack(Config.Graph, stackSize = 1))
+        assertFalse(shouldPopOnBack(Config.History, stackSize = 1))
         assertFalse(shouldPopOnBack(Config.Settings, stackSize = 1))
     }
 
@@ -382,13 +382,13 @@ class RootNavigationTest {
             "absent: exactly what push() did, so no existing route changes shape"
         )
         assertEquals(
-            listOf(Config.Dashboard, Config.Graph, Config.Settings),
-            stackAfterGoTo(listOf(Config.Dashboard, Config.Settings, Config.Graph), Config.Settings),
+            listOf(Config.Dashboard, Config.History, Config.Settings),
+            stackAfterGoTo(listOf(Config.Dashboard, Config.Settings, Config.History), Config.Settings),
             "present: moved to the top, and everything else keeps its order"
         )
         assertEquals(
-            listOf(Config.Settings, Config.Graph, Config.Dashboard),
-            stackAfterGoTo(listOf(Config.Dashboard, Config.Settings, Config.Graph), Config.Dashboard),
+            listOf(Config.Settings, Config.History, Config.Dashboard),
+            stackAfterGoTo(listOf(Config.Dashboard, Config.Settings, Config.History), Config.Dashboard),
             "including the entry at the bottom — the Dashboard a tab would bring forward"
         )
     }

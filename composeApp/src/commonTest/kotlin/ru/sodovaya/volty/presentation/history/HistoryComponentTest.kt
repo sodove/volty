@@ -198,6 +198,37 @@ class HistoryComponentTest {
             assertEquals(listOf("stop:active", "gps"), calls)
         } finally { c.close() }
     }
+    @Test fun openingHistoryShowsTheNewestRideOnceAndBackStaysOnTheList() = runTest {
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
+            Repo(), { HistoryTick(6000, 5010, 1) }, {}, openLatestOnLoad = true)
+        try {
+            assertEquals(HistoryDestination.CATALOG, c.state.value.destination)
+            c.refresh(); runCurrent()
+            assertEquals(HistoryDestination.RIDE, c.state.value.destination); assertEquals("a", c.state.value.selectedRideId)
+            c.back(); runCurrent(); assertEquals(HistoryDestination.CATALOG, c.state.value.destination)
+            c.refresh(); runCurrent()
+            assertEquals(HistoryDestination.CATALOG, c.state.value.destination, "the list the rider went back to stays")
+        } finally { c.close() }
+    }
+    @Test fun openingHistoryPrefersTheRideBeingRecorded() = runTest {
+        val recording = object : HistoryRecordingRepository {
+            override val states = kotlinx.coroutines.flow.MutableStateFlow(HistoryRecordingStatus(available = true, ride = ride("live")))
+            override fun captureControls(observed: HistoryRecordingStatus): HistoryRecordingControls? = null
+        }
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
+            Repo(), { HistoryTick(6000, 5010, 1) }, {}, recordingRepository = recording, openLatestOnLoad = true)
+        try {
+            runCurrent(); c.refresh(); runCurrent()
+            assertEquals(HistoryDestination.RIDE, c.state.value.destination); assertEquals("live", c.state.value.selectedRideId)
+        } finally { c.close() }
+    }
+    @Test fun historyStaysOnTheListUnlessAskedToOpenTheLatestRide() = runTest {
+        val c = component(Repo())
+        try {
+            c.refresh(); runCurrent()
+            assertEquals(HistoryDestination.CATALOG, c.state.value.destination); assertNull(c.state.value.selectedRideId)
+        } finally { c.close() }
+    }
     private val origin = HistoryTick(1000, 10, 1)
     private val full = HistoryRange(1000, 5000)
     private val key = HistorySeriesKey("pack", "voltage_v")

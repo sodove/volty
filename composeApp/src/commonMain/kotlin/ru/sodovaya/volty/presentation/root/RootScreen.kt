@@ -60,7 +60,6 @@ import ru.sodovaya.volty.presentation.alerts.VehicleAlertsScreen
 import ru.sodovaya.volty.presentation.autoconnect.AutoConnectScreen
 import ru.sodovaya.volty.presentation.dashboard.DashboardScreen
 import ru.sodovaya.volty.presentation.pack.PackDetailScreen
-import ru.sodovaya.volty.presentation.graph.GraphScreen
 import ru.sodovaya.volty.presentation.history.*
 import ru.sodovaya.volty.domain.history.favoriteSource
 import ru.sodovaya.volty.presentation.permissions.PermissionsGateScreen
@@ -390,7 +389,6 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     is RootComponent.Child.SetupWizard -> SetupWizardScreen(instance.component)
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
                     is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
-                    is RootComponent.Child.Graph -> GraphScreen(component = instance.component, onOpenHistory = component::onOpenHistory)
                     is RootComponent.Child.History -> HistoryScreen(instance.component,
                         cursorMaxAgeMillis = { 5_000L }, gpsMaxAgeMillis = 5_000L, mapHost = historyHost,
                         vehicleNames = instance.vehicleNames.collectAsState(emptyMap()).value)
@@ -493,7 +491,6 @@ private fun BottomTabBar(
         else -> when (active) {
         is RootComponent.Child.Ride -> RootChromeDestination.RIDE
         is RootComponent.Child.Dashboard -> RootChromeDestination.BATTERY
-        is RootComponent.Child.Graph -> RootChromeDestination.GRAPH
         is RootComponent.Child.Nearby -> RootChromeDestination.NEARBY
         is RootComponent.Child.Settings -> RootChromeDestination.SETTINGS
         else -> RootChromeDestination.OTHER

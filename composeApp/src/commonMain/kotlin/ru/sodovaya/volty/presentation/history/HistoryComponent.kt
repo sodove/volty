@@ -72,7 +72,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     mediaRepository: HistoryMediaRepository? = null,
     deletionRepository: HistoryRideDeletionRepository? = null,
     exportRepository: HistoryExportRepository? = null,
-    recordingRepository: HistoryRecordingRepository? = null) : HistoryComponent {
+    recordingRepository: HistoryRecordingRepository? = null,
+    /** Open the ride being recorded, else the newest, once the first catalog page arrives. */
+    private val openLatestOnLoad: Boolean = false) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -159,6 +161,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private data class PendingFavoriteSave(val id: String, val selection: Any, val windowIntent: Any, val source: HistoryFavoriteSource)
     private var pendingFavoriteSave: PendingFavoriteSave? = null
     private var handledDeletion: HistoryRideDeletionResult? = null
+    // Declared before init: the catalog collector below runs during construction.
+    private var autoOpened = false
     private var pendingRestoration = componentContext.stateKeeper.consume("history-selection-v1", HistorySavedSelection.serializer())
     private val savedStateOwner = componentContext.stateKeeper
     private var windowGesture: WindowGesture? = null
@@ -193,6 +197,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                 if (lifetime.isActive) {
                     mutableState.value = mutableState.value.copy(catalog = next)
                     syncVisiblePreviews()
+                    openLatestOnce()
                 }
             }
         }
@@ -293,8 +298,21 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     override fun loadOlder() { if (lifetime.isActive) { catalogIntent = Any(); catalog.loadOlder() } }
 
     override fun openRide(id: String) { openSelection(id, null) }
+
+    /** One-shot: going back to the list afterwards stays on the list. A restored view wins. */
+    private fun openLatestOnce() {
+        if (!openLatestOnLoad || autoOpened) return
+        val current = mutableState.value
+        if (!current.catalog.loaded) return
+        autoOpened = true
+        if (pendingRestoration != null || selectedRideId != null || current.destination != HistoryDestination.CATALOG) return
+        val target = current.recording.status.ride?.id ?: current.catalog.rides.firstOrNull()?.id ?: return
+        openSelection(target, null)
+    }
+
     private fun openSelection(id: String, favorite: HistoryFavorite?, restoration: HistorySavedSelection? = null) {
         if (!lifetime.isActive) return
+        autoOpened = true
         pendingRestoration = restoration
         require(id.isNotBlank())
         deletion.dismiss()

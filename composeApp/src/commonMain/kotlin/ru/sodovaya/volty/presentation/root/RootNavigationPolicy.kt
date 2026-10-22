@@ -6,7 +6,6 @@ import ru.sodovaya.volty.domain.model.DashboardStyle
 internal enum class RootChromeDestination {
     RIDE,
     BATTERY,
-    GRAPH,
     NEARBY,
     GROUP_MAP,
     SETTINGS,
@@ -23,7 +22,6 @@ internal fun bottomTabBarVisible(
 ): Boolean = when (destination) {
     RootChromeDestination.RIDE -> rideStyle != DashboardStyle.LIGHT
     RootChromeDestination.BATTERY,
-    RootChromeDestination.GRAPH,
     RootChromeDestination.NEARBY,
     RootChromeDestination.GROUP_MAP,
     RootChromeDestination.SETTINGS -> true
