@@ -62,6 +62,36 @@ class RideRecordingControllerTest {
         assertTrue(b.writer.offers.all { it.second.samples.isEmpty() })
     }
 
+    @Test fun gpsDuringAShortDropoutIsWrittenWhenTheVehicleReturns() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        c.execute(RecordingInput.LinkLost(7, tick(2)))
+        val before = f.writer.offers.size
+        assertEquals(HistoryOffer.ACCEPTED, c.offerGps("ride-1", HistoryGpsFix(tick(3), 56.0, 60.0, 5.0, null)))
+        assertEquals(HistoryOffer.ACCEPTED, c.offerGpsGap("ride-1", tick(4)))
+        assertEquals(before, f.writer.offers.size, "held while the vehicle is away")
+        c.execute(RecordingInput.Connected("bike", 8, tick(5)), sources)
+        val written = f.writer.offers.drop(before).map { it.second }
+        assertEquals(listOf(tick(3)), written.flatMap { it.gps }.map { it.tick }, "the dropout keeps its track")
+        val gap = written.indexOfFirst { b -> b.markers.any { it.kind == HistoryMarkerKind.GPS_GAP } }
+        val connected = written.indexOfFirst { b -> b.markers.any { it.kind == HistoryMarkerKind.CONNECTED } }
+        assertTrue(gap in 0 until connected, "held facts are written before the reconnect marker")
+    }
+
+    @Test fun aRideEndedForAbsenceEndsWhenTheVehicleLeftNotWhenTheWaitEnded() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        c.execute(RecordingInput.LinkLost(7, tick(2)))
+        val before = f.writer.offers.size
+        (3L..300L step 10).forEach { c.offerGps("ride-1", HistoryGpsFix(tick(it), 56.0, 60.0, 5.0, null)) }
+        c.execute(RecordingInput.Absent(7, tick(2)))
+        assertTrue(f.writer.offers.drop(before).none { it.second.gps.isNotEmpty() }, "the wait for a switched-off wheel is not riding")
+        assertEquals(tick(2), f.writer.ends.single())
+        // A new ride does not inherit the dropped fixes either.
+        c.execute(RecordingInput.Connected("bike", 7, tick(400)), sources)
+        assertTrue(f.writer.offers.none { it.second.rideId == "ride-2" && it.second.gps.isNotEmpty() })
+    }
+
     @Test fun reconnectKeepsRideButChangesBleAdmissionWithoutChangingWriterGeneration() = runTest {
         val f = Fixture(); val c = f.controller
         c.execute(RecordingInput.Connected("bike", 7, tick()), sources)

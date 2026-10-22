@@ -124,6 +124,10 @@ class HistoryGpsRecorderTest {
             assertEquals(HistoryOffer.ACCEPTED, queued.offer(HistoryBatch("ride-1",
                 listOf(HistorySample(f.tick(), HistorySeriesKey("p", "power_w"), 100.0)), emptyList(), emptyList())))
             losing.await(); runCurrent()
+            // Retraction: the marker used to be written at once. While BLE is away GPS facts are held
+            // and land when it returns (or are dropped if the ride ends for the vehicle's absence).
+            assertTrue(f.gaps().isEmpty(), "held while BLE is away")
+            f.controller.execute(RecordingInput.Connected("bike", 8, f.tick()), null); runCurrent()
             assertEquals(listOf(f.tick()), f.gaps().map { it.tick })
             assertEquals(1, f.fixes().size)
         } finally { queued.discard(); losing.cancelAndJoin() }
@@ -186,8 +190,11 @@ class HistoryGpsRecorderTest {
         f.controller.execute(RecordingInput.LinkLost(7, f.tick())); runCurrent()
         advanceTimeBy(10)
         f.status(RideLocationStatus.Available(f.fix())); runCurrent()
-        assertEquals(2, f.fixes().size, "GPS must continue while BLE is absent")
         f.status(RideLocationStatus.Searching); runCurrent()
+        // GPS keeps going while BLE is absent; its facts are written once the vehicle is back.
+        assertEquals(1, f.fixes().size); assertEquals(1, f.gaps().size)
+        f.controller.execute(RecordingInput.Connected("bike", 8, f.tick()), null); runCurrent()
+        assertEquals(2, f.fixes().size, "GPS must continue while BLE is absent")
         assertEquals(2, f.gaps().size)
         assertEquals("ride-1", f.controller.state.value.intent.ride?.id)
     }

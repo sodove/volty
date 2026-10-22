@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.history
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -52,6 +53,13 @@ class RideRecordingController(
     val telemetryFailure: StateFlow<HistoryRecordingFailure?> = mutableTelemetryFailure
     private val controls = Mutex()
     private var owned: Owner? = null
+    /**
+     * GPS while the vehicle is away. A short dropout gets it back when the link returns, so the
+     * track has no hole; a ride ended for the vehicle's absence drops it, because waiting for a
+     * switched-off wheel is not riding. An earlier revision wrote it at once, and every such ride
+     * ended five minutes after the wheel did, with a duration and average to match.
+     */
+    private val heldGps = MutableStateFlow<List<HistoryBatch>>(emptyList())
     private var nextGeneration = 0L
     private var recovered = false
 
@@ -125,6 +133,9 @@ class RideRecordingController(
             val tick = input.tick()
             if (previous.ride?.let { historyAxisEpochMillis(it.started, tick) == null } == true) return@withContext
             fence()?.let { owned = it }
+            // Admission is closed now, so no GPS can join the hold while it is settled.
+            val held = heldGps.value; heldGps.value = emptyList()
+            owned?.let { owner -> settleHeldGps(owner, held, keep = input !is RecordingInput.Absent)?.let { owned = it } }
             val last = owned?.last
             // A queued UI command cannot end the ride before facts reserved before its ingress fence.
             val effective = if (last != null && last.elapsedMillis > tick.elapsedMillis) input.withTick(last) else input
@@ -158,6 +169,24 @@ class RideRecordingController(
             admission.value = owner
             if (transition.begin != null) requestDemand(true)
         }
+    }
+
+    private fun settleHeldGps(owner: Owner, held: List<HistoryBatch>, keep: Boolean): Owner? {
+        val rideId = owner.intent.ride?.id ?: return null
+        val own = held.filter { it.rideId == rideId }
+        if (!keep || own.isEmpty()) return null
+        own.forEach { batch ->
+            try { writer.offer(owner.generation, batch) }
+            catch (error: Exception) { recordTelemetryFailure(owner, "GpsOfferFailure") }
+        }
+        val latest = own.mapNotNull { it.gps.maxByOrNull { f -> f.tick.elapsedMillis }?.tick ?: it.markers.maxByOrNull { m -> m.tick.elapsedMillis }?.tick }
+            .maxByOrNull { it.elapsedMillis } ?: return null
+        return if (latest.elapsedMillis > owner.last.elapsedMillis) owner.copy(last = latest) else null
+    }
+
+    private fun holdGps(batch: HistoryBatch): HistoryOffer {
+        heldGps.update { (it + batch).takeLast(MAX_HELD_GPS) }
+        return HistoryOffer.ACCEPTED
     }
 
     /** Nonblocking ownership transfer to the bounded native queue, before notification returns. */
@@ -294,7 +323,9 @@ class RideRecordingController(
         val owner = admission.value ?: return HistoryOffer.RETIRED
         val ride = owner.intent.ride ?: return HistoryOffer.RETIRED
         if (rideId != ride.id || historyAxisEpochMillis(ride.started, fix.tick) == null) return HistoryOffer.RETIRED
-        return offerGpsBatch(owner, fix.tick, HistoryBatch(ride.id, emptyList(), listOf(fix), emptyList()))
+        val batch = HistoryBatch(ride.id, emptyList(), listOf(fix), emptyList())
+        if (!owner.intent.linkConnected) return holdGps(batch)
+        return offerGpsBatch(owner, fix.tick, batch)
     }
 
     /** GPS status/expiry boundary, independent of BLE admission. No invented coordinate. */
@@ -302,8 +333,9 @@ class RideRecordingController(
         val owner = admission.value ?: return HistoryOffer.RETIRED
         val ride = owner.intent.ride ?: return HistoryOffer.RETIRED
         if (rideId != ride.id || historyAxisEpochMillis(ride.started, tick) == null) return HistoryOffer.RETIRED
-        return offerGpsBatch(owner, tick, HistoryBatch(ride.id, emptyList(), emptyList(),
-            listOf(HistoryMarker(tick, HistoryMarkerKind.GPS_GAP))))
+        val batch = HistoryBatch(ride.id, emptyList(), emptyList(), listOf(HistoryMarker(tick, HistoryMarkerKind.GPS_GAP)))
+        if (!owner.intent.linkConnected) return holdGps(batch)
+        return offerGpsBatch(owner, tick, batch)
     }
 
     private fun offerGpsBatch(owner: Owner, tick: HistoryTick, batch: HistoryBatch): HistoryOffer {
@@ -364,3 +396,6 @@ private fun RecordingInput.withTick(value: HistoryTick): RecordingInput = when (
     is RecordingInput.Start -> copy(tick = value)
     is RecordingInput.Absent -> copy(tick = value)
 }
+
+/** About ten minutes of 1 Hz fixes: more than the absence window, so a dropout keeps all of it. */
+private const val MAX_HELD_GPS = 600
