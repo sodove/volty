@@ -35,6 +35,10 @@ fun HistoryRecordingPanel(state: HistoryRecordingUiState, onStart: (HistoryRecor
                 else -> Res.string.history_recording_connected
             }), style = MaterialTheme.typography.bodyMedium,
                 color = if (observed.storageFailure) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant)
+            if (observed.ride != null && observed.telemetryLimited) {
+                Text(stringResource(Res.string.history_recording_telemetry_limited),
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             if (observed.ride != null || observed.route == HistoryRecordingRouteStatus.STOPPING) {
                 Text(stringResource(when (observed.route) {
                     HistoryRecordingRouteStatus.STARTING -> Res.string.history_recording_gps_starting

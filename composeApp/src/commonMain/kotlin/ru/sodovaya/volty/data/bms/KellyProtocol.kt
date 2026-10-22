@@ -17,6 +17,8 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryRole
 import kotlin.math.PI
 import kotlin.math.abs
 
@@ -195,12 +197,14 @@ class KellyProtocol(
             }
         }
         val decoded = decodeMonitor(data)
-        motion = decoded
+        motion = publishControllerUpdate(decoded, setOf(TelemetryMetric.SPEED, TelemetryMetric.MOTOR_CURRENT,
+            TelemetryMetric.INPUT_VOLTAGE, TelemetryMetric.ERPM, TelemetryMetric.ESC_TEMPERATURE,
+            TelemetryMetric.MOTOR_TEMPERATURE))
         if (deriveBattery) {
             // This deliberately leaves socKnown=false: KableBmsRepository applies
             // VoltageSocEstimator with the owning vehicle's chemistry, exactly as
             // it does for the VESC-derived pack path.
-            battery = derivedBatteryFrom(decoded)
+            battery = publishBatteryUpdate(derivedBatteryFrom(decoded), setOf(TelemetryMetric.VOLTAGE), role = TelemetryRole.DERIVED)
         }
         clearMonitorCycle()
     }

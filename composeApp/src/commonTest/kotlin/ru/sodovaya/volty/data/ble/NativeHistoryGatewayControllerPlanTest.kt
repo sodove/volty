@@ -119,7 +119,7 @@ class NativeHistoryGatewayControllerPlanTest {
         for (key in first.keys) assertNotEquals(first.getValue(key).id, third.getValue(key).id)
     }
 
-    @Test fun hostedPacksDerivedSlotsUnqualifiedNativeTargetsAndInconsistentPlansStayRejected() {
+    @Test fun unownedPacksDerivedSlotsAndInconsistentPlansStayRejected() {
         val valid = spec(); val profile = vehicle()
         // Reach the supported shape before testing deliberately inconsistent variants.
         assertEquals(4, nativeHistorySourcesForLink(valid, profile).size)
@@ -133,7 +133,6 @@ class NativeHistoryGatewayControllerPlanTest {
             spec(listOf(a, b.copy(canId = 41))) to vehicle(listOf(a, b.copy(canId = 41))),
             spec(listOf(a.copy(canId = 255), b)) to vehicle(listOf(a.copy(canId = 255), b)),
             spec(listOf(a.copy(canId = -1), b)) to vehicle(listOf(a.copy(canId = -1), b)),
-            spec(listOf(a.copy(canId = null), b)) to vehicle(listOf(a.copy(canId = null), b)),
             valid to vehicle(listOf(a.copy(address = "OTHER"), b)),
             valid to vehicle(listOf(a)),
         )

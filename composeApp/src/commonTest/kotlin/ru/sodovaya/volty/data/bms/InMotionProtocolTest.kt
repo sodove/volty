@@ -11,6 +11,29 @@ import ru.sodovaya.volty.domain.model.SpeedSource
 class InMotionProtocolTest {
 
     @Test
+    fun acceptedRealtimePublishesBothFreshOutputsWithoutRestampingMetadata() {
+        val protocol = InMotionProtocol()
+        val observations = mutableListOf<ru.sodovaya.volty.domain.model.TelemetryObservation>()
+        protocol.telemetryObserver = observations::add
+        protocol.onNotification(V9_REALTIME.copyOfRange(0, 17))
+        assertTrue(observations.isEmpty())
+        protocol.onNotification(V9_REALTIME.copyOfRange(17, V9_REALTIME.size))
+        assertEquals(2, observations.size)
+        assertHistoryAccepts(observations)
+        val battery = observations.single { it.origin == ru.sodovaya.volty.domain.model.TelemetryOrigin.BATTERY }
+        val controller = observations.single { it.origin == ru.sodovaya.volty.domain.model.TelemetryOrigin.CONTROLLER }
+        val input = controller.readings.single { it.metric == ru.sodovaya.volty.domain.model.TelemetryMetric.INPUT_VOLTAGE }
+        assertEquals(protocol.latestMotion(0)!!.inputVoltageV.toDouble(), input.value)
+        assertEquals(ru.sodovaya.volty.domain.model.TelemetryRole.CONTRIBUTOR, battery.role)
+        assertFalse(battery.readings.any { it.metric == ru.sodovaya.volty.domain.model.TelemetryMetric.POWER })
+        assertFalse(controller.readings.any { it.metric == ru.sodovaya.volty.domain.model.TelemetryMetric.ODOMETER })
+        protocol.onNotification(V9_REALTIME)
+        assertEquals(4, observations.size, "unchanged measurements are fresh in the next frame")
+        protocol.onNotification(hex("aaaa110882010206010201009c"))
+        assertEquals(4, observations.size, "model metadata must not restamp cached measurements")
+    }
+
+    @Test
     fun splitV9RealtimeFramePublishesOnlyAfterCompleteValidatedFrame() {
         val protocol = InMotionProtocol()
         val frame = V9_REALTIME

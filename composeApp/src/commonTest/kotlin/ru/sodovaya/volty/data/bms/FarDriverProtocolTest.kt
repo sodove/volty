@@ -1,6 +1,10 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryObservation
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
 import ru.sodovaya.volty.domain.model.SpeedSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -88,6 +92,128 @@ class FarDriverProtocolTest {
         assertEquals(-3600f, battery.power)
         assertTrue(battery.hasPower)
         assertFalse(battery.socKnown)
+    }
+
+    @Test
+    fun accepted_new_and_legacy_register_groups_observe_only_their_fresh_fields() {
+        val protocol = FarDriverProtocol()
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+
+        protocol.onNotification(newFrame(1) {
+            u16(2, 720)
+            i16(6, 200)
+        })
+        protocol.onNotification(legacyFrame(1) {
+            u16(2, 600)
+            i16(4, -20)
+        })
+        protocol.onNotification(newFrame(51) { u16(12, 44) })
+        protocol.onNotification(legacyFrame(2) { u24(2, 256) })
+
+        assertEquals(
+            listOf(
+                TelemetryOrigin.CONTROLLER,
+                TelemetryOrigin.BATTERY,
+                TelemetryOrigin.CONTROLLER,
+                TelemetryOrigin.BATTERY,
+                TelemetryOrigin.CONTROLLER,
+                TelemetryOrigin.CONTROLLER
+            ),
+            observed.map { it.origin }
+        )
+        assertEquals(
+            listOf(
+                TelemetryRole.CONTRIBUTOR,
+                TelemetryRole.DERIVED,
+                TelemetryRole.CONTRIBUTOR,
+                TelemetryRole.DERIVED,
+                TelemetryRole.CONTRIBUTOR,
+                TelemetryRole.CONTRIBUTOR
+            ),
+            observed.map { it.role }
+        )
+        assertEquals(
+            listOf(
+                setOf(
+                    TelemetryMetric.INPUT_VOLTAGE,
+                    TelemetryMetric.CONTROLLER_BATTERY_CURRENT,
+                    TelemetryMetric.CONTROLLER_POWER
+                ),
+                setOf(TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.POWER),
+                setOf(
+                    TelemetryMetric.INPUT_VOLTAGE,
+                    TelemetryMetric.CONTROLLER_BATTERY_CURRENT,
+                    TelemetryMetric.CONTROLLER_POWER
+                ),
+                setOf(TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.POWER),
+                setOf(TelemetryMetric.ESC_TEMPERATURE),
+                setOf(TelemetryMetric.MOTOR_CURRENT)
+            ),
+            observed.map { it.readings.map { reading -> reading.metric }.toSet() }
+        )
+    }
+
+    @Test
+    fun repeated_identical_accepted_frames_are_observed_again() {
+        val protocol = FarDriverProtocol()
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+        val frame = newFrame(1) {
+            u16(2, 720)
+            i16(6, 200)
+        }
+
+        protocol.onNotification(frame)
+        protocol.onNotification(frame.copyOf())
+
+        assertEquals(4, observed.size)
+        assertEquals(listOf(TelemetryOrigin.CONTROLLER, TelemetryOrigin.BATTERY,
+            TelemetryOrigin.CONTROLLER, TelemetryOrigin.BATTERY), observed.map { it.origin })
+        assertEquals(observed[0].readings, observed[2].readings)
+        assertEquals(observed[1].readings, observed[3].readings)
+    }
+
+    @Test
+    fun unrelated_and_malformed_frames_do_not_restamp_cached_voltage_or_current() {
+        val protocol = FarDriverProtocol()
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+        val voltageAndCurrent = newFrame(1) {
+            u16(2, 720)
+            i16(6, 200)
+        }
+        protocol.onNotification(voltageAndCurrent)
+        observed.clear()
+
+        protocol.onNotification(newFrame(0) {
+            u16(8, 900)
+            bytes[2] = 1
+        })
+        protocol.onNotification(newFrame(51) { u16(12, 44) })
+        protocol.onNotification(legacyFrame(15) {
+            u16(4, 0x0100)
+            u16(8, 0)
+        })
+
+        assertEquals(2, observed.size)
+        assertEquals(
+            listOf(
+                setOf(TelemetryMetric.SPEED, TelemetryMetric.ERPM),
+                setOf(TelemetryMetric.ESC_TEMPERATURE)
+            ),
+            observed.map { it.readings.map { reading -> reading.metric }.toSet() }
+        )
+        assertTrue(observed.all { it.origin == TelemetryOrigin.CONTROLLER })
+
+        observed.clear()
+        val badNewVoltage = voltageAndCurrent.copyOf().also { it[14] = (it[14] + 1).toByte() }
+        val badLegacyVoltage = legacyFrame(1) { u16(2, 840); i16(4, 100) }
+            .also { it[15] = (it[15] + 1).toByte() }
+        protocol.onNotification(badNewVoltage)
+        protocol.onNotification(badLegacyVoltage)
+
+        assertTrue(observed.isEmpty())
     }
 
     @Test

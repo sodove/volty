@@ -89,6 +89,7 @@ class HistoryRecordingRuntimeTest {
             val recording = repository.states.first()
             assertEquals("ride", recording.ride?.id); assertTrue(recording.canStop); assertFalse(recording.canStart)
             assertFalse(recording.storageFailure); assertEquals(HistoryRecordingRouteStatus.STARTING, recording.route)
+            assertFalse(recording.telemetryLimited, "qualified ANT telemetry remains numerically available")
             f.natives.single().state.value = HistoryLocationCaptureState(capturing = true)
             assertEquals(HistoryRecordingRouteStatus.RECORDING, repository.states.first().route)
             val controls = assertNotNull(repository.captureControls(repository.states.first()))
@@ -104,6 +105,30 @@ class HistoryRecordingRuntimeTest {
             assertEquals(listOf("ride", "ride-2"), f.writer.begins)
             assertEquals(HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.NOT_APPLIED), controls.stop("ride"))
             assertEquals(listOf<String?>("ride"), f.writer.finishes)
+        } finally { f.runtime.close(); channel.close() }
+    }
+    // Retraction: KingSong formerly had no numeric history output. Its common
+    // decoder now publishes fresh fields; GPS-only coverage uses an explicit
+    // empty source plan in NativeHistoryGpsFallbackTest instead.
+    @Test fun savedControllerOnlyLinkStartsTimeAndLocationRecordingWithCommonTelemetry() = runTest {
+        val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(capacity = 4)
+        val vehicle = Vehicle("kingsong", "KingSong", "wheel", emptyList(),
+            controllers = listOf(Controller(0, "KingSong", ControllerType.KINGSONG, "KS")),
+            chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0))
+        val spec = LinkSpec("KS", ProtocolKind.KINGSONG, listOf(OwnedSource(0), OwnedSource(1)), listOf(OwnedSource(0)))
+        try {
+            val binding = f.runtime.prepare()
+            binding.ingress.installNativePlan(vehicle.id, listOf(spec), vehicle) { true }
+            val capture = assertNotNull(binding.ingress.capture(Emitter(), "attempt", spec, vehicle,
+                SampleSessionOwnership { true }, channel))
+            assertTrue(capture.prepareForObservation())
+
+            val status = repository.states.first()
+            assertNotNull(status.ride, "A saved controller-only wheel starts time and GPS recording")
+            assertFalse(status.telemetryLimited)
+            assertEquals(listOf(true), f.service, "Location demand follows the real ride")
+            assertFalse(status.storageFailure)
         } finally { f.runtime.close(); channel.close() }
     }
     @Test fun capturedRecordingControlsCannotRetargetAReplacementPhysicalSelection() = runTest {

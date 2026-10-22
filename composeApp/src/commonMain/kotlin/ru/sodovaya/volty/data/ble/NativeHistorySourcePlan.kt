@@ -21,15 +21,16 @@ internal fun nativeHistorySourcesForSelectedLink(spec: LinkSpec, vehicle: Vehicl
 
 /**
  * Direct, non-aliased native sources and explicit forwarded VESC controllers.
- * Gateway BMS cache sources carry typed absence only; numeric freshness is not
- * certified. Derived gateway packs and physical aliases still need qualification.
+ * Gateway BMS responses record their reported fields at receipt time. They do
+ * not claim a sensor acquisition timestamp. Derived gateway packs still need
+ * an explicit computed-update path; physical aliases select one recording path.
  * Native branch/role identity is independent of UI labels and global slot order.
  */
 internal fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?): Map<HistoryTelemetrySource, HistorySource> =
     nativeHistorySourcesForLink(spec, vehicle, singlePathAliases = false)
 
 private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singlePathAliases: Boolean): Map<HistoryTelemetrySource, HistorySource> {
-    val profile = requireNotNull(vehicle) { "Recording needs an owned vehicle" }
+    val profile = requireNotNull(vehicle) { "Recording needs a physical connection identity" }
     require(spec.address.isNotBlank())
     require(profile.packs.map { it.index }.distinct().size == profile.packs.size)
     require(profile.controllers.map { it.index }.distinct().size == profile.controllers.size)
@@ -93,24 +94,45 @@ private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singl
             add(TelemetryOrigin.CONTROLLER, 0, "${controller.label} · CAN", TelemetryRole.REPORTED_CAN)
             if (derived) add(TelemetryOrigin.BATTERY, 0, controller.label, TelemetryRole.DERIVED)
         }
-        ProtocolKind.VETERAN -> {
+        ProtocolKind.VETERAN, ProtocolKind.KINGSONG -> {
             require(spec.ownedPacks.size == 2 && controllers.size <= 1)
             require(packs.any { it != null } || controllers.isNotEmpty())
             add(TelemetryOrigin.CONTROLLER, 0, nativeLinkController(spec, profile)?.label ?: profile.name)
             add(TelemetryOrigin.BATTERY, 0, nativeLinkController(spec, profile)?.label ?: profile.name, TelemetryRole.DERIVED)
             for (branch in 0..1) add(TelemetryOrigin.BATTERY, branch, packs[branch]?.label ?: "${profile.name} · ${branch + 1}")
         }
-        ProtocolKind.VESC_BMS, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,
-        ProtocolKind.NINEBOT, ProtocolKind.NINEBOT_LEGACY, ProtocolKind.KINGSONG,
-        ProtocolKind.INMOTION -> throw IllegalArgumentException("Native recording producer is not qualified")
+        ProtocolKind.KELLY, ProtocolKind.FARDRIVER -> {
+            require(controllers.size == 1 && packs.all { it == null })
+            val controller = checkNotNull(controllers.single())
+            val derived = controller.providesDerivedBattery || profile.packs.isEmpty()
+            require(spec.ownedPacks.size == if (derived) 1 else 0)
+            add(TelemetryOrigin.CONTROLLER, 0, controller.label)
+            if (derived) add(TelemetryOrigin.BATTERY, 0, controller.label, TelemetryRole.DERIVED)
+        }
+        ProtocolKind.NINEBOT -> {
+            require(spec.ownedPacks.size == 2 && controllers.size == 1 && packs.all { it == null })
+            val controller = checkNotNull(controllers.single())
+            add(TelemetryOrigin.CONTROLLER, 0, controller.label)
+            for (branch in 0..1) add(TelemetryOrigin.BATTERY, branch, "${controller.label} · ${branch + 1}")
+        }
+        ProtocolKind.NINEBOT_LEGACY, ProtocolKind.INMOTION -> {
+            require(spec.ownedPacks.size == 1 && controllers.size == 1 && packs.single() == null)
+            val controller = checkNotNull(controllers.single())
+            add(TelemetryOrigin.CONTROLLER, 0, controller.label)
+            // These decoders expose one reported battery snapshot, not an
+            // optional voltage-estimated virtual pack as Kelly/FarDriver do.
+            add(TelemetryOrigin.BATTERY, 0, controller.label)
+        }
+        // This native decoder itself is not implemented (Kable's factory rejects
+        // it), unlike the working protocols formerly rejected only by history.
+        ProtocolKind.VESC_BMS -> Unit
     }
     return result.toMap()
 }
 
-/** Explicit forwarded controllers plus optional physical BMS cache sources.
- * Local controller targets without a known native CAN ID remain unqualified.
- * Cache identities certify only the decoder's typed absence policy, never numeric
- * freshness, and cannot borrow a direct battery's identity or a virtual slot.
+/** Local/forwarded controllers plus optional physical BMS response sources.
+ * A native controller is identified by the BLE endpoint; a forwarded one also
+ * includes its CAN target. BMS identities cannot borrow another battery's ID.
  */
 private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle, singlePathAliases: Boolean): Map<HistoryTelemetrySource, HistorySource> {
     require(spec.protocolKind == ProtocolKind.VESC && spec.ownedControllers.isNotEmpty())
@@ -119,7 +141,7 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle, 
     val deriveBattery = nativeLinkController(spec, profile)?.providesDerivedBattery == true || profile.packs.isEmpty()
     val packs = vescGatewayPacks(spec, deriveBattery)
     require(packs.none { it.derived }) { "Derived gateway recording is not qualified" }
-    require(spec.ownedControllers.all { it.canId != null && it.canId in 0..254 &&
+    require(spec.ownedControllers.all { (it.canId == null || it.canId in 0..254) &&
         (it.kind == null || it.kind == ProtocolKind.VESC) })
     require(spec.ownedControllers.map { it.canId }.distinct().size == spec.ownedControllers.size)
     val result = linkedMapOf<HistoryTelemetrySource, HistorySource>()
@@ -134,7 +156,7 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle, 
             val key = HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, local, role)
             // The local decoder array can reorder while the endpoint stays the same.
             val id = "native-gateway-history-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
-                spec.protocolKind.name, owned.canId.toString(), role.name,
+                spec.protocolKind.name, owned.canId?.toString() ?: "local", role.name,
                 if (role == TelemetryRole.CONTRIBUTOR) calibration else ""))
             result[key] = HistorySource(id, historySourceKindForTelemetry(key.origin, role),
                 if (role == TelemetryRole.REPORTED_CAN) "${controller.label} · CAN" else controller.label)
@@ -153,10 +175,10 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle, 
             "Aliased recording needs qualified single-path admission"
         }
         val key = HistoryTelemetrySource(TelemetryOrigin.BATTERY, local)
-        // Explicit policy version prevents a future numeric producer from
-        // silently continuing the cache-absence series under the same source ID.
-        val id = if (alias != null) "native-alias-gateway-cache-unknown-v1:" + encodeIdentity(listOf(profile.id, alias))
-        else "native-gateway-cache-unknown-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
+        // Retraction: the old cache-unknown policy erased received values. Use
+        // a new identity for response snapshots timestamped at app receipt time.
+        val id = if (alias != null) "native-alias-gateway-received-v1:" + encodeIdentity(listOf(profile.id, alias))
+        else "native-gateway-received-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
             spec.protocolKind.name, endpoint.canId?.toString() ?: "host"))
         result[key] = HistorySource(id, historySourceKindForTelemetry(key.origin, key.role), pack.label)
     }

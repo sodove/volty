@@ -1143,4 +1143,5 @@
     <string name="history_media_close">Закрыть просмотр</string>
     <string name="history_media_on_map">На записанном маршруте</string>
     <string name="history_media_unpositioned">Без точки на карте</string>
+    <string name="history_recording_telemetry_limited">Данные устройства записываются не полностью. Время поездки сохраняется, маршрут — при доступной геолокации.</string>
 </resources>

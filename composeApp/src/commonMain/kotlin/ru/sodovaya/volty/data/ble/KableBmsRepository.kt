@@ -223,15 +223,21 @@ class KableBmsRepository private constructor(
         historyTelemetryIngress?.capture(protocol, Uuid.random().toString(), link.spec, link.vehicle, ownership, channel)
 
     private suspend fun prepareHistoryForInstalledLinks(installed: List<PackLink>, vehicleId: String, vehicle: Vehicle?) {
-        historyTelemetryIngress?.installNativePlan(vehicleId, installed.map { it.spec }, vehicle) {
+        val ingress = historyTelemetryIngress ?: return
+        // A guest has no saved vehicle. Use the same transient, address-based
+        // identity as the live dashboard; this never persists a vehicle profile.
+        val recordingVehicle = vehicle ?: installed.singleOrNull()?.spec?.let {
+            buildGuestVehicle(it.address, it.protocolKind.toBmsType())
+        }
+        ingress.installNativePlan(vehicleId, installed.map { it.spec }, recordingVehicle) {
             !recordingShutdownRequested && !userInitiatedDisconnect && installed.any { planned -> links.any { it === planned } }
         }
     }
 
     internal suspend fun prepareInstalledHistoryForTest() {
         val installed = links
-        val vehicle = checkNotNull(installed.first().vehicle)
-        prepareHistoryForInstalledLinks(installed, vehicle.id, vehicle)
+        val vehicle = installed.first().vehicle
+        prepareHistoryForInstalledLinks(installed, vehicle?.id ?: GUEST_VEHICLE_ID_PREFIX + installed.first().spec.address, vehicle)
     }
 
     internal fun historyTelemetryCaptureForTest(protocol: BmsProtocol, address: String,

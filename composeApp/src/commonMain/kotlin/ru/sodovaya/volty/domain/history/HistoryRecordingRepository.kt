@@ -7,7 +7,8 @@ data class HistoryRecordingStatus(val available: Boolean = false, val ride: Hist
     val linkConnected: Boolean = false, val manuallyStopped: Boolean = false,
     val canStart: Boolean = false, val canStop: Boolean = false,
     val route: HistoryRecordingRouteStatus = HistoryRecordingRouteStatus.IDLE, val storageFailure: Boolean = false,
-    val controlTarget: HistoryRecordingControlTarget? = null)
+    val controlTarget: HistoryRecordingControlTarget? = null,
+    val telemetryLimited: Boolean = false)
 
 /** Opaque, issued with a displayed snapshot. Equality tracks the selection, not
  * telemetry counters or a newly allocated wrapper around the same capability. */

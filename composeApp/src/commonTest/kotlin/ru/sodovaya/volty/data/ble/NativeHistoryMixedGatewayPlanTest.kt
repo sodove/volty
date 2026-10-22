@@ -76,11 +76,24 @@ class NativeHistoryMixedGatewayPlanTest {
         }
     }
 
-    @Test fun nativeMixedDecoderRecordsEarnedControllerValuesButOnlyTypedUnknownCacheFields() = verifyNativeMixedDecoder(false)
+    // Retraction: a received BMS snapshot is recordable at app receipt time;
+    // lack of sensor acquisition timestamps does not erase its reported values.
+    @Test fun nativeMixedDecoderRecordsControllerAndReceivedBmsValues() = verifyNativeMixedDecoder(false)
 
     @Test fun nativeFactoryHonorsRealHostedSlotsEvenWithDerivedChoiceOn() = verifyNativeMixedDecoder(true)
 
-    @Test fun selectedCacheAliasesUseRealDecoderUnknownsAndKeepEarnedControllerValues() = verifyNativeMixedDecoder(false, aliases = true)
+    @Test fun selectedCacheAliasesUseReceivedBmsValuesAndKeepControllerValues() = verifyNativeMixedDecoder(false, aliases = true)
+
+    @Test fun localHeadUnitDoesNotBlockItsHostedBmsOrForwardedController() {
+        val local = controller.copy(index = 0, label = "Head unit", canId = null)
+        val profile = vehicle().copy(controllers = listOf(local, controller))
+        val link = spec().copy(ownedControllers = listOf(OwnedSource(0), OwnedSource(controller.index, controller.canId)))
+        val plan = nativeHistorySourcesForLink(link, profile)
+        assertEquals(6, plan.size)
+        assertEquals(6, plan.values.map { it.id }.distinct().size)
+        assertEquals(HistorySourceKind.BATTERY, plan.getValue(battery(0)).kind)
+        assertEquals(HistorySourceKind.BATTERY, plan.getValue(battery(1)).kind)
+    }
 
     private fun verifyNativeMixedDecoder(deriveBattery: Boolean, aliases: Boolean = false) = runTest {
         val link = spec()
@@ -121,7 +134,10 @@ class NativeHistoryMixedGatewayPlanTest {
         for (local in 0..1) {
             val cached = samples.filter { it.key.sourceId == plan.getValue(battery(local)).id }
             assertTrue(cached.isNotEmpty())
-            assertTrue(cached.all { it.value == null && it.unknown == HistoryUnknownReason.PARTIAL_SOURCE })
+            assertEquals(75.5, cached.single { it.key.metricId == "voltage_v" }.value)
+            assertEquals(-12.5, cached.single { it.key.metricId == "current_a" }.value)
+            assertEquals(-943.75, cached.single { it.key.metricId == "power_w" }.value)
+            assertTrue(cached.all { it.value != null })
             assertEquals(setOf(0, 1), cached.mapNotNull { it.key.cellIndex }.toSet())
         }
         assertEquals(0, protocol.telemetryObserverFailures)

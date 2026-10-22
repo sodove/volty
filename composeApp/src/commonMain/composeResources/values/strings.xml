@@ -1145,4 +1145,5 @@
     <string name="history_media_close">Close viewer</string>
     <string name="history_media_on_map">On recorded route</string>
     <string name="history_media_unpositioned">Not positioned on map</string>
+    <string name="history_recording_telemetry_limited">Device data is not fully recorded. Ride time is saved; GPS route recording requires location permission.</string>
 </resources>

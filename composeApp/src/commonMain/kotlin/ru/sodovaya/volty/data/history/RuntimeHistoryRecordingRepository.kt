@@ -33,7 +33,8 @@ internal class RuntimeHistoryRecordingRepository(private val runtime: HistoryRec
                     canStart = controls != null && intent.manuallyStopped && intent.ride == null,
                     canStop = controls != null && intent.ride != null, route = route,
                     storageFailure = writer.failure != null || writer.closed,
-                    controlTarget = controls?.let { HistoryRecordingControlTarget(this, binding, it.identity, wrap(binding, it)) })
+                    controlTarget = controls?.let { HistoryRecordingControlTarget(this, binding, it.identity, wrap(binding, it)) },
+                    telemetryLimited = controls?.telemetryLimited ?: false)
             }
         }
     }.distinctUntilChanged()

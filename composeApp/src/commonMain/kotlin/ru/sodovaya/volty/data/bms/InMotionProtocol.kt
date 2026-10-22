@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.bms
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.TelemetryMetric
 import kotlin.math.abs
 
 /**
@@ -194,7 +195,7 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
         val power = values.powerW
         val current = values.currentA
 
-        data = BmsData(
+        data = publishBatteryUpdate(BmsData(
             voltage = values.voltageV,
             current = current ?: 0f,
             hasCurrent = current != null,
@@ -204,9 +205,15 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
             socKnown = values.soc != null,
             temperatures = values.batteryTemperatures,
             isConnected = true,
-        )
+        ), buildSet {
+            add(TelemetryMetric.VOLTAGE)
+            if (current != null) add(TelemetryMetric.CURRENT)
+            if (power != null) add(TelemetryMetric.POWER)
+            if (values.soc != null) add(TelemetryMetric.SOC)
+            if (values.batteryTemperatures.isNotEmpty()) add(TelemetryMetric.BATTERY_TEMPERATURE)
+        })
 
-        motion = ControllerData(
+        motion = publishControllerUpdate(ControllerData(
             speedKmh = values.speedKmh,
             speedSource = SpeedSource.REPORTED,
             dutyPercent = values.dutyPercent ?: 0f,
@@ -224,7 +231,16 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
             hasDistance = true,
             hasEnergyCounters = false,
             isConnected = true,
-        )
+        ), buildSet {
+            add(TelemetryMetric.SPEED)
+            add(TelemetryMetric.INPUT_VOLTAGE)
+            add(TelemetryMetric.TRIP)
+            if (current != null) add(TelemetryMetric.CONTROLLER_BATTERY_CURRENT)
+            if (power != null) add(TelemetryMetric.CONTROLLER_POWER)
+            if (values.dutyPercent != null) add(TelemetryMetric.DUTY)
+            if (values.escTemperatureC != null) add(TelemetryMetric.ESC_TEMPERATURE)
+            if (values.motorTemperatureC != null) add(TelemetryMetric.MOTOR_TEMPERATURE)
+        })
     }
 
     private fun appendUnescaped(chunk: ByteArray) {

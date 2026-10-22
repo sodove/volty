@@ -5,6 +5,11 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryObservation
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
+import ru.sodovaya.volty.domain.model.TelemetryUnknown
 
 /** Fixtures mirror the unencrypted Ninebot One Z frames documented by WheelLog. */
 class NinebotProtocolTest {
@@ -62,6 +67,137 @@ class NinebotProtocolTest {
         assertEquals(listOf(4.0f, 4.01f, 3.99f, 4.02f, 4.005f, 4.015f), data.cellVoltages)
         assertTrue(data.dischargeEnabled)
         assertTrue(data.isConnected)
+    }
+
+    @Test
+    fun accepted_bms_life_packets_publish_only_their_fields_and_repeat_as_fresh_observations() {
+        val protocol = NinebotProtocol()
+        val events = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = events::add
+        val life = ByteArray(24).apply {
+            putU16(0, 0x0020)
+            putU16(4, 73)
+            putI16(6, -1234)
+            putU16(8, 5120)
+            this[10] = 45
+            this[11] = 50
+        }
+        val frame = frame(source = 0x11, destination = 0x3e, parameter = 0x30, data = life)
+
+        protocol.onNotification(frame)
+        protocol.onNotification(frame.copyOf())
+
+        assertEquals(2, events.size, "identical accepted frames are two fresh observations")
+        assertHistoryAccepts(events)
+        events.forEach { event ->
+            assertEquals(TelemetryOrigin.BATTERY, event.origin)
+            assertEquals(TelemetryRole.CONTRIBUTOR, event.role)
+            assertEquals(0, event.localIndex)
+            assertEquals(
+                setOf(TelemetryMetric.SOC, TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT,
+                    TelemetryMetric.POWER, TelemetryMetric.BATTERY_TEMPERATURE),
+                event.readings.map { it.metric }.toSet()
+            )
+        }
+        assertEquals(events[0].readings.toSet(), events[1].readings.toSet())
+    }
+
+    @Test
+    fun cells_register_does_not_restamp_cached_life_register_measurements() {
+        val protocol = NinebotProtocol()
+        val events = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = events::add
+        val life = ByteArray(24).apply {
+            putU16(4, 73)
+            putI16(6, -1234)
+            putU16(8, 5120)
+            this[10] = 45
+        }
+        protocol.onNotification(frame(source = 0x11, destination = 0x3e, parameter = 0x30, data = life))
+        events.clear()
+        val cells = ByteArray(32).apply {
+            putU16(0, 4000)
+            putU16(2, 4010)
+            putU16(4, 3990)
+        }
+
+        protocol.onNotification(frame(source = 0x11, destination = 0x3e, parameter = 0x40, data = cells))
+
+        val event = events.single()
+        assertEquals(TelemetryOrigin.BATTERY, event.origin)
+        assertEquals(TelemetryRole.CONTRIBUTOR, event.role)
+        assertEquals(0, event.localIndex)
+        assertEquals(
+            setOf(TelemetryMetric.CELL, TelemetryMetric.CELL_MIN, TelemetryMetric.CELL_MAX, TelemetryMetric.CELL_DELTA),
+            event.readings.map { it.metric }.toSet()
+        )
+        // This register block does not prove the physical pack count, so its extrema remain partial.
+        assertTrue(event.readings.filter { it.metric in setOf(
+            TelemetryMetric.CELL_MIN, TelemetryMetric.CELL_MAX, TelemetryMetric.CELL_DELTA
+        ) }.all { it.value == null && it.unknown == TelemetryUnknown.PARTIAL_SOURCE })
+        assertTrue(event.readings.none { it.metric in setOf(
+            TelemetryMetric.SOC, TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT,
+            TelemetryMetric.POWER, TelemetryMetric.BATTERY_TEMPERATURE
+        ) })
+    }
+
+    @Test
+    fun cells_register_keeps_raw_indices_around_invalid_cells() {
+        val protocol = NinebotProtocol()
+        val events = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = events::add
+        val life = ByteArray(24).apply {
+            putU16(4, 73)
+            putU16(8, 5120)
+        }
+        protocol.onNotification(frame(source = 0x11, destination = 0x3e, parameter = 0x30, data = life))
+        events.clear()
+        val cells = ByteArray(32).apply {
+            putU16(0, 4000)
+            putU16(2, 6000) // out of range, but still occupies raw cell index 1
+            putU16(4, 4100)
+        }
+
+        protocol.onNotification(frame(source = 0x11, destination = 0x3e, parameter = 0x40, data = cells))
+
+        assertEquals(listOf(4.0f, 4.1f), assertNotNull(protocol.latestData(0)).cellVoltages)
+        val readings = events.single().readings.filter { it.metric == TelemetryMetric.CELL }.associateBy { it.cellIndex }
+        assertEquals(setOf(0, 1, 2), readings.keys)
+        assertEquals(4.0, readings.getValue(0).value!!, 0.001)
+        assertNull(readings.getValue(1).value)
+        assertEquals(TelemetryUnknown.INVALID_VALUE, readings.getValue(1).unknown)
+        assertEquals(4.1, readings.getValue(2).value!!, 0.001)
+        assertTrue(events.single().readings.filter { it.metric in setOf(
+            TelemetryMetric.CELL_MIN, TelemetryMetric.CELL_MAX, TelemetryMetric.CELL_DELTA
+        ) }.all { it.value == null && it.unknown == TelemetryUnknown.PARTIAL_SOURCE })
+    }
+
+    @Test
+    fun controller_live_page_publishes_only_fields_present_in_that_page() {
+        val protocol = NinebotProtocol()
+        val events = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = events::add
+        val live = ByteArray(32).apply {
+            putI16(10, -1234)
+            putU32(14, 12_345)
+            putI16(22, 385)
+            putU16(24, 5120)
+        }
+
+        protocol.onNotification(frame(source = 0x14, destination = 0x3e, parameter = 0xB0, data = live))
+
+        val event = events.single()
+        assertEquals(TelemetryOrigin.CONTROLLER, event.origin)
+        assertEquals(TelemetryRole.CONTRIBUTOR, event.role)
+        assertEquals(0, event.localIndex)
+        assertEquals(
+            setOf(TelemetryMetric.SPEED, TelemetryMetric.ODOMETER,
+                TelemetryMetric.ESC_TEMPERATURE, TelemetryMetric.INPUT_VOLTAGE),
+            event.readings.map { it.metric }.toSet()
+        )
+        assertTrue(event.readings.none { it.metric in setOf(
+            TelemetryMetric.TRIP, TelemetryMetric.CONTROLLER_BATTERY_CURRENT, TelemetryMetric.CONTROLLER_POWER
+        ) })
     }
 
     @Test

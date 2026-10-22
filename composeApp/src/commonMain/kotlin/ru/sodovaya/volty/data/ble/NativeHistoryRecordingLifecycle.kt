@@ -10,7 +10,6 @@ import ru.sodovaya.volty.domain.history.HistorySource
 import ru.sodovaya.volty.domain.history.HistoryTick
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.isDemo
-import ru.sodovaya.volty.domain.model.isGuest
 
 /** All suspending calls belong outside the repository sessionLock. The caller qualifies
  * installed physical intent; protocol object identity qualifies each native attempt.
@@ -26,6 +25,7 @@ internal class NativeHistoryRecordingLifecycle(
         internal val identity: Any,
         private val begin: suspend () -> Boolean,
         private val end: suspend (String) -> Boolean,
+        val telemetryLimited: Boolean = false,
     ) {
         suspend fun start(): Boolean = begin()
         suspend fun stop(rideId: String): Boolean = end(rideId)
@@ -40,6 +40,7 @@ internal class NativeHistoryRecordingLifecycle(
             identity = captured.selection,
             begin = { manualControl(captured) { connections.start(captured.selection) } },
             end = { rideId -> manualControl(captured) { connections.stop(captured.selection, rideId) } },
+            telemetryLimited = captured.links.any { it.binding.isEmpty() },
         )
     }
 
@@ -87,15 +88,19 @@ internal class NativeHistoryRecordingLifecycle(
     suspend fun install(vehicleId: String, specs: List<LinkSpec>, vehicle: Vehicle?, ownsPlan: () -> Boolean) {
         if (!isAccepting) return
         // No IO: copy the installed decoder plan before any capture can observe it.
-        // Unsupported/guest/demo selections must retire old GPS but cannot auto-start a fake ride.
+        // Retraction: real guest links were excluded solely for lacking a saved
+        // profile. Their transient address-based identity is enough; demo is
+        // still simulation. Numeric coverage cannot remove real ride time/GPS.
         var failed = false
-        val links = if (vehicle == null || vehicle.isGuest || vehicle.isDemo) emptyList() else try {
+        val links = if (vehicle == null || vehicle.isDemo) emptyList() else try {
             val installed = specs.toList()
             requireUniquePhysicalOwnership(vehicleId, installed, vehicle)
             val qualified = installed.map { sources(it, vehicle).toMap() }
             val selected = if (selectPhysicalPaths) nativeHistoryPhysicalPaths(installed, vehicle, qualified) else qualified
             installed.mapIndexedNotNull { index, spec ->
-                selected[index].takeIf { it.isNotEmpty() }?.let { Link(spec, it) }
+                // Keep a real device's lifecycle even with no numeric fields. An
+                // intentionally suppressed redundant alias still has no binding.
+                selected[index].takeIf { it.isNotEmpty() || qualified[index].isEmpty() }?.let { Link(spec, it) }
             }.also { planned ->
                 val ids = planned.flatMap { it.binding.values }.map { it.id }
                 require(ids.distinct().size == ids.size) { "Duplicate physical source binding" }

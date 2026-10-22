@@ -1080,7 +1080,8 @@ class VescGatewayProtocol(
         expectedOpcode = VescBmsValues.OPCODE_BMS_GET_VALUES,
         consume = { payload ->
             val frame = VescBmsValues.decode(payload)
-            if (frame != null) observeCachedBmsReply(p, frame)
+            val decoded = frame?.takeUnless { it.noBmsDataYet }?.toBmsData()
+            if (frame != null) observeReceivedBmsReply(p, frame, decoded)
             // `can_id == 0xFF` is the firmware's "no BMS data yet" sentinel and
             // the whole frame is then the zeroed default, not a reading — the
             // decoder flags it precisely so a consumer can drop it. We are that
@@ -1099,7 +1100,7 @@ class VescGatewayProtocol(
                 // staleness window` pins the inequality the argument rests on;
                 // if a later tuning inverts it, that test fails and this
                 // comment stops being true in the same commit.
-                packData = packData + (p.globalIndex to frame.toBmsData())
+                packData = packData + (p.globalIndex to checkNotNull(decoded))
             } else {
                 // An answer that carries no reading is, for a DERIVED slot,
                 // exactly as informative as no answer: a stock VESC with no BMS
@@ -1128,25 +1129,31 @@ class VescGatewayProtocol(
         // that stopped being asked would stop being derived at all.
     )
 
-    /** A reply proves cache availability, not fresh BMS acquisition. The native
-     * bms.c serializer sends m_values without field ages. Neither a valid CAN ID
-     * nor changed bytes certifies those ages or the producer's current/counter
-     * policy. Numeric recording needs an explicit age-bearing producer contract.
+    /** Record what the device reported, at app receipt time, not an invented
+     * sensor acquisition time. Retraction: lack of field ages formerly erased
+     * every numeric reading even though this same decoded response powers live
+     * telemetry. A response is an observation of the gateway snapshot; silence
+     * cannot restamp it, and the firmware's no-data sentinel remains unavailable.
      */
-    private fun observeCachedBmsReply(source: GatewaySource, frame: VescBmsFrame) {
+    private fun observeReceivedBmsReply(source: GatewaySource, frame: VescBmsFrame, decoded: BmsData?) {
         val previous = historyBmsCellSpan[source.globalIndex] ?: 0
         val span = if (frame.noBmsDataYet) previous else maxOf(previous, frame.cellVoltages.size)
         if (!source.derived) historyBmsCellSpan = historyBmsCellSpan + (source.globalIndex to span)
         observeTelemetry(TelemetryOrigin.BATTERY, packs.indexOf(source),
             if (source.derived) TelemetryRole.DERIVED else TelemetryRole.CONTRIBUTOR) {
-            val reason = if (frame.noBmsDataYet) TelemetryUnknown.UNAVAILABLE else TelemetryUnknown.PARTIAL_SOURCE
+            val fields = buildSet {
+                addAll(listOf(TelemetryMetric.SOC, TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.POWER))
+                if (!source.derived) addAll(listOf(TelemetryMetric.BATTERY_TEMPERATURE, TelemetryMetric.CELL_MIN,
+                    TelemetryMetric.CELL_MAX, TelemetryMetric.CELL_DELTA, TelemetryMetric.CELL))
+            }
             buildList {
-                for (metric in listOf(TelemetryMetric.SOC, TelemetryMetric.VOLTAGE,
-                    TelemetryMetric.CURRENT, TelemetryMetric.POWER)) add(TelemetryReading(metric, null, reason))
-                if (!source.derived) {
-                    for (metric in listOf(TelemetryMetric.BATTERY_TEMPERATURE, TelemetryMetric.CELL_MIN,
-                        TelemetryMetric.CELL_MAX, TelemetryMetric.CELL_DELTA)) add(TelemetryReading(metric, null, reason))
-                    repeat(span) { add(TelemetryReading(TelemetryMetric.CELL, null, reason, it)) }
+                if (decoded == null) {
+                    fields.filter { !it.indexed }.forEach { add(TelemetryReading(it, null, TelemetryUnknown.UNAVAILABLE)) }
+                    if (!source.derived) repeat(span) { add(TelemetryReading(TelemetryMetric.CELL, null, TelemetryUnknown.UNAVAILABLE, it)) }
+                } else {
+                    addAll(freshBatteryReadings(decoded, fields))
+                    if (!source.derived) for (index in frame.cellVoltages.size until span)
+                        add(TelemetryReading(TelemetryMetric.CELL, null, TelemetryUnknown.UNAVAILABLE, index))
                 }
             }
         }
