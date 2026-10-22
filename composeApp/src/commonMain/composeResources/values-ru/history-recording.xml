@@ -2,7 +2,7 @@
     <string name="history_recording_title">Запись поездки</string>
     <string name="history_recording_active">Запись включена</string>
     <string name="history_recording_stopped">Запись остановлена вручную. Когда будете готовы, начните новую поездку.</string>
-    <string name="history_recording_connect">Для записи подключите поддерживаемый сохранённый транспорт.</string>
+    <string name="history_recording_connect">Для записи подключите транспорт.</string>
     <string name="history_recording_link_lost">Нет связи с транспортом</string>
     <string name="history_recording_connected">Транспорт подключён</string>
     <string name="history_recording_gps_starting">Подключение GPS…</string>

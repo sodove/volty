@@ -168,6 +168,38 @@ class HistoryExportSourceTest {
         assertEquals(tick((total - 1) * 500L), last?.tick)
     }
 
+    @Test fun retainedSummariesWithoutCapturedTimesAreExportedWithoutInventingSampleTimes() = runTest {
+        val (provider, store) = fixture(); store.beginRide()
+        val db = provider.database
+        // Deliberately incoherent with current writers: migrated retained facts
+        // have earned aggregates but none of the later captured-time columns.
+        db.rideHistoryBucketQueries.putBucket("ride", "pack", "power_w", -1,
+            10, 2010, -100.0, 20.0, 4.5, 100, 1, null, null, null, null, null, null, null)
+        val request = store.request(HistoryExportFormat.JSON)
+        val reader = SqlDelightHistoryExportSource(provider, pageSize = 1)
+        for (format in listOf(HistoryExportFormat.JSON, HistoryExportFormat.CSV)) {
+            val input = reader.open(request.copy(format = format)); val text = StringBuilder()
+            val counts = StreamingHistoryExportEncoder().write(format, input.metadata, input.records) { text.append(it) }
+            assertEquals(1, counts.summaries, "retained facts must not silently disappear")
+            if (format == HistoryExportFormat.JSON) {
+                val row = Json.parseToJsonElement(text.toString()).jsonObject.getValue("records").jsonArray.single().jsonObject
+                assertEquals("summary", row.getValue("type").jsonPrimitive.content)
+                assertEquals("RETAINED_SUMMARY_TIME_UNAVAILABLE", row.getValue("dataQuality").jsonPrimitive.content)
+                assertEquals(JsonNull, row.getValue("epochMillis"))
+                assertEquals(JsonNull, row.getValue("clockGeneration"))
+                assertEquals(JsonNull, row.getValue("first").jsonObject.getValue("epochMillis"))
+                assertEquals(JsonNull, row.getValue("minimum").jsonObject.getValue("epochMillis"))
+                assertEquals(-100.0, row.getValue("minimum").jsonObject.getValue("value").jsonPrimitive.double)
+                assertEquals(4.5, row.getValue("energyWh").jsonPrimitive.double)
+                assertEquals(100, row.getValue("sampleCount").jsonPrimitive.int)
+                assertEquals(10, row.getValue("coverageStartElapsedMillis").jsonPrimitive.int)
+                assertEquals(2010, row.getValue("coverageEndElapsedMillis").jsonPrimitive.int)
+            } else assertTrue("RETAINED_SUMMARY_TIME_UNAVAILABLE" in text)
+        }
+        val cropped = reader.open(request.copy(range = HistoryRange(1500, 4000)))
+        assertTrue(cropped.records.toList().isEmpty(), "a retained bucket crossing the selected window cannot be cropped by guessing")
+    }
+
     @Test fun summaryCompositePagingKeepsIncompleteEarnedFactsAndExcludesBucketsCrossingSelectedWindow() = runTest {
         val (provider, store) = fixture(); store.beginRide(); val db = provider.database
         for (source in listOf("pack2", "pack3")) db.rideHistorySourceQueries.insertSource("ride", source, "BATTERY", "Same label")

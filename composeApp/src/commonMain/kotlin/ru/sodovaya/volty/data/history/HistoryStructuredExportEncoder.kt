@@ -41,7 +41,7 @@ internal class StructuredHistoryExportEncoder(private val metadata: HistoryExpor
                 is HistoryExportRecord.Numeric -> counts.copy(samples = counts.samples + 1)
                 is HistoryExportRecord.Location -> counts.copy(locations = counts.locations + 1)
                 is HistoryExportRecord.Event -> counts.copy(events = counts.events + 1)
-                is HistoryExportRecord.Summary -> counts.copy(summaries = counts.summaries + 1)
+                is HistoryExportRecord.Summary, is HistoryExportRecord.RetainedSummary -> counts.copy(summaries = counts.summaries + 1)
                 is HistoryExportRecord.LegacyUnmapped -> counts.copy(unmapped = counts.unmapped + 1)
             }
         }
@@ -93,6 +93,7 @@ internal class StructuredHistoryExportEncoder(private val metadata: HistoryExpor
             base("event", marker.tick); put("event", marker.kind.name)
             marker.sourceId?.let { source(it) }
         }
+        is HistoryExportRecord.RetainedSummary -> retainedSummary(record)
         is HistoryExportRecord.Summary -> buildJsonObject {
             if (legacy) fail(HistoryExportFailure.INVALID_DATA)
             val bucket = record.bucket
@@ -115,6 +116,43 @@ internal class StructuredHistoryExportEncoder(private val metadata: HistoryExpor
             put("coverage", "ORIGINAL_BUCKET")
             put("overlapsRangeBoundary", from < metadata.range.startEpochMillis || through > metadata.range.endEpochMillis)
         }
+    }
+
+    private fun retainedSummary(row: HistoryExportRecord.RetainedSummary) = buildJsonObject {
+        if (legacy || row.sampleCount <= 0 || row.startElapsedMillis < metadata.ride.started.elapsedMillis ||
+            row.endElapsedMillis < row.startElapsedMillis || (row.minimum == null) != (row.maximum == null) ||
+            listOfNotNull(row.minimum, row.maximum, row.energyWh).any { !it.isFinite() } ||
+            (row.minimum != null && row.maximum != null && row.minimum > row.maximum) ||
+            (row.complete && row.minimum == null)) fail(HistoryExportFailure.INVALID_DATA)
+        val coverageStart = row.firstElapsedMillis ?: row.startElapsedMillis
+        if (coverageStart !in row.startElapsedMillis..row.endElapsedMillis) fail(HistoryExportFailure.INVALID_DATA)
+        fun elapsedAxis(elapsed: Long) = axis(metadata.ride.started.copy(elapsedMillis = elapsed))
+        if (elapsedAxis(coverageStart) < metadata.range.startEpochMillis ||
+            elapsedAxis(row.endElapsedMillis) > metadata.range.endEpochMillis) fail(HistoryExportFailure.INVALID_DATA)
+        fun partialTick(epoch: Long?, elapsed: Long?) = buildJsonObject {
+            if (elapsed != null && elapsed !in coverageStart..row.endElapsedMillis) fail(HistoryExportFailure.INVALID_DATA)
+            put("epochMillis", epoch?.let(::JsonPrimitive) ?: JsonNull)
+            put("elapsedMillis", elapsed?.let(::JsonPrimitive) ?: JsonNull)
+            put("clockGeneration", if (epoch != null && elapsed != null) JsonPrimitive(metadata.ride.started.clockGeneration) else JsonNull)
+        }
+        fun peak(value: Double?, epoch: Long?, elapsed: Long?): JsonElement = value?.let { buildJsonObject {
+            partialTick(epoch, elapsed).forEach { (name, entry) -> put(name, entry) }
+            metric(row.key); put("value", value); put("unknownReason", JsonNull)
+        } } ?: JsonNull
+        put("type", "summary"); put("dataQuality", "RETAINED_SUMMARY_TIME_UNAVAILABLE")
+        put("rangeAxis", rangeAxis)
+        partialTick(row.firstEpochMillis, row.firstElapsedMillis).forEach { (name, entry) -> put(name, entry) }
+        metric(row.key)
+        put("slot", (row.startElapsedMillis - metadata.ride.started.elapsedMillis) / HISTORY_SUMMARY_BUCKET_MILLIS)
+        put("first", partialTick(row.firstEpochMillis, row.firstElapsedMillis))
+        put("last", partialTick(row.lastEpochMillis, row.endElapsedMillis))
+        put("minimum", peak(row.minimum, row.minEpochMillis, row.minElapsedMillis))
+        put("maximum", peak(row.maximum, row.maxEpochMillis, row.maxElapsedMillis))
+        put("energyWh", row.energyWh?.let(::JsonPrimitive) ?: JsonNull)
+        put("sampleCount", row.sampleCount); put("complete", row.complete)
+        put("coverage", "STORED_BUCKET_BOUND")
+        put("coverageStartElapsedMillis", coverageStart); put("coverageEndElapsedMillis", row.endElapsedMillis)
+        put("overlapsRangeBoundary", false)
     }
 
     private fun sample(value: HistorySample, checkRange: Boolean = true,

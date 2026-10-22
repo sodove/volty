@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.history
 
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.*
+import com.arkivanov.essenty.statekeeper.StateKeeperDispatcher
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.test.*
@@ -10,6 +11,151 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryComponentTest {
+    @Test fun recreationRestoresQualifiedRideWindowCursorMetricsAndChartsWithoutReusingExport() = runTest {
+        val keeper = StateKeeperDispatcher()
+        val first = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED), stateKeeper = keeper),
+            backgroundScope, Repo(), { origin }, {})
+        var restored: DefaultHistoryComponent? = null
+        try {
+            first.openRide("a"); runCurrent(); first.loadSourceMetrics("pack"); runCurrent(); first.addMetric(key); runCurrent()
+            first.selectRange(HistoryRange(2000, 4000)); runCurrent(); first.selectTime(3000); first.showCharts(); runCurrent()
+            val saved = keeper.save(); first.close()
+            restored = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED),
+                stateKeeper = StateKeeperDispatcher(saved)), backgroundScope, Repo(), { origin }, {})
+            runCurrent()
+            assertEquals("a", restored.state.value.selectedRideId)
+            assertEquals(HistoryRange(2000, 4000), restored.state.value.detail.range)
+            assertEquals(listOf(key), restored.state.value.detail.selectedKeys)
+            assertEquals(3000L, restored.state.value.detail.cursorEpochMillis)
+            assertEquals(HistoryDestination.CHARTS, restored.state.value.destination)
+            assertNull(restored.state.value.export.ready)
+        } finally { first.close(); restored?.close() }
+    }
+
+    @Test fun recreationCannotRebindSavedViewToReusedRideIdWithDifferentIdentity() = runTest {
+        val keeper = StateKeeperDispatcher()
+        val first = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED), stateKeeper = keeper),
+            backgroundScope, Repo(), { origin }, {})
+        var restored: DefaultHistoryComponent? = null
+        try {
+            first.openRide("a"); runCurrent(); val saved = keeper.save(); first.close()
+            val changed = object : Repo() {
+                override suspend fun ride(id: String) = this@HistoryComponentTest.ride(id).copy(vehicleId = "other-bike")
+            }
+            restored = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED),
+                stateKeeper = StateKeeperDispatcher(saved)), backgroundScope, changed, { origin }, {})
+            runCurrent()
+            assertNull(restored.state.value.selectedRideId)
+            assertEquals(HistoryDestination.CATALOG, restored.state.value.destination)
+        } finally { first.close(); restored?.close() }
+    }
+
+    @Test fun repositoryNavigationDuringRestoredMetricReadCannotOverrideSuccessorView() = runTest {
+        val keeper = StateKeeperDispatcher()
+        val first = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED), stateKeeper = keeper),
+            backgroundScope, Repo(), { origin }, {})
+        var restored: DefaultHistoryComponent? = null
+        val restoreReadEntered = CompletableDeferred<Unit>()
+        val releaseRestoreRead = CompletableDeferred<Unit>()
+        val window = HistoryRange(2000, 4000)
+        var navigationIssued = false
+        val restoredRepo = object : Repo() {
+            val seriesCalls = mutableListOf<Pair<String, HistoryRange>>()
+
+            override suspend fun ride(rideId: String): HistoryRide? {
+                if (rideId == "a" && !releaseRestoreRead.isCompleted) {
+                    restoreReadEntered.complete(Unit)
+                    releaseRestoreRead.await()
+                }
+                return super.ride(rideId)
+            }
+
+            override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries {
+                seriesCalls += rideId to range
+                if (rideId == "a" && range == window && !navigationIssued) {
+                    navigationIssued = true
+                    assertNotNull(restored).openRide("b")
+                }
+                return super.series(rideId, key, range, maxPoints)
+            }
+        }
+        try {
+            first.openRide("a"); runCurrent(); first.loadSourceMetrics("pack"); runCurrent(); first.addMetric(key); runCurrent()
+            first.selectRange(window); runCurrent(); first.selectTime(3000); first.selectMapMetric(key); first.showCharts(); runCurrent()
+            val saved = keeper.save(); first.close()
+
+            val immediateScope = CoroutineScope(coroutineContext + UnconfinedTestDispatcher(testScheduler))
+            restored = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED),
+                stateKeeper = StateKeeperDispatcher(saved)), immediateScope, restoredRepo, { origin }, {})
+            assertTrue(restoreReadEntered.isCompleted)
+            releaseRestoreRead.complete(Unit)
+            runCurrent()
+
+            assertTrue(navigationIssued, "the restored cropped-window metric read must issue the successor ride")
+            assertEquals(listOf("a", "b"), restoredRepo.detailReads)
+            assertEquals(listOf("a" to window), restoredRepo.seriesCalls)
+            assertEquals("b", restored.state.value.selectedRideId)
+            assertEquals("b", restored.state.value.detail.ride?.id)
+            assertEquals(full, restored.state.value.detail.range)
+            assertTrue(restored.state.value.detail.selectedKeys.isEmpty())
+            assertNull(restored.state.value.mapMetricKey)
+            assertEquals(HistoryDestination.RIDE, restored.state.value.destination)
+        } finally {
+            releaseRestoreRead.complete(Unit)
+            first.close(); restored?.close(); runCurrent()
+        }
+    }
+
+    @Test fun exportUsesLoadedParentSelectionAndChosenWindowAndCannotStartDuringRideReplacement() = runTest {
+        val requests = mutableListOf<HistoryExportRequest>()
+        val exports = object : HistoryExportRepository {
+            override suspend fun export(request: HistoryExportRequest): HistoryExportResult {
+                requests += request
+                return HistoryExportResult.Success("ride.json", 42, "digest", request.format.mime)
+            }
+        }
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),
+            backgroundScope, Repo(), { origin }, {}, exportRepository = exports)
+        try {
+            c.openExport(); c.export(HistoryExportFormat.JSON); runCurrent(); assertTrue(requests.isEmpty())
+            c.openRide("a"); runCurrent()
+            val window = HistoryRange(2000, 4000)
+            c.selectRange(window); runCurrent()
+            assertEquals(window, c.state.value.detail.range)
+            c.openExport(); c.export(HistoryExportFormat.JSON); runCurrent()
+            assertEquals(listOf(HistoryExportRequest(ride("a").favoriteSource(), window, HistoryExportFormat.JSON)), requests)
+            c.openRide("b")
+            assertTrue(c.state.value.detail.loading)
+            c.openExport(); c.export(HistoryExportFormat.CSV); runCurrent()
+            assertEquals(1, requests.size, "old detail/export state cannot supply the replacement ride")
+            assertEquals("b", c.state.value.detail.ride?.id)
+            c.openExport(); c.export(HistoryExportFormat.CSV); runCurrent()
+            assertEquals(HistoryExportRequest(ride("b").favoriteSource(), full, HistoryExportFormat.CSV), requests.last())
+            c.close(); c.openExport(); c.export(HistoryExportFormat.GPX); runCurrent(); assertEquals(2, requests.size)
+        } finally { c.close() }
+    }
+
+    @Test fun changingParentRideRetiresAnAlreadyStartedExportEvenWhenItsResultArrivesLate() = runTest {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val requests = mutableListOf<HistoryExportRequest>()
+        val exports = object : HistoryExportRepository {
+            override suspend fun export(request: HistoryExportRequest): HistoryExportResult = withContext(NonCancellable) {
+                requests += request; entered.complete(Unit); release.await()
+                HistoryExportResult.Success("old.json", 42, "digest", "application/json")
+            }
+        }
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),
+            backgroundScope, Repo(), { origin }, {}, exportRepository = exports)
+        try {
+            c.openRide("a"); runCurrent(); c.openExport(); c.export(HistoryExportFormat.JSON); runCurrent()
+            assertTrue(entered.isCompleted); assertTrue(c.state.value.export.busy)
+            c.openRide("b"); runCurrent(); release.complete(Unit); runCurrent()
+            assertEquals("b", c.state.value.detail.ride?.id)
+            assertNull(c.state.value.export.ready); assertNull(c.state.value.export.source)
+            assertEquals(listOf(HistoryExportRequest(ride("a").favoriteSource(), full, HistoryExportFormat.JSON)), requests)
+        } finally { release.complete(Unit); c.close(); runCurrent() }
+    }
+
     @Test fun recordingActionsKeepRenderedIdentityRefreshCatalogAndRetireWithScreen() = runTest {
         val reads = Repo()
         val statuses = kotlinx.coroutines.flow.MutableStateFlow(HistoryRecordingStatus(

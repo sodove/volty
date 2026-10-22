@@ -90,7 +90,18 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                     if (bucketRows > snapshot.shape.bucketCount) fail(HistoryExportFailure.SOURCE_CHANGED)
                     for (row in page) {
                         cell(row.cellIndex)
-                        emit(HistoryExportRecord.Summary(row.toHistoryBucket(snapshot.metadata.ride.started)))
+                        // Retraction: the old SQL discarded migrated summaries
+                        // without captured times. Their aggregates remain earned;
+                        // keep missing times explicit instead of synthesizing ticks.
+                        if (row.firstEpochMillis != null && row.firstElapsedMillis != null && row.lastEpochMillis != null &&
+                            (row.minimum == null || (row.minEpochMillis != null && row.minElapsedMillis != null)) &&
+                            (row.maximum == null || (row.maxEpochMillis != null && row.maxElapsedMillis != null))) {
+                            emit(HistoryExportRecord.Summary(row.toHistoryBucket(snapshot.metadata.ride.started)))
+                        } else emit(HistoryExportRecord.RetainedSummary(
+                            HistorySeriesKey(row.sourceId, row.metricId, cell(row.cellIndex)),
+                            row.startElapsedMillis, row.endElapsedMillis, row.minimum, row.maximum, row.energyWh,
+                            row.sampleCount, row.complete == 1L, row.firstEpochMillis, row.firstElapsedMillis,
+                            row.lastEpochMillis, row.minEpochMillis, row.minElapsedMillis, row.maxEpochMillis, row.maxElapsedMillis))
                         source = row.sourceId; metric = row.metricId; index = row.cellIndex; start = row.startElapsedMillis
                     }
                     if (page.size < pageSize) break

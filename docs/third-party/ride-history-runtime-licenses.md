@@ -1,6 +1,6 @@
 # Resolved runtime POM license declarations
 
-Evidence: actual debugRuntimeClasspath from fresh h29 Gradle run (SQLDelight 2.3.2). Includes resolved transitive modules, not a legal compatibility conclusion.
+Evidence: actual releaseRuntimeClasspath from fresh h684 Gradle run (0.7.28). Includes resolved transitive modules, not a legal compatibility conclusion.
 Local AAR/JAR and native bundled subcomponents require separate source/archive evidence. Missing POM declarations are marked unresolved, never presumed permissive.
 
 | Resolved module | POM license declaration | Cached evidence |
@@ -198,9 +198,9 @@ Local AAR/JAR and native bundled subcomponents require separate source/archive e
 | `com.google.protobuf:protobuf-javalite:3.22.0` | BSD-3-Clause — https://opensource.org/licenses/BSD-3-Clause | `com.google.protobuf/protobuf-javalite/3.22.0/4adcb5b0cf8d8910be1ec737908ddd16c4d48c82/protobuf-javalite-3.22.0.pom -> com.google.protobuf/protobuf-parent/3.22.0/84859c771ad86fedb813fa906a57172fe7762012/protobuf-parent-3.22.0.pom` |
 | `com.jakewharton.timber:timber:5.0.1` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `com.jakewharton.timber/timber/5.0.1/c0c1017fec2651206a3b7b672bc3a5b481e17225/timber-5.0.1.pom` |
 | `com.juul.kable:kable-core:0.43.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `com.juul.kable/kable-core/0.43.0/7d8cf783b309ec29c53097487eddcbef694e46a3/kable-core-0.43.0.pom` |
-| `com.juul.kable:kable-core-android-debug:0.43.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `com.juul.kable/kable-core-android-debug/0.43.0/171fbbfcdb155730b976666d1905041f10ce7bea/kable-core-android-debug-0.43.0.pom` |
+| `com.juul.kable:kable-core-android:0.43.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `com.juul.kable/kable-core-android/0.43.0/4f38ed144858b9ef1b8f04deeb5541d6a814e742/kable-core-android-0.43.0.pom` |
 | `com.juul.tuulbox:coroutines:8.1.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `com.juul.tuulbox/coroutines/8.1.0/11bfe835d797c3459c80f9f34da1fb35072ad57d/coroutines-8.1.0.pom` |
-| `com.juul.tuulbox:coroutines-android-debug:8.1.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `com.juul.tuulbox/coroutines-android-debug/8.1.0/7f4d7bb5e2c6b6b45ad5c54939ee9fa59d4ea967/coroutines-android-debug-8.1.0.pom` |
+| `com.juul.tuulbox:coroutines-android:8.1.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `com.juul.tuulbox/coroutines-android/8.1.0/d8e9b1c13301d8d7098e0cc918dd7a3953c690be/coroutines-android-8.1.0.pom` |
 | `com.squareup.moshi:moshi:1.15.1` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `com.squareup.moshi/moshi/1.15.1/a94c9ff73c4f06016c2b4bb26f181d5832b8daa1/moshi-1.15.1.pom` |
 | `com.squareup.moshi:moshi-adapters:1.15.1` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `com.squareup.moshi/moshi-adapters/1.15.1/a8da07dc0c04579f38e43c84bfc6a01aa6bc6b37/moshi-adapters-1.15.1.pom` |
 | `com.squareup.moshi:moshi-kotlin:1.15.1` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `com.squareup.moshi/moshi-kotlin/1.15.1/7ee85e54aeacfc98919c193619deb211c547a176/moshi-kotlin-1.15.1.pom` |
@@ -281,7 +281,7 @@ Local AAR/JAR and native bundled subcomponents require separate source/archive e
 | `org.jetbrains.compose.runtime:runtime-saveable:1.11.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.compose.runtime/runtime-saveable/1.11.0/9f8c8484fd808a72bcba6f994b86fd0354e5d5e/runtime-saveable-1.11.0.pom` |
 | `org.jetbrains.compose.ui:ui:1.11.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.compose.ui/ui/1.11.0/25bb8db2289d9a9a291f6ea2eb82f7edb4c14f99/ui-1.11.0.pom` |
 | `org.jetbrains.compose.ui:ui-backhandler:1.10.0-beta01` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.compose.ui/ui-backhandler/1.10.0-beta01/f6ee9a47ea336b388be402958f55dde669254c3e/ui-backhandler-1.10.0-beta01.pom` |
-| `org.jetbrains.compose.ui:ui-backhandler-android-debug:1.10.0-beta01` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.compose.ui/ui-backhandler-android-debug/1.10.0-beta01/763eeb5c2851fff31ff55ac9f8d9009f0f931d6/ui-backhandler-android-debug-1.10.0-beta01.pom` |
+| `org.jetbrains.compose.ui:ui-backhandler-android:1.10.0-beta01` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.compose.ui/ui-backhandler-android/1.10.0-beta01/27569344f9adaefff2623e5e49b4278dfa567928/ui-backhandler-android-1.10.0-beta01.pom` |
 | `org.jetbrains.compose.ui:ui-geometry:1.11.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.compose.ui/ui-geometry/1.11.0/ba5ae56c543fa25fa66ed1073ae8ec931dd1432d/ui-geometry-1.11.0.pom` |
 | `org.jetbrains.compose.ui:ui-graphics:1.11.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.compose.ui/ui-graphics/1.11.0/1d662f0b150f6dfb10d2b4672c11fadd59670aeb/ui-graphics-1.11.0.pom` |
 | `org.jetbrains.compose.ui:ui-text:1.11.0` | The Apache Software License, Version 2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.compose.ui/ui-text/1.11.0/adbb7dc0ec01cf1f05b8aad31bf27c4e9dcc2f3b/ui-text-1.11.0.pom` |
@@ -312,11 +312,10 @@ Local AAR/JAR and native bundled subcomponents require separate source/archive e
 | `org.jetbrains.kotlinx:kotlinx-serialization-json:1.10.0` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.kotlinx/kotlinx-serialization-json/1.10.0/1e7fcf22dd5eb6da3a45ca26e11e533758ad7e0f/kotlinx-serialization-json-1.10.0.pom` |
 | `org.jetbrains.kotlinx:kotlinx-serialization-json-jvm:1.10.0` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `org.jetbrains.kotlinx/kotlinx-serialization-json-jvm/1.10.0/9c74a109fb63cae2493b60d5263b6da6f25aedef/kotlinx-serialization-json-jvm-1.10.0.pom` |
 | `org.jspecify:jspecify:1.0.0` | The Apache License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `org.jspecify/jspecify/1.0.0/fae4a252aeee8a649653b2f239067bcead8f80cb/jspecify-1.0.0.pom` |
-| `org.maplibre.gl:android-sdk:13.0.2` | BSD — https://opensource.org/licenses/BSD-2-Clause | `org.maplibre.gl/android-sdk/13.0.2/a2975813e40f3262bcd64e564faf06a62fadb013/android-sdk-13.0.2.pom` |
 | `org.maplibre.gl:android-sdk-geojson:6.0.1` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `org.maplibre.gl/android-sdk-geojson/6.0.1/23fb6d592ccba4fd86a719e28b35b38ed67faf73/android-sdk-geojson-6.0.1.pom` |
+| `org.maplibre.gl:android-sdk-opengl:13.0.2` | BSD — https://opensource.org/licenses/BSD-2-Clause | `org.maplibre.gl/android-sdk-opengl/13.0.2/f18d79a3988a8dbba118f8948b663940cde56b5d/android-sdk-opengl-13.0.2.pom` |
 | `org.maplibre.gl:android-sdk-turf:6.0.1` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `org.maplibre.gl/android-sdk-turf/6.0.1/5327d0742de111926468d9c53d7e8b0bdd68b264/android-sdk-turf-6.0.1.pom` |
 | `org.maplibre.gl:maplibre-android-gestures:0.0.4` | BSD — https://opensource.org/licenses/BSD-2-Clause | `org.maplibre.gl/maplibre-android-gestures/0.0.4/d15a832ee15263bb3c40de35a59cc63ffae32d3f/maplibre-android-gestures-0.0.4.pom` |
 | `org.slf4j:slf4j-api:2.0.17` | MIT — https://opensource.org/license/mit | `org.slf4j/slf4j-api/2.0.17/570964f8e6716b09c354c6e334ba1a092464d85/slf4j-api-2.0.17.pom -> org.slf4j/slf4j-parent/2.0.17/641edf481a624909e4da7d07343055d46aba0b77/slf4j-parent-2.0.17.pom -> org.slf4j/slf4j-bom/2.0.17/abbc25a81a3bc8ccacdbd9150224250e4a66542a/slf4j-bom-2.0.17.pom` |
 
 Resolved modules: 312. Modules missing license evidence: 0.
-

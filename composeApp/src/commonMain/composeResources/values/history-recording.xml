@@ -2,7 +2,7 @@
     <string name="history_recording_title">Recording</string>
     <string name="history_recording_active">Recording enabled</string>
     <string name="history_recording_stopped">Recording stopped manually. Start a new ride when ready.</string>
-    <string name="history_recording_connect">Connect a supported saved vehicle to record a ride.</string>
+    <string name="history_recording_connect">Connect your vehicle to record a ride.</string>
     <string name="history_recording_link_lost">Vehicle disconnected</string>
     <string name="history_recording_connected">Vehicle connected</string>
     <string name="history_recording_gps_starting">Connecting GPS…</string>

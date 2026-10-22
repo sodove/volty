@@ -159,6 +159,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private data class PendingFavoriteSave(val id: String, val selection: Any, val windowIntent: Any, val source: HistoryFavoriteSource)
     private var pendingFavoriteSave: PendingFavoriteSave? = null
     private var handledDeletion: HistoryRideDeletionResult? = null
+    private var pendingRestoration = componentContext.stateKeeper.consume("history-selection-v1", HistorySavedSelection.serializer())
+    private val savedStateOwner = componentContext.stateKeeper
     private var windowGesture: WindowGesture? = null
     private class WindowGesture(val token: HistoryWindowGestureToken, val selection: Any, val intent: Any,
         val rideId: String, val base: HistoryRange, val bounds: HistoryRange)
@@ -237,11 +239,18 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                     mutableState.value = current.copy(route = next)
             }
         }
+        savedStateOwner.register("history-selection-v1", HistorySavedSelection.serializer()) {
+            pendingRestoration ?: HistorySavedSelection.capture(mutableState.value)
+        }
+        pendingRestoration?.let { saved -> openSelection(saved.rideId, saved.favorite(), saved) }
         componentContext.lifecycle.doOnDestroy { close() }
     }
 
     private fun onDetail(next: HistoryDetailState) {
         if (!lifetime.isActive || selectedRideId == null || next.rideId != selectedRideId) return
+        pendingRestoration?.let { saved ->
+            if (next.ride != null && next.ride.favoriteSource() != saved.source()) { clearSelection(); return }
+        }
         if (next.error == null && next.ride != null) selectedSource = next.ride.favoriteSource()
         val captured = selection
         val ride = next.ride; val range = next.range
@@ -252,6 +261,25 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         syncMediaFavorite()
         // UI publication can synchronously choose another ride or leave history.
         if (lifetime.isActive && selection === captured && needsRoute) route.open(checkNotNull(ride), checkNotNull(range))
+        val saved = pendingRestoration
+        if (saved != null && !next.loading && next.ride != null && next.range != null) {
+            pendingRestoration = null
+            // A reused database id must not attach a saved view to another ride.
+            if (next.ride.favoriteSource() != saved.source()) { clearSelection(); return }
+            val bounds = next.availableRange
+            if (bounds != null && saved.from >= bounds.startEpochMillis && saved.through <= bounds.endEpochMillis)
+                detail.selectRange(saved.range())
+            val keys = saved.metrics.map { it.key() }.filter { key ->
+                val source = next.sources.singleOrNull { it.id == key.sourceId }
+                val descriptor = HistoryMetricRegistry.descriptor(key.metricId)
+                source != null && descriptor != null && source.kind in descriptor.sourceKinds &&
+                    descriptor.indexedByCell == (key.cellIndex != null)
+            }
+            detail.replaceMetrics(keys)
+            detail.selectTime(saved.cursor)
+            mutableState.value = mutableState.value.copy(destination = if (saved.charts) HistoryDestination.CHARTS else HistoryDestination.RIDE,
+                mapMetricKey = saved.mapMetric?.key()?.takeIf { it in keys })
+        }
     }
 
     override fun refresh() {
@@ -265,8 +293,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     override fun loadOlder() { if (lifetime.isActive) { catalogIntent = Any(); catalog.loadOlder() } }
 
     override fun openRide(id: String) { openSelection(id, null) }
-    private fun openSelection(id: String, favorite: HistoryFavorite?) {
+    private fun openSelection(id: String, favorite: HistoryFavorite?, restoration: HistorySavedSelection? = null) {
         if (!lifetime.isActive) return
+        pendingRestoration = restoration
         require(id.isNotBlank())
         deletion.dismiss()
         exports.dismiss()
@@ -403,6 +432,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     }
 
     private fun clearSelection() {
+        pendingRestoration = null
         exports.dismiss()
         selectedRideId = null; selectedSource = null; selection = Any(); pendingFavoriteSave = null
         windowIntent = Any(); windowGesture = null
@@ -415,6 +445,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     }
 
     fun close() {
+        if (savedStateOwner.isRegistered("history-selection-v1")) savedStateOwner.unregister("history-selection-v1")
+        pendingRestoration = null
         selection = Any(); catalogIntent = Any(); selectedRideId = null; selectedSource = null
         windowIntent = Any(); windowGesture = null
         recording.close(); catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); deletion.close(); exports.close(); previewImages?.close(); lifetime.cancel()

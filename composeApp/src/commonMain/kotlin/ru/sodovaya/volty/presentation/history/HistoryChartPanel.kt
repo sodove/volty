@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.history.*
+import ru.sodovaya.volty.util.formatFixed
 import volty.composeapp.generated.resources.*
 
 /** Only renders selected, already-owned recorded series; no live graph streams.
@@ -99,14 +100,14 @@ private fun RecordedChart(series: HistorySeries, range: HistoryRange, preview: H
     val sample = cursor?.let { historyCursorSample(series, it, maxAgeMillis) }
     val sampleTime = sample?.tick?.let { tick -> series.origin?.let { historyAxisEpochMillis(it, tick) } ?: tick.epochMillis }
     val selected = scene?.segments?.flatten()?.firstOrNull { it.epochMillis == sampleTime && it.x in 0f..1f }
-    val reading = selected?.let { "${it.value} $unit" } ?: "—"
+    val reading = selected?.let { "${formatFixed(it.value.toFloat(), 2)} $unit" } ?: "—"
     Text(stringResource(Res.string.history_chart_cursor, reading), style = MaterialTheme.typography.labelMedium)
     when {
         matching == null -> LinearProgressIndicator(Modifier.fillMaxWidth())
         scene == null -> Text(stringResource(Res.string.history_metric_chart_error), color = MaterialTheme.colorScheme.error)
         scene.segments.isEmpty() -> Text(stringResource(Res.string.history_summary_unavailable))
         else -> {
-            if (!compact) Text(stringResource(Res.string.history_chart_scale, scene.minimum.toString(), scene.maximum.toString(), unit),
+            if (!compact) Text(stringResource(Res.string.history_chart_scale, scene.minimum?.let { formatFixed(it.toFloat(), 2) } ?: "—", scene.maximum?.let { formatFixed(it.toFloat(), 2) } ?: "—", unit),
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val line = MaterialTheme.colorScheme.primary
             val grid = MaterialTheme.colorScheme.outlineVariant

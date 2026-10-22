@@ -32,6 +32,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.*
 
@@ -48,11 +49,12 @@ fun HistoryNavigationStrip(
     onOpenCharts: () -> Unit,
     onOpenMetrics: () -> Unit,
     modifier: Modifier = Modifier,
+    singleRow: Boolean = false,
 ) {
     val openRidesLabel = stringResource(Res.string.history_open_rides)
 
     BoxWithConstraints(modifier.fillMaxWidth()) {
-        val compact = maxWidth < 360.dp || LocalDensity.current.fontScale > 1.3f
+        val compact = (!singleRow && maxWidth < 480.dp) || LocalDensity.current.fontScale > 1.3f
         if (compact) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 HistoryRideSelector(title, subtitle, openRidesLabel, onOpenList, Modifier.fillMaxWidth())
@@ -147,9 +149,9 @@ private fun HistoryRideSelector(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Text(title, style = MaterialTheme.typography.titleSmall)
+                Text(title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(
-                    subtitle,
+                    subtitle, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

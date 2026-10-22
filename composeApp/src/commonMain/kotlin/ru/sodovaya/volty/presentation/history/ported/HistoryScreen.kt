@@ -134,6 +134,9 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                 density.fontScale > 1.3f -> 0.45f
                 else -> 0.28f
             }
+            // A short landscape window must still show the first earned value,
+            // not merely its heading; the panel keeps its own bounded scrolling.
+            val readableSummaryHeight = summaryHeight.coerceAtLeast(minOf(180.dp, maxHeight * 0.65f))
             var topPixels by remember { mutableIntStateOf(0) }
             var panelPixels by remember { mutableIntStateOf(0) }
             var fitSequence by remember { mutableLongStateOf(0) }
@@ -192,13 +195,13 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                     }
                 }
                 if (content.detail != null) HistorySummaryPanel(content.detail, summaryExpanded, { summaryExpanded = it },
-                    Modifier.fillMaxWidth().heightIn(max = summaryHeight), reduceMotion)
+                    Modifier.fillMaxWidth().heightIn(max = readableSummaryHeight), reduceMotion)
                 HistoryRouteStatus(content, owner)
             }
             Surface(Modifier.align(if (wide) Alignment.CenterEnd else Alignment.BottomCenter).width(panelWidth)
                 .heightIn(max = panelHeight).onSizeChanged { panelPixels = it.height },
                 shape = RoundedCornerShape(topStart = 16.dp, topEnd = if (wide) 0.dp else 16.dp), tonalElevation = 3.dp) {
-                val scrollChrome = panelHeight < 320.dp || density.fontScale > 1.3f
+                val scrollChrome = panelHeight < 480.dp || density.fontScale > 1.3f
                 Column((if (reduceMotion) Modifier else Modifier.animateContentSize(tween(180)))
                     .then(if (scrollChrome) Modifier.verticalScroll(rememberScrollState()) else Modifier)) {
                     val neighbors = historyRideNeighbors(state.catalog.rides.map { it.id }, state.selectedRideId)
@@ -208,7 +211,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                         ?: stringResource(Res.string.history_date_unknown)
                     HistoryNavigationStrip(title, subtitle, neighbors.previousId != null, neighbors.nextId != null,
                         { neighbors.previousId?.let(openRide) }, { neighbors.nextId?.let(openRide) },
-                        { listOpen = true }, owner::showCharts, { metricsOpen = true }, Modifier.padding(8.dp))
+                        { listOpen = true }, owner::showCharts, { metricsOpen = true }, Modifier.padding(8.dp), singleRow = wide)
                     if (content.phase == HistoryScreenPhase.READY) {
                         Surface(onClick = { chartsExpanded = !chartsExpanded }, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -45,6 +45,16 @@ sealed interface HistoryExportRecord {
     data class Location(val fix: HistoryGpsFix) : HistoryExportRecord
     data class Event(val marker: HistoryMarker) : HistoryExportRecord
     data class Summary(val bucket: HistoryBucket) : HistoryExportRecord
+    /** Migrated retained aggregates may lack captured boundary/peak times.
+     * Preserve earned values and stored coverage without manufacturing samples.
+     */
+    data class RetainedSummary(val key: HistorySeriesKey,
+        val startElapsedMillis: Long, val endElapsedMillis: Long,
+        val minimum: Double?, val maximum: Double?, val energyWh: Double?,
+        val sampleCount: Long, val complete: Boolean,
+        val firstEpochMillis: Long?, val firstElapsedMillis: Long?, val lastEpochMillis: Long?,
+        val minEpochMillis: Long?, val minElapsedMillis: Long?,
+        val maxEpochMillis: Long?, val maxElapsedMillis: Long?) : HistoryExportRecord
 }
 
 data class HistoryExportCounts(val samples: Long = 0, val locations: Long = 0,
