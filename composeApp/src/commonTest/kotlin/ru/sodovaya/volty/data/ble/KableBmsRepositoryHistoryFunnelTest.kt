@@ -61,7 +61,12 @@ class KableBmsRepositoryHistoryFunnelTest {
     }
 
     @Test fun terminalRuntimeCloseFencesNewCaptureButDrainsAlreadyAcceptedNativeReceipt() = kotlinx.coroutines.test.runTest {
-        val writer = Writer(); val c = controller(writer)
+        val finishAck = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val writer = object : Writer() {
+            override suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String?) {
+                super.finish(generation, tick, status, rideId); finishAck.await()
+            }
+        }; val c = controller(writer)
         val spec = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
         var now = tick(); val protocol = Emitter()
         val ingress = HistoryTelemetryIngress(c, { now },
@@ -71,7 +76,8 @@ class KableBmsRepositoryHistoryFunnelTest {
         val capture = assertNotNull(ingress.capture(protocol, "attempt", spec, vehicle(), SampleSessionOwnership { true }, channel))
         assertTrue(capture.prepareForObservation())
         now = tick(20); assertTrue(capture.processNotification(byteArrayOf(7)))
-        val accepted = assertIs<HistoryTelemetrySample>(channel.tryReceive().getOrNull())
+        assertTrue(channel.tryReceive().isFailure)
+        assertEquals(listOf(7.0), writer.samples.flatMap { it.samples }.map { it.value })
         now = tick(10)
         val close = backgroundScope.async { ingress.closeNative() }
         try {
@@ -80,7 +86,7 @@ class KableBmsRepositoryHistoryFunnelTest {
             assertEquals(1, protocol.decodes)
             assertNull(ingress.capture(Emitter(), "late", spec, vehicle(), SampleSessionOwnership { true }, channel))
             assertNull(ingress.manualControls())
-            assertEquals(HistoryOffer.ACCEPTED, accepted.consume())
+            finishAck.complete(Unit)
             close.await()
             assertEquals(listOf(7.0), writer.samples.flatMap { it.samples }.map { it.value })
             assertEquals(listOf(HistoryRideStatus.COMPLETED), writer.statuses)
@@ -89,11 +95,14 @@ class KableBmsRepositoryHistoryFunnelTest {
             assertNull(ingress.manualControls()); ingress.closeNative()
             assertEquals(1, writer.begins.size)
             assertEquals(1, writer.statuses.size)
-        } finally { accepted.discard(); channel.cancel(); close.cancel(); runCurrent() }
+        } finally { finishAck.complete(Unit); channel.cancel(); close.cancel(); runCurrent() }
     }
 
-    @Test fun managedQueuedPrefixIsProcessedOrQualifiedBeforeNativeDisconnectReturns() = kotlinx.coroutines.test.runTest {
-        for (discard in listOf(false, true)) {
+    // Retraction: managed history formerly reserved a receipt in the dashboard
+    // queue. Accepted direct delivery cannot be retroactively discarded when
+    // the physical attempt retires; the writer already owns that fact.
+    @Test fun managedAcceptedFactsRemainOwnedAfterPhysicalAttemptRetires() = kotlinx.coroutines.test.runTest {
+        for (retire in listOf(false, true)) {
             val writer = Writer(); val c = controller(writer); val spec = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
             var now = tick(); var owns = true
             val ingress = HistoryTelemetryIngress(c, { now }, { _, _ -> mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source) }, manageConnections = true)
@@ -101,21 +110,21 @@ class KableBmsRepositoryHistoryFunnelTest {
             ingress.installNativePlan("bike", listOf(spec), vehicle()) { true }
             val capture = assertNotNull(ingress.capture(Emitter(), "attempt", spec, vehicle(), SampleSessionOwnership { owns }, channel))
             assertTrue(capture.prepareForObservation()); now = tick(20); capture.processNotification(byteArrayOf(7))
-            val sample = assertIs<HistoryTelemetrySample>(assertNotNull(channel.tryReceive().getOrNull()))
+            assertTrue(channel.tryReceive().isFailure)
+            assertEquals(listOf(7.0), writer.samples.flatMap { it.samples }.map { it.value })
             now = tick(10)
+            if (retire) owns = false
             val finish = backgroundScope.async { ingress.disconnectNative { true } }
             try {
-                runCurrent(); assertFalse(finish.isCompleted)
-                if (discard) owns = false
-                assertEquals(if(discard) HistoryOffer.RETIRED else HistoryOffer.ACCEPTED, sample.consume())
+                runCurrent()
                 finish.await()
-                assertEquals(listOf(if(discard) HistoryRideStatus.INTERRUPTED else HistoryRideStatus.COMPLETED), writer.statuses)
-                assertEquals(if(discard) emptyList() else listOf(7.0), writer.samples.flatMap { it.samples }.map { it.value })
-            } finally { sample.discard(); channel.cancel(); finish.cancel(); runCurrent() }
+                assertEquals(listOf(HistoryRideStatus.COMPLETED), writer.statuses)
+                assertEquals(listOf(7.0), writer.samples.flatMap { it.samples }.map { it.value })
+            } finally { channel.cancel(); finish.cancel(); runCurrent() }
         }
     }
 
-    @Test fun cancellingNativeQueueReleasesUndeliveredFactBeforeDurableFinish() = kotlinx.coroutines.test.runTest {
+    @Test fun cancellingDashboardQueueCannotDiscardAcceptedNativeHistory() = kotlinx.coroutines.test.runTest {
         val writer = Writer(); val c = controller(writer); val spec = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
         var now = tick()
         val ingress = HistoryTelemetryIngress(c, { now }, { _, _ -> mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source) }, manageConnections = true)
@@ -123,15 +132,15 @@ class KableBmsRepositoryHistoryFunnelTest {
         ingress.installNativePlan("bike", listOf(spec), vehicle()) { true }
         val capture = assertNotNull(ingress.capture(Emitter(), "attempt", spec, vehicle(), SampleSessionOwnership { true }, channel))
         assertTrue(capture.prepareForObservation()); now = tick(20); capture.processNotification(byteArrayOf(7))
-        val backup = assertIs<HistoryTelemetrySample>(assertNotNull(channel.tryReceive().getOrNull()))
-        assertTrue(channel.trySend(backup).isSuccess)
+        assertTrue(channel.tryReceive().isFailure)
+        assertEquals(listOf(7.0), writer.samples.flatMap { it.samples }.map { it.value })
+        channel.cancel()
         val finish = backgroundScope.async { ingress.disconnectNative { true } }
         try {
-            runCurrent(); assertFalse(finish.isCompleted)
-            channel.cancel(); finish.await()
-            assertEquals(listOf(HistoryRideStatus.INTERRUPTED), writer.statuses)
-            assertTrue(writer.samples.isEmpty())
-        } finally { backup.discard(); channel.cancel(); finish.cancel(); runCurrent() }
+            runCurrent(); finish.await()
+            assertEquals(listOf(HistoryRideStatus.COMPLETED), writer.statuses)
+            assertEquals(listOf(7.0), writer.samples.flatMap { it.samples }.map { it.value })
+        } finally { channel.cancel(); finish.cancel(); runCurrent() }
     }
 
     @Test fun acceptedNativeDisconnectFinishesHistoryWhenItsCallerIsCancelled() = bleRepositoryTest { repo ->
@@ -261,8 +270,7 @@ class KableBmsRepositoryHistoryFunnelTest {
             assertSame(first.gate, assertNotNull(c.captureTelemetryRecording()).gate)
             now = tick(1); ingress.retireNativeAttempt(pa)
             cb.processNotification(byteArrayOf(9))
-            val event = assertIs<HistoryTelemetrySample>(assertNotNull(channel.tryReceive().getOrNull()))
-            assertEquals(HistoryOffer.ACCEPTED, event.consume())
+            assertTrue(channel.tryReceive().isFailure)
             assertEquals("pack-b", writer.samples.single().samples.single().key.sourceId)
             assertTrue(c.state.value.intent.linkConnected)
             now = tick(2); ingress.retireNativeAttempt(pb); assertNull(c.captureTelemetryRecording())

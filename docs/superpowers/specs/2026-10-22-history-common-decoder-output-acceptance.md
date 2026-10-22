@@ -60,13 +60,78 @@ with the `FORWARD_CAN` hosting-controller target. Stock `bldc/bms.c` shows these
 can differ. No such equality guard was introduced; regression tests retain this
 distinction. The CAN ID is not a transaction ID.
 
+## Shared topology and independent native intake
+
+Retraction of the earlier remaining-work list: native decoder construction and
+history now use one `DecoderProtocolPlan`. Source roles/counts are declared beside
+the actual decoder factory, including hosted-only BMS links and numbered virtual
+gateway packs. Sizing no longer constructs throwaway protocol instances. Physical
+source attribution and single selected alias admission remain checked separately.
+
+Managed native observations enter the existing bounded history writer directly
+inside the observation/admission fences. They no longer compete with dashboard
+snapshots in the 64-element channel. Stop, replacement and close await admitted
+writer calls, and bounded-writer rejection is latched before admission release;
+a lossy ride cannot be marked completed. Compatibility queue tests remain for
+unmanaged callers, and native tests now assert actual numeric writer batches.
+
+Computed gateway readings use only identity-qualified controller decode snapshots
+and their receipt ages. Equal fresh replies remain observations; cached/live values
+cannot be substituted after an unattributed reply. A silent BMS timeout has no
+notification receipt: it retains a bounded slot intent, which is folded in the
+next round's final controller VALUES notification scope. The live fallback cadence
+and hosted-BMS precedence are preserved.
+
+- h663 reproduced missing direct delivery and computed-gateway output; factory
+  topology tests passed. h664 exposed marker/count assumptions in new tests.
+- h666: 4608 tests, four failures solely in old native queue-ownership assertions;
+  those tests now fence an actual in-flight synchronous offer.
+- h667: actual `SessionTelemetryCapture` regression reproduced lost silent-BMS
+  fallback, with four ownership tests passing. h668 exposed a test driver ending
+  before the next notification after the qualifying timeout; the driver now
+  asserts both issued serial rounds before checking receipt-scoped output.
+- h669: 4609 tests / 480 fresh XML, no failures/errors/skips/stale results, followed
+  by successful debug assembly (65 seconds). No build cache; serial Gradle,
+  four JVM processors. h670: actual database migration verification executed with
+  `--rerun-tasks` (18 seconds), not an up-to-date result.
+- Focused read-only Luna reviews found no further transport-fence or topology
+  identity issue. Primary review found the controller snapshot overwrite and
+  missing native receipt scope, and added the integration regression above.
+
+## Native Bumble acceptance
+
+h671 exercised the rebuilt debug app through its real saved
+`Bumble_history_wheel` vehicle and passive Leaperkim replay, not a fake recording
+repository. Android subscribed to FFE1, decoded telemetry, and automatically began
+one ride. Stopping/restarting the Bumble peripheral while Volty was in the
+background produced a 45,711 ms BLE gap and an automatic reconnect into the same
+ride. Inside that gap the database contains zero telemetry rows and 30 GPS fixes.
+During a conservatively bounded 38,260 ms interval with Android reporting
+`Asleep`, it contains 4,051 telemetry rows and 27 GPS fixes.
+
+Manual Stop finished the ride as `COMPLETED`: four distinct sources, 11,701 sample
+rows, 102 GPS fixes, 288 buckets and 188 batch receipts. There is no OVERFLOW
+marker. The only markers are CONNECTED, initial GPS_GAP, BLE_GAP, reconnected
+CONNECTED and MANUAL_STOP. Physical BMS branches do not acquire fabricated rail
+voltage/power from the controller.
+
+A SQLite `.backup` after durable Stop and a later quiescent snapshot after another
+peripheral disconnect/reconnect compare exactly across all nine history tables.
+No additional ride appeared and the completed ride did not change. All 18 legacy
+rides / 191,504 legacy points and all seven-table rows of the four earlier V2 rides
+also compare exactly with the pre-install baseline. Both snapshots pass SQLite
+integrity checking. Ignored evidence: `h671-proof.json`, the fresh native UI dumps,
+replay logs, atomic `h671-after-stop.db` and quiescent `h671-final.db`.
+
+The app was force-stopped after verification, all owned Bumble actors stopped,
+and ADB returned to shell mode. This confirms the virtual replay scenario;
+physical vehicles and phone vendor behavior remain separate acceptance work.
+
 ## Still open
 
-This is not whole-feature acceptance. Source topology is still described separately
-from decoder construction; computed gateway fallback recording needs completion.
-Native history still shares the dashboard's 64-element funnel: the earlier Bumble
-run measured nine dropped observations and an INTERRUPTED ride. That transport
-must be separated and the canonical native checks repeated. These new paths have
-not received physical-device acceptance, and no signed APK/source distribution
-has been refreshed for this correction. Export, distribution and the remaining
-Ride History plan are not declared complete.
+This is not whole-feature acceptance. The earlier Bumble run's nine dropped
+observations and INTERRUPTED ride remain an observed failure of the old transport;
+the new implementation passed the canonical native scenario above. These
+paths have not received physical-device acceptance, and no signed APK/source
+distribution has been refreshed for this correction. Export, distribution and the
+remaining Ride History plan are not declared complete.

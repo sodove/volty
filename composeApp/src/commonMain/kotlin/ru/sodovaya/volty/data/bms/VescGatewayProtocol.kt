@@ -775,6 +775,26 @@ class VescGatewayProtocol(
      */
     @Volatile private var lastDecodeAtMs: Map<Int, Long> = emptyMap()
 
+    /** Accepted controller decoder receipts. These counters move only after a decoded reply. */
+    @Volatile private var setupDecodeReceipts: Map<Int, Long> = emptyMap()
+    @Volatile private var valuesDecodeReceipts: Map<Int, Long> = emptyMap()
+    private var nextDecodeReceipt = 0L
+
+    private data class AcceptedControllerDecode(val data: ControllerData, val receivedAtMs: Long)
+    @Volatile private var historySetupDecodes: Map<Int, AcceptedControllerDecode> = emptyMap()
+    @Volatile private var historyValuesDecodes: Map<Int, AcceptedControllerDecode> = emptyMap()
+
+    /** Last receipt counters considered at a derived-history boundary, per virtual pack slot. */
+    private data class DerivedReceiptSnapshot(
+        val setup: Map<Int, Long>,
+        val values: Map<Int, Long>
+    )
+
+    @Volatile private var derivedReceiptSnapshots: Map<Int, DerivedReceiptSnapshot> = emptyMap()
+    // A timeout has no native notification receipt. Retain only the bounded
+    // slot intent; the next round's final controller reply supplies the scope.
+    private var pendingDerivedHistory: Set<Int> = emptySet()
+
     /** The vehicle-level scalars one controller's SETUP frame contributes. */
     private data class SetupOverlay(
         val speedKmh: Float,
@@ -971,8 +991,8 @@ class VescGatewayProtocol(
         expectedOpcode = VescValues.OPCODE_GET_VALUES_SETUP,
         consume = { payload ->
             VescValues.decodeSetupValues(payload)?.let {
-                observeControllerReply(c, payload, it, setup = true)
-                applySetup(c.globalIndex, it)
+                val attributed = observeControllerReply(c, payload, it, setup = true)
+                applySetup(c.globalIndex, it, historyEligible = attributed)
             }
         },
         // A speed this controller is no longer reporting must not stay on the
@@ -1009,9 +1029,10 @@ class VescGatewayProtocol(
         expectedOpcode = VescValues.OPCODE_GET_VALUES,
         consume = { payload ->
             VescValues.decodeValues(payload, c.motor)?.let {
-                observeControllerReply(c, payload, it, setup = false)
-                applyValues(c.globalIndex, it)
+                val attributed = observeControllerReply(c, payload, it, setup = false)
+                applyValues(c.globalIndex, it, historyEligible = attributed)
             }
+            flushPendingDerivedHistory(c)
         },
         // Drop the cached per-unit decode AND what was published from it: with
         // both gone nothing can republish this unit's frozen duty/current next
@@ -1042,19 +1063,16 @@ class VescGatewayProtocol(
     )
 
     private fun observeControllerReply(source: GatewaySource, payload: ByteArray,
-        decoded: ControllerData, setup: Boolean) {
+        decoded: ControllerData, setup: Boolean): Boolean {
         // commands.c: SETUP emits controller_id after its 55-byte mandatory
         // body. VALUES emits it after the 53-byte body and optional 4-byte
         // position. Bare forwarded replies have no transaction/source wrapper:
         // pending request alone cannot attribute a very late CAN reply.
-        val identityOffset = if (setup) 56 else 58
         // Retraction: a null target formerly bypassed identity checking even
         // on a mixed link. A late forwarded reply can also land in its local
         // request slot. Without an explicitly known native ID, only a link
         // with no forwarded controller replies can certify native facts.
-        val attributed = if (source.canId == null) controllers.none { it.canId != null }
-            else source.canId in 0..254 &&
-                payload.getOrNull(identityOffset)?.let { it.toInt() and 255 } == source.canId
+        val attributed = controllerReplyAttributed(source, payload, setup)
         val trip = if (attributed && setup && decoded.hasDistance) {
             val baseline = historyTripBaselineKm[source.globalIndex] ?: decoded.odometerKm.also {
                 historyTripBaselineKm = historyTripBaselineKm + (source.globalIndex to it)
@@ -1073,6 +1091,15 @@ class VescGatewayProtocol(
                 TelemetryReading(it.metric, null, TelemetryUnknown.PARTIAL_SOURCE, it.cellIndex)
             }
         }
+        return attributed
+    }
+
+    /** Identity qualifies a controller decoder receipt; BMS producer CAN ids use a different scope. */
+    private fun controllerReplyAttributed(source: GatewaySource, payload: ByteArray, setup: Boolean): Boolean {
+        val identityOffset = if (setup) 56 else 58
+        return if (source.canId == null) controllers.none { it.canId != null }
+        else source.canId in 0..254 &&
+            payload.getOrNull(identityOffset)?.let { it.toInt() and 255 } == source.canId
     }
 
     private fun bmsRequest(p: GatewaySource) = Request(
@@ -1238,6 +1265,7 @@ class VescGatewayProtocol(
         // where the guard is in fact load-bearing exactly once.
         val hostedAt = hostedBmsAtMs[slot.globalIndex]
         if (hostedAt != null && now - hostedAt <= STALE_READING_MS) return
+        publishDerivedBatteryObservation(slot, now)
         // [motion], not [perUnit]: the state of charge a VESC reports is on the
         // SETUP frame, so it reaches a controller only through its overlay, and
         // [perUnit] is the pre-overlay decode. Folding that instead would leave
@@ -1262,6 +1290,128 @@ class VescGatewayProtocol(
             timestamp = units.maxOf { it.timestamp }
         )
         packData = packData + (slot.globalIndex to derivedBatteryFrom(folded))
+    }
+
+    /**
+     * Record only controller facts backed by a newly accepted decode receipt.
+     * The live BmsData projection above intentionally retains its existing
+     * per-cycle fold; history cannot use that cadence because a contentless
+     * BMS reply may arrive while controller values are merely cached. Identical
+     * decoded replies are still fresh because receipt counters, rather than
+     * value equality or decoder timestamps, advance.
+     */
+    private fun publishDerivedBatteryObservation(slot: GatewaySource, now: Long) {
+        if (telemetryObserver == null) {
+            // Retraction: consuming these receipts in onSilence erased facts
+            // before SessionTelemetryCapture could stamp any of them.
+            pendingDerivedHistory = pendingDerivedHistory + slot.globalIndex
+            return
+        }
+        pendingDerivedHistory = pendingDerivedHistory - slot.globalIndex
+        val previous = derivedReceiptSnapshots[slot.globalIndex]
+            ?: DerivedReceiptSnapshot(emptyMap(), emptyMap())
+        val setupNow = controllers.associate { it.globalIndex to (setupDecodeReceipts[it.globalIndex] ?: 0L) }
+        val valuesNow = controllers.associate { it.globalIndex to (valuesDecodeReceipts[it.globalIndex] ?: 0L) }
+        val changedSetup = controllers.filter { source ->
+            (setupNow[source.globalIndex] ?: 0L) > (previous.setup[source.globalIndex] ?: 0L)
+        }
+        val changedValues = controllers.filter { source ->
+            (valuesNow[source.globalIndex] ?: 0L) > (previous.values[source.globalIndex] ?: 0L)
+        }
+        if (changedSetup.isEmpty() && changedValues.isEmpty()) return
+
+        // Consume this cycle's receipts even when a contributor is missing or
+        // has an unavailable rail. A later aggregate must not reuse its cached
+        // sibling as if that sibling had just replied again.
+        derivedReceiptSnapshots = derivedReceiptSnapshots +
+            (slot.globalIndex to DerivedReceiptSnapshot(setupNow, valuesNow))
+
+        // Capture the accepted decoder snapshot and its monotonic receipt time
+        // together. Live projections can still be overwritten by an
+        // unattributed reply, but that must not turn an older eligible counter
+        // into evidence for the newer live values.
+        val freshSetup = changedSetup.filter { source ->
+            historySetupDecodes[source.globalIndex]?.let { now - it.receivedAtMs <= STALE_READING_MS } == true
+        }
+        val freshValues = changedValues.filter { source ->
+            historyValuesDecodes[source.globalIndex]?.let { now - it.receivedAtMs <= STALE_READING_MS } == true
+        }
+        if (freshSetup.isEmpty() && freshValues.isEmpty()) return
+
+        val valueUnits = freshValues.mapNotNull { source ->
+            historyValuesDecodes[source.globalIndex]?.data?.let { source to it }
+        }
+        val readings = buildList {
+            if (freshSetup.isNotEmpty()) {
+                val level = freshSetup.firstNotNullOfOrNull { source ->
+                    historySetupDecodes[source.globalIndex]?.data?.batteryLevelFraction?.takeIf { it > 0f }
+                }
+                add(if (level == null) {
+                    TelemetryReading(TelemetryMetric.SOC, null, TelemetryUnknown.UNAVAILABLE)
+                } else {
+                    TelemetryReading.measured(TelemetryMetric.SOC, (level * 100f).toDouble())
+                })
+            }
+            if (freshValues.isNotEmpty()) {
+                val voltage = valueUnits.filter { (_, data) -> data.hasInputVoltage }
+                    .maxOfOrNull { (_, data) -> data.inputVoltageV }
+                add(if (voltage == null) {
+                    TelemetryReading(TelemetryMetric.VOLTAGE, null, TelemetryUnknown.UNAVAILABLE)
+                } else {
+                    TelemetryReading.measured(TelemetryMetric.VOLTAGE, voltage.toDouble())
+                })
+
+                val contributorsComplete = controllers.isNotEmpty() &&
+                    freshValues.size == controllers.size && valueUnits.size == controllers.size
+                val currentAvailable = contributorsComplete && valueUnits.all { (_, data) -> data.hasBatteryCurrent }
+                add(when {
+                    !contributorsComplete -> TelemetryReading(
+                        TelemetryMetric.CURRENT, null, TelemetryUnknown.PARTIAL_SOURCE
+                    )
+                    !currentAvailable -> TelemetryReading(
+                        TelemetryMetric.CURRENT, null, TelemetryUnknown.UNAVAILABLE
+                    )
+                    else -> TelemetryReading.measured(
+                        TelemetryMetric.CURRENT,
+                        -valueUnits.sumOf { (_, data) -> data.batteryCurrentA.toDouble() }
+                    )
+                })
+
+                val powerAvailable = contributorsComplete && valueUnits.all { (_, data) ->
+                    data.hasPower && data.hasBatteryCurrent && data.hasInputVoltage
+                }
+                add(when {
+                    !contributorsComplete -> TelemetryReading(
+                        TelemetryMetric.POWER, null, TelemetryUnknown.PARTIAL_SOURCE
+                    )
+                    !powerAvailable -> TelemetryReading(
+                        TelemetryMetric.POWER, null, TelemetryUnknown.UNAVAILABLE
+                    )
+                    else -> TelemetryReading.measured(
+                        TelemetryMetric.POWER,
+                        -valueUnits.sumOf { (_, data) -> data.powerW.toDouble() }
+                    )
+                })
+            }
+        }
+        observeTelemetry(TelemetryOrigin.BATTERY, packs.indexOf(slot), TelemetryRole.DERIVED) { readings }
+    }
+
+    /** Flush after the round's final VALUES response, while its receipt is open.
+     * This preserves complete contributor sums instead of consuming one side
+     * on each controller response. Identity-qualified snapshots alone are used;
+     * the response triggering the fold cannot qualify another controller.
+     */
+    private fun flushPendingDerivedHistory(source: GatewaySource) {
+        if (source != controllers.lastOrNull() || telemetryObserver == null || pendingDerivedHistory.isEmpty()) return
+        val now = nowMs()
+        packs.filter { it.derived && it.globalIndex in pendingDerivedHistory }.forEach { slot ->
+            val since = contentlessSinceMs[slot.globalIndex] ?: return@forEach
+            if (now - since < HOSTED_BMS_WARMUP_MS) return@forEach
+            val hostedAt = hostedBmsAtMs[slot.globalIndex]
+            if (hostedAt != null && now - hostedAt <= STALE_READING_MS) return@forEach
+            publishDerivedBatteryObservation(slot, now)
+        }
     }
 
     // ---- the serial loop ----------------------------------------------
@@ -1604,13 +1754,23 @@ class VescGatewayProtocol(
         }
     }
 
-    private fun applyValues(global: Int, decoded: ControllerData) {
+    private fun applyValues(global: Int, decoded: ControllerData, historyEligible: Boolean) {
         perUnit = perUnit + (global to decoded)
-        lastDecodeAtMs = lastDecodeAtMs + (global to nowMs())
+        val receivedAt = nowMs()
+        lastDecodeAtMs = lastDecodeAtMs + (global to receivedAt)
+        if (historyEligible) {
+            valuesDecodeReceipts = valuesDecodeReceipts + (global to ++nextDecodeReceipt)
+            historyValuesDecodes = historyValuesDecodes + (global to AcceptedControllerDecode(decoded, receivedAt))
+        }
         publishController(global)
     }
 
-    private fun applySetup(global: Int, decoded: ControllerData) {
+    private fun applySetup(global: Int, decoded: ControllerData, historyEligible: Boolean) {
+        val receivedAt = nowMs()
+        if (historyEligible) {
+            setupDecodeReceipts = setupDecodeReceipts + (global to ++nextDecodeReceipt)
+            historySetupDecodes = historySetupDecodes + (global to AcceptedControllerDecode(decoded, receivedAt))
+        }
         val odometerKm = decoded.odometerKm
         val baseline = tripBaselineKm[global]
             ?: odometerKm.also { tripBaselineKm = tripBaselineKm + (global to it) }
@@ -1695,6 +1855,13 @@ class VescGatewayProtocol(
         perUnit = emptyMap()
         motion = emptyMap()
         packData = emptyMap()
+        setupDecodeReceipts = emptyMap()
+        valuesDecodeReceipts = emptyMap()
+        nextDecodeReceipt = 0L
+        historySetupDecodes = emptyMap()
+        historyValuesDecodes = emptyMap()
+        derivedReceiptSnapshots = emptyMap()
+        pendingDerivedHistory = emptySet()
         controllerConfigs = emptyMap()
         configRequests = emptyList()
         configRequestsArmed = false

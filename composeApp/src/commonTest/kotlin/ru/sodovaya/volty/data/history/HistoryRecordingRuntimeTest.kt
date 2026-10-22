@@ -413,22 +413,22 @@ class HistoryRecordingRuntimeTest {
         } finally { f.failService = false; channel.cancel(); f.runtime.close() }
     }
 
-    @Test fun terminalCloseWaitsAcceptedQueueAndSurvivesRequestingCallerCancellation() = runTest {
+    @Test fun terminalCloseWaitsDurableFinishAndSurvivesRequestingCallerCancellation() = runTest {
         val f = Fixture(this); val channel = sampleFunnelChannel(4)
         val binding = f.runtime.prepare(); val capture = f.start(binding, channel)
         f.elapsed = 20; assertTrue(capture.processNotification(byteArrayOf(9)))
-        val sample = assertIs<HistoryTelemetrySample>(channel.tryReceive().getOrNull())
+        assertTrue(channel.tryReceive().isFailure, "native recording no longer shares the dashboard queue")
+        assertEquals(listOf<Double?>(9.0), f.writer.values)
         val release = CompletableDeferred<Unit>(); f.writer.finishGate = release
         val close = backgroundScope.launch { f.runtime.close() }
         try {
             runCurrent(); assertFalse(close.isCompleted); assertEquals(0, f.writer.closed)
             assertFalse(capture.processNotification(byteArrayOf(10)))
-            assertEquals(HistoryOffer.ACCEPTED, sample.consume()); runCurrent()
             assertEquals(listOf<String?>("ride"), f.writer.finishes)
             close.cancel(); runCurrent(); assertFalse(close.isCompleted)
             release.complete(Unit); close.join()
             assertEquals(listOf<Double?>(9.0), f.writer.values); assertEquals(1, f.writer.closed)
             assertNull(binding.controller.state.value.intent.ride)
-        } finally { sample.discard(); release.complete(Unit); channel.cancel(); close.cancelAndJoin(); f.runtime.close() }
+        } finally { release.complete(Unit); channel.cancel(); close.cancelAndJoin(); f.runtime.close() }
     }
 }
