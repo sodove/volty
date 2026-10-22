@@ -3,6 +3,8 @@ package ru.sodovaya.volty.data.bms
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
 import kotlin.math.abs
 
 /**
@@ -276,6 +278,11 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics {
             hasEnergyCounters = false,
             isConnected = true
         )
+        val decoded = checkNotNull(motion)
+        observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedVeteranController(decoded) }
+        observeTelemetry(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED) {
+            observedVeteranRail(decoded, if (voltageKnown) estimateSoc(voltage * 100f, major) else null)
+        }
     }
 
     private fun parseSmartBms(frame: ByteArray) {
@@ -321,6 +328,10 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics {
                     if (temp in -50f..150f) state.temperatures += temp
                 }
             }
+        }
+        observeTelemetry(TelemetryOrigin.BATTERY, bmsIndex) {
+            observedVeteranSmartBms(frame, packet,
+                state.reportedCellCount ?: expectedCellCount(majorVersion, hardwareCodeValue))
         }
     }
 

@@ -7,8 +7,164 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryObservation
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
+import ru.sodovaya.volty.domain.model.TelemetryUnknown
 
 class KingSongProtocolTest {
+
+    @Test
+    fun `A9 live frame publishes its fresh controller and battery readings`() {
+        val protocol = KingSongProtocol()
+        val observed = capture(protocol)
+        val frame = liveFrame(
+            voltageCv = 12621,
+            speedCentiKmh = 1675,
+            distanceMeters = 1_234_000,
+            currentCentiA = -250,
+            temperatureCentiC = 2150
+        )
+
+        val invalid = liveFrame().also { it[18] = 0x00 }
+        protocol.onNotification(invalid.copyOfRange(0, 7))
+        assertTrue(observed.isEmpty(), "a partial frame is not a decoded telemetry update")
+        protocol.onNotification(invalid.copyOfRange(7, invalid.size))
+        assertTrue(observed.isEmpty(), "a rejected frame must not become telemetry")
+        protocol.onNotification(frame)
+
+        assertEquals(2, observed.size)
+        assertHistoryAccepts(observed)
+        val controller = observed.single { it.origin == TelemetryOrigin.CONTROLLER }
+        assertEquals(TelemetryRole.CONTRIBUTOR, controller.role)
+        assertEquals(0, controller.localIndex)
+        assertEquals(
+            setOf(TelemetryMetric.SPEED, TelemetryMetric.CONTROLLER_BATTERY_CURRENT,
+                TelemetryMetric.INPUT_VOLTAGE, TelemetryMetric.CONTROLLER_POWER,
+                TelemetryMetric.ESC_TEMPERATURE, TelemetryMetric.ODOMETER, TelemetryMetric.TRIP),
+            controller.metrics()
+        )
+        assertEquals(16.75, controller.reading(TelemetryMetric.SPEED).value!!, 0.001)
+        assertEquals(2.5, controller.reading(TelemetryMetric.CONTROLLER_BATTERY_CURRENT).value!!, 0.001)
+        assertEquals(126.21, controller.reading(TelemetryMetric.INPUT_VOLTAGE).value!!, 0.001)
+
+        val battery = observed.single { it.origin == TelemetryOrigin.BATTERY }
+        assertEquals(TelemetryRole.DERIVED, battery.role)
+        assertEquals(0, battery.localIndex)
+        assertEquals(
+            setOf(TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT),
+            battery.metrics()
+        )
+        assertEquals(126.21, battery.reading(TelemetryMetric.VOLTAGE).value!!, 0.001)
+        assertEquals(-2.5, battery.reading(TelemetryMetric.CURRENT).value!!, 0.001)
+        assertEquals(21.5, controller.reading(TelemetryMetric.ESC_TEMPERATURE).value!!, 0.001)
+    }
+
+    @Test
+    fun `repeated identical accepted A9 frames each publish a fresh update`() {
+        val protocol = KingSongProtocol()
+        val observed = capture(protocol)
+        val frame = liveFrame(voltageCv = 12600, speedCentiKmh = 500, currentCentiA = -100)
+
+        protocol.onNotification(frame)
+        protocol.onNotification(frame.copyOf())
+
+        assertEquals(4, observed.size)
+        assertEquals(2, observed.count { it.origin == TelemetryOrigin.CONTROLLER })
+        assertEquals(2, observed.count { it.origin == TelemetryOrigin.BATTERY })
+        assertTrue(observed.filter { it.origin == TelemetryOrigin.BATTERY }
+            .all { it.role == TelemetryRole.DERIVED && it.localIndex == 0 })
+        assertTrue(observed.filter { it.origin == TelemetryOrigin.CONTROLLER }
+            .all { it.metrics() == setOf(TelemetryMetric.SPEED, TelemetryMetric.CONTROLLER_BATTERY_CURRENT,
+                TelemetryMetric.INPUT_VOLTAGE, TelemetryMetric.CONTROLLER_POWER,
+                TelemetryMetric.ESC_TEMPERATURE, TelemetryMetric.ODOMETER, TelemetryMetric.TRIP) })
+    }
+
+    @Test
+    fun `ancillary and BMS packets publish only fields carried by that packet`() {
+        val protocol = KingSongProtocol()
+        val observed = capture(protocol)
+        protocol.onNotification(liveFrame(voltageCv = 12600, speedCentiKmh = 700, currentCentiA = -200))
+        observed.clear()
+
+        protocol.onNotification(frame(0xB9, 0x14).apply { putLe(14, 2400) })
+        val stats = observed.single()
+        assertEquals(TelemetryOrigin.CONTROLLER, stats.origin)
+        assertEquals(setOf(TelemetryMetric.ESC_TEMPERATURE), stats.metrics())
+        observed.clear()
+
+        protocol.onNotification(frame(0xF5, 0x14).apply { this[15] = 44 })
+        val output = observed.single()
+        assertEquals(TelemetryOrigin.CONTROLLER, output.origin)
+        assertEquals(setOf(TelemetryMetric.DUTY), output.metrics())
+        observed.clear()
+
+        protocol.onNotification(bmsFrame(0xF1, 0x00).apply {
+            putLe(2, 12546); putLe(4, -340); putLe(6, 800); putLe(8, 1000)
+        })
+        val summary = observed.single()
+        assertEquals(TelemetryOrigin.BATTERY, summary.origin)
+        assertEquals(0, summary.localIndex)
+        assertEquals(setOf(TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.SOC), summary.metrics())
+        observed.clear()
+
+        protocol.onNotification(bmsFrame(0xF2, 0x00).apply {
+            putLe(2, 12400); putLe(4, -200); putLe(6, 400); putLe(8, 800)
+        })
+        val secondPack = observed.single()
+        assertEquals(TelemetryOrigin.BATTERY, secondPack.origin)
+        assertEquals(TelemetryRole.CONTRIBUTOR, secondPack.role)
+        assertEquals(1, secondPack.localIndex)
+        assertEquals(setOf(TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.SOC), secondPack.metrics())
+        observed.clear()
+
+        protocol.onNotification(bmsFrame(0xF1, 0x02).apply {
+            for (i in 0 until 7) putLe(2 + i * 2, 3300 + i)
+        })
+        val cells = observed.single()
+        assertEquals(TelemetryOrigin.BATTERY, cells.origin)
+        assertEquals(0, cells.localIndex)
+        assertEquals(listOf(TelemetryMetric.CELL, TelemetryMetric.CELL, TelemetryMetric.CELL,
+            TelemetryMetric.CELL, TelemetryMetric.CELL, TelemetryMetric.CELL, TelemetryMetric.CELL),
+            cells.readings.map { it.metric })
+        assertEquals((0..6).toList(), cells.readings.map { it.cellIndex })
+        assertTrue(cells.readings.all { it.value != null })
+        cells.readings.zip(3300..3306).forEach { (reading, milliVolts) ->
+            assertEquals(milliVolts / 1000.0, reading.value!!, 0.001)
+        }
+
+        observed.clear()
+        protocol.onNotification(bmsFrame(0xF1, 0x02).apply {
+            for (i in 0 until 7) putLe(2 + i * 2, if (i == 3) 5100 else 3400 + i)
+        })
+        val mixedCells = observed.single()
+        assertEquals((0..6).toList(), mixedCells.readings.map { it.cellIndex })
+        val invalidMiddleCell = mixedCells.readings.single { it.cellIndex == 3 }
+        assertNull(invalidMiddleCell.value)
+        assertEquals(TelemetryUnknown.INVALID_VALUE, invalidMiddleCell.unknown)
+        assertEquals(3.402, mixedCells.readings.single { it.cellIndex == 2 }.value!!, 0.001)
+    }
+
+    @Test
+    fun `page six eighth temperature does not claim the whole pack maximum`() {
+        val protocol = KingSongProtocol()
+        val observed = capture(protocol)
+        protocol.onNotification(bmsFrame(0xF1, 0x01).apply {
+            repeat(7) { i -> putLe(2 + i * 2, 3230) }
+        })
+        val sevenSensorSample = observed.single().readings.single { it.metric == TelemetryMetric.BATTERY_TEMPERATURE }
+        assertEquals(50.0, sevenSensorSample.value!!, 0.001)
+        observed.clear()
+
+        protocol.onNotification(bmsFrame(0xF1, 0x06).apply { putLe(10, 2930) })
+
+        val eighthSensorUpdate = observed.single().readings.single {
+            it.metric == TelemetryMetric.BATTERY_TEMPERATURE
+        }
+        assertNull(eighthSensorUpdate.value)
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, eighthSensorUpdate.unknown)
+    }
 
     @Test
     fun `read only stream has no commands and exposes FFE0 FFE1`() {
@@ -243,6 +399,13 @@ class KingSongProtocolTest {
     }
 
     private fun bmsFrame(type: Int, page: Int): ByteArray = frame(type, page)
+
+    private fun capture(protocol: KingSongProtocol): MutableList<TelemetryObservation> =
+        mutableListOf<TelemetryObservation>().also { protocol.telemetryObserver = it::add }
+
+    private fun TelemetryObservation.metrics(): Set<TelemetryMetric> = readings.map { it.metric }.toSet()
+
+    private fun TelemetryObservation.reading(metric: TelemetryMetric) = readings.single { it.metric == metric }
 
     private fun frame(type: Int, page: Int): ByteArray = ByteArray(20).apply {
         this[0] = 0xAA.toByte()

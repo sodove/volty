@@ -31,7 +31,8 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
     vehicleNames: Map<String, String> = emptyMap(), previews: HistoryPreviewsState = HistoryPreviewsState(),
     reduceMotion: Boolean = false, onVisibleChanged: (List<String>) -> Unit = {}, onRetryPreview: (String) -> Unit = {},
     listState: LazyListState = rememberLazyListState(), previewImages: HistoryPreviewImagesState = HistoryPreviewImagesState(),
-    previewRevision: Long = 0, onVisibleImagesChanged: (List<HistoryPreviewImageKey>) -> Unit = {}) {
+    previewRevision: Long = 0, onVisibleImagesChanged: (List<HistoryPreviewImageKey>) -> Unit = {},
+    onDelete: ((HistoryRide) -> Unit)? = null) {
     val zone = TimeZone.currentSystemDefault()
     val latestVisible by rememberUpdatedState(onVisibleChanged)
     val latestImages by rememberUpdatedState(onVisibleImagesChanged)
@@ -89,7 +90,8 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
                 previewPartial = previews.previews[ride.id]?.partial == true, previewError = ride.id in previews.errors,
                 onRetry = { onRetryPreview(ride.id) }, image = previewImages.images[ride.id]?.takeIf {
                     renderKeys[ride.id] != null && previewImages.renderKeys[ride.id] == renderKeys[ride.id]
-                })
+                }, onDelete = onDelete?.takeIf { ride.status == HistoryRideStatus.LEGACY ||
+                    (ride.status != HistoryRideStatus.RECORDING && ride.ended != null) }?.let { action -> { action(ride) } })
         }
         if (state.error != null) item("error") {
             Text(stringResource(Res.string.history_load_error), color = MaterialTheme.colorScheme.error)

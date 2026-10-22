@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.TelemetryMetric
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.TelemetryObservation
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
@@ -8,10 +10,22 @@ import ru.sodovaya.volty.domain.model.TelemetryReading
 import ru.sodovaya.volty.domain.model.TelemetryRole
 
 abstract class BmsProtocol {
-    /** Optional full-decode observer. History failure must not tear down the live BLE stream. */
+    /** Fresh accepted decoder output. Consumer failure must not tear down the live BLE stream. */
     var telemetryObserver: ((TelemetryObservation) -> Unit)? = null
     var telemetryObserverFailures: Long = 0
         private set
+
+    /** Publish the same decoded snapshot to live consumers and its fresh fields to observers. */
+    protected fun publishControllerUpdate(data: ControllerData, fields: Set<TelemetryMetric>, localIndex: Int = 0): ControllerData {
+        if (fields.isNotEmpty()) observeTelemetry(TelemetryOrigin.CONTROLLER, localIndex) { freshControllerReadings(data, fields) }
+        return data
+    }
+
+    protected fun publishBatteryUpdate(data: BmsData, fields: Set<TelemetryMetric>, localIndex: Int = 0,
+        role: TelemetryRole = TelemetryRole.CONTRIBUTOR): BmsData {
+        if (fields.isNotEmpty()) observeTelemetry(TelemetryOrigin.BATTERY, localIndex, role) { freshBatteryReadings(data, fields) }
+        return data
+    }
 
     protected fun observeTelemetry(origin: TelemetryOrigin, localIndex: Int,
         role: TelemetryRole = TelemetryRole.CONTRIBUTOR, assemblyIndex: Int? = null,

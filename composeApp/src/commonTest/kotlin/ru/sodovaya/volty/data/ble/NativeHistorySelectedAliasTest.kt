@@ -28,9 +28,18 @@ class NativeHistorySelectedAliasTest {
         val begins = mutableListOf<Pair<HistoryRide, List<HistorySource>>>()
         val batches = mutableListOf<HistoryBatch>()
         val finishes = mutableListOf<String?>()
+        var duringOffer: ((Long, HistoryBatch) -> Unit)? = null
+        var finishGate: CompletableDeferred<Unit>? = null
         override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) { begins += ride to sources }
-        override fun offer(generation: Long, batch: HistoryBatch): HistoryOffer { batches += batch; return HistoryOffer.ACCEPTED }
-        override suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String?) { finishes += rideId }
+        override fun offer(generation: Long, batch: HistoryBatch): HistoryOffer {
+            duringOffer?.invoke(generation, batch)
+            batches += batch
+            return HistoryOffer.ACCEPTED
+        }
+        override suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String?) {
+            finishes += rideId
+            finishGate?.await()
+        }
         override suspend fun flush() = Unit
         override suspend fun delete(rideId: String) = Unit
         override suspend fun close() = Unit
@@ -64,8 +73,10 @@ class NativeHistorySelectedAliasTest {
         fun capture(link: LinkSpec, profile: Vehicle, protocol: BmsProtocol = Emitter()) = ingress.capture(protocol, "${link.address}:attempt", link, profile,
             SampleSessionOwnership { true }, channel)
         suspend fun install(link: LinkSpec, profile: Vehicle) = ingress.installNativePlan(profile.id, listOf(link), profile) { true }
-        fun take() = assertIs<HistoryTelemetrySample>(channel.tryReceive().getOrNull())
-        fun consume() { assertEquals(HistoryOffer.ACCEPTED, take().consume()) }
+
+        /** Retraction: managed telemetry is issued directly to the writer; it no longer waits in the dashboard sample queue. */
+        fun assertDashboardEmpty() = assertTrue(channel.tryReceive().isFailure,
+            "managed history must not enqueue a dashboard sample")
     }
 
     private val cached = b.copy(bmsType = BmsType.VESC_BMS)
@@ -80,7 +91,7 @@ class NativeHistorySelectedAliasTest {
             f.install(link, profile)
             val capture = assertNotNull(f.capture(link, profile, CacheEmitter()))
             assertTrue(capture.prepareForObservation())
-            assertTrue(capture.processNotification(byteArrayOf(1))); f.consume()
+            assertTrue(capture.processNotification(byteArrayOf(1))); f.assertDashboardEmpty()
             val registry = f.writer.begins.single().second
             assertEquals(setOf(HistorySourceKind.BATTERY, HistorySourceKind.CONTROLLER, HistorySourceKind.REPORTED_CAN), registry.map { it.kind }.toSet())
             val sample = f.writer.batches.flatMap { it.samples }.single()
@@ -90,22 +101,33 @@ class NativeHistorySelectedAliasTest {
         } finally { f.channel.cancel() }
     }
 
-    @Test fun directToCacheSelectionDrainsAcceptedFactsAndSplitsProducerPolicy() = runTest {
+    @Test fun directToCacheSelectionSplitsProducerPolicyAfterWriterAcceptance() = runTest {
         val f = Fixture(); val profile = cacheVehicle(); val direct = spec(a); val cache = cacheSpec()
-        var accepted: HistoryTelemetrySample? = null; var switch: Job? = null
+        val finishAck = CompletableDeferred<Unit>()
+        var switch: Job? = null
         try {
             f.install(direct, profile)
             val old = assertNotNull(f.capture(direct, profile)); assertTrue(old.prepareForObservation())
             val oldGps = assertNotNull(f.controller.captureGpsRecording())
-            assertTrue(old.processNotification(byteArrayOf(11))); accepted = f.take()
+            assertTrue(old.processNotification(byteArrayOf(11)))
+            f.assertDashboardEmpty()
+            assertEquals(listOf(11.0), f.writer.batches.flatMap { it.samples }.map { it.value },
+                "the accepted fact already belongs to the writer before selection changes")
+            f.writer.finishGate = finishAck
             switch = backgroundScope.launch { f.install(cache, profile) }
-            runCurrent(); assertFalse(switch.isCompleted); assertTrue(f.writer.finishes.isEmpty())
-            assertEquals(HistoryOffer.ACCEPTED, accepted.consume()); switch.join()
+            runCurrent()
+            assertFalse(switch.isCompleted)
+            assertEquals(listOf<String?>("ride-1"), f.writer.finishes)
+            assertEquals(1, f.writer.begins.size, "new begin must wait for the old ride's durable finish ACK")
+            finishAck.complete(Unit)
+            runCurrent()
+            switch.join()
+            f.writer.finishGate = null
             val next = assertNotNull(f.capture(cache, profile, CacheEmitter())); assertTrue(next.prepareForObservation())
             assertTrue(old.processNotification(byteArrayOf(12)))
-            val unexpected = f.channel.tryReceive().getOrNull(); (unexpected as? HistoryTelemetrySample)?.discard()
-            assertNull(unexpected)
-            assertTrue(next.processNotification(byteArrayOf(1))); f.consume()
+            assertEquals(1, f.writer.batches.flatMap { it.samples }.size, "retired callback must not issue another fact")
+            f.assertDashboardEmpty()
+            assertTrue(next.processNotification(byteArrayOf(1))); f.assertDashboardEmpty()
             assertEquals(2, f.writer.begins.size); assertEquals(listOf<String?>("ride-1"), f.writer.finishes)
             val oldSource = f.writer.begins[0].second.single().id
             val cacheSource = f.writer.begins[1].second.single { it.kind == HistorySourceKind.BATTERY }.id
@@ -117,7 +139,7 @@ class NativeHistorySelectedAliasTest {
             assertTrue(f.writer.batches.flatMap { it.markers }.any { it.kind == HistoryMarkerKind.SOURCE_CHANGE })
             assertNotSame(oldGps.identity, assertNotNull(f.controller.captureGpsRecording()).identity)
             assertEquals(0L, f.ingress.diagnostics.value.setupFailures)
-        } finally { accepted?.discard(); f.channel.cancel(); switch?.cancelAndJoin() }
+        } finally { finishAck.complete(Unit); f.channel.cancel(); switch?.cancelAndJoin() }
     }
 
     @Test fun selectedCacheIdentityTracksVehicleGroupAndPolicyInsteadOfSelectedEndpoint() {
@@ -133,32 +155,34 @@ class NativeHistorySelectedAliasTest {
         assertFailsWith<IllegalArgumentException> { source(cached.copy(aliasGroup = " ")) }
     }
 
-    @Test fun returnFromCacheDrainsUnknownsAndCannotReviveOriginalDirectCapture() = runTest {
+    @Test fun returnFromCacheCannotReviveOriginalDirectCapture() = runTest {
         val f = Fixture(); val profile = cacheVehicle(); val direct = spec(a); val cache = cacheSpec()
         val originalProtocol = Emitter()
-        var accepted: HistoryTelemetrySample? = null; var switch: Job? = null
+        var switch: Job? = null
         try {
             f.install(direct, profile)
             val original = assertNotNull(f.capture(direct, profile, originalProtocol))
             assertTrue(original.prepareForObservation())
-            assertTrue(original.processNotification(byteArrayOf(11))); f.consume()
+            assertTrue(original.processNotification(byteArrayOf(11))); f.assertDashboardEmpty()
             val originalGps = assertNotNull(f.controller.captureGpsRecording())
             f.install(cache, profile)
             val cached = assertNotNull(f.capture(cache, profile, CacheEmitter())); assertTrue(cached.prepareForObservation())
-            assertTrue(cached.processNotification(byteArrayOf(1))); accepted = f.take()
+            assertTrue(cached.processNotification(byteArrayOf(1))); f.assertDashboardEmpty()
+            assertEquals(listOf(11.0, null), f.writer.batches.flatMap { it.samples }.map { it.value },
+                "both facts have already been issued to the writer before the next selection")
             switch = backgroundScope.launch { f.install(direct, profile) }
-            runCurrent(); assertFalse(switch.isCompleted)
-            assertEquals(listOf<String?>("ride-1"), f.writer.finishes)
-            assertEquals(HistoryOffer.ACCEPTED, accepted.consume()); switch.join()
+            runCurrent(); switch.join()
+            assertEquals(listOf<String?>("ride-1", "ride-2"), f.writer.finishes,
+                "each producer-policy change finishes the ride that was active before it")
             // Reuse both the exact original spec and protocol object. Only the
             // newly acquired binding may observe this new recording.
             val restored = assertNotNull(f.capture(direct, profile, originalProtocol))
             assertTrue(restored.prepareForObservation())
             assertTrue(original.processNotification(byteArrayOf(12)))
             assertTrue(cached.processNotification(byteArrayOf(1)))
-            val unexpected = f.channel.tryReceive().getOrNull(); (unexpected as? HistoryTelemetrySample)?.discard()
-            assertNull(unexpected)
-            assertTrue(restored.processNotification(byteArrayOf(14))); f.consume()
+            assertEquals(2, f.writer.batches.flatMap { it.samples }.size, "retired direct/cache callbacks must not leak")
+            f.assertDashboardEmpty()
+            assertTrue(restored.processNotification(byteArrayOf(14))); f.assertDashboardEmpty()
             assertEquals(3, f.writer.begins.size)
             assertEquals(listOf<String?>("ride-1", "ride-2"), f.writer.finishes)
             val firstSource = f.writer.begins[0].second.single().id
@@ -170,27 +194,29 @@ class NativeHistorySelectedAliasTest {
             assertEquals(HistoryUnknownReason.PARTIAL_SOURCE, samples[1].unknown)
             assertNotSame(originalGps.identity, assertNotNull(f.controller.captureGpsRecording()).identity)
             assertEquals(0L, f.ingress.diagnostics.value.setupFailures)
-        } finally { accepted?.discard(); f.channel.cancel(); switch?.cancelAndJoin() }
+        } finally { f.channel.cancel(); switch?.cancelAndJoin() }
     }
 
     @Test fun sameCachePolicyCanPathSwitchRetainsRideAndGpsAfterAcceptedPrefix() = runTest {
         val f = Fixture(); val alternate = cached.copy(index = 80, label = "CAN path", canId = 42)
         val profile = cacheVehicle().copy(packs = listOf(a, cached, alternate))
         val first = cacheSpec(); val second = cacheSpec(alternate)
-        var accepted: HistoryTelemetrySample? = null; var switch: Job? = null
+        var switch: Job? = null
         try {
             f.install(first, profile)
             val old = assertNotNull(f.capture(first, profile, CacheEmitter(TelemetryUnknown.UNAVAILABLE)))
             assertTrue(old.prepareForObservation()); val gps = assertNotNull(f.controller.captureGpsRecording())
-            assertTrue(old.processNotification(byteArrayOf(1))); accepted = f.take()
+            assertTrue(old.processNotification(byteArrayOf(1))); f.assertDashboardEmpty()
+            assertEquals(1, f.writer.batches.flatMap { it.samples }.size,
+                "the accepted prefix already belongs to the writer before the path switch")
             switch = backgroundScope.launch { f.install(second, profile) }
-            runCurrent(); assertFalse(switch.isCompleted); assertTrue(f.writer.finishes.isEmpty())
-            assertEquals(HistoryOffer.ACCEPTED, accepted.consume()); switch.join()
+            runCurrent(); switch.join()
+            assertTrue(f.writer.finishes.isEmpty())
             val next = assertNotNull(f.capture(second, profile, CacheEmitter())); assertTrue(next.prepareForObservation())
             assertTrue(old.processNotification(byteArrayOf(1)))
-            val unexpected = f.channel.tryReceive().getOrNull(); (unexpected as? HistoryTelemetrySample)?.discard()
-            assertNull(unexpected)
-            assertTrue(next.processNotification(byteArrayOf(1))); f.consume()
+            assertEquals(1, f.writer.batches.flatMap { it.samples }.size, "retired callback must not issue another fact")
+            f.assertDashboardEmpty()
+            assertTrue(next.processNotification(byteArrayOf(1))); f.assertDashboardEmpty()
             assertEquals(1, f.writer.begins.size); assertTrue(f.writer.finishes.isEmpty())
             val samples = f.writer.batches.flatMap { it.samples }
             assertEquals(listOf(HistoryUnknownReason.UNAVAILABLE, HistoryUnknownReason.PARTIAL_SOURCE), samples.map { it.unknown })
@@ -201,7 +227,7 @@ class NativeHistorySelectedAliasTest {
             assertTrue(markers.none { it.kind == HistoryMarkerKind.SOURCE_CHANGE })
             assertSame(gps.identity, assertNotNull(f.controller.captureGpsRecording()).identity)
             assertEquals(0L, f.ingress.diagnostics.value.setupFailures)
-        } finally { accepted?.discard(); f.channel.cancel(); switch?.cancelAndJoin() }
+        } finally { f.channel.cancel(); switch?.cancelAndJoin() }
     }
 
     @Test fun cacheAliasStillRequiresUsableGroupAndMatchingVehicleNamespace() = runTest {
@@ -227,7 +253,7 @@ class NativeHistorySelectedAliasTest {
             try {
                 f.install(link, profile)
                 val capture = assertNotNull(f.capture(link, profile)); assertTrue(capture.prepareForObservation())
-                assertTrue(capture.processNotification(byteArrayOf(10))); f.consume()
+                assertTrue(capture.processNotification(byteArrayOf(10))); f.assertDashboardEmpty()
                 val source = f.writer.begins.single().second.single()
                 assertEquals(HistorySourceKind.BATTERY, source.kind)
                 assertEquals(source.id, f.writer.batches.flatMap { it.samples }.single().key.sourceId)
@@ -237,28 +263,71 @@ class NativeHistorySelectedAliasTest {
         }
     }
 
-    @Test fun selectedSameProtocolPathSwitchDrainsOldFactsAndRetainsRideWithGap() = runTest {
+    @Test fun selectedSameProtocolPathSwitchRetainsRideWithGap() = runTest {
         val f = Fixture(); val profile = vehicle(); val first = spec(a); val second = spec(b)
-        var accepted: HistoryTelemetrySample? = null; var switch: Job? = null
+        var switch: Job? = null
         try {
             f.install(first, profile)
             val old = assertNotNull(f.capture(first, profile)); assertTrue(old.prepareForObservation())
             val gps = assertNotNull(f.controller.captureGpsRecording())
-            assertTrue(old.processNotification(byteArrayOf(11))); accepted = f.take()
+            assertTrue(old.processNotification(byteArrayOf(11)))
+            f.assertDashboardEmpty()
+            assertEquals(listOf(11.0), f.writer.batches.flatMap { it.samples }.map { it.value })
             switch = backgroundScope.launch { f.install(second, profile) }
-            runCurrent(); assertFalse(switch.isCompleted)
-            assertEquals(HistoryOffer.ACCEPTED, accepted.consume()); switch.join()
+            runCurrent(); switch.join()
+            assertTrue(f.writer.finishes.isEmpty(), "same physical alias path retains the ride")
             val next = assertNotNull(f.capture(second, profile)); assertTrue(next.prepareForObservation())
             assertTrue(old.processNotification(byteArrayOf(12)))
-            val unexpected = f.channel.tryReceive().getOrNull(); (unexpected as? HistoryTelemetrySample)?.discard()
-            assertNull(unexpected)
-            assertTrue(next.processNotification(byteArrayOf(13))); f.consume()
+            assertEquals(1, f.writer.batches.flatMap { it.samples }.size,
+                "the retired attempt cannot issue another fact")
+            f.assertDashboardEmpty()
+            assertTrue(next.processNotification(byteArrayOf(13))); f.assertDashboardEmpty()
             assertEquals(1, f.writer.begins.size); assertTrue(f.writer.finishes.isEmpty())
             assertEquals(listOf<Double?>(11.0, 13.0), f.writer.batches.flatMap { it.samples }.map { it.value })
             assertEquals(1, f.writer.batches.flatMap { it.samples }.map { it.key.sourceId }.distinct().size)
             assertTrue(f.writer.batches.flatMap { it.markers }.any { it.kind == HistoryMarkerKind.BLE_GAP })
             assertSame(gps.identity, assertNotNull(f.controller.captureGpsRecording()).identity)
-        } finally { accepted?.discard(); f.channel.cancel(); switch?.cancelAndJoin() }
+        } finally { f.channel.cancel(); switch?.cancelAndJoin() }
+    }
+
+    @Test fun aliasSwitchWaitsForInFlightDirectWriterOfferThenRetainsTheRide() = runTest {
+        val f = Fixture(); val profile = vehicle(); val first = spec(a); val second = spec(b)
+        var switch: Job? = null
+        var selectionWaitedInsideOffer = false
+        try {
+            f.install(first, profile)
+            val old = assertNotNull(f.capture(first, profile)); assertTrue(old.prepareForObservation())
+            val gps = assertNotNull(f.controller.captureGpsRecording())
+            f.writer.duringOffer = { _, batch ->
+                if (batch.samples.any { it.value == 11.0 }) {
+                    switch = backgroundScope.launch(start = CoroutineStart.UNDISPATCHED) { f.install(second, profile) }
+                    selectionWaitedInsideOffer = !assertNotNull(switch).isCompleted
+                }
+            }
+
+            // The selection closes this attempt's observation gate inside offer(). It must wait
+            // for this exact direct writer call to return before replacing the installed plan.
+            assertTrue(old.processNotification(byteArrayOf(11)))
+            assertTrue(selectionWaitedInsideOffer, "the switch must suspend while offer is in flight")
+            f.writer.duringOffer = null
+            assertEquals(listOf(11.0), f.writer.batches.flatMap { it.samples }.map { it.value })
+            f.assertDashboardEmpty()
+            runCurrent()
+            assertNotNull(switch).join()
+
+            val next = assertNotNull(f.capture(second, profile)); assertTrue(next.prepareForObservation())
+            assertTrue(old.processNotification(byteArrayOf(12)))
+            assertEquals(1, f.writer.batches.flatMap { it.samples }.size,
+                "the retired attempt cannot publish after its in-flight offer")
+            f.assertDashboardEmpty()
+            assertTrue(next.processNotification(byteArrayOf(13))); f.assertDashboardEmpty()
+            assertEquals(listOf(11.0, 13.0), f.writer.batches.flatMap { it.samples }.map { it.value })
+            assertEquals(1, f.writer.begins.size)
+            assertTrue(f.writer.finishes.isEmpty())
+            assertTrue(f.writer.batches.flatMap { it.markers }.any { it.kind == HistoryMarkerKind.BLE_GAP })
+            assertTrue(f.writer.batches.flatMap { it.markers }.none { it.kind == HistoryMarkerKind.SOURCE_CHANGE })
+            assertSame(gps.identity, assertNotNull(f.controller.captureGpsRecording()).identity)
+        } finally { f.channel.cancel(); switch?.cancelAndJoin() }
     }
 
     @Test fun physicalAliasIdentityIgnoresAddressSlotAndLabelsButTracksVehicleAndGroup() = runTest {
@@ -296,7 +365,7 @@ class NativeHistorySelectedAliasTest {
                 f.ingress.installNativePlan(profile.id, if (reverse) listOf(second, first) else listOf(first, second), profile) { true }
                 val selected = assertNotNull(f.capture(first, profile)); assertTrue(selected.prepareForObservation())
                 assertNull(f.capture(second, profile))
-                assertTrue(selected.processNotification(byteArrayOf(11))); f.consume()
+                assertTrue(selected.processNotification(byteArrayOf(11))); f.assertDashboardEmpty()
                 assertEquals(1, f.writer.begins.single().second.size)
                 assertEquals(11.0, f.writer.batches.flatMap { it.samples }.single().value)
                 assertEquals(0L, f.ingress.diagnostics.value.setupFailures)
@@ -313,9 +382,8 @@ class NativeHistorySelectedAliasTest {
             val gateway = assertNotNull(f.capture(cache, profile, CacheEmitter(withController = true)))
             assertTrue(gateway.prepareForObservation()); assertTrue(battery.prepareForObservation())
             val gps = assertNotNull(f.controller.captureGpsRecording())
-            assertTrue(battery.processNotification(byteArrayOf(11))); f.consume()
-            assertTrue(gateway.processNotification(byteArrayOf(1))); f.consume()
-            assertNull(f.channel.tryReceive().getOrNull())
+            assertTrue(battery.processNotification(byteArrayOf(11))); f.assertDashboardEmpty()
+            assertTrue(gateway.processNotification(byteArrayOf(1))); f.assertDashboardEmpty()
             val sources = f.writer.begins.single().second
             assertEquals(3, sources.size)
             val physical = sources.single { it.kind == HistorySourceKind.BATTERY }.id
@@ -325,8 +393,7 @@ class NativeHistorySelectedAliasTest {
             // Cache availability does not make its numbers earned history.
             f.ingress.retireNativeAttempt(directProtocol)
             assertTrue(battery.processNotification(byteArrayOf(12)))
-            assertTrue(gateway.processNotification(byteArrayOf(1))); f.consume()
-            assertNull(f.channel.tryReceive().getOrNull())
+            assertTrue(gateway.processNotification(byteArrayOf(1))); f.assertDashboardEmpty()
             assertEquals(listOf<Double?>(11.0, 9.0, 9.0), f.writer.batches.flatMap { it.samples }.map { it.value })
             assertEquals(1, f.writer.begins.size); assertTrue(f.writer.finishes.isEmpty())
             assertTrue(f.writer.batches.flatMap { it.markers }.any { it.kind == HistoryMarkerKind.BLE_GAP })
@@ -347,6 +414,7 @@ class NativeHistorySelectedAliasTest {
             assertTrue(battery.prepareForObservation()); assertTrue(gateway.prepareForObservation())
             assertTrue(battery.processNotification(byteArrayOf(11)))
             assertTrue(gateway.processNotification(byteArrayOf(1)))
+            f.assertDashboardEmpty()
             runCurrent()
             assertEquals(3, f.writer.begins.single().second.size)
             assertEquals(listOf<Double?>(11.0, 9.0), f.writer.batches.flatMap { it.samples }.map { it.value })
@@ -362,7 +430,7 @@ class NativeHistorySelectedAliasTest {
         val unmanaged = Fixture(managed = false)
         try { assertNull(unmanaged.capture(spec(a), vehicle())) }
         finally { unmanaged.channel.cancel() }
-        for (type in listOf(BmsType.BEGODE, BmsType.VESC_BMS)) {
+        for (type in listOf(BmsType.BEGODE)) {
             val f = Fixture(); val pack = a.copy(bmsType = type); val profile = vehicle(listOf(pack))
             val link = if (type == BmsType.BEGODE) spec(pack).copy(ownedPacks = listOf(OwnedSource(3), OwnedSource(4)))
                 else LinkSpec(pack.bmsAddress, ProtocolKind.VESC, listOf(OwnedSource(3, kind = ProtocolKind.VESC_BMS)))

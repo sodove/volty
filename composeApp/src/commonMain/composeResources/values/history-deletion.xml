@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="history_ride_delete_title">Delete the entire ride recording?</string>
+    <string name="history_ride_delete_body">This removes the original whole recording from Volty, including all graph and GPS data.</string>
+    <string name="history_ride_delete_counts">Favorites removed: %1$d. Media copies removed: %2$d. Original photos and videos in your gallery will stay.</string>
+    <string name="history_ride_delete_preparing">Preparing deletion…</string>
+    <string name="history_ride_delete_deleting">Deleting the recording…</string>
+    <string name="history_ride_delete_confirm">Delete recording</string>
+    <string name="history_ride_delete_cancel">Cancel</string>
+    <string name="history_ride_delete_retry">Prepare again</string>
+    <string name="history_ride_delete_failure_not_found">This recording is no longer available. Refresh the ride list.</string>
+    <string name="history_ride_delete_failure_active_recording">This ride is still being recorded and cannot be deleted yet. Stop the recording, then try again.</string>
+    <string name="history_ride_delete_failure_source_changed">The recording changed. Prepare the deletion again before confirming.</string>
+    <string name="history_ride_delete_failure_conflict">Favorites or attachments changed. Prepare the deletion again before confirming.</string>
+    <string name="history_ride_delete_failure_storage">The recording could not be deleted. Check available storage and try again.</string>
+    <string name="history_ride_delete_result_title">Ride recording deleted</string>
+    <string name="history_ride_delete_result_success">The ride recording was deleted.</string>
+    <string name="history_ride_delete_result_cleanup_pending">The ride recording was deleted. Cleanup of its files is still pending and will be retried later.</string>
+    <string name="history_ride_delete_result_ok">OK</string>
+</resources>

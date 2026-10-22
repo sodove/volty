@@ -28,14 +28,7 @@ class LegacyHistoryReader(provider: VoltyDatabaseProvider,
     override suspend fun legacyRecordedRange(rideId: String): HistoryRange? = withContext(dispatcher) {
         database.transactionWithResult {
             val ride = database.rideRowQueries.selectById(rideId).executeAsOneOrNull() ?: return@transactionWithResult null
-            val start = wallTick(ride.startedAt).epochMillis
-            val bounds = database.ridePointRowQueries.selectLegacyRecordedRange(rideId).executeAsOne()
-            check(bounds.totalRows == bounds.parsedRows) { "Unparseable legacy recording timestamp" }
-            if (bounds.totalRows == 0L) return@transactionWithResult HistoryRange(start, start)
-            val first = wallTick(checkNotNull(bounds.firstTimestamp)).epochMillis
-            val last = wallTick(checkNotNull(bounds.lastTimestamp)).epochMillis
-            check(last >= first)
-            HistoryRange(minOf(start, first), maxOf(start, last))
+            legacyRecordedRange(database, ride)
         }
     }
     override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys = withContext(dispatcher) {
@@ -140,12 +133,12 @@ class LegacyHistoryReader(provider: VoltyDatabaseProvider,
     private fun wallTick(text: String) = HistoryTick(Instant.parse(text).toEpochMilliseconds(), 0, 0)
 }
 
-private data class LegacyMetric(val id: String, val sourceId: String, val canonicalMultiplier: Double = 1.0)
+internal data class LegacyMetric(val id: String, val sourceId: String, val canonicalMultiplier: Double = 1.0)
 
 /** The retired recorder persisted GraphTelemetryMapper's display values, not wire values. */
-private fun legacyMetric(key: String): LegacyMetric? = legacyMetrics[key]
+internal fun legacyMetric(key: String): LegacyMetric? = legacyMetrics[key]
 
-private val legacyMetrics = mapOf(
+internal val legacyMetrics = mapOf(
     "SOC" to LegacyMetric("soc_percent", "legacy-battery"),
     "POWER" to LegacyMetric("power_w", "legacy-battery", -1.0),
     "CURRENT" to LegacyMetric("current_a", "legacy-battery", -1.0),

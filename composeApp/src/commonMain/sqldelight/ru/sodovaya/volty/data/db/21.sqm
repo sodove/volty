@@ -1,0 +1,11 @@
+CREATE TABLE HistoryPreviewPurge (
+  id INTEGER NOT NULL PRIMARY KEY,
+  generation INTEGER NOT NULL DEFAULT 0,
+  acknowledgedGeneration INTEGER NOT NULL DEFAULT 0,
+  CHECK(id = 1),
+  CHECK(typeof(generation) = 'integer'),
+  CHECK(typeof(acknowledgedGeneration) = 'integer'),
+  CHECK(generation >= 0),
+  CHECK(acknowledgedGeneration >= 0),
+  CHECK(acknowledgedGeneration <= generation)
+);

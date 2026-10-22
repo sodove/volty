@@ -1,0 +1,18 @@
+CREATE TABLE HistoryFavorite (
+  id TEXT NOT NULL PRIMARY KEY,
+  rideId TEXT NOT NULL,
+  vehicleId TEXT NOT NULL,
+  storageKind TEXT NOT NULL,
+  startedEpochMillis INTEGER NOT NULL,
+  startedElapsedMillis INTEGER NOT NULL,
+  clockGeneration INTEGER NOT NULL,
+  rangeStart INTEGER NOT NULL,
+  rangeEnd INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  createdEpochMillis INTEGER NOT NULL,
+  CHECK(rangeEnd > rangeStart),
+  CHECK(revision > 0)
+);
+CREATE INDEX HistoryFavorite_created ON HistoryFavorite(createdEpochMillis DESC, id DESC);
+CREATE INDEX HistoryFavorite_source ON HistoryFavorite(rideId, storageKind);

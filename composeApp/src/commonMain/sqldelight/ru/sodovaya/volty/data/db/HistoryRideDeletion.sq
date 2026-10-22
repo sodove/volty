@@ -1,0 +1,22 @@
+deletionImpact:
+WITH affected AS (
+  SELECT id FROM HistoryFavorite WHERE rideId = :rideId AND storageKind = :storageKind
+  AND vehicleId = :vehicleId AND startedEpochMillis = :startedEpochMillis
+  AND startedElapsedMillis = :startedElapsedMillis AND clockGeneration = :clockGeneration
+)
+SELECT (SELECT COUNT(*) FROM affected) AS favoriteCount,
+  (SELECT COUNT(*) FROM HistoryMedia WHERE favoriteId IN (SELECT id FROM affected)) AS mediaCount;
+
+retireRecordingMedia:
+UPDATE HistoryMedia SET state = 'DELETING' WHERE favoriteId IN (
+  SELECT id FROM HistoryFavorite WHERE rideId = :rideId AND storageKind = :storageKind
+  AND vehicleId = :vehicleId AND startedEpochMillis = :startedEpochMillis
+  AND startedElapsedMillis = :startedElapsedMillis AND clockGeneration = :clockGeneration
+);
+
+deleteRecordingFavorites:
+DELETE FROM HistoryFavorite WHERE rideId = :rideId AND storageKind = :storageKind
+AND vehicleId = :vehicleId AND startedEpochMillis = :startedEpochMillis
+AND startedElapsedMillis = :startedElapsedMillis AND clockGeneration = :clockGeneration;
+pendingRetiredMediaCount:
+SELECT COUNT(*) FROM HistoryMedia WHERE state = 'DELETING';

@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.history
 
 enum class HistoryDestination { CATALOG, RIDE, CHARTS }
+class HistoryWindowGestureToken internal constructor()
 
 /** Independent read quality, one selected ride and one shared detail range/cursor. */
 data class HistoryUiState(
@@ -11,6 +12,14 @@ data class HistoryUiState(
     val route: HistoryRouteState = HistoryRouteState(),
     val previews: HistoryPreviewsState = HistoryPreviewsState(),
     val presets: HistoryPresetsState = HistoryPresetsState(),
+    val favorites: HistoryFavoritesState = HistoryFavoritesState(),
+    val selectedFavorite: ru.sodovaya.volty.domain.history.HistoryFavorite? = null,
+    val media: HistoryMediaState = HistoryMediaState(),
+    val deletion: HistoryRideDeletionState = HistoryRideDeletionState(),
+    val export: HistoryExportState = HistoryExportState(),
+    val recording: HistoryRecordingUiState = HistoryRecordingUiState(),
     val previewImages: HistoryPreviewImagesState = HistoryPreviewImagesState(),
     val previewRevision: Long = 0,
+    val windowPreview: ru.sodovaya.volty.domain.history.HistoryRange? = null,
+    val mapMetricKey: ru.sodovaya.volty.domain.history.HistorySeriesKey? = null,
 )

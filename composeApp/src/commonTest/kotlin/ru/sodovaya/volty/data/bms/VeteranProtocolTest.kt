@@ -7,8 +7,113 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.*
 
 class VeteranProtocolTest {
+
+    @Test fun observerPublishesOnlyCompleteFreshControllerFrameAndSeparateDerivedRail() {
+        val protocol = VeteranProtocol()
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+        val frame = controllerFrame(voltageRaw = 12_525, speedRaw = -321,
+            phaseCurrentRaw = -250, temperatureRaw = 3500, pwmRaw = 7850)
+        protocol.onNotification(frame.copyOfRange(0, 13))
+        assertTrue(observed.isEmpty())
+        protocol.onNotification(frame.copyOfRange(13, frame.size))
+        assertEquals(2, observed.size)
+        val controller = observed.single { it.origin == TelemetryOrigin.CONTROLLER }.readings.associateBy { it.metric }
+        assertEquals(32.1, controller.getValue(TelemetryMetric.SPEED).value!!, 0.001)
+        assertEquals(-25.0, controller.getValue(TelemetryMetric.MOTOR_CURRENT).value!!, 0.001)
+        assertEquals(-19.625, controller.getValue(TelemetryMetric.CONTROLLER_BATTERY_CURRENT).value!!, 0.001)
+        assertFalse(controller.containsKey(TelemetryMetric.ERPM), "The frame has no ERPM field")
+        val rail = observed.single { it.origin == TelemetryOrigin.BATTERY }
+        assertEquals(TelemetryRole.DERIVED, rail.role)
+        assertEquals(0, rail.localIndex)
+        val battery = rail.readings.associateBy { it.metric }
+        assertEquals(125.25, battery.getValue(TelemetryMetric.VOLTAGE).value!!, 0.001)
+        assertEquals(19.625, battery.getValue(TelemetryMetric.CURRENT).value!!, 0.001)
+        assertEquals(2458.03125, battery.getValue(TelemetryMetric.POWER).value!!, 0.01)
+        assertFalse(battery.containsKey(TelemetryMetric.CELL))
+    }
+
+    @Test fun smartBmsPagesDoNotRestampCachedCurrentCellsOrAssembledVoltage() {
+        val protocol = VeteranProtocol()
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+        protocol.onNotification(bmsFrame(packet = 0, current1Raw = 345))
+        val current = observed.single { it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.CONTRIBUTOR }
+        assertEquals(0, current.localIndex)
+        assertEquals(listOf(TelemetryMetric.CURRENT), current.readings.map { it.metric })
+        assertEquals(-3.45, current.readings.single().value!!, 0.001)
+        observed.clear()
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4100 + it }, reportedCellCount = 36))
+        val cells = observed.single { it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.CONTRIBUTOR }.readings
+        assertEquals((0..14).toList(), cells.filter { it.metric == TelemetryMetric.CELL }.map { it.cellIndex })
+        assertFalse(cells.any { it.metric in setOf(TelemetryMetric.CURRENT, TelemetryMetric.VOLTAGE, TelemetryMetric.POWER) })
+        assertTrue(cells.filter { it.metric in setOf(TelemetryMetric.CELL_MIN, TelemetryMetric.CELL_MAX, TelemetryMetric.CELL_DELTA) }
+            .let { it.size == 3 && it.all { value -> value.value == null && value.unknown == TelemetryUnknown.PARTIAL_SOURCE } })
+        observed.clear()
+        protocol.onNotification(bmsFrame(packet = 5, cells = IntArray(15) { if (it == 0) 50000 else 4200 }, reportedCellCount = 36))
+        val other = observed.single { it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.CONTRIBUTOR }
+        assertEquals(1, other.localIndex)
+        val invalid = other.readings.single { it.metric == TelemetryMetric.CELL && it.cellIndex == 0 }
+        assertNull(invalid.value); assertEquals(TelemetryUnknown.INVALID_VALUE, invalid.unknown)
+    }
+
+    @Test fun rejectedFrameAndObserverFailureCannotTurnIntoHistoryFactsOrBreakLiveDecode() {
+        val protocol = VeteranProtocol()
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+        val valid = bmsFrame(packet = 0, current1Raw = 100)
+        protocol.onNotification(valid.copyOf().apply { this[5] = (this[5].toInt() xor 1).toByte() })
+        assertTrue(observed.isEmpty())
+        protocol.telemetryObserver = { throw IllegalStateException("test observer") }
+        protocol.onNotification(controllerFrame(voltageRaw = 12400))
+        assertEquals(124f, assertNotNull(protocol.latestData()).voltage, 0.001f)
+        assertEquals(2L, protocol.telemetryObserverFailures)
+    }
+
+    @Test fun freshPageDoesNotBorrowFactsEvenWhenCachedPackIsComplete() {
+        val protocol = VeteranProtocol()
+        protocol.onNotification(bmsFrame(packet = 0, current1Raw = 300))
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4100 }, reportedCellCount = 36))
+        protocol.onNotification(bmsFrame(packet = 2, cells = IntArray(15) { 4100 }))
+        protocol.onNotification(bmsFrame(packet = 3, cells = IntArray(6) { 4100 }, temperatures = IntArray(6) { 2500 }))
+        assertTrue(assertNotNull(protocol.latestData(0)).hasPower, "Reach a fully assembled retained pack")
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4200 }, reportedCellCount = 36))
+        val fresh = observed.single { it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.CONTRIBUTOR }
+        assertEquals((0..14).toList(), fresh.readings.filter { it.metric == TelemetryMetric.CELL }.map { it.cellIndex })
+        assertTrue(fresh.readings.filter { it.metric == TelemetryMetric.CELL }.all { it.value == 4.2 })
+        assertFalse(fresh.readings.any { it.metric in setOf(TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT,
+            TelemetryMetric.POWER, TelemetryMetric.SOC, TelemetryMetric.BATTERY_TEMPERATURE) })
+        assertTrue(fresh.readings.filter { it.metric in setOf(TelemetryMetric.CELL_MIN, TelemetryMetric.CELL_MAX,
+            TelemetryMetric.CELL_DELTA) }.all { it.unknown == TelemetryUnknown.PARTIAL_SOURCE && it.value == null })
+    }
+
+    @Test fun reportedZeroSocAndFreshRailEstimateHaveDifferentOwners() {
+        val protocol = VeteranProtocol()
+        protocol.onNotification(bmsFrame(packet = 0, current1Raw = 300))
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4100 }, reportedCellCount = 36))
+        protocol.onNotification(bmsFrame(packet = 2, cells = IntArray(15) { 4100 }))
+        protocol.onNotification(bmsFrame(packet = 3, cells = IntArray(6) { 4100 }, temperatures = IntArray(6) { 2500 }))
+        assertEquals(0f, assertNotNull(protocol.latestData(0)).soc, "Reach a complete cached physical pack with reported zero")
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+        protocol.onNotification(bmsFrame(packet = 2, cells = IntArray(15) { 4100 }).apply {
+            this[50] = 0; appendCrc(this, 83)
+        })
+        val physical = observed.single { it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.CONTRIBUTOR }
+        assertEquals(0.0, physical.readings.single { it.metric == TelemetryMetric.SOC }.value)
+        observed.clear()
+        protocol.onNotification(controllerFrame(voltageRaw = 12525))
+        assertEquals(0f, assertNotNull(protocol.latestData(0)).soc, "Live decoder retains the reported zero")
+        val rail = observed.single { it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.DERIVED }
+        assertTrue(assertNotNull(rail.readings.single { it.metric == TelemetryMetric.SOC }.value) > 0.0,
+            "History rail must use this frame's voltage curve, not restamp the cached physical zero")
+        assertFalse(observed.any { it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.CONTRIBUTOR })
+    }
 
     @Test
     fun `Veteran stream is read only and uses the Nordic UART UUIDs`() {

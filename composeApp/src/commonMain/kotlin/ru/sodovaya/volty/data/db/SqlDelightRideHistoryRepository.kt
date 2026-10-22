@@ -15,6 +15,9 @@ class SqlDelightRideHistoryRepository(provider: VoltyDatabaseProvider) : RideHis
 
     override suspend fun startRide(summary: RideSummary) {
         database.transaction {
+            check(database.historyFavoriteQueries.sourceReferences(summary.id, "LEGACY").executeAsOne() == 0L) {
+                "Recording is referenced by favorites"
+            }
             rides.insert(
                 id = summary.id,
                 vehicleId = summary.vehicleId,
@@ -62,6 +65,9 @@ class SqlDelightRideHistoryRepository(provider: VoltyDatabaseProvider) : RideHis
 
     override suspend fun deleteRide(rideId: String) {
         database.transaction {
+            check(database.historyFavoriteQueries.sourceReferences(rideId, "LEGACY").executeAsOne() == 0L) {
+                "Recording is referenced by favorites"
+            }
             points.deleteByRide(rideId)
             rides.delete(rideId)
         }
@@ -69,16 +75,16 @@ class SqlDelightRideHistoryRepository(provider: VoltyDatabaseProvider) : RideHis
 
     override suspend fun pruneOldest(keep: Int) {
         require(keep >= 0) { "keep must not be negative" }
-        val count = rides.selectAll().executeAsList().size - keep
-        if (count > 0) {
-            val oldest = rides.selectAll().executeAsList()
+        database.transaction {
+            val rows = rides.selectAll().executeAsList()
+            val count = (rows.size - keep).coerceAtLeast(0)
+            val oldest = rows
                 .sortedBy { it.startedAt }
+                .filter { database.historyFavoriteQueries.sourceReferences(it.id, "LEGACY").executeAsOne() == 0L }
                 .take(count)
-            database.transaction {
-                oldest.forEach { row ->
-                    points.deleteByRide(row.id)
-                    rides.delete(row.id)
-                }
+            oldest.forEach { row ->
+                points.deleteByRide(row.id)
+                rides.delete(row.id)
             }
         }
     }

@@ -4,6 +4,10 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryObservation
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
 import ru.sodovaya.volty.domain.model.SpeedSource
 
 /** Fixtures follow WheelLog's read-only NinebotAdapter (55 AA / B0 live page). */
@@ -54,6 +58,70 @@ class NinebotLegacyProtocolTest {
         assertEquals(2_660.251f, motion.odometerKm, 0.001f)
         assertEquals(0f, motion.tripKm, 0.001f)
         assertTrue(motion.hasDistance)
+    }
+
+    @Test
+    fun `identical accepted B0 pages publish fresh battery and controller fields`() {
+        val protocol = NinebotLegacyProtocol()
+        val events = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = events::add
+        val frame = liveFrame(
+            batteryPercent = 78,
+            distanceMeters = 2_660_251,
+            temperatureCentiC = 3_700,
+            voltageCentiV = 6_150,
+            currentCentiA = 1_234,
+            speedCentiKmh = 2_716
+        )
+
+        protocol.onNotification(frame)
+        protocol.onNotification(frame.copyOf())
+
+        assertEquals(4, events.size, "each accepted B0 page contributes a battery and controller observation")
+        assertHistoryAccepts(events)
+        val batteryEvents = events.filter { it.origin == TelemetryOrigin.BATTERY }
+        val controllerEvents = events.filter { it.origin == TelemetryOrigin.CONTROLLER }
+        assertEquals(2, batteryEvents.size)
+        assertEquals(2, controllerEvents.size)
+        batteryEvents.forEach { event ->
+            assertEquals(TelemetryRole.CONTRIBUTOR, event.role)
+            assertEquals(0, event.localIndex)
+            assertEquals(
+                setOf(TelemetryMetric.SOC, TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT,
+                    TelemetryMetric.POWER, TelemetryMetric.BATTERY_TEMPERATURE),
+                event.readings.map { it.metric }.toSet()
+            )
+        }
+        controllerEvents.forEach { event ->
+            assertEquals(TelemetryRole.CONTRIBUTOR, event.role)
+            assertEquals(0, event.localIndex)
+            assertEquals(
+                setOf(TelemetryMetric.SPEED, TelemetryMetric.INPUT_VOLTAGE,
+                    TelemetryMetric.CONTROLLER_BATTERY_CURRENT, TelemetryMetric.CONTROLLER_POWER,
+                    TelemetryMetric.ESC_TEMPERATURE, TelemetryMetric.ODOMETER, TelemetryMetric.TRIP),
+                event.readings.map { it.metric }.toSet()
+            )
+        }
+        assertEquals(batteryEvents[0].readings.toSet(), batteryEvents[1].readings.toSet())
+        assertEquals(controllerEvents[0].readings.toSet(), controllerEvents[1].readings.toSet())
+    }
+
+    @Test
+    fun `a different register does not restamp cached B0 values`() {
+        val protocol = NinebotLegacyProtocol()
+        val events = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = events::add
+        protocol.onNotification(liveFrame(voltageCentiV = 6_150, currentCentiA = 1_234))
+        val before = requireNotNull(protocol.latestData())
+        events.clear()
+
+        protocol.onNotification(frame(parameter = 0xB1, payload = ByteArray(LIVE_PAYLOAD_SIZE) { 0x2a }))
+
+        assertTrue(events.isEmpty(), "unsupported register data cannot refresh cached B0 measurements")
+        val after = requireNotNull(protocol.latestData())
+        assertEquals(before.voltage, after.voltage, 0.001f)
+        assertEquals(before.current, after.current, 0.001f)
+        assertEquals(before.soc, after.soc, 0.001f)
     }
 
     @Test

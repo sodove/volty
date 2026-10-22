@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="history_ride_delete_title">Удалить всю запись поездки?</string>
+    <string name="history_ride_delete_body">Из Volty будет удалена вся исходная запись, включая все графики и данные GPS.</string>
+    <string name="history_ride_delete_counts">Будут удалены элементы избранного: %1$d. Копии фото и видео: %2$d. Оригиналы фото и видео в галерее останутся.</string>
+    <string name="history_ride_delete_preparing">Подготовка к удалению…</string>
+    <string name="history_ride_delete_deleting">Удаление записи…</string>
+    <string name="history_ride_delete_confirm">Удалить запись</string>
+    <string name="history_ride_delete_cancel">Отмена</string>
+    <string name="history_ride_delete_retry">Подготовить ещё раз</string>
+    <string name="history_ride_delete_failure_not_found">Запись больше недоступна. Обновите список поездок.</string>
+    <string name="history_ride_delete_failure_active_recording">Эта поездка ещё записывается, поэтому удалить её пока нельзя. Остановите запись и попробуйте снова.</string>
+    <string name="history_ride_delete_failure_source_changed">Данные записи изменились. Подготовьте удаление ещё раз.</string>
+    <string name="history_ride_delete_failure_conflict">Избранное или вложения изменились. Подготовьте удаление ещё раз.</string>
+    <string name="history_ride_delete_failure_storage">Не удалось удалить запись. Проверьте свободное место и попробуйте снова.</string>
+    <string name="history_ride_delete_result_title">Запись поездки удалена</string>
+    <string name="history_ride_delete_result_success">Запись поездки удалена.</string>
+    <string name="history_ride_delete_result_cleanup_pending">Запись поездки удалена. Очистка связанных файлов ещё не завершена; приложение повторит её позже.</string>
+    <string name="history_ride_delete_result_ok">ОК</string>
+</resources>

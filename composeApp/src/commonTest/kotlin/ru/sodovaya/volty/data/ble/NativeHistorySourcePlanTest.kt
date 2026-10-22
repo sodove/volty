@@ -17,6 +17,48 @@ class NativeHistorySourcePlanTest {
     private fun controller(index: Int = 7) = Controller(index, "ESC", ControllerType.VESC, address,
         motor = MotorConfig(15, 254, 1f))
 
+    @Test fun kellyControllerAndOptionalRailHaveDistinctSources() {
+        val c = controller().copy(controllerType = ControllerType.KELLY)
+        val spec = LinkSpec(address, ProtocolKind.KELLY, listOf(OwnedSource(3)), listOf(OwnedSource(7)))
+        val sources = nativeHistorySourcesForLink(spec, vehicle(emptyList(), listOf(c)))
+        assertEquals(setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.DERIVED_BATTERY), sources.values.map { it.kind }.toSet())
+        assertEquals(2, sources.values.map { it.id }.distinct().size)
+        val external = pack().copy(bmsAddress = "AA:BB:CC:DD:EE:02")
+        val withoutRail = nativeHistorySourcesForLink(spec.copy(ownedPacks = emptyList()), vehicle(listOf(external), listOf(c)))
+        assertEquals(listOf(HistorySourceKind.CONTROLLER), withoutRail.values.map { it.kind })
+    }
+
+    @Test fun everyWorkingControllerUsesItsActualDecoderSourceShape() {
+        for ((type, slots, expected) in listOf(
+            Triple(ControllerType.FARDRIVER, 1, setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.DERIVED_BATTERY)),
+            Triple(ControllerType.KINGSONG, 2, setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.DERIVED_BATTERY, HistorySourceKind.BATTERY)),
+            Triple(ControllerType.NINEBOT, 2, setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.BATTERY)),
+            Triple(ControllerType.NINEBOT_LEGACY, 1, setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.BATTERY)),
+            Triple(ControllerType.INMOTION, 1, setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.BATTERY)),
+        )) {
+            val c = controller().copy(controllerType = type)
+            val spec = LinkSpec(address, type.protocolKind(), (0 until slots).map { OwnedSource(it) }, listOf(OwnedSource(7)))
+            val sources = nativeHistorySourcesForLink(spec, vehicle(emptyList(), listOf(c)))
+            assertEquals(expected, sources.values.map { it.kind }.toSet(), type.name)
+            assertEquals(if (type == ControllerType.KINGSONG) 4 else if (type == ControllerType.NINEBOT) 3 else 2, sources.size, type.name)
+            assertEquals(sources.size, sources.values.map { it.id }.distinct().size, type.name)
+        }
+    }
+
+    @Test fun veteranSeparatesControllerRailFromBothPhysicalSmartBmsBranches() {
+        val p = pack(type = BmsType.LEAPERKIM)
+        val c = controller().copy(controllerType = ControllerType.VETERAN)
+        val spec = LinkSpec(address, ProtocolKind.VETERAN, listOf(OwnedSource(3), OwnedSource(4)), listOf(OwnedSource(7)))
+        val sources = nativeHistorySourcesForSelectedLink(spec, vehicle(listOf(p), listOf(c)))
+        assertEquals(4, sources.size)
+        assertEquals(4, sources.values.map { it.id }.distinct().size)
+        assertEquals(HistorySourceKind.CONTROLLER, sources.getValue(HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, 0)).kind)
+        assertEquals(HistorySourceKind.DERIVED_BATTERY,
+            sources.getValue(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED)).kind)
+        for (index in 0..1) assertEquals(HistorySourceKind.BATTERY,
+            sources.getValue(HistoryTelemetrySource(TelemetryOrigin.BATTERY, index)).kind)
+    }
+
     @Test fun plain_controller_plan_declares_distinct_reporter_scope_without_a_virtual_pack() {
         val c = controller()
         val external = pack().copy(bmsAddress = "AA:BB:CC:DD:EE:02")
@@ -104,7 +146,9 @@ class NativeHistorySourcePlanTest {
             changed.filterKeys { it.origin == TelemetryOrigin.BATTERY }.mapValues { it.value.id })
     }
 
-    @Test fun unsupportedAmbiguousAndMismatchedPlansAreRejectedBeforeAttribution() {
+    @Test fun ambiguousAndMismatchedPlansAreRejectedBeforeNumericalAttribution() {
+        // An earlier version also rejected a valid FarDriver solely because its
+        // numeric publisher was absent. GPS fallback now owns that real link.
         val p = pack(); val v = vehicle(listOf(p)); val spec = LinkSpec(address, ProtocolKind.ANT, listOf(OwnedSource(3)))
         val bad = listOf(
             spec to null,
@@ -119,8 +163,6 @@ class NativeHistorySourcePlanTest {
             LinkSpec(address, ProtocolKind.VESC, ownedControllers = listOf(OwnedSource(7))) to vehicle(emptyList(), listOf(controller())),
             LinkSpec(address, ProtocolKind.VESC, listOf(OwnedSource(11)), listOf(OwnedSource(7))) to
                 vehicle(emptyList(), listOf(controller().copy(canId = 5))),
-            LinkSpec(address, ProtocolKind.FARDRIVER, ownedControllers = listOf(OwnedSource(7))) to
-                vehicle(emptyList(), listOf(controller().copy(controllerType = ControllerType.FARDRIVER))),
             spec.copy(protocolKind = ProtocolKind.FARDRIVER) to v,
         )
         bad.forEach { (link, profile) -> assertFailsWith<IllegalArgumentException> { nativeHistorySourcesForLink(link, profile) } }

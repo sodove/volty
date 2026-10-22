@@ -23,7 +23,10 @@ class HistoryPreviewImage(bytes: ByteArray) {
     init { require(encoded.size in 1..1_048_576) }
     fun copyBytes(): ByteArray = encoded.copyOf()
 }
-fun interface HistoryPreviewImageLoader { suspend fun load(key: HistoryPreviewImageKey): HistoryPreviewImage? }
+fun interface HistoryPreviewImageLoader {
+    suspend fun load(key: HistoryPreviewImageKey): HistoryPreviewImage?
+    suspend fun reconcileDeletedRides(): Boolean = true
+}
 data class HistoryPreviewImagesState(val images: Map<String, HistoryPreviewImage> = emptyMap(),
     val loading: Set<String> = emptySet(), val unavailable: Set<String> = emptySet(),
     val renderKeys: Map<String, HistoryPreviewImageKey> = emptyMap())
@@ -102,6 +105,11 @@ class HistoryPreviewImagesComponent(componentContext: ComponentContext, parentSc
         if (image.byteCount > cacheBytes) return
         cache.remove(key); cache[key] = image
         while (cache.size > cacheEntries || cache.values.sumOf { it.byteCount } > cacheBytes) cache.remove(cache.keys.first())
+    }
+    fun forget(rideId: String) {
+        if (!lifetime.isActive) return
+        cache.keys.filter { it.rideId == rideId }.forEach(cache::remove)
+        setVisible(visible.values.filterNot { it.rideId == rideId })
     }
     fun close() {
         transition = Any(); lifetime.cancel()

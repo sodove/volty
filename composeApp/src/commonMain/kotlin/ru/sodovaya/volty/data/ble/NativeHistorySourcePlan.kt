@@ -5,31 +5,25 @@ import ru.sodovaya.volty.data.history.historySourceKindForTelemetry
 import ru.sodovaya.volty.domain.history.HistorySource
 import ru.sodovaya.volty.domain.model.*
 
-/** The same immutable decoder configuration lookup used by native construction. */
-internal fun nativeLinkController(spec: LinkSpec, vehicle: Vehicle?): Controller? =
-    spec.ownedControllers.firstOrNull()?.globalIndex?.let { index -> vehicle?.controllers?.firstOrNull { it.index == index } }
-
-internal fun nativeLinkCellCount(spec: LinkSpec, vehicle: Vehicle?): Int? =
-    spec.ownedPacks.firstOrNull()?.globalIndex?.let { index -> vehicle?.packs?.firstOrNull { it.index == index }?.cellCount }
-
 /** Managed selection only: caller must first validate the complete physical plan.
  * One selected path per alias is safe; this cannot authorize concurrent paths.
- * Gateway aliases retain their separate cache-absence producer policy.
+ * Gateway aliases retain their separate receipt-snapshot producer policy.
  */
 internal fun nativeHistorySourcesForSelectedLink(spec: LinkSpec, vehicle: Vehicle?): Map<HistoryTelemetrySource, HistorySource> =
     nativeHistorySourcesForLink(spec, vehicle, singlePathAliases = true)
 
 /**
  * Direct, non-aliased native sources and explicit forwarded VESC controllers.
- * Gateway BMS cache sources carry typed absence only; numeric freshness is not
- * certified. Derived gateway packs and physical aliases still need qualification.
+ * Gateway BMS responses record their reported fields at receipt time. They do
+ * not claim a sensor acquisition timestamp. Computed gateway packs retain their
+ * own derived source; physical aliases select one recording path.
  * Native branch/role identity is independent of UI labels and global slot order.
  */
 internal fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?): Map<HistoryTelemetrySource, HistorySource> =
     nativeHistorySourcesForLink(spec, vehicle, singlePathAliases = false)
 
 private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singlePathAliases: Boolean): Map<HistoryTelemetrySource, HistorySource> {
-    val profile = requireNotNull(vehicle) { "Recording needs an owned vehicle" }
+    val profile = requireNotNull(vehicle) { "Recording needs a physical connection identity" }
     require(spec.address.isNotBlank())
     require(profile.packs.map { it.index }.distinct().size == profile.packs.size)
     require(profile.controllers.map { it.index }.distinct().size == profile.controllers.size)
@@ -69,89 +63,93 @@ private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singl
             if ((origin == TelemetryOrigin.CONTROLLER && role == TelemetryRole.CONTRIBUTOR) || role == TelemetryRole.DERIVED) calibration else ""))
         result[key] = HistorySource(id, historySourceKindForTelemetry(origin, role), label)
     }
-    when (spec.protocolKind) {
-        ProtocolKind.JK, ProtocolKind.JBD, ProtocolKind.ANT, ProtocolKind.DALY -> {
-            require(spec.ownedPacks.size == 1 && packs.single() != null && controllers.isEmpty())
-            add(TelemetryOrigin.BATTERY, 0, checkNotNull(packs.single()).label)
+    // Retraction: this used to repeat a per-protocol history allowlist. Source
+    // addresses now come from the exact plan used to construct the live decoder.
+    val configuration = nativeDecoderPlan(spec, profile)
+    require(spec.ownedPacks.size == configuration.packCount)
+    require(controllers.size <= configuration.controllerCount)
+    require(controllers.isNotEmpty() || packs.any { it != null })
+    configuration.sources.forEach { source ->
+        val label = when (source.origin) {
+            TelemetryOrigin.CONTROLLER -> controllers.getOrNull(source.localIndex)?.label ?: profile.name
+            TelemetryOrigin.BATTERY -> packs.getOrNull(source.localIndex)?.label
+                ?: nativeLinkController(spec, profile)?.label ?: "${profile.name} · ${source.localIndex + 1}"
         }
-        ProtocolKind.BEGODE -> {
-            require(spec.ownedPacks.size == 2 && controllers.size <= 1)
-            require(packs.any { it != null } || controllers.isNotEmpty())
-            for (branch in 0..1) {
-                val label = packs[branch]?.label ?: "${profile.name} · ${branch + 1}"
-                add(TelemetryOrigin.BATTERY, branch, label)
-                for (assembly in 0..1) add(TelemetryOrigin.BATTERY, branch, "$label · ${assembly + 1}", TelemetryRole.ASSEMBLY, assembly)
-            }
-            add(TelemetryOrigin.CONTROLLER, 0, nativeLinkController(spec, profile)?.label ?: profile.name)
-        }
-        ProtocolKind.VESC -> {
-            require(controllers.size == 1 && packs.all { it == null })
-            val controller = checkNotNull(controllers.single())
-            val derived = controller.providesDerivedBattery || profile.packs.isEmpty()
-            require(spec.ownedPacks.size == if (derived) 1 else 0)
-            add(TelemetryOrigin.CONTROLLER, 0, controller.label)
-            add(TelemetryOrigin.CONTROLLER, 0, "${controller.label} · CAN", TelemetryRole.REPORTED_CAN)
-            if (derived) add(TelemetryOrigin.BATTERY, 0, controller.label, TelemetryRole.DERIVED)
-        }
-        ProtocolKind.VESC_BMS, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,
-        ProtocolKind.NINEBOT, ProtocolKind.NINEBOT_LEGACY, ProtocolKind.KINGSONG,
-        ProtocolKind.INMOTION, ProtocolKind.VETERAN -> throw IllegalArgumentException("Native recording producer is not qualified")
+        add(source.origin, source.localIndex, label, source.role, source.assemblyIndex)
     }
     return result.toMap()
 }
 
-/** Explicit forwarded controllers plus optional physical BMS cache sources.
- * Local controller targets without a known native CAN ID remain unqualified.
- * Cache identities certify only the decoder's typed absence policy, never numeric
- * freshness, and cannot borrow a direct battery's identity or a virtual slot.
+/** Local/forwarded controllers plus optional physical BMS response sources.
+ * A native controller is identified by the BLE endpoint; a forwarded one also
+ * includes its CAN target. BMS identities cannot borrow another battery's ID.
  */
 private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle, singlePathAliases: Boolean): Map<HistoryTelemetrySource, HistorySource> {
-    require(spec.protocolKind == ProtocolKind.VESC && spec.ownedControllers.isNotEmpty())
-    // Match native construction, including its first-controller/profile fallback.
-    // A real owned BMS slot suppresses that fallback even when the flag is ON.
-    val deriveBattery = nativeLinkController(spec, profile)?.providesDerivedBattery == true || profile.packs.isEmpty()
-    val packs = vescGatewayPacks(spec, deriveBattery)
-    require(packs.none { it.derived }) { "Derived gateway recording is not qualified" }
-    require(spec.ownedControllers.all { it.canId != null && it.canId in 0..254 &&
+    require(spec.protocolKind == ProtocolKind.VESC)
+    val configuration = nativeDecoderPlan(spec, profile)
+    require(spec.ownedPacks.size == configuration.packCount)
+    require(spec.ownedControllers.size == configuration.controllerCount)
+    require(spec.ownedControllers.all { (it.canId == null || it.canId in 0..254) &&
         (it.kind == null || it.kind == ProtocolKind.VESC) })
     require(spec.ownedControllers.map { it.canId }.distinct().size == spec.ownedControllers.size)
-    val result = linkedMapOf<HistoryTelemetrySource, HistorySource>()
-    spec.ownedControllers.forEachIndexed { local, owned ->
+    val controllers = spec.ownedControllers.map { owned ->
         val controller = requireNotNull(profile.controllers.singleOrNull { it.index == owned.globalIndex })
         require(controller.controllerType == ControllerType.VESC && controller.canId == owned.canId &&
             controller.address.equals(spec.address, ignoreCase = true))
-        val motor = controller.motor
-        val calibration = encodeIdentity(listOf(motor.polePairs.toString(), motor.wheelDiameterMm.toString(),
-            motor.gearRatio.toRawBits().toString()))
-        for (role in listOf(TelemetryRole.CONTRIBUTOR, TelemetryRole.REPORTED_CAN)) {
-            val key = HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, local, role)
-            // The local decoder array can reorder while the endpoint stays the same.
-            val id = "native-gateway-history-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
-                spec.protocolKind.name, owned.canId.toString(), role.name,
-                if (role == TelemetryRole.CONTRIBUTOR) calibration else ""))
-            result[key] = HistorySource(id, historySourceKindForTelemetry(key.origin, role),
-                if (role == TelemetryRole.REPORTED_CAN) "${controller.label} · CAN" else controller.label)
-        }
+        controller
     }
-    // Reuse native construction's slot order, after excluding actual virtual slots.
-    require(packs.map { it.canId }.distinct().size == packs.size)
-    packs.forEachIndexed { local, endpoint ->
-        val owned = spec.ownedPacks[local]
-        require(owned.kind == ProtocolKind.VESC_BMS && (endpoint.canId == null || endpoint.canId in 0..254))
-        val pack = requireNotNull(profile.packs.singleOrNull { it.index == endpoint.globalIndex })
-        require(pack.bmsType == BmsType.VESC_BMS && pack.canId == endpoint.canId &&
-            pack.bmsAddress.equals(spec.address, ignoreCase = true))
-        val alias = pack.aliasGroup
-        require(alias == null || (singlePathAliases && alias.isNotBlank())) {
-            "Aliased recording needs qualified single-path admission"
+    fun calibration(controller: Controller): String = controller.motor.let { motor ->
+        encodeIdentity(listOf(motor.polePairs.toString(), motor.wheelDiameterMm.toString(),
+            motor.gearRatio.toRawBits().toString()))
+    }
+    val virtual = configuration.sources.filter { it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.DERIVED }
+    require(virtual.size <= 1)
+    val physical = configuration.sources.filter { it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.CONTRIBUTOR }
+    require(physical.map { spec.ownedPacks[it.localIndex].canId }.distinct().size == physical.size)
+    val result = linkedMapOf<HistoryTelemetrySource, HistorySource>()
+    configuration.sources.forEach { source ->
+        val key = HistoryTelemetrySource(source.origin, source.localIndex, source.role, source.assemblyIndex)
+        val (id, label) = when (source.origin) {
+            TelemetryOrigin.CONTROLLER -> {
+                val owned = spec.ownedControllers[source.localIndex]
+                val controller = controllers[source.localIndex]
+                val identity = "native-gateway-history-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
+                    spec.protocolKind.name, owned.canId?.toString() ?: "local", source.role.name,
+                    if (source.role == TelemetryRole.CONTRIBUTOR) calibration(controller) else ""))
+                identity to if (source.role == TelemetryRole.REPORTED_CAN) "${controller.label} · CAN" else controller.label
+            }
+            TelemetryOrigin.BATTERY -> {
+                val owned = spec.ownedPacks[source.localIndex]
+                if (source.role == TelemetryRole.DERIVED) {
+                    require(owned.kind == null && owned.canId == null)
+                    require(profile.packs.none { it.index == owned.globalIndex })
+                    require(controllers.isNotEmpty())
+                    // Identity follows contributing endpoints and calibration,
+                    // never presentation order or slot labels.
+                    val contributors = spec.ownedControllers.mapIndexed { index, endpoint ->
+                        encodeIdentity(listOf(endpoint.canId?.toString() ?: "local", calibration(controllers[index])))
+                    }.sorted()
+                    ("native-gateway-derived-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
+                        spec.protocolKind.name) + contributors)) to profile.name
+                } else {
+                    require(owned.kind == ProtocolKind.VESC_BMS && (owned.canId == null || owned.canId in 0..254))
+                    val pack = requireNotNull(profile.packs.singleOrNull { it.index == owned.globalIndex })
+                    require(pack.bmsType == BmsType.VESC_BMS && pack.canId == owned.canId &&
+                        pack.bmsAddress.equals(spec.address, ignoreCase = true))
+                    val alias = pack.aliasGroup
+                    require(alias == null || (singlePathAliases && alias.isNotBlank())) {
+                        "Aliased recording needs qualified single-path admission"
+                    }
+                    // Retraction: cache-unknown erased received values. Receipt
+                    // snapshots have a separate producer-policy identity.
+                    val identity = if (alias != null) "native-alias-gateway-received-v1:" + encodeIdentity(listOf(profile.id, alias))
+                    else "native-gateway-received-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
+                        spec.protocolKind.name, owned.canId?.toString() ?: "host"))
+                    identity to pack.label
+                }
+            }
         }
-        val key = HistoryTelemetrySource(TelemetryOrigin.BATTERY, local)
-        // Explicit policy version prevents a future numeric producer from
-        // silently continuing the cache-absence series under the same source ID.
-        val id = if (alias != null) "native-alias-gateway-cache-unknown-v1:" + encodeIdentity(listOf(profile.id, alias))
-        else "native-gateway-cache-unknown-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
-            spec.protocolKind.name, endpoint.canId?.toString() ?: "host"))
-        result[key] = HistorySource(id, historySourceKindForTelemetry(key.origin, key.role), pack.label)
+        result[key] = HistorySource(id, historySourceKindForTelemetry(source.origin, source.role), label)
     }
     return result.toMap()
 }

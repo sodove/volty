@@ -34,7 +34,7 @@
 4. GPS-less old ride/offline preview tiles must remain usable (Tasks3/4).
 5. Interrupted media copy/delete and corrupt export must not damage original rides (Tasks6/7).
 
-## Task1 — history component and selection ownership
+## Task 1 — history component and selection ownership
 
 **Files:** Create commonMain `presentation/history/HistoryComponent.kt`,
 `HistoryState.kt`, `HistoryCursorPolicy.kt`, `HistoryRequestOwner.kt`;
@@ -89,7 +89,7 @@ Checkpoint: `a0b88673` owns the shared selection/range/cursor and atomic route
 read composition. Subsequent preview ownership adds no eager source/series read.
 This completes the component task, not production root/recorder activation.
 
-## Task2 — metric drawer for contributors and cells
+## Task 2 — metric drawer for contributors and cells
 
 **Files:** Create `presentation/history/HistoryMetricPickerPolicy.kt`,
 `HistoryMetricDrawer.kt`, `HistorySelectedMetrics.kt`;
@@ -130,7 +130,7 @@ unavailable, versioned atomic preferences and native process-restart acceptance.
 This completes the drawer/preset task; production screen/root activation remains
 part of Task5 rather than being implied by this checkpoint.
 
-## Task3 — historical map scene, cursor and animation
+## Task 3 — historical map scene, cursor and animation
 
 **Files:** Create `presentation/history/HistoryMapScene.kt`, `HistoryMapScenePolicy.kt`;
 modify common `presentation/map/NavigationMapScene.kt`,
@@ -151,7 +151,7 @@ fun historyMapScene(gps: List<HistoryGpsFix>, markers: List<HistoryMarker>, curs
     assertTrue(historyMapScene(emptyList(), emptyList(), 1000, 1).segments.isEmpty())
   }
   ```
-- [ ] Extend existing retained map scene with a historical layer input. Render
+- [x] Extend existing retained map scene with a historical layer input. Render
   route/start/end/gap markers/selected point, color by selected metric only where
   samples earned. Unknown metric segment uses neutral missing-data style.
   Preserve navigation/live/Nearby map ownership; historical overlay cannot alter
@@ -171,7 +171,16 @@ existing retained map. Evidence is in `../specs/2026-10-18-history-map-acceptanc
 Metric coloring, full screen/camera integration and the remaining native cases
 stay open; the partial adapter commit does not check off those requirements.
 
-## Task4 — route previews and history list
+Color-overlay checkpoint (2026-10-20): explicit selected-source chart Map action,
+earned range legend, bounded indexed coloring above the complete neutral route,
+unknown/gap/source fences and explicit clear are now integrated into the composed
+home/fullscreen owner. Final4374 tests and native actual colored/neutral edges,
+route paging, unknown second pack, font200% and retained MapView evidence are in
+`../specs/2026-10-20-history-map-color-acceptance.md`. This supersedes the preceding
+metric-coloring-pending statement only. Remaining camera/motion/native/root gates
+are still open; Task3 as a whole is not marked complete.
+
+## Task 4 — route previews and history list
 
 **Files:** Create `presentation/history/HistoryRoutePreview.kt`, `HistoryRideList.kt`,
 `HistoryRideCard.kt`, `data/history/HistoryPreviewCache.kt`,
@@ -185,7 +194,7 @@ in foundation facade with extrema/segment-safe read and its tests.
 - [x] RED using pure `historyPreviewPath(gps: List<HistoryGpsFix>, width: Double,
   height: Double): List<Pair<Double, Double>>` on zero-area bounds, crossing
   longitude wrap and gaps. Empty input returns empty path, no native map allocation.
-- [ ] Port Vescape thumbnail/layout/tile-cache approach. Key caches by ride ID,
+- [x] Port Vescape thumbnail/layout/tile-cache approach. Key caches by ride ID,
   data revision, dimensions and style revision; bound disk cache and concurrent
   requests. Reuse approved tile provider/cache, obey attribution/provider terms.
   If a tile fails/offline, route-only fallback remains visible, no broken partial tile mosaic.
@@ -206,7 +215,18 @@ explicit incomplete flag when data/segments are omitted; this does not claim a
 new full-route SQL summary, tile/image cache, name/distance/date-group/favorite
 binding or production root activation.
 
-## Task5 — full history home, summary and fullscreen charts
+Image-background checkpoint (2026-10-20): visible-only image ownership, bounded
+PNG memory/disk caches and one serialized native OpenGL snapshotter now sit behind
+the existing Canvas route fallback. The owner's exact key and parent admission
+fence late/stale images. The approved OFM styles/provider are reused with readable
+credits; failed/uncached offline requests preserve route-only previews. Native
+light/dark/offline/cancellation/font/orientation/back-scroll checks and full4317
+tests are recorded in `../specs/2026-10-20-history-preview-images-acceptance.md`.
+This supersedes the earlier image-cache-pending statement only. Remaining Task4
+items include full row metadata/date groups/favorites, future trim/delete binding
+and measured long-list performance; Task4 as a whole stays open.
+
+## Task 5 — full history home, summary and fullscreen charts
 
 **Files:** Create `presentation/history/HistoryScreen.kt`, `HistorySummaryPanel.kt`,
 `HistoryChartPanel.kt`, `HistoryChartsScreen.kt`, `HistoryNavigationStrip.kt`;
@@ -216,18 +236,22 @@ Tests `HistoryScreenStatePolicyTest.kt`; actual Compose checked natively.
 **Consumes:** Tasks1–4 and existing graph geometry; Foundation true summary stats.
 **Produces:** Complete screens and root navigation retaining one shared component.
 
-- [ ] RED on pure `historySummaryLabel(stats: HistoryStats): SummaryQuality`
+- [x] RED on per-field `historyMetricSummary(key, stats): HistoryMetricSummary`
   (`SummaryQuality.EXACT`, `PARTIAL`, `UNAVAILABLE`): unknown energy is not 0Wh.
+  Ruling: a single quality for the whole stats object would hide earned extrema
+  or incorrectly qualify absent energy; quality belongs to each displayed value.
   ```kotlin
   @Test fun missingEnergyIsUnavailable() {
-    assertEquals(SummaryQuality.UNAVAILABLE, historySummaryLabel(HistoryStats(null, null, null, false)))
+    assertEquals(SummaryQuality.UNAVAILABLE,
+      historyMetricSummary(HistorySeriesKey("pack", "power_w"),
+        HistoryStats(null, null, null, false)).energy.quality)
   }
   ```
-- [ ] Port home composition: same full-screen map, header/back/title, compact
+- [x] Port home composition: same full-screen map, header/back/title, compact
   expandable summary, bottom series stack/navigation/drawers. Port source tokens/
   card shapes/spacing with Volty fonts/branding; add original/source attribution.
   Summary current cursor, selected range and whole-ride stats have distinct labels.
-- [ ] Charts share time window/cursor, allow pan/pinch and selection, render gaps,
+- [x] Charts share time window/cursor, allow pan/pinch and selection, render gaps,
   units and unavailable cards. Stack is lazy; source data loading is bounded.
   Fullscreen charts reuses component state, not duplicate live streams.
 - [ ] Animate panel height, drawer, route highlight and data transitions without
@@ -239,7 +263,52 @@ Tests `HistoryScreenStatePolicyTest.kt`; actual Compose checked natively.
   Unit tests do not substitute for screenshots/gesture results.
 - [ ] Full suite/signed candidate, commit home/fullscreen/routing.
 
-## Task6 — favorites, trim and curated media
+Summary-only checkpoint (2026-10-20): the source-qualified compact/expand panel
+and per-field quality/sign policy are implemented and exercised on Android,
+including font200% Russian landscape and unknown/partial fixtures. See
+`../specs/2026-10-20-history-summary-acceptance.md`. This is a GPL-attributed
+adaptation of pinned HistoryStatsBar hierarchy, using Volty's persisted range
+stats instead of reduced chart samples. No root activation or completed home,
+cursor/whole-ride sections, full chart interactions or signed candidate is claimed.
+
+Recorded-chart rendering checkpoint (2026-10-20): original Kotlin chart projection,
+lazy selected-series cards and a fullscreen wrapper reuse the existing detail
+owner and metric drawer. Actual overview gap separators preserve earned post-gap
+points, and native chart taps update the same cursor later shown on the map.
+The acceptance record is `../specs/2026-10-20-history-recorded-charts-acceptance.md`.
+This does not close the chart-interaction checkbox: shared pan/pinch window,
+accessible timeline/time-axis controls, full Vescape-shaped home/navigation,
+remaining source/cursor/whole-ride sections and root cutover still need completion.
+
+Explicit time-window controls (2026-10-20): detail now retains original recorded
+bounds for reset, with tested anchor zoom/clamped pan and numeric/stale guards.
+Fullscreen charts expose earlier/later, zoom in/out/reset and a named shared-cursor
+slider, with clock endpoints and an adaptive wide layout. Native narrowed-window
+checks cover all series plus map/range summary. Evidence:
+`../specs/2026-10-20-history-time-window-acceptance.md`. Pinch/drag preview with
+settled read commit remains required, as do product retention and full home/root
+integration. The gesture checkbox above stays open.
+
+Shared gesture checkpoint (2026-10-20): parent-owned transient preview now moves
+all visible recorded plots without per-frame reads; release commits once, while
+cancel/navigation/newer commands fence old callbacks. Real native pinch, horizontal
+pan, ACTION_CANCEL, vertical-list cooperation and shared cursor were checked,
+including Russian font200% landscape. See
+`../specs/2026-10-20-history-window-gestures-acceptance.md`. This supersedes the
+preceding gesture-pending statement only. Complete home/navigation/transitions,
+product retention/root cutover and all later tasks remain required.
+
+Home-composition checkpoint (2026-10-20): `HistoryScreen` now renders the shared
+map-backed home, bounded compact chart panel, loaded-ride navigation/list sheet,
+source-aware summary and metric drawer. Fullscreen charts keep the same native
+map/component/window/cursor. Native input/layout/stored legacy and actual slow-read
+checks plus final4359 tests are recorded in
+`../specs/2026-10-20-history-home-acceptance.md`. This completes the composition
+checkbox only. Product root/rotation retention, remaining motion/map/native
+matrix, favorites/media/export, recorder activation and signed acceptance remain
+required; Task5 and the full rewrite are not marked complete.
+
+## Task 6 — favorites, trim and curated media
 
 **Files:** Create `domain/history/HistoryFavorite.kt`, `FavoriteRangePolicy.kt`,
 `data/history/HistoryFavoriteRepository.kt`, `HistoryMediaManifest.kt`,
@@ -262,29 +331,37 @@ interface HistoryFavoriteRepository {
 }
 ```
 
-- [ ] RED on range clamp/no empty trim, favorite source unchanged after editing,
+- [x] RED on range clamp/no empty trim, favorite source unchanged after editing,
   duplicate labels distinct IDs. Test preserved whole ride and selected interval.
   ```kotlin
   @Test fun trimStaysWithinRide() {
     assertEquals(HistoryRange(10, 90), clampFavoriteRange(HistoryRange(0, 90), HistoryRange(10, 100)))
   }
   ```
-- [ ] Port favorites/list/trim visual interaction; favorite is a reference/range,
+- [x] Port favorites/list/trim visual interaction; favorite is a reference/range,
   not destructive rewrite of recorded trace. Delete favorite leaves ride intact.
-- [ ] Explicit picker imports bounded files to temp app-owned path, computes hash,
+- [x] Explicit picker imports bounded files to temp app-owned path, computes hash,
   commits manifest with stable ID, atomically publishes final file. At startup
   reconcile pending imports/deletes across filesystem/SQLite. Report failed copy;
   no manifest claiming an absent file. Don't persist arbitrary content URI access
   as permanent truth or scan gallery automatically.
-- [ ] Media positions use nearest recorded fix inside SAME continuous segment,
+- [x] Media positions use nearest recorded fix inside SAME continuous segment,
   within30s; unknown capture time retains unpositioned item. EXIF location is not
   fallback. Tests import cancellation/oversize/no permission, corrupt file, process
   interruption, deletion overlap, noGPS/outage and source file later removed.
-- [ ] User deletes a ride with favorites/media only after UI confirmation, expected
+- [x] User deletes a ride with favorites/media only after UI confirmation, expected
   cascades visible. Native verify picker/back/gallery lifecycle plus restore.
-- [ ] Full suite/migration/native checks, commit favorites/media.
+- [x] Full suite/migration/native checks, commit favorites/media.
 
-## Task7 — honest export and sharing
+Task6 deletion acceptance (2026-10-21): original recording/count revalidation,
+explicit FK-off SQL cascades and durable media/preview purge are now connected
+to catalog confirmation. Final h558: 4483 tests / 465 fresh XML reports, zero
+failures/errors/skips/stale reports; migration and debug build passed. Native
+cancel/confirm preserved other recorded data and gallery originals. Details:
+`docs/superpowers/specs/2026-10-21-history-ride-deletion-acceptance.md`.
+Task7 export and Task8 production/release acceptance remain open.
+
+## Task 7 — honest export and sharing
 
 **Files:** Create `domain/history/HistoryExport.kt`, `data/history/HistoryExporter.kt`,
 `presentation/history/HistoryExportSheet.kt`, android `HistoryShare.android.kt`;
@@ -306,7 +383,7 @@ where format=GPX/CSV/JSON and result=Success(relativePath,bytes)/Failed(typedRea
 - [ ] Native verify recipient receives readable bounded file, canceled chooser
   does not delete original ride; full suite, commit export.
 
-## Task8 — cutover, visual/device acceptance and final provenance
+## Task 8 — cutover, visual/device acceptance and final provenance
 
 **Files:** Modify existing graph HistoryDialog navigation and root destinations;
 update `docs/third-party/vescape-history.md`, THIRD_PARTY_NOTICES, release notes,

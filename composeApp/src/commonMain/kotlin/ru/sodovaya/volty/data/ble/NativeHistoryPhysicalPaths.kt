@@ -28,7 +28,7 @@ internal fun nativeHistoryPhysicalPaths(
             require(key in bindings[link]) { "Physical alias needs a qualified battery producer" }
             val rank = when (spec.protocolKind) {
                 ProtocolKind.ANT, ProtocolKind.JBD, ProtocolKind.JK, ProtocolKind.DALY -> 0
-                ProtocolKind.VESC -> 1 // Already qualified cache-absence policy.
+                ProtocolKind.VESC -> 1 // Received gateway snapshot; prefer a direct path when both exist.
                 else -> error("Physical alias producer is not qualified")
             }
             aliases.getOrPut(alias) { mutableListOf() } += Path(link, key, rank, spec.address.uppercase(),

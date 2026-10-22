@@ -7,8 +7,13 @@ These Kotlin/Compose files adapt Vescape's UI at pinned revision
 |---|---|---|
 | `HistoryRideCard.kt` | `src/modules/history/components/HistoryRideRow.tsx` | Compose Surface/Row, Volty theme and typography, content may grow with system font size, recorded segmented preview input with loading/error/retry/partial states. Keeps the 86-wide preview, 88-high row minimum, 12-radius card, labels and chevron hierarchy. |
 | `HistoryRoutePreview.kt` | `src/modules/history/components/RouteSparkline.tsx` | Compose Canvas instead of Skia, separate paths for GPS segments, neutral loaded-point marks, route-only fallback. Tile/cache rendering is not ported yet. Projection comes from Volty's independently tested policy. |
+| `HistorySummaryPanel.kt` | `src/screens/main/history/HistoryStatsBar.tsx` | Compact/expand hierarchy adapted to source-qualified selected metrics. Flowing cells and bounded lazy expansion replace fixed tiny columns. Canonical persisted range statistics, independent per-field quality and Volty units replace upstream session aggregates; no reduced-sample recomputation or aggregate/contributor addition. |
+| `HistoryNavigationStrip.kt` | `src/modules/history/components/HistoryPanelNav.tsx` | Central clickable ride title/subtitle/dropdown with loaded-order previous/next and side actions. Compose Material3, 54dp touch targets, adaptive two-row layout for narrow windows/large fonts. Metrics action replaces the not-yet-integrated favorite action; no inactive favorite/media/share controls. |
+| `HistoryScreen.kt` | `src/screens/main/history/HistoryOverlay.tsx`, `HistoryRideDetail.tsx`, `HistoryTelemetryPanel.tsx` | Home composition responsibilities: one retained recorded map behind header/summary and the bottom chart/navigation panel, ride-list and metric sheets, shared fullscreen chart owner, 180ms panel size animation. Volty adds source-qualified facts, range/ride fences, off-UI map scene work, adaptive side panel, explicit GPS/read quality and measured camera padding. No React runtime, upstream map token, session aggregate/metric-button strip or inactive favorite/media/export actions. |
+| `HistoryFavoritesScreen.kt` | `src/modules/history/components/HistorySessionSheet.tsx`, `src/screens/main/history/useHistoryFavorites.ts` | Explicit history/favorites switch, named saved sections and selection workflow. Compose lazy list, bounded SQL pages, confirmation before removing a reference, hoisted list position and typed failures. No inferred route/distance or borrowed board data. |
+| `HistoryTrimPanel.kt` | `src/screens/main/history/useHistoryFavorites.ts` | Save/edit section workflow with bounded range selection, whole-recording reset, name field, visible start/end/duration and explicit save. Compose bottom sheet with scrolling and IME handling. Saves a source-pinned reference, never rewrites the recording. |
 
-Both adaptations are marked `GPL-3.0-or-later`, matching upstream `package.json`.
+These adaptations are marked `GPL-3.0-or-later`, matching upstream `package.json`.
 `LICENSE` is a verbatim copy of upstream's GNU GPL version 3 text (SHA-256
 `230184F60BAE2FEAF244F10A8BAC053C8FF33A183BCC365B4D8B876D2B7F4809`).
 Retraction: the initial LF-only Git rule normalized this upstream CRLF file in
@@ -20,3 +25,51 @@ The source pin, package-author evidence and dependency audit are recorded in
 This record identifies transferred material and its license. It does not assert
 that a directory boundary resolves combined-application distribution requirements
 or that the complete screen port/dependency compatibility audit is finished.
+
+The home now connects Volty's original Kotlin selected-metric map-color owner,
+evidence/index policy and legend. Chart Map actions collapse the home chart panel
+and reuse the retained map; explicit clear preserves its neutral route. Upstream
+device-specific hot thresholds are not copied into the richer source model.
+
+Retraction (2026-10-20): the earlier tile/cache-pending statement above describes
+the Canvas adaptation alone. Volty's separate image pipeline now provides bounded
+OFM background snapshots and PNG caches behind that fallback, without borrowing
+the upstream owner's Mapbox style/token.
+
+Retraction (2026-10-21): the earlier favorite-pending descriptions above record
+the prior home milestone. The home now exposes an active header star and a
+history/favorites catalog switch. Favorites use Volty's original transactional
+SQL repository, immutable recording identity and revision checks; the workflow
+adaptations are the two additional GPL-marked files listed above. Media and
+export controls remain absent until their real storage flows are integrated.
+
+Retraction (2026-10-21, media integration): media controls are now present for a
+source-qualified saved favorite. `HistoryMediaDrawer.kt` adapts the pinned
+`HistoryRideMediaDrawer.tsx` and `MediaHistoryGallery.tsx` gallery/grid workflow
+and carries its GPL notice. Android Photo Picker, bounded app-private copy,
+transactional journal/recovery, checksum verification, strict EXIF clock parser,
+recorded-fix placement and Android image/video rendering are Volty code. The
+original media file is never a durable storage fallback. The native viewer uses
+platform controls; this does not claim the upstream synchronized video telemetry
+overlay or complete root/recorder/release acceptance. Export remains pending.
+
+Volty extension (2026-10-21): catalog cards now accept an optional destructive
+action callback. The separate confirmation owner, source-qualified transactional
+deletion and durable private-route preview purge are original Volty code. They
+do not change the upstream notices or import additional assets. Whole-recording
+deletion preserves gallery originals; export and production cutover remain open.
+
+Volty extension (2026-10-21): the stored-history toolbar now opens an export
+sheet implemented outside this ported directory. Paged SQLite readers, encoders,
+file ownership, Android share/save actions and their tests are original Volty
+code. They add no upstream files or assets. Export integration acceptance is
+recorded in `docs/superpowers/specs/2026-10-21-history-export-integration.md`;
+production cutover and the remaining export acceptance gates remain open.
+
+Volty extension (2026-10-21): HistoryScreen can publish its recorded scene into
+the retained root map instead of creating another native map. Host ownership,
+full source/range qualification and per-viewport camera generations are original
+Volty integration code. The production graph entry now uses this mode. Required
+map attribution remains in the measured history panel; the root suppresses its
+duplicate line. See `docs/superpowers/specs/2026-10-21-history-root-integration.md`
+for evidence and the still-open recording/release acceptance gates.

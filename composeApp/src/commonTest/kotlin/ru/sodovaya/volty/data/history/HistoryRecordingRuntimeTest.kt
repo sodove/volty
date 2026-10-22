@@ -14,6 +14,197 @@ import kotlin.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 class HistoryRecordingRuntimeTest {
+    @Test fun locationRetryUsesExistingDemandWithoutAllocatingAnotherWriterOrStartingAnUnpreparedRuntime() = runTest {
+        val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        try {
+            assertEquals(HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.UNAVAILABLE), repository.retryLocation())
+            assertEquals(0, f.allocations); assertEquals(0, f.preparations)
+            f.failService = true
+            val binding = f.runtime.prepare(); f.start(binding, channel)
+            assertTrue(f.natives.isEmpty()); assertEquals(listOf("ride"), f.writer.begins)
+            f.failService = false
+            assertEquals(HistoryRecordingActionResult.Applied, repository.retryLocation())
+            assertEquals(1, f.natives.size); assertEquals(1, f.natives.single().starts)
+            assertEquals(1, f.allocations); assertEquals(1, f.preparations); assertEquals(listOf("ride"), f.writer.begins)
+            assertEquals(HistoryRecordingRouteStatus.STARTING, repository.states.first().route)
+        } finally { f.failService = false; f.runtime.close(); channel.close() }
+    }
+    @Test fun routeObserverSeesAdmissionFenceWhileDurableStopStillAwaitsItsReceipt() = runTest {
+        val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        val gate = CompletableDeferred<Unit>()
+        var collector: Job? = null
+        var stopping: Deferred<HistoryRecordingActionResult>? = null
+        try {
+            val binding = f.runtime.prepare(); f.start(binding, channel)
+            f.writer.diagnostics.value = HistoryWriterDiagnostics(accepting = true)
+            f.natives.single().state.value = HistoryLocationCaptureState(capturing = true)
+            val observed = mutableListOf<HistoryRecordingStatus>()
+            collector = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { repository.states.collect { observed += it } }
+            runCurrent(); assertEquals(HistoryRecordingRouteStatus.RECORDING, observed.last().route)
+            val controls = assertNotNull(repository.captureControls(observed.last()))
+            f.writer.finishGate = gate
+            stopping = backgroundScope.async { controls.stop("ride") }
+            runCurrent()
+            assertEquals(listOf<String?>("ride"), f.writer.finishes)
+            assertFalse(stopping.isCompleted); assertNull(binding.controller.captureGpsRecording())
+            assertEquals(HistoryRecordingRouteStatus.STOPPING, observed.last().route)
+            assertNotNull(observed.last().ride, "Stop has not received its durable finish acknowledgement")
+            f.writer.diagnostics.value = HistoryWriterDiagnostics(accepting = false)
+            runCurrent()
+            assertEquals(HistoryRecordingRouteStatus.STOPPING, observed.last().route)
+            assertFalse(observed.last().storageFailure,
+                "The writer fences intake while draining; that alone is not a storage failure")
+            gate.complete(Unit); assertEquals(HistoryRecordingActionResult.Applied, stopping.await())
+            runCurrent(); assertEquals(HistoryRecordingRouteStatus.IDLE, observed.last().route)
+        } finally {
+            gate.complete(Unit); stopping?.cancelAndJoin(); collector?.cancelAndJoin(); f.runtime.close(); channel.close()
+        }
+    }
+    @Test fun recordingRepositoryObservationNeverAllocatesAndOnlyExposesPreparedRuntime() = runTest {
+        val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
+        try {
+            assertEquals(HistoryRecordingStatus(), repository.states.first())
+            assertNull(repository.captureControls(repository.states.first())); assertEquals(0, f.preparations); assertEquals(0, f.allocations)
+            f.runtime.prepare()
+            val prepared = repository.states.first()
+            assertTrue(prepared.available); assertNull(prepared.ride); assertFalse(prepared.canStart); assertFalse(prepared.canStop)
+            assertNull(repository.captureControls(prepared)); assertTrue(f.service.isEmpty())
+            f.runtime.close(); assertEquals(HistoryRecordingStatus(), repository.states.first())
+        } finally { f.runtime.close() }
+    }
+    @Test fun recordingRepositoryUsesActualRouteAndWriterStateAndExplicitStartStopAcknowledgements() = runTest {
+        val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        try {
+            val binding = f.runtime.prepare(); f.start(binding, channel)
+            // A temporary intake fence is not evidence that persistence failed.
+            assertFalse(repository.states.first().storageFailure)
+            f.writer.diagnostics.value = HistoryWriterDiagnostics(failure = "append failed")
+            assertTrue(repository.states.first().storageFailure)
+            f.writer.diagnostics.value = HistoryWriterDiagnostics(closed = true)
+            assertTrue(repository.states.first().storageFailure)
+            f.writer.diagnostics.value = HistoryWriterDiagnostics(accepting = true)
+            val recording = repository.states.first()
+            assertEquals("ride", recording.ride?.id); assertTrue(recording.canStop); assertFalse(recording.canStart)
+            assertFalse(recording.storageFailure); assertEquals(HistoryRecordingRouteStatus.STARTING, recording.route)
+            assertFalse(recording.telemetryLimited, "qualified ANT telemetry remains numerically available")
+            f.natives.single().state.value = HistoryLocationCaptureState(capturing = true)
+            assertEquals(HistoryRecordingRouteStatus.RECORDING, repository.states.first().route)
+            val controls = assertNotNull(repository.captureControls(repository.states.first()))
+            assertEquals(HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.NOT_APPLIED), controls.stop("other"))
+            assertTrue(f.writer.finishes.isEmpty())
+            assertEquals(HistoryRecordingActionResult.Applied, controls.stop("ride"))
+            assertEquals(listOf<String?>("ride"), f.writer.finishes)
+            val stopped = repository.states.first(); assertNull(stopped.ride); assertTrue(stopped.manuallyStopped); assertTrue(stopped.canStart)
+            assertEquals(HistoryRecordingRouteStatus.IDLE, stopped.route)
+            f.nextId = "ride-2"
+            assertEquals(HistoryRecordingActionResult.Applied, assertNotNull(repository.captureControls(stopped)).start())
+            assertEquals("ride-2", repository.states.first().ride?.id)
+            assertEquals(listOf("ride", "ride-2"), f.writer.begins)
+            assertEquals(HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.NOT_APPLIED), controls.stop("ride"))
+            assertEquals(listOf<String?>("ride"), f.writer.finishes)
+        } finally { f.runtime.close(); channel.close() }
+    }
+    // Retraction: KingSong formerly had no numeric history output. Its common
+    // decoder now publishes fresh fields; GPS-only coverage uses an explicit
+    // empty source plan in NativeHistoryGpsFallbackTest instead.
+    @Test fun savedControllerOnlyLinkStartsTimeAndLocationRecordingWithCommonTelemetry() = runTest {
+        val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(capacity = 4)
+        val vehicle = Vehicle("kingsong", "KingSong", "wheel", emptyList(),
+            controllers = listOf(Controller(0, "KingSong", ControllerType.KINGSONG, "KS")),
+            chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0))
+        val spec = LinkSpec("KS", ProtocolKind.KINGSONG, listOf(OwnedSource(0), OwnedSource(1)), listOf(OwnedSource(0)))
+        try {
+            val binding = f.runtime.prepare()
+            binding.ingress.installNativePlan(vehicle.id, listOf(spec), vehicle) { true }
+            val capture = assertNotNull(binding.ingress.capture(Emitter(), "attempt", spec, vehicle,
+                SampleSessionOwnership { true }, channel))
+            assertTrue(capture.prepareForObservation())
+
+            val status = repository.states.first()
+            assertNotNull(status.ride, "A saved controller-only wheel starts time and GPS recording")
+            assertFalse(status.telemetryLimited)
+            assertEquals(listOf(true), f.service, "Location demand follows the real ride")
+            assertFalse(status.storageFailure)
+        } finally { f.runtime.close(); channel.close() }
+    }
+    @Test fun capturedRecordingControlsCannotRetargetAReplacementPhysicalSelection() = runTest {
+        val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        try {
+            val binding = f.runtime.prepare(); f.start(binding, channel)
+            val captured = assertNotNull(repository.captureControls(repository.states.first()))
+            val other = f.vehicle.copy(id = "other")
+            binding.ingress.installNativePlan(other.id, listOf(f.spec), other) { true }
+            assertEquals(HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.NOT_APPLIED), captured.start())
+            assertEquals(HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.NOT_APPLIED), captured.stop("ride"))
+            assertEquals(listOf("ride"), f.writer.begins); assertEquals(listOf<String?>("ride"), f.writer.finishes)
+        } finally { f.runtime.close(); channel.close() }
+    }
+    @Test fun clickOnAStaleDisplayedStoppedStatusCannotStartTheNewlySelectedVehicle() = runTest {
+        val f = Fixture(this); val repository = RuntimeHistoryRecordingRepository(f.runtime)
+        val channel = kotlinx.coroutines.channels.Channel<Sample>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+        try {
+            val binding = f.runtime.prepare(); f.start(binding, channel)
+            assertEquals(HistoryRecordingActionResult.Applied,
+                assertNotNull(repository.captureControls(repository.states.first())).stop("ride"))
+            val displayed = repository.states.first(); assertTrue(displayed.canStart)
+            val other = f.vehicle.copy(id = "other"); f.nextId = "ride-2"
+            binding.ingress.installNativePlan(other.id, listOf(f.spec), other) { true }
+            val incoming = assertNotNull(binding.ingress.capture(Emitter(), "replacement", f.spec, other,
+                SampleSessionOwnership { true }, channel))
+            assertTrue(incoming.prepareForObservation())
+            val replacement = repository.states.first(); assertTrue(replacement.canStart)
+            val result = assertNotNull(repository.captureControls(displayed)).start()
+            assertEquals(listOf("ride"), f.writer.begins, "Displayed old controls must not start the new vehicle")
+            assertEquals(HistoryRecordingActionResult.Failed(HistoryRecordingActionFailure.NOT_APPLIED), result)
+            assertNotEquals(displayed, replacement, "A physical selection change must remain observable")
+        } finally { f.runtime.close(); channel.close() }
+    }
+    @Test fun observingRuntimeDoesNotPrepareOrAllocateAndOnlyACompleteBindingIsPublished() = runTest {
+        val f = Fixture(this)
+        try {
+            assertNull(f.runtime.status.value.binding)
+            assertFalse(f.runtime.status.value.closing)
+            assertEquals(0, f.preparations); assertEquals(0, f.allocations)
+            val binding = f.runtime.prepare()
+            assertSame(binding, f.runtime.status.value.binding)
+            assertSame(binding, f.runtime.prepare()); assertEquals(1, f.allocations)
+            f.runtime.close()
+            assertNull(f.runtime.status.value.binding); assertTrue(f.runtime.status.value.closing)
+        } finally { f.runtime.close() }
+    }
+    @Test fun blockedOrFailedPreparationNeverPublishesPartialUiControls() = runTest {
+        val f = Fixture(this); val gate = CompletableDeferred<Unit>(); f.prepareGate = gate
+        supervisorScope {
+            val preparation = async { f.runtime.prepare() }
+            try {
+                runCurrent(); assertEquals(1, f.preparations); assertEquals(0, f.allocations)
+                assertNull(f.runtime.status.value.binding)
+                f.failPrepare = true; gate.complete(Unit)
+                assertFailsWith<IllegalStateException> { preparation.await() }
+                assertNull(f.runtime.status.value.binding)
+                f.failPrepare = false
+                val ready = f.runtime.prepare(); assertSame(ready, f.runtime.status.value.binding)
+            } finally { gate.complete(Unit); preparation.cancel(); f.runtime.close() }
+        }
+    }
+    @Test fun failedShutdownRetiresUiControlsWhileKeepingOriginalResourcesForRetry() = runTest {
+        val f = Fixture(this)
+        try {
+            f.runtime.prepare(); f.writer.failClose = true
+            assertFailsWith<IllegalStateException> { f.runtime.close() }
+            assertNull(f.runtime.status.value.binding); assertTrue(f.runtime.status.value.closing)
+            assertEquals(1, f.allocations); assertEquals(0, f.writer.closed)
+            assertFailsWith<IllegalStateException> { f.runtime.prepare() }
+            assertNull(f.runtime.status.value.binding)
+            f.writer.failClose = false; f.runtime.close()
+            assertEquals(1, f.allocations); assertEquals(1, f.writer.closed)
+        } finally { f.writer.failClose = false; f.runtime.close() }
+    }
     private class Writer : HistoryWriter {
         override val diagnostics = MutableStateFlow(HistoryWriterDiagnostics())
         val begins = mutableListOf<String>()
@@ -64,6 +255,7 @@ class HistoryRecordingRuntimeTest {
         var failAllocation = false
         var onAllocate: (() -> Unit)? = null
         var elapsed = 10L
+        var nextId = "ride"
         var failService = false
         val service = mutableListOf<Boolean>()
         val natives = mutableListOf<Native>()
@@ -75,7 +267,7 @@ class HistoryRecordingRuntimeTest {
             { check(!failAllocation) { "writer unavailable" }; allocations++; onAllocate?.invoke(); writer }, MutableStateFlow(RideLocationState()),
             HistoryLocationForegroundAuthority({ true }) { "10000000-0000-0000-0000-000000000001" },
             { service += it; check(!it || !failService) { "service unavailable" } },
-            { scope, _ -> Native(scope).also { natives += it } }, { "ride" }, opportunities)
+            { scope, _ -> Native(scope).also { natives += it } }, { nextId }, opportunities)
         val vehicle = Vehicle("bike", "Bike", "bicycle", listOf(Pack(0, "Pack", BmsType.ANT_BMS, "AA")), emptyList(),
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0))
         val spec = LinkSpec("AA", ProtocolKind.ANT, listOf(OwnedSource(0)))
@@ -221,22 +413,22 @@ class HistoryRecordingRuntimeTest {
         } finally { f.failService = false; channel.cancel(); f.runtime.close() }
     }
 
-    @Test fun terminalCloseWaitsAcceptedQueueAndSurvivesRequestingCallerCancellation() = runTest {
+    @Test fun terminalCloseWaitsDurableFinishAndSurvivesRequestingCallerCancellation() = runTest {
         val f = Fixture(this); val channel = sampleFunnelChannel(4)
         val binding = f.runtime.prepare(); val capture = f.start(binding, channel)
         f.elapsed = 20; assertTrue(capture.processNotification(byteArrayOf(9)))
-        val sample = assertIs<HistoryTelemetrySample>(channel.tryReceive().getOrNull())
+        assertTrue(channel.tryReceive().isFailure, "native recording no longer shares the dashboard queue")
+        assertEquals(listOf<Double?>(9.0), f.writer.values)
         val release = CompletableDeferred<Unit>(); f.writer.finishGate = release
         val close = backgroundScope.launch { f.runtime.close() }
         try {
             runCurrent(); assertFalse(close.isCompleted); assertEquals(0, f.writer.closed)
             assertFalse(capture.processNotification(byteArrayOf(10)))
-            assertEquals(HistoryOffer.ACCEPTED, sample.consume()); runCurrent()
             assertEquals(listOf<String?>("ride"), f.writer.finishes)
             close.cancel(); runCurrent(); assertFalse(close.isCompleted)
             release.complete(Unit); close.join()
             assertEquals(listOf<Double?>(9.0), f.writer.values); assertEquals(1, f.writer.closed)
             assertNull(binding.controller.state.value.intent.ride)
-        } finally { sample.discard(); release.complete(Unit); channel.cancel(); close.cancelAndJoin(); f.runtime.close() }
+        } finally { release.complete(Unit); channel.cancel(); close.cancelAndJoin(); f.runtime.close() }
     }
 }

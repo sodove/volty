@@ -96,6 +96,7 @@ interface RootComponent {
     fun onBack()
     fun onTab(tab: Tab)
     fun onOpenGroupMap()
+    fun onOpenHistory()
 
     enum class Tab { Ride, Battery, Nearby, Settings }
 
@@ -114,6 +115,8 @@ interface RootComponent {
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
         data class Graph(val component: GraphComponent) : Child
+        data class History(val component: ru.sodovaya.volty.presentation.history.HistoryComponent,
+            val vehicleNames: kotlinx.coroutines.flow.Flow<Map<String, String>> = kotlinx.coroutines.flow.flowOf(emptyMap())) : Child
         data class Nearby(val component: DefaultVoiceSpacesNearbyComponent) : Child
         /** Retained channel map; serialized GroupMap route name remains compatible. */
         data object GroupMap : Child
@@ -158,6 +161,7 @@ sealed class Config {
      */
     @Serializable data class VehicleAlerts(val vehicleId: String) : Config()
     @Serializable data object Graph : Config()
+    @Serializable data object History : Config()
     @Serializable data object Nearby : Config()
     @Serializable data object GroupMap : Config()
     @Serializable data object Settings : Config()
@@ -302,7 +306,7 @@ internal fun stackAfterGoTo(stack: List<Config>, config: Config): List<Config> =
  * Graph/Settings in the ordinary case.
  */
 internal fun shouldPopOnBack(current: Any?, stackSize: Int): Boolean =
-    (current !is Config.Graph && current !is Config.Settings) || stackSize > 1
+    (current !is Config.Graph && current !is Config.Settings && current !is Config.History) || stackSize > 1
 
 /**
  * Give a retained vehicle composer first refusal over an action that destroys
@@ -517,6 +521,8 @@ class DefaultRootComponent(
     override fun onTab(tab: RootComponent.Tab) {
         nav.bringToFront(configForTab(tab))
     }
+
+    override fun onOpenHistory() { goTo(Config.History) }
 
     override fun onOpenGroupMap() {
         goTo(Config.GroupMap)
@@ -761,6 +767,18 @@ class DefaultRootComponent(
                     onBackRequested = { nav.pop() }
                 )
             )
+            is Config.History -> {
+                val clock = get<ru.sodovaya.volty.data.history.HistoryRecordingClock>()
+                val reads = ru.sodovaya.volty.data.history.PreparedHistoryReadRepository(get(), clock::prepare)
+                RootComponent.Child.History(ru.sodovaya.volty.presentation.history.DefaultHistoryComponent(
+                    context, scope, reads, clock::readTick, ::onBack,
+                    presetStore = get(), imageLoader = get(), favoriteStore = get(),
+                    mediaRepository = get(), deletionRepository = get(), exportRepository = get(),
+                    recordingRepository = get()).also { it.refresh() },
+                    combine(vehicleRepository.vehicles, bmsRepository.activeVehicle) { saved, current ->
+                        (saved + listOfNotNull(current)).associate { it.id to it.name }
+                    })
+            }
             is Config.Graph -> RootComponent.Child.Graph(
                 DefaultGraphComponent(
                     componentContext = context,

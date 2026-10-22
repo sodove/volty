@@ -25,6 +25,53 @@ class NativeHistoryMixedGatewayPlanTest {
         ownedControllers = listOf(OwnedSource(controller.index, controller.canId)))
     private fun battery(local: Int) = HistoryTelemetrySource(TelemetryOrigin.BATTERY, local)
 
+    @Test fun computedGatewayBatteryUsesTheActualFactoryVirtualSource() {
+        val profile = vehicle().copy(packs = emptyList())
+        val link = spec().copy(ownedPacks = listOf(OwnedSource(99)))
+        val configuration = nativeDecoderPlan(link, profile)
+        val plan = nativeHistorySourcesForLink(link, profile)
+        val virtual = HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED)
+        assertEquals(1, configuration.packCount)
+        assertEquals(3, plan.size)
+        assertEquals(HistorySourceKind.DERIVED_BATTERY, plan.getValue(virtual).kind)
+        assertEquals(configuration.sources.map { HistoryTelemetrySource(it.origin, it.localIndex, it.role, it.assemblyIndex) }.toSet(), plan.keys)
+    }
+
+    @Test fun hostedOnlyGatewayNeedsNoFictitiousControllerToRecordItsBms() {
+        val profile = vehicle(listOf(hosted)).copy(controllers = emptyList())
+        val link = spec(listOf(hosted)).copy(ownedControllers = emptyList())
+        val configuration = nativeDecoderPlan(link, profile)
+        val plan = nativeHistorySourcesForLink(link, profile)
+        assertEquals(0, configuration.controllerCount)
+        assertEquals(1, configuration.packCount)
+        assertEquals(setOf(battery(0)), plan.keys)
+        assertEquals(HistorySourceKind.BATTERY, plan.getValue(battery(0)).kind)
+    }
+
+    @Test fun computedGatewayIdentityFollowsContributorsAndCalibration() {
+        val other = controller.copy(index = 8, canId = 42)
+        val profile = vehicle().copy(packs = emptyList(), controllers = listOf(controller, other))
+        val link = spec().copy(ownedPacks = listOf(OwnedSource(99)),
+            ownedControllers = listOf(OwnedSource(7, 41), OwnedSource(8, 42)))
+        val key = HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED)
+        val original = nativeHistorySourcesForLink(link, profile).getValue(key).id
+        assertEquals(original, nativeHistorySourcesForLink(link.copy(
+            ownedControllers = link.ownedControllers.reversed()), profile).getValue(key).id)
+        val recalibrated = profile.copy(controllers = listOf(controller.copy(
+            motor = controller.motor.copy(polePairs = controller.motor.polePairs + 1)), other))
+        assertNotEquals(original, nativeHistorySourcesForLink(link, recalibrated).getValue(key).id)
+    }
+
+    @Test fun selectedHostedOnlyAliasUsesTheSameReceivedProducerPolicy() {
+        val pack = hosted.copy(aliasGroup = "battery")
+        val profile = vehicle(listOf(pack)).copy(controllers = emptyList())
+        val link = spec(listOf(pack)).copy(ownedControllers = emptyList())
+        val source = nativeHistorySourcesForSelectedLink(link, profile).getValue(battery(0))
+        assertEquals(HistorySourceKind.BATTERY, source.kind)
+        assertTrue(source.id.startsWith("native-alias-gateway-received-v1:"))
+        assertFailsWith<IllegalArgumentException> { nativeHistorySourcesForLink(link, profile) }
+    }
+
     @Test fun mixedPlanKeepsPhysicalControllersAndIndependentCacheSources() {
         val plan = nativeHistorySourcesForLink(spec(), vehicle())
         assertEquals(4, plan.size)
@@ -47,7 +94,7 @@ class NativeHistoryMixedGatewayPlanTest {
         assertNotEquals(first.getValue(battery(1)).id, third.getValue(battery(1)).id)
     }
 
-    @Test fun ambiguousAliasedDerivedAndMismatchedCachePlansStayRejected() {
+    @Test fun ambiguousAliasedAndMismatchedCachePlansStayRejected() {
         val valid = spec(); val profile = vehicle()
         val bad = listOf(
             valid to profile.copy(packs = listOf(hosted.copy(aliasGroup = "physical"), forwarded)),
@@ -71,16 +118,29 @@ class NativeHistoryMixedGatewayPlanTest {
         assertFailsWith<IllegalArgumentException> {
             nativeHistorySourcesForLink(spec().copy(ownedPacks = emptyList()), profile)
         }
-        assertFailsWith<IllegalArgumentException> {
-            nativeHistorySourcesForLink(spec().copy(ownedPacks = listOf(OwnedSource(99))), profile)
-        }
+        val virtual = HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED)
+        assertEquals(HistorySourceKind.DERIVED_BATTERY, nativeHistorySourcesForLink(
+            spec().copy(ownedPacks = listOf(OwnedSource(99))), profile).getValue(virtual).kind)
     }
 
-    @Test fun nativeMixedDecoderRecordsEarnedControllerValuesButOnlyTypedUnknownCacheFields() = verifyNativeMixedDecoder(false)
+    // Retraction: a received BMS snapshot is recordable at app receipt time;
+    // lack of sensor acquisition timestamps does not erase its reported values.
+    @Test fun nativeMixedDecoderRecordsControllerAndReceivedBmsValues() = verifyNativeMixedDecoder(false)
 
     @Test fun nativeFactoryHonorsRealHostedSlotsEvenWithDerivedChoiceOn() = verifyNativeMixedDecoder(true)
 
-    @Test fun selectedCacheAliasesUseRealDecoderUnknownsAndKeepEarnedControllerValues() = verifyNativeMixedDecoder(false, aliases = true)
+    @Test fun selectedCacheAliasesUseReceivedBmsValuesAndKeepControllerValues() = verifyNativeMixedDecoder(false, aliases = true)
+
+    @Test fun localHeadUnitDoesNotBlockItsHostedBmsOrForwardedController() {
+        val local = controller.copy(index = 0, label = "Head unit", canId = null)
+        val profile = vehicle().copy(controllers = listOf(local, controller))
+        val link = spec().copy(ownedControllers = listOf(OwnedSource(0), OwnedSource(controller.index, controller.canId)))
+        val plan = nativeHistorySourcesForLink(link, profile)
+        assertEquals(6, plan.size)
+        assertEquals(6, plan.values.map { it.id }.distinct().size)
+        assertEquals(HistorySourceKind.BATTERY, plan.getValue(battery(0)).kind)
+        assertEquals(HistorySourceKind.BATTERY, plan.getValue(battery(1)).kind)
+    }
 
     private fun verifyNativeMixedDecoder(deriveBattery: Boolean, aliases: Boolean = false) = runTest {
         val link = spec()
@@ -121,7 +181,10 @@ class NativeHistoryMixedGatewayPlanTest {
         for (local in 0..1) {
             val cached = samples.filter { it.key.sourceId == plan.getValue(battery(local)).id }
             assertTrue(cached.isNotEmpty())
-            assertTrue(cached.all { it.value == null && it.unknown == HistoryUnknownReason.PARTIAL_SOURCE })
+            assertEquals(75.5, cached.single { it.key.metricId == "voltage_v" }.value)
+            assertEquals(-12.5, cached.single { it.key.metricId == "current_a" }.value)
+            assertEquals(-943.75, cached.single { it.key.metricId == "power_w" }.value)
+            assertTrue(cached.all { it.value != null })
             assertEquals(setOf(0, 1), cached.mapNotNull { it.key.cellIndex }.toSet())
         }
         assertEquals(0, protocol.telemetryObserverFailures)

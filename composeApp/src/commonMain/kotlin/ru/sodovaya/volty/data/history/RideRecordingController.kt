@@ -252,7 +252,18 @@ class RideRecordingController(
             owner.gate.reserveTelemetry(latest, sourceIds) ?: return HistoryOffer.RETIRED
         if (sourceIds.isEmpty() && !owner.gate.reserve(latest)) return HistoryOffer.RETIRED
         // Earlier CAS-only reservation could be overtaken by finish before this send returned.
-        try { return writer.offer(owner.generation, batch) }
+        try {
+            val result = writer.offer(owner.generation, batch)
+            // The writer's real bounded queue owns native delivery. Record its
+            // rejection before releasing admission, so a concurrent Stop cannot
+            // label a lossy ride completed merely because no exception escaped.
+            when (result) {
+                HistoryOffer.OVERFLOW -> recordTelemetryFailure(owner, "WriterOverflow")
+                HistoryOffer.RETIRED -> recordTelemetryFailure(owner, "WriterRetired")
+                HistoryOffer.ACCEPTED -> Unit
+            }
+            return result
+        }
         catch (error: Exception) {
             // Record failure BEFORE releasing the reservation: finish cannot
             // outrun this verdict. Owner copies keep it across BLE reconnects.

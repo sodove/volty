@@ -32,6 +32,16 @@ class VoltyApplication : Application() {
         koinApp.koin.get<OfflineMapPackManager>()
         val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
         alertEngine.start(appScope)
+        appScope.launch {
+            try { koinApp.koin.get<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader>().reconcileDeletedRides() }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (failure: Exception) { android.util.Log.w("HistoryPreview", "Preview cleanup deferred", failure) }
+        }
+        appScope.launch {
+            try { koinApp.koin.get<ru.sodovaya.volty.domain.history.HistoryMediaRepository>().reconcile() }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (failure: Exception) { android.util.Log.w("HistoryMedia", "Private media recovery deferred", failure) }
+        }
         if (koinApp.koin.get<AndroidOfflineNavigationConfig>().enabled) {
             val packageRepository = koinApp.koin.get<OfflineRegionPackageRepository>()
             appScope.launch {

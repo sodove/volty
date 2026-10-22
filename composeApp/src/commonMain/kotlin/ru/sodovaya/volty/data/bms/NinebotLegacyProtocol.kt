@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.bms
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.TelemetryMetric
 
 /**
  * Read-only decoder for the legacy Ninebot/Segway EUC link used by WheelLog
@@ -131,16 +132,25 @@ class NinebotLegacyProtocol : BmsProtocol(), MotionSource {
         if (current !in MIN_CURRENT_A..MAX_CURRENT_A) return
         if (temperature !in MIN_TEMPERATURE_C..MAX_TEMPERATURE_C) return
 
-        latest = BmsData(
-            voltage = voltage,
-            current = current,
-            hasCurrent = true,
-            power = voltage * current,
-            hasPower = true,
-            soc = batteryPercent.toFloat(),
-            socKnown = true,
-            temperatures = listOf(temperature),
-            isConnected = true
+        latest = publishBatteryUpdate(
+            BmsData(
+                voltage = voltage,
+                current = current,
+                hasCurrent = true,
+                power = voltage * current,
+                hasPower = true,
+                soc = batteryPercent.toFloat(),
+                socKnown = true,
+                temperatures = listOf(temperature),
+                isConnected = true
+            ),
+            setOf(
+                TelemetryMetric.SOC,
+                TelemetryMetric.VOLTAGE,
+                TelemetryMetric.CURRENT,
+                TelemetryMetric.POWER,
+                TelemetryMetric.BATTERY_TEMPERATURE
+            )
         )
 
         val baseline = tripBaselineMeters ?: distanceMeters.also { tripBaselineMeters = it }
@@ -152,23 +162,34 @@ class NinebotLegacyProtocol : BmsProtocol(), MotionSource {
             tripBaselineMeters = distanceMeters
             0f
         }
-        latestMotion = ControllerData(
-            speedKmh = speedKmh,
-            speedSource = SpeedSource.REPORTED,
-            hasDuty = false,
-            batteryCurrentA = current,
-            hasBatteryCurrent = true,
-            inputVoltageV = voltage,
-            hasInputVoltage = true,
-            powerW = voltage * current,
-            hasPower = true,
-            escTempC = temperature,
-            hasMotorTemp = false,
-            odometerKm = distanceMeters / 1000f,
-            tripKm = tripKm,
-            hasDistance = true,
-            hasEnergyCounters = false,
-            isConnected = true
+        latestMotion = publishControllerUpdate(
+            ControllerData(
+                speedKmh = speedKmh,
+                speedSource = SpeedSource.REPORTED,
+                hasDuty = false,
+                batteryCurrentA = current,
+                hasBatteryCurrent = true,
+                inputVoltageV = voltage,
+                hasInputVoltage = true,
+                powerW = voltage * current,
+                hasPower = true,
+                escTempC = temperature,
+                hasMotorTemp = false,
+                odometerKm = distanceMeters / 1000f,
+                tripKm = tripKm,
+                hasDistance = true,
+                hasEnergyCounters = false,
+                isConnected = true
+            ),
+            setOf(
+                TelemetryMetric.SPEED,
+                TelemetryMetric.CONTROLLER_BATTERY_CURRENT,
+                TelemetryMetric.INPUT_VOLTAGE,
+                TelemetryMetric.CONTROLLER_POWER,
+                TelemetryMetric.ESC_TEMPERATURE,
+                TelemetryMetric.ODOMETER,
+                TelemetryMetric.TRIP
+            )
         )
     }
 

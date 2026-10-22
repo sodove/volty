@@ -223,15 +223,21 @@ class KableBmsRepository private constructor(
         historyTelemetryIngress?.capture(protocol, Uuid.random().toString(), link.spec, link.vehicle, ownership, channel)
 
     private suspend fun prepareHistoryForInstalledLinks(installed: List<PackLink>, vehicleId: String, vehicle: Vehicle?) {
-        historyTelemetryIngress?.installNativePlan(vehicleId, installed.map { it.spec }, vehicle) {
+        val ingress = historyTelemetryIngress ?: return
+        // A guest has no saved vehicle. Use the same transient, address-based
+        // identity as the live dashboard; this never persists a vehicle profile.
+        val recordingVehicle = vehicle ?: installed.singleOrNull()?.spec?.let {
+            buildGuestVehicle(it.address, it.protocolKind.toBmsType())
+        }
+        ingress.installNativePlan(vehicleId, installed.map { it.spec }, recordingVehicle) {
             !recordingShutdownRequested && !userInitiatedDisconnect && installed.any { planned -> links.any { it === planned } }
         }
     }
 
     internal suspend fun prepareInstalledHistoryForTest() {
         val installed = links
-        val vehicle = checkNotNull(installed.first().vehicle)
-        prepareHistoryForInstalledLinks(installed, vehicle.id, vehicle)
+        val vehicle = installed.first().vehicle
+        prepareHistoryForInstalledLinks(installed, vehicle?.id ?: GUEST_VEHICLE_ID_PREFIX + installed.first().spec.address, vehicle)
     }
 
     internal fun historyTelemetryCaptureForTest(protocol: BmsProtocol, address: String,
@@ -245,7 +251,7 @@ class KableBmsRepository private constructor(
     override fun stopCapture() = diagnosticBuffer.stop()
     override fun clearCapture() = diagnosticBuffer.clear()
 
-    /** Production constructor used by Koin. */
+    /** Legacy compatibility constructor. Production Koin uses the native runtime overload below. */
     constructor(
         vehicleRepository: VehicleRepository,
         serviceController: ru.sodovaya.volty.service.ServiceController,
@@ -1482,13 +1488,10 @@ class KableBmsRepository private constructor(
     private fun planLinkPacks(vehicle: Vehicle?, address: String, type: BmsType?): List<LinkPacks> {
         val stored = storedPacks(vehicle, address, type)
         val specs = planLinks(stored, vehicle?.controllers ?: emptyList())
-        // buildProtocol, NOT createProtocol: this instance is thrown away the
-        // instant packCount is read, and createProtocol's side effect
-        // (capturing primaryPackProtocol — see its KDoc) would otherwise
-        // clobber the REAL, live decoder connectLinkAttempt builds later with
-        // this disposable, never-fed one, permanently starving the Begode
-        // cell-count auto-fill of a confirmable decoder.
-        val counts = specs.map { buildProtocol(it, vehicle).packCount }
+        // Retraction: this used to allocate buildProtocol just to read a count.
+        // Pure configuration now supplies the same count without constructing
+        // a throwaway decoder or touching primaryPackProtocol's live owner.
+        val counts = specs.map { nativeDecoderPlan(it, vehicle).packCount }
         val sized = specs.mapIndexed { i, spec ->
             LinkPacks(
                 spec = spec,
@@ -3480,48 +3483,8 @@ class KableBmsRepository private constructor(
      * because that is what the single-source branch needs; the gateway branch
      * reads every controller's geometry through `motorFor`.
      */
-    private fun buildProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
-        val controller = nativeLinkController(spec, vehicle)
-        controllerMotionProtocol(
-            kind = spec.protocolKind,
-            // A lone controller with no battery source of its own backs a
-            // derived pack; the composer (Part G) turns this off once a real
-            // BMS covers the same battery. Written as `== true ||` rather than
-            // `?:` so the no-packs fallback stays LIVE even though `controller`
-            // is never null for a planned controller link in practice (every
-            // one of them is found in `vehicle.controllers`) — a plain elvis on
-            // a non-null Boolean can never reach its right-hand side, which
-            // would silently strand a controller-only vehicle with
-            // `providesDerivedBattery = false` (its own default) at
-            // `packCount = 0` and the derived-slot machinery off.
-            deriveBattery = controller?.providesDerivedBattery == true ||
-                vehicle?.packs.isNullOrEmpty(),
-            motor = controller?.motor ?: MotorConfig(),
-            // A gateway link carries several sources, so the factory needs the
-            // whole spec (which CAN ids, which hosted battery) and every
-            // controller's own geometry — not just the first one's. Both are
-            // ignored for a plain single-source link, which still builds the
-            // exact VescProtocol it always did.
-            link = spec,
-            motorFor = { idx ->
-                vehicle?.controllers?.firstOrNull { it.index == idx }?.motor ?: MotorConfig()
-            },
-            // The Begode branch's counterpart of `motor`: configuration the
-            // decoder cannot read off any frame. The live frame's voltage is on
-            // Begode's 67.2 V reference and needs the pack's series count to
-            // become volts; without it `inputVoltageV` — and `powerW`, which is
-            // built from it — stay 0, which the Ride dashboard renders as a
-            // confident "0.0 kW" rather than as a blank. Taken from the FIRST
-            // PACK THIS LINK OWNS rather than the vehicle's pack 0, so a
-            // multi-link vehicle cannot hand one wheel another's profile; for a
-            // wheel the two coincide, and pack 0 is also what
-            // [withScaledBegodeLiveVoltage] scales the battery side by.
-            // Null — a link owning no pack at all — is honest absence, and the
-            // protocol publishes no voltage rather than a wrong one.
-            cellCount = nativeLinkCellCount(spec, vehicle)
-        )?.let { return it }
-        return createProtocol(spec.protocolKind.toBmsType())
-    }
+    private fun buildProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol =
+        nativeDecoderPlan(spec, vehicle).create()
 
     /**
      * The [BmsType] a link's battery half decodes with, or null for a
@@ -3549,18 +3512,7 @@ class KableBmsRepository private constructor(
         ProtocolKind.VESC_BMS -> BmsType.VESC_BMS
     }
 
-    private fun createProtocol(type: BmsType): BmsProtocol = when (type) {
-        BmsType.JK_BMS -> JkBmsProtocol()
-        BmsType.JBD_BMS -> JbdBmsProtocol()
-        BmsType.ANT_BMS -> AntBmsProtocol()
-        BmsType.DALY_BMS -> DalyBmsProtocol()
-        BmsType.BEGODE -> BegodeProtocol()
-        BmsType.LEAPERKIM -> VeteranProtocol()
-        // VESC BMS decode is out of scope for the Part A foundation work that
-        // introduced this enum entry (see the vehicle-platform-A-foundation
-        // plan) — a later part wires the real protocol in.
-        BmsType.VESC_BMS -> error("VESC BMS protocol decode is not implemented yet")
-    }
+    private fun createProtocol(type: BmsType): BmsProtocol = batteryDecoderPlan(type).create()
 
     /** App-owner native disposal, called outside this repository's own jobs.
      * Keep the funnel and its original sample ownership alive until recording ACK.

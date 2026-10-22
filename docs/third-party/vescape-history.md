@@ -80,3 +80,86 @@ No standalone `LICENSE`, `NOTICE`, or `COPYING` file was found in the listed mod
 ## Local archive follow-up (primary, 2026-10-13)
 
 Neither local archive contains LICENSE/NOTICE/COPYING entries. AudioSwitch source is the LiveKit POM-pinned davidliu/audioswitch commit039a35aefab7747c557242fa216c9ea11743b604; git show proves LICENSE.txt is Apache2.0 (LICENSE without extension returned404 and was not evidence). Text retained in docs/third-party/licenses/AudioSwitch-Apache-2.0.txt. BRouter upstream v1.7.10 LICENSE is MIT, copyright2019 BRouter contributors: https://github.com/abrensch/brouter/blob/v1.7.10/LICENSE . These source licenses do not themselves prove byte-for-byte identity or complete bundled component provenance of the local archives. Archive notices/transitive inventory remains incomplete; no Vescape source imported yet.
+
+## Summary-panel transfer (2026-10-20)
+
+`presentation/history/ported/HistorySummaryPanel.kt` adapts the pinned
+`src/screens/main/history/HistoryStatsBar.tsx` compact/expand hierarchy, with the
+same adjacent GPL-3.0-or-later notice/license. Changes: source-qualified selected
+metrics, flowing readable cells, bounded lazy expansion and Volty typography;
+per-field unknown/partial values use persisted full-stream range statistics.
+It does not port upstream session aggregate calculation or recompute peaks/energy
+from decimated chart points. Root history activation remains a later acceptance
+step. The independent original Kotlin HistorySummaryPolicy converts canonical
+extrema to display sign and preserves already consumption-signed Wh.
+
+The direct-dependency inventory above predates the renderer change: application
+now uses the same-version official `org.maplibre.gl:android-sdk-opengl:13.0.2`
+artifact. The old default Vulkan artifact entry is historical, not evidence for
+the new artifact's complete archive/transitive notice audit. Final combined APK
+source/notice/distribution acceptance remains open.
+
+## Home composition and navigation transfer (2026-10-20)
+
+The adjacent GPL-noticed `ported/HistoryScreen.kt` adapts the responsibilities of
+the pinned Vescape `HistoryOverlay.tsx`, `HistoryRideDetail.tsx` and
+`HistoryTelemetryPanel.tsx`: map-backed detail home, header/summary, bottom
+charts/navigation, a ride selection sheet and fullscreen charts sharing selection.
+`HistoryNavigationStrip.kt` adapts `HistoryPanelNav.tsx` central dropdown title,
+adjacent-ride controls and side actions. Original author and revision are recorded
+in each file and the adjacent README. Compose rendering uses Volty's theme and
+source-qualified read owners, a lazy selected-metric stack instead of a fixed
+metric-button strip, adaptive layouts, unknown/read-quality states, and measured
+camera padding. The Kotlin state-qualification/adjacency policy is original code.
+No additional runtime dependency or upstream assets/token are introduced.
+Favorite/media/export actions remain omitted until their real owners are wired;
+this does not claim the complete experience or root/recorder activation is done.
+
+## Favorites workflow adaptation (2026-10-21)
+
+`ported/HistoryFavoritesScreen.kt` and `ported/HistoryTrimPanel.kt` adapt the
+favorites/list/trim interaction from pinned `HistorySessionSheet.tsx` and
+`useHistoryFavorites.ts` at revision
+`2527c346bbdb25d4e018fdd68e916621e20fac27` (Kacper Kozak). Both carry adjacent
+GPL-3.0-or-later notices and use the preserved upstream LICENSE. The original
+Kotlin repository, source fingerprint, SQLite migration, paging/revision rules
+and Decompose request ownership are Volty implementations. No new dependency,
+upstream media URI persistence or recording mutation was introduced here.
+The combined release audit above remains open; this entry records provenance.
+
+## Curated media gallery adaptation (2026-10-21)
+
+`ported/HistoryMediaDrawer.kt` adapts the thumbnail-grid, explicit picker and
+favorite media drawer workflow from pinned `HistoryRideMediaDrawer.tsx` and
+`MediaHistoryGallery.tsx` (same revision and author as above), with its adjacent
+GPL notice. The upstream `MediaHistoryViewer.tsx` was also inspected; the Android
+viewer here is an original platform `BitmapFactory`/`VideoView` implementation,
+without the upstream synchronized video telemetry overlay. No upstream media
+assets, gallery scans, access-token configuration or new runtime SDK is added.
+
+Volty stores bounded private copies behind a narrow FileProvider path, with a
+SQLite IMPORTING/READY/DELETING journal and recovery, streaming SHA-256, and
+source/favorite-qualified nearest **recorded** fix placement. EXIF capture time
+requires an explicit UTC offset; the Android video metadata DATE field is not
+used as a capture-time claim. Android framework behavior is checked natively;
+JVM tests exercise the original ownership/files/SQLite policies only.
+Combined-APK distribution/source/notice audit remains open.
+
+## Whole-recording deletion extension (2026-10-21)
+
+The adapted catalog card exposes an optional trash action. Its confirmation
+component, exact recording/count revalidation, SQL cascade, bounded post-commit
+file cleanup and durable route-preview purge are original Volty implementations.
+No additional upstream source, asset or runtime dependency is introduced here.
+This does not close the combined distribution audit or production cutover gates.
+
+## Recording controls and factory cutover (2026-10-21)
+
+The adapted history catalog now hosts an original Volty current-recording panel.
+Its parent, native permission/settings launcher, status/control repository and
+debug-only visual fixture introduce no upstream source/assets or dependency.
+The production factory selects the app-owned native recorder; legacy rows remain
+readable and use an explicit inactive-recorder authority for export and deletion.
+See `docs/superpowers/specs/2026-10-21-history-recording-cutover.md` for evidence
+and remaining acceptance gates. The earlier root-integration note describing the
+four-argument factory as still active is superseded by this actual cutover.

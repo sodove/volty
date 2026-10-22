@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.history
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import app.cash.sqldelight.db.QueryResult
 import kotlinx.coroutines.test.runTest
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
 import ru.sodovaya.volty.domain.history.*
@@ -10,6 +11,87 @@ import java.nio.file.Files
 import kotlin.test.*
 
 class HistoryMigrationTest {
+    @Test fun realVersion21MediaAndFavoritesSurviveDurablePreviewPurgeMigration() {
+        val snapshot = listOf(File("src/commonMain/sqldelight/databases/21.db"),
+            File("composeApp/src/commonMain/sqldelight/databases/21.db")).firstOrNull { it.isFile }
+        assertNotNull(snapshot)
+        val copy = Files.createTempFile("history-v21-purge-", ".db").toFile()
+        try {
+            snapshot.copyTo(copy, overwrite = true)
+            val driver = JdbcSqliteDriver("jdbc:sqlite:${copy.absolutePath}")
+            try {
+                val db = VoltyDatabase(driver)
+                db.rideHistoryV2Queries.insertRide("ride", "bike", 1000, 10, 1, "RECORDING")
+                db.historyFavoriteQueries.insertFavorite("fav", "ride", "bike", "V2", 1000, 10, 1, 1000, 2000, "Keep", 2, 3000)
+                val id = "aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb"
+                db.historyMediaQueries.reserveMedia(id, "fav", "image/jpeg", 3000)
+                db.historyMediaQueries.completeMedia(3, "a".repeat(64), 1500, "image/jpeg", id)
+                val favorite = db.historyFavoriteQueries.getFavorite("fav").executeAsOne()
+                val media = db.historyMediaQueries.getMedia(id).executeAsOne()
+                VoltyDatabase.Schema.migrate(driver, 21, VoltyDatabase.Schema.version)
+                assertEquals(favorite, db.historyFavoriteQueries.getFavorite("fav").executeAsOne())
+                assertEquals(media, db.historyMediaQueries.getMedia(id).executeAsOne())
+                val count = driver.executeQuery(null, "SELECT COUNT(*) FROM HistoryPreviewPurge", { cursor ->
+                    check(cursor.next().value); QueryResult.Value(cursor.getLong(0))
+                }, 0).value
+                assertEquals(0L, count)
+                assertNull(HistoryPreviewPurgeJournal(VoltyDatabaseProvider(driver)).pendingGeneration())
+            } finally { driver.close() }
+        } finally { copy.delete() }
+    }
+
+    @Test fun realVersion20FavoriteAndRecordingRemainUnchangedByMediaJournalMigration() {
+        val snapshot = listOf(File("src/commonMain/sqldelight/databases/20.db"),
+            File("composeApp/src/commonMain/sqldelight/databases/20.db")).firstOrNull { it.isFile }
+        assertNotNull(snapshot)
+        val copy = Files.createTempFile("history-v20-media-", ".db").toFile()
+        try {
+            snapshot.copyTo(copy, overwrite = true)
+            val driver = JdbcSqliteDriver("jdbc:sqlite:${copy.absolutePath}")
+            try {
+                val db = VoltyDatabase(driver)
+                db.rideHistoryV2Queries.insertRide("ride", "bike", 10000, 100, 1, "RECORDING")
+                db.historyFavoriteQueries.insertFavorite("favorite", "ride", "bike", "V2", 10000, 100, 1, 10000, 11000, "Keep", 3, 12000)
+                val rideBefore = db.rideHistoryV2Queries.getRide("ride").executeAsOne()
+                val favoriteBefore = db.historyFavoriteQueries.getFavorite("favorite").executeAsOne()
+                VoltyDatabase.Schema.migrate(driver, 20, VoltyDatabase.Schema.version)
+                assertEquals(rideBefore, db.rideHistoryV2Queries.getRide("ride").executeAsOne())
+                assertEquals(favoriteBefore, db.historyFavoriteQueries.getFavorite("favorite").executeAsOne())
+                val journal = HistoryMediaJournal(VoltyDatabaseProvider(driver))
+                val pending = journal.reserve("aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb", "favorite", "image/png")
+                assertEquals(HistoryMediaStatus.IMPORTING, pending.status)
+                assertEquals(favoriteBefore, db.historyFavoriteQueries.getFavorite("favorite").executeAsOne())
+            } finally { driver.close() }
+        } finally { copy.delete() }
+    }
+
+    @Test fun realVersion19RecordingSurvivesFavoriteMigration() = runTest {
+        val snapshot = listOf(File("src/commonMain/sqldelight/databases/19.db"),
+            File("composeApp/src/commonMain/sqldelight/databases/19.db")).firstOrNull { it.isFile }
+        assertNotNull(snapshot)
+        val copy = Files.createTempFile("history-v19-favorites-", ".db").toFile()
+        try {
+            snapshot.copyTo(copy, overwrite = true)
+            val driver = JdbcSqliteDriver("jdbc:sqlite:${copy.absolutePath}")
+            try {
+                val db = VoltyDatabase(driver)
+                db.rideHistoryV2Queries.insertRide("ride", "bike", 10000, 100, 1, "RECORDING")
+                db.rideHistoryV2Queries.finishRide(11000, 1100, 1, "COMPLETED", "ride")
+                db.rideRowQueries.insert("legacy", "old-bike", "2020-01-01T00:00:00Z", null)
+                val before = db.rideHistoryV2Queries.getRide("ride").executeAsOne()
+                VoltyDatabase.Schema.migrate(driver, 19, VoltyDatabase.Schema.version)
+                assertEquals(before, db.rideHistoryV2Queries.getRide("ride").executeAsOne())
+                assertNull(db.rideRowQueries.selectById("legacy").executeAsOne().endedAt)
+                val provider = VoltyDatabaseProvider(driver)
+                val favorites = SqlDelightHistoryFavorites(provider) { 99999 }
+                val ride = assertNotNull(SqlDelightHistoryStore(provider).ride("ride"))
+                val saved = favorites.save("f", ride.favoriteSource(), HistoryRange(10000, 11000), "Migrated")
+                assertEquals(saved, SqlDelightHistoryFavorites(provider) { 0 }.get("f"))
+                assertEquals(before, db.rideHistoryV2Queries.getRide("ride").executeAsOne())
+            } finally { driver.close() }
+        } finally { copy.delete() }
+    }
+
     @Test fun realVersion18GlobalMarkerReceiptSurvivesUpgradeAndNewMarkersKeepScope() = runTest {
         val snapshot = listOf(File("src/commonMain/sqldelight/databases/18.db"),
             File("composeApp/src/commonMain/sqldelight/databases/18.db")).firstOrNull { it.isFile }

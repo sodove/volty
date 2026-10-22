@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.history
 
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.*
+import com.arkivanov.essenty.statekeeper.StateKeeperDispatcher
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.test.*
@@ -10,6 +11,193 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryComponentTest {
+    @Test fun recreationRestoresQualifiedRideWindowCursorMetricsAndChartsWithoutReusingExport() = runTest {
+        val keeper = StateKeeperDispatcher()
+        val first = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED), stateKeeper = keeper),
+            backgroundScope, Repo(), { origin }, {})
+        var restored: DefaultHistoryComponent? = null
+        try {
+            first.openRide("a"); runCurrent(); first.loadSourceMetrics("pack"); runCurrent(); first.addMetric(key); runCurrent()
+            first.selectRange(HistoryRange(2000, 4000)); runCurrent(); first.selectTime(3000); first.showCharts(); runCurrent()
+            val saved = keeper.save(); first.close()
+            restored = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED),
+                stateKeeper = StateKeeperDispatcher(saved)), backgroundScope, Repo(), { origin }, {})
+            runCurrent()
+            assertEquals("a", restored.state.value.selectedRideId)
+            assertEquals(HistoryRange(2000, 4000), restored.state.value.detail.range)
+            assertEquals(listOf(key), restored.state.value.detail.selectedKeys)
+            assertEquals(3000L, restored.state.value.detail.cursorEpochMillis)
+            assertEquals(HistoryDestination.CHARTS, restored.state.value.destination)
+            assertNull(restored.state.value.export.ready)
+        } finally { first.close(); restored?.close() }
+    }
+
+    @Test fun recreationCannotRebindSavedViewToReusedRideIdWithDifferentIdentity() = runTest {
+        val keeper = StateKeeperDispatcher()
+        val first = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED), stateKeeper = keeper),
+            backgroundScope, Repo(), { origin }, {})
+        var restored: DefaultHistoryComponent? = null
+        try {
+            first.openRide("a"); runCurrent(); val saved = keeper.save(); first.close()
+            val changed = object : Repo() {
+                override suspend fun ride(id: String) = this@HistoryComponentTest.ride(id).copy(vehicleId = "other-bike")
+            }
+            restored = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED),
+                stateKeeper = StateKeeperDispatcher(saved)), backgroundScope, changed, { origin }, {})
+            runCurrent()
+            assertNull(restored.state.value.selectedRideId)
+            assertEquals(HistoryDestination.CATALOG, restored.state.value.destination)
+        } finally { first.close(); restored?.close() }
+    }
+
+    @Test fun repositoryNavigationDuringRestoredMetricReadCannotOverrideSuccessorView() = runTest {
+        val keeper = StateKeeperDispatcher()
+        val first = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED), stateKeeper = keeper),
+            backgroundScope, Repo(), { origin }, {})
+        var restored: DefaultHistoryComponent? = null
+        val restoreReadEntered = CompletableDeferred<Unit>()
+        val releaseRestoreRead = CompletableDeferred<Unit>()
+        val window = HistoryRange(2000, 4000)
+        var navigationIssued = false
+        val restoredRepo = object : Repo() {
+            val seriesCalls = mutableListOf<Pair<String, HistoryRange>>()
+
+            override suspend fun ride(rideId: String): HistoryRide? {
+                if (rideId == "a" && !releaseRestoreRead.isCompleted) {
+                    restoreReadEntered.complete(Unit)
+                    releaseRestoreRead.await()
+                }
+                return super.ride(rideId)
+            }
+
+            override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries {
+                seriesCalls += rideId to range
+                if (rideId == "a" && range == window && !navigationIssued) {
+                    navigationIssued = true
+                    assertNotNull(restored).openRide("b")
+                }
+                return super.series(rideId, key, range, maxPoints)
+            }
+        }
+        try {
+            first.openRide("a"); runCurrent(); first.loadSourceMetrics("pack"); runCurrent(); first.addMetric(key); runCurrent()
+            first.selectRange(window); runCurrent(); first.selectTime(3000); first.selectMapMetric(key); first.showCharts(); runCurrent()
+            val saved = keeper.save(); first.close()
+
+            val immediateScope = CoroutineScope(coroutineContext + UnconfinedTestDispatcher(testScheduler))
+            restored = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED),
+                stateKeeper = StateKeeperDispatcher(saved)), immediateScope, restoredRepo, { origin }, {})
+            assertTrue(restoreReadEntered.isCompleted)
+            releaseRestoreRead.complete(Unit)
+            runCurrent()
+
+            assertTrue(navigationIssued, "the restored cropped-window metric read must issue the successor ride")
+            assertEquals(listOf("a", "b"), restoredRepo.detailReads)
+            assertEquals(listOf("a" to window), restoredRepo.seriesCalls)
+            assertEquals("b", restored.state.value.selectedRideId)
+            assertEquals("b", restored.state.value.detail.ride?.id)
+            assertEquals(full, restored.state.value.detail.range)
+            assertTrue(restored.state.value.detail.selectedKeys.isEmpty())
+            assertNull(restored.state.value.mapMetricKey)
+            assertEquals(HistoryDestination.RIDE, restored.state.value.destination)
+        } finally {
+            releaseRestoreRead.complete(Unit)
+            first.close(); restored?.close(); runCurrent()
+        }
+    }
+
+    @Test fun exportUsesLoadedParentSelectionAndChosenWindowAndCannotStartDuringRideReplacement() = runTest {
+        val requests = mutableListOf<HistoryExportRequest>()
+        val exports = object : HistoryExportRepository {
+            override suspend fun export(request: HistoryExportRequest): HistoryExportResult {
+                requests += request
+                return HistoryExportResult.Success("ride.json", 42, "digest", request.format.mime)
+            }
+        }
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),
+            backgroundScope, Repo(), { origin }, {}, exportRepository = exports)
+        try {
+            c.openExport(); c.export(HistoryExportFormat.JSON); runCurrent(); assertTrue(requests.isEmpty())
+            c.openRide("a"); runCurrent()
+            val window = HistoryRange(2000, 4000)
+            c.selectRange(window); runCurrent()
+            assertEquals(window, c.state.value.detail.range)
+            c.openExport(); c.export(HistoryExportFormat.JSON); runCurrent()
+            assertEquals(listOf(HistoryExportRequest(ride("a").favoriteSource(), window, HistoryExportFormat.JSON)), requests)
+            c.openRide("b")
+            assertTrue(c.state.value.detail.loading)
+            c.openExport(); c.export(HistoryExportFormat.CSV); runCurrent()
+            assertEquals(1, requests.size, "old detail/export state cannot supply the replacement ride")
+            assertEquals("b", c.state.value.detail.ride?.id)
+            c.openExport(); c.export(HistoryExportFormat.CSV); runCurrent()
+            assertEquals(HistoryExportRequest(ride("b").favoriteSource(), full, HistoryExportFormat.CSV), requests.last())
+            c.close(); c.openExport(); c.export(HistoryExportFormat.GPX); runCurrent(); assertEquals(2, requests.size)
+        } finally { c.close() }
+    }
+
+    @Test fun changingParentRideRetiresAnAlreadyStartedExportEvenWhenItsResultArrivesLate() = runTest {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val requests = mutableListOf<HistoryExportRequest>()
+        val exports = object : HistoryExportRepository {
+            override suspend fun export(request: HistoryExportRequest): HistoryExportResult = withContext(NonCancellable) {
+                requests += request; entered.complete(Unit); release.await()
+                HistoryExportResult.Success("old.json", 42, "digest", "application/json")
+            }
+        }
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),
+            backgroundScope, Repo(), { origin }, {}, exportRepository = exports)
+        try {
+            c.openRide("a"); runCurrent(); c.openExport(); c.export(HistoryExportFormat.JSON); runCurrent()
+            assertTrue(entered.isCompleted); assertTrue(c.state.value.export.busy)
+            c.openRide("b"); runCurrent(); release.complete(Unit); runCurrent()
+            assertEquals("b", c.state.value.detail.ride?.id)
+            assertNull(c.state.value.export.ready); assertNull(c.state.value.export.source)
+            assertEquals(listOf(HistoryExportRequest(ride("a").favoriteSource(), full, HistoryExportFormat.JSON)), requests)
+        } finally { release.complete(Unit); c.close(); runCurrent() }
+    }
+
+    @Test fun recordingActionsKeepRenderedIdentityRefreshCatalogAndRetireWithScreen() = runTest {
+        val reads = Repo()
+        val statuses = kotlinx.coroutines.flow.MutableStateFlow(HistoryRecordingStatus(
+            available = true, ride = ride("active"), canStop = true))
+        val captured = mutableListOf<HistoryRecordingStatus>()
+        val calls = mutableListOf<String>()
+        val recording = object : HistoryRecordingRepository {
+            override val states = statuses
+            override fun captureControls(observed: HistoryRecordingStatus): HistoryRecordingControls {
+                captured += observed
+                return object : HistoryRecordingControls {
+                    override suspend fun start(): HistoryRecordingActionResult {
+                        calls += "start"; return HistoryRecordingActionResult.Applied
+                    }
+                    override suspend fun stop(rideId: String): HistoryRecordingActionResult {
+                        calls += "stop:$rideId"; return HistoryRecordingActionResult.Applied
+                    }
+                }
+            }
+            override suspend fun retryLocation(): HistoryRecordingActionResult {
+                calls += "gps"; return HistoryRecordingActionResult.Applied
+            }
+        }
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),
+            backgroundScope, reads, { origin }, {}, recordingRepository = recording)
+        try {
+            runCurrent()
+            assertTrue(c.state.value.recording.present)
+            val rendered = c.state.value.recording.status
+            statuses.value = rendered.copy(ride = ride("replacement")); runCurrent()
+            c.stopRecording(rendered)
+            assertEquals(listOf(rendered), captured)
+            runCurrent()
+            assertEquals(listOf("stop:active"), calls)
+            assertEquals(1, reads.catalogReads)
+            c.retryRecordingLocation(); runCurrent()
+            assertEquals(listOf("stop:active", "gps"), calls)
+            c.close()
+            c.startRecording(rendered.copy(canStart = true)); c.retryRecordingLocation(); runCurrent()
+            assertEquals(listOf("stop:active", "gps"), calls)
+        } finally { c.close() }
+    }
     private val origin = HistoryTick(1000, 10, 1)
     private val full = HistoryRange(1000, 5000)
     private val key = HistorySeriesKey("pack", "voltage_v")
@@ -17,6 +205,8 @@ class HistoryComponentTest {
     private open inner class Repo : HistoryReadRepository {
         val detailReads = mutableListOf<String>(); val routeReads = mutableListOf<Pair<String, HistoryRange>>()
         var catalogReads = 0
+        val seriesReads = mutableListOf<HistoryRange>()
+        val statsReads = mutableListOf<HistoryRange>()
         override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> {
             catalogReads++; return HistoryPage(listOf(this@HistoryComponentTest.ride(if (before == null) "a" else "b")),
                 if (before == null) HistoryCursor(1000, "a") else null, before == null)
@@ -24,9 +214,13 @@ class HistoryComponentTest {
         override suspend fun ride(rideId: String): HistoryRide? { detailReads += rideId; return this@HistoryComponentTest.ride(rideId) }
         override suspend fun sources(rideId: String) = listOf(HistorySource("pack", HistorySourceKind.BATTERY, "Pack"))
         override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int) = HistoryRecordedKeys(listOf(key), false)
-        override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int) = HistorySeries(key,
-            listOf(HistorySample(HistoryTick(range.startEpochMillis, range.startEpochMillis - 990, 1), key, 63.0)), emptyList(), false, origin)
-        override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) = HistoryStats(63.0, 63.0, null, true)
+        override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries {
+            seriesReads += range
+            return HistorySeries(key, listOf(HistorySample(HistoryTick(range.startEpochMillis, range.startEpochMillis - 990, 1), key, 63.0)), emptyList(), false, origin)
+        }
+        override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats {
+            statsReads += range; return HistoryStats(63.0, 63.0, null, true)
+        }
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryPage<HistoryGpsFix> = error("Use route snapshot")
         override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
             routeReads += rideId to range
@@ -37,6 +231,387 @@ class HistoryComponentTest {
     }
     private fun TestScope.component(repo: Repo, onBack: () -> Unit = {}) = DefaultHistoryComponent(
         DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo, { HistoryTick(6000, 5010, 1) }, onBack)
+
+    private open inner class Favorites : HistoryFavoriteRepository {
+        var saved: HistoryFavorite? = null
+        override suspend fun get(id: String) = saved?.takeIf { it.id == id }
+        override suspend fun page(before: HistoryCursor?) = HistoryPage(listOfNotNull(saved), null, false)
+        override suspend fun save(id: String, source: HistoryFavoriteSource, range: HistoryRange, name: String, expectedRevision: Long?): HistoryFavorite {
+            return HistoryFavorite(id, source, range, name, (expectedRevision ?: 0) + 1, 9999).also { saved = it }
+        }
+        override suspend fun delete(id: String, expectedRevision: Long) { saved = null }
+    }
+    private fun TestScope.withFavorites(repo: Repo, favorites: Favorites) = DefaultHistoryComponent(
+        DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo,
+        { HistoryTick(6000, 5010, 1) }, {}, favoriteStore = favorites)
+
+    private inner class Media : HistoryMediaRepository {
+        var reads = 0; val picks = mutableListOf<HistoryMediaPick>()
+        override suspend fun list(favoriteId: String): HistoryMediaListing {
+            reads++; return HistoryMediaListing(listOf(mediaItem(favoriteId)), HistoryMediaRecovery())
+        }
+        override suspend fun importItem(pick: HistoryMediaPick): HistoryMediaRecord { picks += pick; return mediaItem(pick.favoriteId) }
+        override suspend fun delete(id: String) {}
+        override suspend fun reconcile() = HistoryMediaRecovery()
+        override suspend fun readableUri(id: String) = "content://private/$id"
+    }
+    private fun mediaItem(favoriteId: String) = HistoryMediaRecord("photo", favoriteId, "image/png", null, 3,
+        "a".repeat(64), HistoryMediaStatus.READY, 3000)
+    private fun TestScope.withMedia(repo: Repo, store: Favorites, media: Media) = DefaultHistoryComponent(
+        DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo,
+        { HistoryTick(6000, 5010, 1) }, {}, favoriteStore = store, mediaRepository = media)
+
+    private open inner class Deletion : HistoryRideDeletionRepository {
+        val prepared = mutableListOf<HistoryRide>(); val confirmed = mutableListOf<HistoryRideDeletionRequest>()
+        override suspend fun prepare(ride: HistoryRide): HistoryRideDeletionRequest {
+            prepared += ride; return HistoryRideDeletionRequest(ride, 1, 1, this)
+        }
+        override suspend fun confirm(request: HistoryRideDeletionRequest): HistoryRideDeletionResult {
+            confirmed += request; return HistoryRideDeletionResult(request.ride.favoriteSource(), false)
+        }
+    }
+    private fun TestScope.withDeletion(repo: Repo, deletion: Deletion, favorites: Favorites? = null, media: Media? = null) =
+        DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo,
+            { HistoryTick(6000, 5010, 1) }, {}, favoriteStore = favorites, mediaRepository = media, deletionRepository = deletion)
+
+    @Test fun selectedRideDeletionClearsOwnedSelectionAndMediaAndRefreshesCatalogAndFavorites() = runTest {
+        var deleted = false
+        val repo = object : Repo() { override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> {
+            val page = super.rides(before); return if (deleted) HistoryPage(emptyList(), null, false) else page
+        } }
+        val favorites = Favorites().apply { saved = HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999) }
+        val deletion = object : Deletion() { override suspend fun confirm(request: HistoryRideDeletionRequest): HistoryRideDeletionResult {
+            val result = super.confirm(request); deleted = true; favorites.saved = null; return result
+        } }
+        val c = withDeletion(repo, deletion, favorites, Media())
+        try {
+            c.refresh(); c.loadFavorites(); c.openFavorite(assertNotNull(favorites.saved)); runCurrent(); c.loadMedia(); runCurrent()
+            assertEquals(1, c.state.value.media.items.size); assertEquals("a", c.state.value.detail.ride?.id)
+            val reads = repo.catalogReads
+            c.requestRideDeletion(ride("a")); runCurrent(); assertEquals(1L, c.state.value.deletion.confirmation?.favoriteCount)
+            c.confirmRideDeletion(); runCurrent()
+            assertEquals(1, deletion.confirmed.size); assertEquals(HistoryDestination.CATALOG, c.state.value.destination)
+            assertNull(c.state.value.selectedRideId); assertNull(c.state.value.detail.ride); assertTrue(c.state.value.route.fixes.isEmpty())
+            assertNull(c.state.value.selectedFavorite); assertTrue(c.state.value.media.items.isEmpty()); assertNull(c.state.value.media.favoriteId)
+            assertTrue(repo.catalogReads > reads); assertTrue(c.state.value.catalog.rides.isEmpty()); assertTrue(c.state.value.favorites.items.isEmpty())
+        } finally { c.close() }
+    }
+    @Test fun completedDeletionCannotStealNewerRideSelection() = runTest {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val deletion = object : Deletion() { override suspend fun confirm(request: HistoryRideDeletionRequest) = withContext(NonCancellable) {
+            val result = super.confirm(request); entered.complete(Unit); release.await(); result
+        } }
+        val repo = Repo(); val c = withDeletion(repo, deletion)
+        try {
+            c.openRide("a"); runCurrent(); c.requestRideDeletion(ride("a")); runCurrent(); c.confirmRideDeletion(); runCurrent()
+            assertTrue(entered.isCompleted); c.openRide("b"); runCurrent(); release.complete(Unit); runCurrent()
+            assertEquals("b", c.state.value.selectedRideId); assertEquals("b", c.state.value.detail.ride?.id)
+            assertEquals(HistoryDestination.RIDE, c.state.value.destination); assertEquals(1, repo.detailReads.count { it == "b" })
+            assertEquals(ride("a").favoriteSource(), c.state.value.deletion.result?.source)
+            c.dismissRideDeletionResult(); assertNull(c.state.value.deletion.result)
+        } finally { release.complete(Unit); c.close(); runCurrent() }
+    }
+    @Test fun navigationDismissesUnconfirmedDeletionAndLatePrepareCannotReopenIt() = runTest {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val deletion = object : Deletion() { override suspend fun prepare(ride: HistoryRide) = withContext(NonCancellable) {
+            entered.complete(Unit); release.await(); super.prepare(ride)
+        } }
+        val c = withDeletion(Repo(), deletion)
+        try {
+            c.openRide("a"); runCurrent(); c.requestRideDeletion(ride("a")); runCurrent(); assertTrue(entered.isCompleted)
+            c.openRide("b"); runCurrent(); release.complete(Unit); runCurrent()
+            assertNull(c.state.value.deletion.target); assertNull(c.state.value.deletion.confirmation)
+            c.confirmRideDeletion(); runCurrent(); assertTrue(deletion.confirmed.isEmpty())
+        } finally { release.complete(Unit); c.close(); runCurrent() }
+    }
+    @Test fun committedDeletionRetiresReloadingSelectedSourceBeforeItsLateDetailCanPublish() = runTest {
+        val deleteEntered = CompletableDeferred<Unit>(); val deleteRelease = CompletableDeferred<Unit>()
+        val detailEntered = CompletableDeferred<Unit>(); val detailRelease = CompletableDeferred<Unit>(); var reads = 0
+        val repo = object : Repo() { override suspend fun ride(rideId: String): HistoryRide? {
+            if (++reads > 1) withContext(NonCancellable) { detailEntered.complete(Unit); detailRelease.await() }
+            return super.ride(rideId)
+        } }
+        val deletion = object : Deletion() { override suspend fun confirm(request: HistoryRideDeletionRequest) = withContext(NonCancellable) {
+            deleteEntered.complete(Unit); deleteRelease.await(); super.confirm(request)
+        } }
+        val c = withDeletion(repo, deletion)
+        try {
+            c.openRide("a"); runCurrent(); c.requestRideDeletion(ride("a")); runCurrent(); c.confirmRideDeletion(); runCurrent()
+            assertTrue(deleteEntered.isCompleted); c.retrySelectedRide(); runCurrent(); assertTrue(detailEntered.isCompleted)
+            assertNull(c.state.value.detail.ride); deleteRelease.complete(Unit); runCurrent()
+            assertEquals(HistoryDestination.CATALOG, c.state.value.destination); assertNull(c.state.value.selectedRideId)
+            detailRelease.complete(Unit); runCurrent(); assertNull(c.state.value.detail.ride)
+        } finally { deleteRelease.complete(Unit); detailRelease.complete(Unit); c.close(); runCurrent() }
+    }
+    @Test fun closedParentDoesNotIssueDeletionWork() = runTest {
+        val deletion = Deletion(); val c = withDeletion(Repo(), deletion)
+        c.close(); c.requestRideDeletion(ride("a")); c.confirmRideDeletion(); runCurrent()
+        assertTrue(deletion.prepared.isEmpty()); assertTrue(deletion.confirmed.isEmpty())
+    }
+
+    @Test fun mediaBindsOnlyAfterQualifiedFavoriteAndClearsOnPlainRide() = runTest {
+        val media = Media(); val c = withMedia(Repo(), Favorites(), media)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)
+        try {
+            c.openFavorite(favorite); runCurrent(); assertEquals("f", c.state.value.media.favoriteId)
+            assertEquals(0, media.reads); c.loadMedia(); runCurrent()
+            assertEquals(listOf(mediaItem("f")), c.state.value.media.items)
+            c.openRide("b"); runCurrent(); assertNull(c.state.value.media.favoriteId); assertTrue(c.state.value.media.items.isEmpty())
+        } finally { c.close() }
+    }
+    @Test fun failedFavoriteSourceCannotOpenItsMediaPickerOrLoadAttachments() = runTest {
+        val repo = object : Repo() { override suspend fun ride(rideId: String) = this@HistoryComponentTest.ride(rideId).copy(vehicleId = "replacement") }
+        val media = Media(); val c = withMedia(repo, Favorites(), media)
+        try {
+            c.openFavorite(HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)); runCurrent()
+            assertNotNull(c.state.value.detail.error); assertNull(c.beginMediaPick())
+            c.loadMedia(); runCurrent(); assertEquals(0, media.reads); assertNull(c.state.value.media.favoriteId)
+        } finally { c.close() }
+    }
+    @Test fun savingCurrentFavoriteActivatesItsOwnMediaTarget() = runTest {
+        val media = Media(); val c = withMedia(Repo(), Favorites(), media)
+        try {
+            c.openRide("a"); runCurrent(); c.saveFavorite("New", full); runCurrent()
+            val favorite = assertNotNull(c.state.value.selectedFavorite)
+            assertEquals(favorite.id, c.state.value.media.favoriteId)
+            c.mediaPicked(assertNotNull(c.beginMediaPick()), "content://picked/new", "image/png"); runCurrent()
+            assertEquals(favorite.id, media.picks.single().favoriteId)
+            assertEquals(listOf(mediaItem(favorite.id)), c.state.value.media.items)
+        } finally { c.close() }
+    }
+    @Test fun parentNavigationRetiresPickerEvenWhenSameFavoriteIsReentered() = runTest {
+        val media = Media(); val c = withMedia(Repo(), Favorites(), media)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)
+        try {
+            c.openFavorite(favorite); runCurrent(); val old = assertNotNull(c.beginMediaPick())
+            c.openRide("b"); c.openFavorite(favorite); runCurrent()
+            c.mediaPicked(old, "content://picked/old", "image/png"); runCurrent()
+            assertTrue(media.picks.isEmpty()); assertTrue(c.state.value.media.items.isEmpty())
+        } finally { c.close() }
+    }
+
+    @Test fun favoriteSaveCapturesOriginalSelectionWithoutSwitchingTheNewRide() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        try {
+            c.openRide("a"); runCurrent()
+            c.saveFavorite("A", HistoryRange(2000, 4000)); c.openRide("b"); runCurrent()
+            assertEquals(ride("a").favoriteSource(), assertNotNull(store.saved).source)
+            assertEquals(HistoryRange(2000, 4000), store.saved?.range)
+            assertEquals("b", c.state.value.detail.ride?.id)
+        } finally { c.close() }
+    }
+    @Test fun openingFavoriteUsesSavedRangeWithWholeRecordingBounds() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), HistoryRange(2000, 4000), "A", 1, 9999)
+        try {
+            c.openFavorite(favorite); runCurrent()
+            assertEquals(favorite.range, c.state.value.detail.range)
+            assertEquals(full, c.state.value.detail.availableRange)
+            assertEquals(favorite.id, c.state.value.selectedFavorite?.id)
+            c.openRide("b"); runCurrent(); assertNull(c.state.value.selectedFavorite)
+        } finally { c.close() }
+    }
+    @Test fun favoriteCannotBindToReplacedVehicleOrExposeItsRoute() = runTest {
+        val repo = object : Repo() { override suspend fun ride(rideId: String) = this@HistoryComponentTest.ride(rideId).copy(vehicleId = "replacement") }
+        val c = withFavorites(repo, Favorites())
+        try {
+            c.openFavorite(HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)); runCurrent()
+            assertNull(c.state.value.detail.ride)
+            assertNotNull(c.state.value.detail.error)
+            assertTrue(repo.routeReads.isEmpty())
+        } finally { c.close() }
+    }
+    @Test fun deletingOpenFavoriteClearsFavoriteSelectionButKeepsRideAndRange() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), HistoryRange(2000, 4000), "A", 1, 9999)
+        try {
+            store.saved = favorite; c.loadFavorites(); runCurrent(); c.openFavorite(favorite); runCurrent()
+            assertEquals("f", c.state.value.selectedFavorite?.id)
+            c.deleteFavorite(favorite); runCurrent()
+            assertNull(c.state.value.selectedFavorite)
+            assertEquals("a", c.state.value.detail.ride?.id)
+            assertEquals(favorite.range, c.state.value.detail.range)
+        } finally { c.close() }
+    }
+    @Test fun editingOpenFavoriteAppliesPersistedRangeToSharedDetail() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), full, "A", 1, 9999)
+        try {
+            store.saved = favorite; c.loadFavorites(); runCurrent(); c.openFavorite(favorite); runCurrent()
+            val trimmed = HistoryRange(2000, 3000)
+            c.saveFavorite("Trimmed", trimmed, favorite); runCurrent()
+            assertEquals(trimmed, c.state.value.selectedFavorite?.range)
+            assertEquals(trimmed, c.state.value.detail.range)
+            assertEquals(full, c.state.value.detail.availableRange)
+        } finally { c.close() }
+    }
+    @Test fun retryingFavoriteNeverDropsSourceQualification() = runTest {
+        var replaced = true
+        val repo = object : Repo() { override suspend fun ride(rideId: String) = this@HistoryComponentTest.ride(rideId)
+            .let { if (replaced) it.copy(vehicleId = "replacement") else it } }
+        val c = withFavorites(repo, Favorites())
+        val favorite = HistoryFavorite("f", ride("a").favoriteSource(), HistoryRange(2000, 4000), "A", 1, 9999)
+        try {
+            c.openFavorite(favorite); runCurrent(); assertNotNull(c.state.value.detail.error)
+            c.retrySelectedRide(); runCurrent()
+            assertNotNull(c.state.value.detail.error); assertTrue(repo.routeReads.isEmpty())
+            replaced = false; c.retrySelectedRide(); runCurrent()
+            assertNull(c.state.value.detail.error); assertEquals(favorite.range, c.state.value.detail.range)
+        } finally { c.close() }
+    }
+    @Test fun savingCurrentSectionSelectsSavedFavoriteAndShowsItsPersistedRange() = runTest {
+        val store = Favorites(); val c = withFavorites(Repo(), store)
+        try {
+            c.openRide("a"); runCurrent(); c.saveFavorite("New", HistoryRange(2000, 3000)); runCurrent()
+            assertEquals(assertNotNull(store.saved), c.state.value.selectedFavorite)
+            assertEquals(HistoryRange(2000, 3000), c.state.value.detail.range)
+        } finally { c.close() }
+    }
+    @Test fun lateFavoriteSaveCannotUndoNewerWindowSelection() = runTest {
+        val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val store = object : Favorites() {
+            override suspend fun save(id: String, source: HistoryFavoriteSource, range: HistoryRange, name: String,
+                expectedRevision: Long?): HistoryFavorite {
+                entered.complete(Unit); release.await(); return super.save(id, source, range, name, expectedRevision)
+            }
+        }
+        val c = withFavorites(Repo(), store)
+        try {
+            c.openRide("a"); runCurrent(); c.saveFavorite("Earlier", HistoryRange(2000, 3000)); runCurrent()
+            assertTrue(entered.isCompleted)
+            c.selectRange(HistoryRange(3000, 4000)); runCurrent(); release.complete(Unit); runCurrent()
+            assertEquals(HistoryRange(3000, 4000), c.state.value.detail.range)
+            assertNull(c.state.value.selectedFavorite); assertNotNull(store.saved)
+        } finally { release.complete(Unit); c.close(); runCurrent() }
+    }
+
+    @Test fun gesturePreviewsIssueNoReadsAndSettlesExactlyOnceForAllOwners() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent(); c.addMetric(key); runCurrent(); c.selectTime(2500)
+            val token = assertNotNull(c.beginWindowGesture())
+            repeat(50) {
+                c.transformWindowGesture(token, 2.0, 0.5, 0.0)
+                assertEquals(HistoryRange(2000, 4000), c.state.value.windowPreview)
+                c.transformWindowGesture(token, 0.5, 0.5, 0.0)
+                assertEquals(full, c.state.value.windowPreview)
+            }
+            c.transformWindowGesture(token, 2.0, 0.5, 0.0); runCurrent()
+            assertEquals(HistoryRange(2000, 4000), c.state.value.windowPreview)
+            assertEquals(full, c.state.value.detail.range); assertEquals(listOf(full), repo.seriesReads)
+            assertEquals(listOf(full), repo.statsReads); assertEquals(listOf("a" to full), repo.routeReads)
+            c.finishWindowGesture(token); runCurrent(); c.finishWindowGesture(token); runCurrent()
+            assertNull(c.state.value.windowPreview)
+            assertEquals(listOf(full, HistoryRange(2000, 4000)), repo.seriesReads)
+            assertEquals(repo.seriesReads, repo.statsReads)
+            assertEquals(HistoryRange(2000, 4000), repo.routeReads.last().second)
+            assertEquals(2500L, c.state.value.detail.cursorEpochMillis)
+        } finally { c.close() }
+    }
+
+    @Test fun mapMetricUsesSelectedKeyAndSurvivesWindowCursorAndFullscreenWithoutReads() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent(); c.addMetric(key); runCurrent()
+            c.selectMapMetric(key); assertEquals(key, c.state.value.mapMetricKey)
+            c.selectTime(1500); c.selectRange(HistoryRange(1000, 2000)); runCurrent()
+            val reads = Triple(repo.seriesReads.toList(), repo.statsReads.toList(), repo.routeReads.toList())
+            c.showCharts(); c.back(); c.selectMapMetric(key.copy(sourceId = "unselected")); runCurrent()
+            assertEquals(key, c.state.value.mapMetricKey); assertEquals(1500L, c.state.value.detail.cursorEpochMillis)
+            assertEquals(HistoryRange(1000, 2000), c.state.value.detail.range)
+            assertEquals(reads, Triple(repo.seriesReads.toList(), repo.statsReads.toList(), repo.routeReads.toList()))
+            c.selectMapMetric(null); assertNull(c.state.value.mapMetricKey)
+        } finally { c.close() }
+    }
+
+    @Test fun removingMapSeriesOrChangingRideClearsMapChoiceAndCloseIgnoresCommands() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent(); c.addMetric(key); runCurrent(); c.selectMapMetric(key)
+            assertEquals(key, c.state.value.mapMetricKey)
+            c.removeMetric(key); runCurrent(); assertNull(c.state.value.mapMetricKey)
+            c.addMetric(key); runCurrent(); c.selectMapMetric(key); assertEquals(key, c.state.value.mapMetricKey)
+            c.openRide("b"); assertNull(c.state.value.mapMetricKey); runCurrent()
+            c.addMetric(key); runCurrent(); c.selectMapMetric(key); assertEquals(key, c.state.value.mapMetricKey)
+            c.back(); assertNull(c.state.value.mapMetricKey)
+            c.openRide("a"); runCurrent(); c.addMetric(key); runCurrent(); c.selectMapMetric(key)
+            assertEquals(key, c.state.value.mapMetricKey); c.close()
+            val frozen = c.state.value; c.selectMapMetric(null); assertEquals(frozen, c.state.value)
+        } finally { c.close() }
+    }
+
+    @Test fun cancelledAndSupersededGestureCannotClearTheNewPreviewOrCommit() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent()
+            val old = assertNotNull(c.beginWindowGesture()); c.transformWindowGesture(old, 2.0, 0.5, 0.0)
+            c.cancelWindowGesture(old); assertNull(c.state.value.windowPreview)
+            val fresh = assertNotNull(c.beginWindowGesture()); c.transformWindowGesture(fresh, 2.0, 0.0, 0.0)
+            c.cancelWindowGesture(old); c.finishWindowGesture(old); runCurrent()
+            assertEquals(HistoryRange(1000, 3000), c.state.value.windowPreview)
+            assertEquals(listOf("a" to full), repo.routeReads)
+            c.cancelWindowGesture(fresh); assertNull(c.state.value.windowPreview); assertEquals(full, c.state.value.detail.range)
+        } finally { c.close() }
+    }
+
+    @Test fun explicitRangeCommandRetiresPendingGesture() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            c.openRide("a"); runCurrent(); val token = assertNotNull(c.beginWindowGesture())
+            c.transformWindowGesture(token, 2.0, 0.5, 0.0)
+            assertEquals(HistoryRange(2000, 4000), c.state.value.windowPreview)
+            val buttonWindow = HistoryRange(1000, 2000); c.selectRange(buttonWindow); runCurrent()
+            c.finishWindowGesture(token); runCurrent()
+            assertNull(c.state.value.windowPreview); assertEquals(buttonWindow, c.state.value.detail.range)
+            assertEquals(listOf("a" to full, "a" to buttonWindow), repo.routeReads)
+        } finally { c.close() }
+    }
+
+    @Test fun rideNavigationAndCloseFenceLateGestureCallbacks() = runTest {
+        for (action in 0..2) {
+            val repo = Repo(); val c = component(repo)
+            try {
+                c.openRide("a"); runCurrent(); c.showCharts()
+                val token = assertNotNull(c.beginWindowGesture()); c.transformWindowGesture(token, 2.0, 0.5, 0.0)
+                assertEquals(HistoryRange(2000, 4000), c.state.value.windowPreview)
+                when (action) { 0 -> c.openRide("b"); 1 -> c.back(); else -> c.close() }
+                runCurrent(); val snapshot = c.state.value
+                c.transformWindowGesture(token, 2.0, 0.5, 0.0); c.finishWindowGesture(token); runCurrent()
+                assertEquals(snapshot, c.state.value)
+                assertFalse(repo.routeReads.any { it.second != full })
+                if (action != 2) assertNull(c.state.value.windowPreview)
+            } finally { c.close() }
+        }
+    }
+
+    @Test fun synchronousNavigationDuringPreviewRetirementStopsOldCommit() = runTest {
+        val repo = Repo(); val c = component(repo); var sawPreview = false
+        val observer = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+            c.state.collect { state ->
+                if (state.windowPreview != null) sawPreview = true
+                else if (sawPreview && state.selectedRideId == "a") { sawPreview = false; c.openRide("b") }
+            }
+        }
+        try {
+            c.openRide("a"); runCurrent(); val token = assertNotNull(c.beginWindowGesture())
+            c.transformWindowGesture(token, 2.0, 0.5, 0.0); assertTrue(sawPreview)
+            c.finishWindowGesture(token); runCurrent()
+            assertEquals("b", c.state.value.selectedRideId); assertEquals(full, c.state.value.detail.range)
+            assertEquals(listOf("a" to full, "b" to full), repo.routeReads)
+        } finally { observer.cancel(); c.close() }
+    }
+
+    @Test fun invalidUpdateAndNoOpCompletionDoNotStartReads() = runTest {
+        val repo = Repo(); val c = component(repo)
+        try {
+            assertNull(c.beginWindowGesture()); c.openRide("a"); runCurrent()
+            val token = assertNotNull(c.beginWindowGesture())
+            c.transformWindowGesture(token, Double.NaN, 0.5, 0.0)
+            assertEquals(full, c.state.value.windowPreview)
+            c.finishWindowGesture(token); runCurrent()
+            assertEquals(listOf("a" to full), repo.routeReads); assertNull(c.state.value.windowPreview)
+        } finally { c.close() }
+    }
 
     @Test fun explicitPresetSaveApplyUsesCapturedVehicleAndNeverPreloadsOnRead()=runTest {
         val repo=Repo();var saved=emptyList<HistoryMetricPreset>()

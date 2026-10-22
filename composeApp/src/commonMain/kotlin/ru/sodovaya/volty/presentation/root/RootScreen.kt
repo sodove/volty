@@ -59,6 +59,8 @@ import ru.sodovaya.volty.presentation.autoconnect.AutoConnectScreen
 import ru.sodovaya.volty.presentation.dashboard.DashboardScreen
 import ru.sodovaya.volty.presentation.pack.PackDetailScreen
 import ru.sodovaya.volty.presentation.graph.GraphScreen
+import ru.sodovaya.volty.presentation.history.*
+import ru.sodovaya.volty.domain.history.favoriteSource
 import ru.sodovaya.volty.presentation.permissions.PermissionsGateScreen
 import ru.sodovaya.volty.presentation.picker.PickerScreen
 import ru.sodovaya.volty.presentation.ride.RideDashboardScreen
@@ -120,6 +122,18 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     }
     val stackState by component.stack.subscribeAsState()
     val active = stackState.active.instance
+    val activeHistory = active as? RootComponent.Child.History
+    val historyState = activeHistory?.component?.state?.collectAsState()?.value
+    // Camera command numbers restart in a newly composed history screen. Its
+    // viewport generation must change even when the same ride is reopened.
+    val historyViewportSequence = remember { longArrayOf(0L) }
+    val historyHost = remember(activeHistory?.component) {
+        check(historyViewportSequence[0] < Long.MAX_VALUE)
+        HistoryMapHost(activeHistory?.component ?: component, ++historyViewportSequence[0])
+    }
+    val historyFrame by historyHost.state.collectAsState()
+    val recordedScene = if (historyState != null && historyScreenContent(historyState).phase == HistoryScreenPhase.READY)
+        qualifiedHistoryMap(historyFrame, historyState.detail.ride?.favoriteSource(), historyState.detail.range) else null
     val darkTheme = LocalVoltyDarkTheme.current
     val nearby by component.nearby.state.collectAsState()
     var conversationDetailsVisible by remember { mutableStateOf(false) }
@@ -188,6 +202,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             active is RootComponent.Child.Ride -> RideMapScreen.RIDE
             active is RootComponent.Child.Dashboard -> RideMapScreen.BATTERY
             active is RootComponent.Child.Nearby -> RideMapScreen.NEARBY
+            activeHistory != null -> RideMapScreen.HISTORY
             else -> RideMapScreen.OTHER
         },
         activeStyle = activeRideState?.style,
@@ -236,7 +251,10 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             requestLocationPermission()
         }
     }
-    val mapScene = if (rideMapVisible) {
+    val mapScene = if (activeHistory != null) {
+        recordedScene ?: NavigationMapScene(null, emptyList(), emptyList(), emptyList(), null,
+            ru.sodovaya.volty.presentation.map.RideMapFollowState(ru.sodovaya.volty.presentation.map.RideMapFollowMode.FREE), null)
+    } else if (rideMapVisible) {
         NavigationMapRenderPolicy.scene(
             state = navigationState,
             ownFix = ownFix,
@@ -290,6 +308,14 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     modifier = Modifier
                         .fillMaxSize()
                         .alpha(if (mapHost.visible) 1f else 0f),
+                    onHistoryMediaClick = { id ->
+                        activeHistory?.component?.let { owner ->
+                            owner.state.value.media.items.singleOrNull { it.id == id }?.let(owner::openMedia)
+                        }
+                    },
+                    // History renders the same required attribution in its
+                    // measured bottom panel, above the system gesture area.
+                    showAttribution = activeHistory == null,
                 )
             }
             Children(
@@ -352,7 +378,10 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     is RootComponent.Child.SetupWizard -> SetupWizardScreen(instance.component)
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
                     is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
-                    is RootComponent.Child.Graph -> GraphScreen(component = instance.component)
+                    is RootComponent.Child.Graph -> GraphScreen(component = instance.component, onOpenHistory = component::onOpenHistory)
+                    is RootComponent.Child.History -> HistoryScreen(instance.component,
+                        cursorMaxAgeMillis = { 5_000L }, gpsMaxAgeMillis = 5_000L, mapHost = historyHost,
+                        vehicleNames = instance.vehicleNames.collectAsState(emptyMap()).value)
                     is RootComponent.Child.Nearby -> VoiceSpacesNearbyScreen(instance.component)
                     is RootComponent.Child.GroupMap -> ChannelMapScreen(
                         statusText = when {

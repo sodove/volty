@@ -50,6 +50,36 @@ import kotlin.time.Clock
 class KellyProtocolTest {
 
     @Test
+    fun `accepted complete monitor publishes fresh readings even when values repeat`() = runTest {
+        val protocol = KellyProtocol(deriveBattery = true, motor = MotorConfig(wheelDiameterMm = 500))
+        val observations = mutableListOf<ru.sodovaya.volty.domain.model.TelemetryObservation>()
+        protocol.telemetryObserver = observations::add
+        val harness = PollHarness(protocol, backgroundScope)
+        try {
+            val monitor = monitorData()
+            harness.respond(EtsCommand.USER_MONITOR1, monitor, 0)
+            harness.respond(EtsCommand.USER_MONITOR2, monitor, 16)
+            assertTrue(observations.isEmpty(), "partial monitor is not a fresh snapshot")
+            harness.respond(EtsCommand.USER_MONITOR3, monitor, 32)
+            assertEquals(2, observations.size)
+            harness.completeCycle(monitor)
+            assertEquals(4, observations.size, "equal values in a new accepted reply are still fresh")
+            assertHistoryAccepts(observations)
+            val controller = observations.first()
+            val metrics = controller.readings.associateBy { it.metric }
+
+            assertEquals(protocol.latestMotion(0)!!.inputVoltageV.toDouble(), metrics.getValue(ru.sodovaya.volty.domain.model.TelemetryMetric.INPUT_VOLTAGE).value)
+            assertEquals(300.0, metrics.getValue(ru.sodovaya.volty.domain.model.TelemetryMetric.MOTOR_CURRENT).value)
+            assertFalse(ru.sodovaya.volty.domain.model.TelemetryMetric.CONTROLLER_BATTERY_CURRENT in metrics, "phase current is not battery current")
+            assertFalse(ru.sodovaya.volty.domain.model.TelemetryMetric.ODOMETER in metrics, "Kelly did not report a distance counter")
+            assertEquals(ru.sodovaya.volty.domain.model.TelemetryRole.DERIVED, observations[1].role)
+            assertEquals(setOf(ru.sodovaya.volty.domain.model.TelemetryMetric.VOLTAGE), observations[1].readings.map { it.metric }.toSet())
+        } finally {
+            harness.stop()
+        }
+    }
+
+    @Test
     fun `handshake is a one-shot CODE_VERSION and monitor poll is framed in ETS order`() {
         val protocol = KellyProtocol()
 

@@ -5,6 +5,8 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryRole
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.sqrt
@@ -127,8 +129,8 @@ class FarDriverProtocol(
             }
 
             receiveBuffer.trimLeading(FRAME_SIZE)
-            if (isNewFrame(frame)) decodeNewFrame(frame) else decodeLegacyFrame(frame)
-            publish()
+            val freshFields = if (isNewFrame(frame)) decodeNewFrame(frame) else decodeLegacyFrame(frame)
+            publish(freshFields)
         }
     }
 
@@ -157,52 +159,73 @@ class FarDriverProtocol(
             (frame[15].toInt() and 0xFF) == (sum and 0xFF)
     }
 
-    private fun decodeNewFrame(frame: ByteArray) {
+    private fun decodeNewFrame(frame: ByteArray): Set<TelemetryMetric> {
         val id = frame[1].toInt() and 0x7F
-        val address = REGISTER_ADDRESSES.getOrNull(id) ?: return
-        when (address) {
+        val address = REGISTER_ADDRESSES.getOrNull(id) ?: return emptySet()
+        return when (address) {
             226 -> {
                 mechanicalRpm = u16(frame, 8).toShort().toFloat()
                 faultByteA = frame[4].toInt() and 0xFF
                 faultByteB = frame[5].toInt() and 0xFF
+                setOf(TelemetryMetric.SPEED, TelemetryMetric.ERPM)
             }
             232 -> {
                 voltageV = u16(frame, 2) / 10f
                 batteryCurrentA = i16(frame, 6) / 4f
+                setOf(
+                    TelemetryMetric.INPUT_VOLTAGE,
+                    TelemetryMetric.CONTROLLER_BATTERY_CURRENT,
+                    TelemetryMetric.CONTROLLER_POWER
+                )
             }
             238 -> {
                 phaseACurrentA = phaseCurrent(u24(frame, 6))
                 phaseCCurrentA = phaseCurrent(u24(frame, 9))
+                setOf(TelemetryMetric.MOTOR_CURRENT)
             }
             214 -> {
                 escTemperatureC = i16(frame, 12).toFloat()
+                setOf(TelemetryMetric.ESC_TEMPERATURE)
             }
             244 -> {
                 motorTemperatureC = i16(frame, 2).toFloat()
                 batteryLevelFraction = (frame[5].toInt() and 0xFF) / 100f
+                setOf(TelemetryMetric.MOTOR_TEMPERATURE)
             }
+            else -> emptySet()
         }
     }
 
-    private fun decodeLegacyFrame(frame: ByteArray) {
-        when (frame[1].toInt() and 0xFF) {
-            0 -> mechanicalRpm = u16(frame, 6).toShort().toFloat()
+    private fun decodeLegacyFrame(frame: ByteArray): Set<TelemetryMetric> {
+        return when (frame[1].toInt() and 0xFF) {
+            0 -> {
+                mechanicalRpm = u16(frame, 6).toShort().toFloat()
+                setOf(TelemetryMetric.SPEED, TelemetryMetric.ERPM)
+            }
             1 -> {
                 voltageV = u16(frame, 2) / 10f
                 batteryCurrentA = i16(frame, 4) / 4f
+                setOf(
+                    TelemetryMetric.INPUT_VOLTAGE,
+                    TelemetryMetric.CONTROLLER_BATTERY_CURRENT,
+                    TelemetryMetric.CONTROLLER_POWER
+                )
             }
             2 -> {
                 phaseACurrentA = phaseCurrent(u24(frame, 2))
                 phaseCCurrentA = phaseCurrent(u24(frame, 9))
+                setOf(TelemetryMetric.MOTOR_CURRENT)
             }
             15 -> {
                 faultByteA = u16(frame, 4) ushr 8
                 faultByteB = u16(frame, 8) and 0xFF
+                emptySet()
             }
+            else -> emptySet()
         }
     }
 
-    private fun publish() {
+    private fun publish(freshControllerFields: Set<TelemetryMetric>) {
         val speed = mechanicalRpm?.let(::derivedSpeedKmh)
         val hasVoltage = voltageV != null
         val hasCurrent = batteryCurrentA != null
@@ -243,13 +266,25 @@ class FarDriverProtocol(
             batteryLevelFraction = batteryLevelFraction,
             isConnected = true
         )
-        motion = motionSnapshot
+        motion = publishControllerUpdate(motionSnapshot, freshControllerFields)
+        val hasFreshVoltageAndCurrent =
+            TelemetryMetric.INPUT_VOLTAGE in freshControllerFields &&
+                TelemetryMetric.CONTROLLER_BATTERY_CURRENT in freshControllerFields
         if (deriveBattery && hasVoltage && hasCurrent) {
             // FarDriver's byte in register 244 is the controller's VCU SOC,
             // not a verified smart-BMS gauge. Keep it on motion telemetry and
             // let the vehicle-level estimator decide whether pack SoC can be
             // inferred from voltage and chemistry.
-            battery = derivedBatteryFrom(motionSnapshot).copy(soc = 0f, socKnown = false)
+            val derivedPack = derivedBatteryFrom(motionSnapshot).copy(soc = 0f, socKnown = false)
+            battery = publishBatteryUpdate(
+                derivedPack,
+                if (hasFreshVoltageAndCurrent) {
+                    setOf(TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.POWER)
+                } else {
+                    emptySet()
+                },
+                role = TelemetryRole.DERIVED
+            )
         }
     }
 

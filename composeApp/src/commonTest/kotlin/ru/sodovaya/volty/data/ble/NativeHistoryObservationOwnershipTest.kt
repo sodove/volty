@@ -31,8 +31,10 @@ class NativeHistoryObservationOwnershipTest {
         override val diagnostics = MutableStateFlow(HistoryWriterDiagnostics())
         val values = mutableListOf<Double?>()
         var begins = 0
+        var duringOffer: ((HistoryBatch) -> Unit)? = null
         override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) { begins++ }
         override fun offer(generation: Long, batch: HistoryBatch): HistoryOffer {
+            duringOffer?.invoke(batch)
             values += batch.samples.map { it.value }; return HistoryOffer.ACCEPTED
         }
         override suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String?) = Unit
@@ -56,8 +58,8 @@ class NativeHistoryObservationOwnershipTest {
         suspend fun install() = ingress.installNativePlan("bike", listOf(spec), vehicle) { true }
         fun capture(protocol: Emitter, id: String) = assertNotNull(ingress.capture(protocol, id, spec, vehicle,
             SampleSessionOwnership { true }, channel)) // Live ownership deliberately survives history handover.
-        fun take() = assertIs<HistoryTelemetrySample>(channel.tryReceive().getOrNull())
-        fun consume() { assertEquals(HistoryOffer.ACCEPTED, take().consume()) }
+        // Retraction: native facts are already writer-owned, not dashboard-queued.
+        fun consume() = assertNoQueuedHistory()
         fun assertNoQueuedHistory() {
             val unexpected = channel.tryReceive().getOrNull()
             (unexpected as? HistoryTelemetrySample)?.discard()
@@ -83,22 +85,34 @@ class NativeHistoryObservationOwnershipTest {
 
     @Test fun acceptedOldPrefixDrainsBeforeReplacementWithoutReauthorizingOldCapture() = runTest {
         val f = Fixture(); var replacement: Deferred<Boolean>? = null
-        var accepted: HistoryTelemetrySample? = null
         try {
             f.install(); val oldProtocol = Emitter(); val old = f.capture(oldProtocol, "old")
-            assertTrue(old.prepareForObservation()); assertTrue(old.processNotification(byteArrayOf(4)))
-            accepted = f.take()
+            assertTrue(old.prepareForObservation())
             val next = f.capture(Emitter(), "next")
-            replacement = backgroundScope.async { next.prepareForObservation() }
-            runCurrent(); assertFalse(replacement.isCompleted)
+            var waitedInsideOffer = false
+            f.writer.duringOffer = { batch ->
+                if (batch.samples.any { it.value == 4.0 }) {
+                    replacement = backgroundScope.async(start = CoroutineStart.UNDISPATCHED) {
+                        next.prepareForObservation()
+                    }
+                    waitedInsideOffer = !assertNotNull(replacement).isCompleted
+                    // Replacement has revoked further old observations but must
+                    // await this already admitted synchronous writer call.
+                    assertEquals(emptyList(), f.writer.values)
+                }
+            }
+            assertTrue(old.processNotification(byteArrayOf(4)))
+            assertTrue(waitedInsideOffer)
+            f.writer.duringOffer = null
+            assertEquals(listOf<Double?>(4.0), f.writer.values)
+            f.assertNoQueuedHistory()
             assertTrue(old.processNotification(byteArrayOf(5))); f.assertNoQueuedHistory()
-            assertEquals(HistoryOffer.ACCEPTED, accepted.consume())
-            assertTrue(replacement.await())
+            assertTrue(assertNotNull(replacement).await())
             assertTrue(old.processNotification(byteArrayOf(6))); f.assertNoQueuedHistory()
             assertTrue(next.processNotification(byteArrayOf(7))); f.consume()
             assertEquals(listOf<Double?>(4.0, 7.0), f.writer.values)
             assertEquals(3, oldProtocol.decodes)
-        } finally { accepted?.discard(); f.channel.cancel(); replacement?.cancelAndJoin() }
+        } finally { f.channel.cancel(); replacement?.cancelAndJoin() }
     }
 
     @Test fun oldClockFailureCannotMarkSuccessorsRecordingAsLost() = runTest {

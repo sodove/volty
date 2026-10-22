@@ -9,6 +9,45 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryWriterTest {
+    @Test fun smallNativePacketsShareBoundedTransactionsWithoutLosingFacts() = runTest {
+        val store = Store()
+        val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow())
+        try {
+            writer.begin(7, ride, sources)
+            repeat(130) { index ->
+                assertEquals(HistoryOffer.ACCEPTED, writer.offer(7, batch().copy(
+                    samples = listOf(batch().samples.single().copy(value = index.toDouble())))))
+            }
+            writer.finish(7, tick, HistoryRideStatus.COMPLETED)
+            assertEquals((0..129).map(Int::toDouble), store.batches.flatMap { it.samples }.map { it.value })
+            assertEquals(2, store.batches.size, "A notification must not force its own SQLite transaction")
+            assertEquals(listOf(128, 2), store.batches.map { it.samples.size })
+            assertEquals(1, store.calls.count { it == "finish" })
+        } finally { writer.close() }
+    }
+
+    @Test fun mergedProjectedRetryPinsOriginalPrefixDespiteOffersDuringLostAcknowledgement() = runTest {
+        val store = Store(); val gate = CompletableDeferred<Unit>()
+        store.gate = gate; store.failAfterCommit = true
+        val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow(), projectRecording = true)
+        try {
+            writer.begin(7, ride, sources)
+            repeat(3) { assertEquals(HistoryOffer.ACCEPTED, writer.offer(7, batch(4))) }
+            val flush = async { runCatching { writer.flush() } }
+            runCurrent()
+            assertEquals(listOf("begin", "append-start"), store.calls)
+            assertEquals(HistoryOffer.ACCEPTED, writer.offer(7, batch()))
+            gate.complete(Unit)
+            assertTrue(flush.await().isFailure)
+            writer.flush()
+            assertEquals(store.attempts[0], store.attempts[1], "Retry must reuse exact merged payload and receipt")
+            assertEquals(3, store.attempts.size, "Merged prefix retry, then only the later packet")
+            assertEquals(2, store.batches.size)
+            assertEquals(listOf(12L, 13L), store.batches.map { it.buckets.single().sampleCount })
+            writer.finish(7, tick, HistoryRideStatus.COMPLETED)
+        } finally { gate.complete(Unit); writer.close() }
+    }
+
     @Test fun largeScopedMarkerCannotBypassRetainedMemoryCapacity() = runTest {
         val store = Store()
         val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow())

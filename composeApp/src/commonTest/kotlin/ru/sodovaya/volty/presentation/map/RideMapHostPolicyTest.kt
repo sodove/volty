@@ -6,6 +6,10 @@ import kotlin.test.assertTrue
 import ru.sodovaya.volty.domain.model.DashboardStyle
 
 class RideMapHostPolicyTest {
+    @Test fun historyUsesRootMapWithoutAnActiveVehicleOrLiveLocationPermission() {
+        assertEquals(RideMapHostState(true, true, false), rideMapHostState(false, RideMapScreen.HISTORY, null))
+        assertEquals(RideMapHostState(true, true, false), rideMapHostState(true, RideMapScreen.HISTORY, DashboardStyle.LIGHT))
+    }
     @Test
     fun ride_map_uses_texture_rendering_for_map_capture() {
         assertTrue(rideMapTextureModeRequiredForMapCapture)

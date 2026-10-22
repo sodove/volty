@@ -3,6 +3,10 @@ package ru.sodovaya.volty.data.bms
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryReading
+import ru.sodovaya.volty.domain.model.TelemetryUnknown
 import kotlin.math.abs
 
 /**
@@ -133,10 +137,11 @@ class NinebotProtocol : BmsProtocol(), MotionSource {
         if (destination != APP && destination != 0) return
         when (source) {
             BMS1, BMS2 -> {
-                val state = packs[if (source == BMS1) 0 else 1]
+                val packIndex = if (source == BMS1) 0 else 1
+                val state = packs[packIndex]
                 when (parameter) {
-                    REG_BMS_LIFE -> parseLife(state, payload)
-                    REG_BMS_CELLS -> parseCells(state, payload)
+                    REG_BMS_LIFE -> parseLife(state, packIndex, payload)
+                    REG_BMS_CELLS -> parseCells(state, packIndex, payload)
                 }
             }
             CONTROLLER -> if (parameter == REG_LIVE_DATA) parseLive(payload)
@@ -152,7 +157,7 @@ class NinebotProtocol : BmsProtocol(), MotionSource {
         val distanceKm = data.u32Le(14) / 1000f
         val boardTemperature = data.i16Le(22) / 10f
         if (boardTemperature !in -40f..120f) return
-        motion = ControllerData(
+        motion = publishControllerUpdate(ControllerData(
             speedKmh = speed,
             speedSource = SpeedSource.REPORTED,
             dutyPercent = 0f,
@@ -170,10 +175,15 @@ class NinebotProtocol : BmsProtocol(), MotionSource {
             hasDistance = true,
             hasEnergyCounters = false,
             isConnected = true
-        )
+        ), setOf(
+            TelemetryMetric.SPEED,
+            TelemetryMetric.INPUT_VOLTAGE,
+            TelemetryMetric.ESC_TEMPERATURE,
+            TelemetryMetric.ODOMETER
+        ))
     }
 
-    private fun parseLife(state: PackState, data: ByteArray) {
+    private fun parseLife(state: PackState, localIndex: Int, data: ByteArray) {
         if (data.size < LIFE_MIN_SIZE) return
         if (data.take(LIFE_MIN_SIZE).all { it == 0.toByte() }) return
         val status = data.u16Le(0)
@@ -202,17 +212,43 @@ class NinebotProtocol : BmsProtocol(), MotionSource {
             data[11].u8().temperatureOrNull()?.let(::add)
         }
         state.lifeSeen = true
+        publishBatteryUpdate(
+            checkNotNull(state.snapshot()),
+            setOf(
+                TelemetryMetric.SOC,
+                TelemetryMetric.VOLTAGE,
+                TelemetryMetric.CURRENT,
+                TelemetryMetric.POWER,
+                TelemetryMetric.BATTERY_TEMPERATURE
+            ),
+            localIndex
+        )
     }
 
-    private fun parseCells(state: PackState, data: ByteArray) {
+    private fun parseCells(state: PackState, localIndex: Int, data: ByteArray) {
         val count = minOf(data.size / 2, MAX_CELLS)
-        state.cells = buildList {
+        val freshCellReadings = buildList {
             for (index in 0 until count) {
                 val millivolts = data.u16Le(index * 2)
                 // Zero is the documented unused tail for 14/15-cell packs.
-                if (millivolts !in 1..MAX_CELL_MV) continue
-                add(millivolts / 1000f)
+                if (millivolts == 0) continue
+                if (millivolts in 1..MAX_CELL_MV) {
+                    add(TelemetryReading.measured(TelemetryMetric.CELL, millivolts / 1000.0, cellIndex = index))
+                } else {
+                    add(TelemetryReading(TelemetryMetric.CELL, null, TelemetryUnknown.INVALID_VALUE, index))
+                }
             }
+        }
+        state.cells = freshCellReadings.mapNotNull { it.value?.toFloat() }
+        if (freshCellReadings.isNotEmpty()) {
+            // This register's physical cell count is not established by the received block.
+            // Keep its per-cell evidence at raw indices and mark pack-wide extrema partial.
+            val readings = freshCellReadings + listOf(
+                TelemetryReading(TelemetryMetric.CELL_MIN, null, TelemetryUnknown.PARTIAL_SOURCE),
+                TelemetryReading(TelemetryMetric.CELL_MAX, null, TelemetryUnknown.PARTIAL_SOURCE),
+                TelemetryReading(TelemetryMetric.CELL_DELTA, null, TelemetryUnknown.PARTIAL_SOURCE)
+            )
+            observeTelemetry(TelemetryOrigin.BATTERY, localIndex, readings = { readings })
         }
     }
 

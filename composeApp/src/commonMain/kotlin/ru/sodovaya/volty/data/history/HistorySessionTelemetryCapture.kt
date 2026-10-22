@@ -26,7 +26,7 @@ internal data class CapturedHistoryTelemetry(
             tick.elapsedMillis == received.receipt.time.elapsedMillis)
     }
 
-    /** Call from the serialized consumer under its BLE ownership lock. No IO. */
+    /** Call inside the observation admission fence (or the legacy serialized consumer). No IO. */
     fun offer(controller: RideRecordingController, ownsSession: () -> Boolean): HistoryOffer {
         if (!ownsSession()) return HistoryOffer.RETIRED
         return controller.offerTelemetry(recording, HistoryBatch(recording.rideId,

@@ -1,0 +1,18 @@
+<resources>
+    <string name="history_recording_title">Recording</string>
+    <string name="history_recording_active">Recording enabled</string>
+    <string name="history_recording_stopped">Recording stopped manually. Start a new ride when ready.</string>
+    <string name="history_recording_connect">Connect your vehicle to record a ride.</string>
+    <string name="history_recording_link_lost">Vehicle disconnected</string>
+    <string name="history_recording_connected">Vehicle connected</string>
+    <string name="history_recording_gps_starting">Connecting GPS…</string>
+    <string name="history_recording_gps_connected">GPS connected</string>
+    <string name="history_recording_gps_stopping">Stopping GPS…</string>
+    <string name="history_recording_gps_unavailable">GPS unavailable. Telemetry and route have separate availability.</string>
+    <string name="history_recording_unavailable">Recording controls are unavailable. Reconnect the vehicle and try again.</string>
+    <string name="history_recording_changed">Recording changed. Check its current state and try again.</string>
+    <string name="history_recording_storage_error">Recording storage error. Data may not be saved.</string>
+    <string name="history_recording_start">Start recording</string>
+    <string name="history_recording_stop">Stop recording</string>
+    <string name="history_recording_gps_action">Set up GPS</string>
+</resources>

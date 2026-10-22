@@ -1,0 +1,14 @@
+CREATE TABLE HistoryMedia (
+  id TEXT NOT NULL PRIMARY KEY,
+  favoriteId TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  capturedEpochMillis INTEGER,
+  byteCount INTEGER NOT NULL DEFAULT 0,
+  sha256 TEXT,
+  state TEXT NOT NULL,
+  createdEpochMillis INTEGER NOT NULL,
+  CHECK(state IN ('IMPORTING', 'READY', 'DELETING')),
+  CHECK(byteCount >= 0),
+  CHECK(state != 'READY' OR (byteCount > 0 AND sha256 IS NOT NULL AND length(sha256) = 64))
+);
+CREATE INDEX HistoryMedia_favorite ON HistoryMedia(favoriteId, state, id);

@@ -22,7 +22,12 @@ internal class HistoryRecordingRuntime(
     private val newId: () -> String,
     private val retryOpportunities: Flow<Unit> = emptyFlow(),
 ) {
-    internal class Binding(val controller: RideRecordingController, val ingress: HistoryTelemetryIngress)
+    internal class Binding(val controller: RideRecordingController, val ingress: HistoryTelemetryIngress,
+        val locations: Flow<HistoryRecordingLocationSnapshot?>,
+        val writerDiagnostics: StateFlow<HistoryWriterDiagnostics>)
+    internal data class Status(val binding: Binding? = null, val closing: Boolean = false)
+    private val mutableStatus = MutableStateFlow(Status())
+    val status = mutableStatus.asStateFlow()
     private class Owned(val binding: Binding, val writer: HistoryWriter,
         val demand: HistoryRecordingGpsDemand, val scope: CoroutineScope,
         val gps: HistoryGpsRecorder, val retries: Job)
@@ -54,7 +59,8 @@ internal class HistoryRecordingRuntime(
                     // clock.prepare already recovered interrupted rows, before writer construction.
                     controller = RideRecordingController(writer, demand, newId, { 0 })
                     val binding = Binding(controller,
-                        HistoryTelemetryIngress(controller, clock::readTick, manageConnections = true))
+                        HistoryTelemetryIngress(controller, clock::readTick, manageConnections = true),
+                        demand.locationStates, writer.diagnostics)
                     val gps = HistoryGpsRecorder(scope, controller, locations, foreground, clock::readTick)
                     val retries = scope.launch {
                         try {
@@ -65,6 +71,9 @@ internal class HistoryRecordingRuntime(
                     check(!closing) { "Recording runtime closed during assembly" }
                     owned = Owned(binding, writer, demand, scope, gps, retries)
                     pendingWriter = null
+                    // Publication is observation only. Closing is a tombstone:
+                    // a delayed prepare may not put UI controls back afterwards.
+                    mutableStatus.update { if (it.closing) it else it.copy(binding = binding) }
                     binding
                 } catch (error: Exception) {
                     scope.cancel(); scope.coroutineContext[Job]?.join()
@@ -84,6 +93,7 @@ internal class HistoryRecordingRuntime(
     suspend fun close() {
         currentCoroutineContext().ensureActive()
         withContext(NonCancellable) {
+            mutableStatus.update { it.copy(binding = null, closing = true) }
             closing = true
             controls.withLock {
                 val current = owned

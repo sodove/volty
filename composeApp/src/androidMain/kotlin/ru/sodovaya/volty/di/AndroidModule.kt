@@ -86,7 +86,7 @@ import org.maplibre.android.offline.OfflineManager
 
 val androidModule = module {
     single { SqlDriverFactory(androidContext()) }
-    // Inert until the future recording runtime awaits prepare(); one clock for BLE/GPS/detail.
+    // Inert until native connection startup awaits prepare(); one clock for BLE/GPS/detail.
     single {
         val store = get<ru.sodovaya.volty.data.history.SqlDelightHistoryStore>()
         ru.sodovaya.volty.data.history.HistoryRecordingClock(
@@ -96,8 +96,42 @@ val androidModule = module {
         )
     }
     single { DataStoreFactory(androidContext()) }
+    single {
+        val context = androidContext()
+        ru.sodovaya.volty.data.history.HistoryDerivedFiles(
+            ru.sodovaya.volty.data.history.HistoryPreviewFileCache(java.io.File(context.cacheDir, "history-preview-images-v1")),
+            java.io.File(context.cacheDir, "history-exports-v1"), get())
+    }
+    single<ru.sodovaya.volty.domain.history.HistoryExportRepository> {
+        val files = get<ru.sodovaya.volty.data.history.HistoryDerivedFiles>()
+        ru.sodovaya.volty.data.history.FileHistoryExportRepository(files.exportDirectory,
+            // The production Kable factory seals native ingress before every
+            // connection; it never starts or falls back to the legacy recorder.
+            ru.sodovaya.volty.data.history.SqlDelightHistoryExportSource(get(), Dispatchers.IO, isLegacyActive = { false }),
+            gate = files.gate, reconcile = files::reconcileLocked)
+    }
     single<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader> {
-        ru.sodovaya.volty.data.history.MapLibreHistoryPreviewLoader(androidContext())
+        ru.sodovaya.volty.data.history.MapLibreHistoryPreviewLoader(androidContext(), get(), get())
+    }
+    single<ru.sodovaya.volty.domain.history.HistoryRideDeletionRepository> {
+        val media = get<ru.sodovaya.volty.domain.history.HistoryMediaRepository>()
+        val previews = get<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader>()
+        // Legacy storage is read-only after native recorder cutover.
+        ru.sodovaya.volty.data.history.SqlDelightHistoryRideDeletion(get(), isLegacyActive = { false }, cleanup = {
+            val result = media.cleanupRetired()
+            result.copy(pendingCleanup = result.pendingCleanup + if (previews.reconcileDeletedRides()) 0 else 1)
+        })
+    }
+    single { ru.sodovaya.volty.data.history.HistoryMediaJournal(get()) }
+    single<ru.sodovaya.volty.domain.history.HistoryMediaRepository> {
+        val context = androidContext()
+        ru.sodovaya.volty.data.history.HistoryMediaImport(get(),
+            ru.sodovaya.volty.data.history.HistoryMediaFiles(java.io.File(context.filesDir, "history-media-v1")),
+            openSource = { uri -> context.contentResolver.openInputStream(android.net.Uri.parse(uri))
+                ?: throw ru.sodovaya.volty.domain.history.HistoryMediaException(ru.sodovaya.volty.domain.history.HistoryMediaFailure.ACCESS_DENIED) },
+            inspect = { file, hint -> ru.sodovaya.volty.data.history.inspectAndroidHistoryMedia(file, hint) },
+            toReadableUri = { file -> androidx.core.content.FileProvider.getUriForFile(context,
+                "${context.packageName}.fileprovider", file).toString() })
     }
     single<BleAdapterStateProvider> { AndroidBleAdapterStateProvider(androidContext()) }
     single<RideLocationRepository> { AndroidRideLocationRepository(androidContext()) }
@@ -139,6 +173,9 @@ val androidModule = module {
         )
     }
     single<SocialCredentialStore> { AndroidSocialCredentialStore(androidContext()) }
+    single<ru.sodovaya.volty.domain.history.HistoryRecordingRepository> {
+        ru.sodovaya.volty.data.history.RuntimeHistoryRecordingRepository(get())
+    }
     single(named(NEARBY_HTTP_CLIENT)) {
         HttpClient(OkHttp) {
             install(HttpTimeout) {

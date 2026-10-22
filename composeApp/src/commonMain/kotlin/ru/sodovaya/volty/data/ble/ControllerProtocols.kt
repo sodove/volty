@@ -15,20 +15,23 @@ import ru.sodovaya.volty.data.bms.VescGatewayProtocol
 import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
 
 /**
- * THE single statement of which controller kinds volty can actually decode —
- * the motion protocol behind [kind], or null when there is none.
+ * Build the topology and factory for the motion protocol behind [kind], or
+ * return null when [kind] has no controller protocol. This is the exhaustive
+ * statement of controller decoder coverage and its observation layout.
  *
  * Two callers, one fact:
  *  - `KableBmsRepository.createProtocol(spec, vehicle)` builds every controller
- *    link from this, so what it returns IS what a connection speaks;
+ *    link from the plan, so what its factory returns IS what a connection speaks;
+ *  - [controllerMotionProtocol] is the compatibility constructor wrapper;
  *  - [controllerMotionSupported] asks it whether a type can be connected at
  *    all, which is what the picker refuses a pick on.
  *
- * That is the point of the indirection. Adding a protocol here flips BOTH at
- * once — there is no second list in the UI to keep in step, and no way to ship
- * a working decoder that the picker still refuses (or the reverse).
+ * Adding a protocol here declares its counts and source addresses alongside
+ * its factory, so construction and source topology cannot grow separate arms.
  *
  * Battery kinds return null rather than being absent: this function answers
  * "is there a CONTROLLER protocol for this kind", and every kind has an answer.
@@ -94,29 +97,54 @@ import ru.sodovaya.volty.domain.model.MotorConfig
  * [vescGatewayPacks] is where the gateway branch answers it; read that KDoc
  * before changing either branch's arguments.
  */
-fun controllerMotionProtocol(
+internal fun controllerProtocolPlan(
     kind: ProtocolKind,
     deriveBattery: Boolean,
     motor: MotorConfig,
     link: LinkSpec? = null,
     motorFor: (globalControllerIndex: Int) -> MotorConfig = { motor },
     cellCount: Int? = null
-): BmsProtocol? = when (kind) {
-    ProtocolKind.VESC ->
-        if (link != null && link.isGatewayLink) {
-            VescGatewayProtocol(
-                controllers = link.ownedControllers.map {
-                    GatewaySource(it.globalIndex, it.canId, motorFor(it.globalIndex))
-                },
-                // NOT `link.ownedPacks.map { … }` — see [vescGatewayPacks].
-                // Re-listing the multiplexer's pack sources here is precisely
-                // how [deriveBattery] came to be answered on one branch and
-                // silently dropped on the other.
-                packs = vescGatewayPacks(link, deriveBattery)
-            )
-        } else {
-            VescProtocol(deriveBattery = deriveBattery, motor = motor)
+): DecoderProtocolPlan? = when (kind) {
+    ProtocolKind.VESC -> if (link != null && link.isGatewayLink) {
+        // Resolve each ordered endpoint once. Counts and observation addresses
+        // describe exactly these constructor arguments.
+        val controllers = link.ownedControllers.map {
+            GatewaySource(it.globalIndex, it.canId, motorFor(it.globalIndex))
         }
+        // NOT `link.ownedPacks.map { … }` — see [vescGatewayPacks].
+        // Re-listing the multiplexer's pack sources here is precisely how
+        // [deriveBattery] came to be answered on one branch and silently
+        // dropped on the other.
+        val packs = vescGatewayPacks(link, deriveBattery)
+        val sources = buildList {
+            controllers.forEachIndexed { localIndex, _ ->
+                add(DecoderSource(TelemetryOrigin.CONTROLLER, localIndex))
+                add(DecoderSource(TelemetryOrigin.CONTROLLER, localIndex, TelemetryRole.REPORTED_CAN))
+            }
+            packs.forEachIndexed { localIndex, source ->
+                add(DecoderSource(TelemetryOrigin.BATTERY, localIndex,
+                    if (source.derived) TelemetryRole.DERIVED else TelemetryRole.CONTRIBUTOR))
+            }
+        }
+        DecoderProtocolPlan(
+            packCount = packs.size,
+            controllerCount = controllers.size,
+            sources = sources,
+            factory = { VescGatewayProtocol(controllers = controllers, packs = packs) },
+        )
+    } else {
+        val sources = buildList {
+            add(DecoderSource(TelemetryOrigin.CONTROLLER, 0))
+            add(DecoderSource(TelemetryOrigin.CONTROLLER, 0, TelemetryRole.REPORTED_CAN))
+            if (deriveBattery) add(DecoderSource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED))
+        }
+        DecoderProtocolPlan(
+            packCount = if (deriveBattery) 1 else 0,
+            controllerCount = 1,
+            sources = sources,
+            factory = { VescProtocol(deriveBattery = deriveBattery, motor = motor) },
+        )
+    }
     // A wheel: one controller and two packs over one link. See the KDoc.
     //
     // [deriveBattery] and [link] are both ignored here, and both deliberately:
@@ -137,32 +165,114 @@ fun controllerMotionProtocol(
     //    a wheel has one motor on one board, so the shape is physically odd
     //    too. If a later part lets a rider add a second controller, it must
     //    either refuse this pairing in the plan or grow a Begode multiplexer.
-    ProtocolKind.BEGODE -> BegodeProtocol(cellCount = cellCount)
+    ProtocolKind.BEGODE -> DecoderProtocolPlan(
+        packCount = 2,
+        controllerCount = 1,
+        sources = buildList {
+            for (branch in 0..1) {
+                add(DecoderSource(TelemetryOrigin.BATTERY, branch))
+                for (assembly in 0..1) {
+                    add(DecoderSource(TelemetryOrigin.BATTERY, branch, TelemetryRole.ASSEMBLY, assembly))
+                }
+            }
+            add(DecoderSource(TelemetryOrigin.CONTROLLER, 0))
+        },
+        factory = { BegodeProtocol(cellCount = cellCount) },
+    )
     // Kelly's monitor packets carry controller telemetry over the same NUS
     // transport as a VESC, but the ETS wire protocol is its own decoder.
     // It deliberately receives the same controller-only decisions as VESC:
     // the derived pack is optional and wheel geometry is needed for motion.
-    ProtocolKind.KELLY -> KellyProtocol(deriveBattery = deriveBattery, motor = motor)
+    ProtocolKind.KELLY -> DecoderProtocolPlan(
+        packCount = if (deriveBattery) 1 else 0,
+        controllerCount = 1,
+        sources = buildList {
+            add(DecoderSource(TelemetryOrigin.CONTROLLER, 0))
+            if (deriveBattery) add(DecoderSource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED))
+        },
+        factory = { KellyProtocol(deriveBattery = deriveBattery, motor = motor) },
+    )
     // FarDriver broadcasts fixed-size telemetry frames on its FFE0/FFEC link.
     // The decoder is deliberately read-only: poll and handshake command lists
     // are empty because FFEC is also the controller's configuration channel.
-    ProtocolKind.FARDRIVER -> FarDriverProtocol(deriveBattery = deriveBattery, motor = motor)
-    ProtocolKind.NINEBOT -> NinebotProtocol()
-    ProtocolKind.NINEBOT_LEGACY -> NinebotLegacyProtocol()
-    ProtocolKind.KINGSONG -> KingSongProtocol()
-    ProtocolKind.INMOTION -> InMotionProtocol()
-    ProtocolKind.VETERAN -> VeteranProtocol()
+    ProtocolKind.FARDRIVER -> DecoderProtocolPlan(
+        packCount = if (deriveBattery) 1 else 0,
+        controllerCount = 1,
+        sources = buildList {
+            add(DecoderSource(TelemetryOrigin.CONTROLLER, 0))
+            if (deriveBattery) add(DecoderSource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED))
+        },
+        factory = { FarDriverProtocol(deriveBattery = deriveBattery, motor = motor) },
+    )
+    ProtocolKind.NINEBOT -> DecoderProtocolPlan(
+        packCount = 2,
+        controllerCount = 1,
+        sources = buildList {
+            add(DecoderSource(TelemetryOrigin.CONTROLLER, 0))
+            for (branch in 0..1) add(DecoderSource(TelemetryOrigin.BATTERY, branch))
+        },
+        factory = { NinebotProtocol() },
+    )
+    ProtocolKind.NINEBOT_LEGACY -> DecoderProtocolPlan(
+        packCount = 1,
+        controllerCount = 1,
+        sources = listOf(
+            DecoderSource(TelemetryOrigin.CONTROLLER, 0),
+            DecoderSource(TelemetryOrigin.BATTERY, 0),
+        ),
+        factory = { NinebotLegacyProtocol() },
+    )
+    ProtocolKind.KINGSONG -> DecoderProtocolPlan(
+        packCount = 2,
+        controllerCount = 1,
+        sources = buildList {
+            add(DecoderSource(TelemetryOrigin.CONTROLLER, 0))
+            add(DecoderSource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED))
+            for (branch in 0..1) add(DecoderSource(TelemetryOrigin.BATTERY, branch))
+        },
+        factory = { KingSongProtocol() },
+    )
+    ProtocolKind.INMOTION -> DecoderProtocolPlan(
+        packCount = 1,
+        controllerCount = 1,
+        sources = listOf(
+            DecoderSource(TelemetryOrigin.CONTROLLER, 0),
+            DecoderSource(TelemetryOrigin.BATTERY, 0),
+        ),
+        factory = { InMotionProtocol() },
+    )
+    ProtocolKind.VETERAN -> DecoderProtocolPlan(
+        packCount = 2,
+        controllerCount = 1,
+        sources = buildList {
+            add(DecoderSource(TelemetryOrigin.CONTROLLER, 0))
+            add(DecoderSource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED))
+            for (branch in 0..1) add(DecoderSource(TelemetryOrigin.BATTERY, branch))
+        },
+        factory = { VeteranProtocol() },
+    )
     // Battery kinds: not a controller protocol at all.
     ProtocolKind.JK, ProtocolKind.JBD, ProtocolKind.ANT,
     ProtocolKind.DALY, ProtocolKind.VESC_BMS -> null
 }
 
+/** Compatibility constructor for callers that need the decoder immediately. */
+fun controllerMotionProtocol(
+    kind: ProtocolKind,
+    deriveBattery: Boolean,
+    motor: MotorConfig,
+    link: LinkSpec? = null,
+    motorFor: (globalControllerIndex: Int) -> MotorConfig = { motor },
+    cellCount: Int? = null
+): BmsProtocol? = controllerProtocolPlan(kind, deriveBattery, motor, link, motorFor, cellCount)?.create()
+
 /**
  * The global index a derived slot carries before [KableBmsRepository]'s pack
  * plan has numbered it — see [vescGatewayPacks]. Negative because every real
  * index is a position in the vehicle's own pack list and so is `>= 0`; nothing
- * is ever keyed by it, because the only protocol instance that can hold one is
- * discarded the instant its `packCount` has been read.
+ * is ever keyed by it, because this provisional slot is used only for topology sizing.
+ * Retraction: sizing formerly constructed and discarded a protocol instance;
+ * the shared decoder plan now supplies the count without constructing it.
  */
 internal const val UNNUMBERED_DERIVED_PACK: Int = -1
 

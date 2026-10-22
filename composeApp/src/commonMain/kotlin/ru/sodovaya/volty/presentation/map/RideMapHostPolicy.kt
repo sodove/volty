@@ -7,6 +7,7 @@ internal enum class RideMapScreen {
     BATTERY,
     NEARBY,
     GROUP_MAP,
+    HISTORY,
     OTHER,
 }
 
@@ -33,9 +34,10 @@ internal fun rideMapHostState(
         activeStyle == DashboardStyle.LIGHT
     val nearbyMapVisible = activeScreen == RideMapScreen.NEARBY ||
         activeScreen == RideMapScreen.GROUP_MAP
+    val historyMapVisible = activeScreen == RideMapScreen.HISTORY
     return RideMapHostState(
-        mounted = rideAvailable || nearbyMapVisible,
-        visible = rideMapVisible || nearbyMapVisible,
+        mounted = rideAvailable || nearbyMapVisible || historyMapVisible,
+        visible = rideMapVisible || nearbyMapVisible || historyMapVisible,
         // Nearby may render remote markers, but opening it must never ask for
         // or start the user's own location stream.
         requestLocationPermission = rideMapVisible,

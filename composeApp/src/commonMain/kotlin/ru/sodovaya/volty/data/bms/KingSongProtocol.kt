@@ -3,6 +3,11 @@ package ru.sodovaya.volty.data.bms
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryReading
+import ru.sodovaya.volty.domain.model.TelemetryRole
+import ru.sodovaya.volty.domain.model.TelemetryUnknown
 import kotlin.math.abs
 
 /**
@@ -205,7 +210,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
         }
 
         // Byte 15 is normally E0 (the mode marker), not a measured SoC.
-        liveData = BmsData(
+        val decodedBattery = BmsData(
             voltage = voltage,
             current = current,
             hasCurrent = true,
@@ -216,11 +221,18 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
             temperatures = listOf(temperature),
             isConnected = true
         )
+        liveData = publishBatteryUpdate(
+            decodedBattery,
+            // The A9 temperature is the board's live reading, recorded on the
+            // controller below. A virtual rail cannot claim a pack thermistor.
+            setOf(TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT),
+            role = TelemetryRole.DERIVED
+        )
 
         val speedKmh = abs(frame.i16Le(4) / 100f)
         val distanceMeters = frame.kingSongDistance(6)
         val baseline = distanceBaselineMeters ?: distanceMeters.also { distanceBaselineMeters = it }
-        motion = ControllerData(
+        val decodedMotion = ControllerData(
             speedKmh = speedKmh,
             speedSource = SpeedSource.REPORTED,
             dutyPercent = dutyPercentValue ?: 0f,
@@ -240,20 +252,40 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
             hasEnergyCounters = false,
             isConnected = true
         )
+        val freshControllerFields = buildSet {
+            add(TelemetryMetric.SPEED)
+            add(TelemetryMetric.CONTROLLER_BATTERY_CURRENT)
+            add(TelemetryMetric.INPUT_VOLTAGE)
+            add(TelemetryMetric.CONTROLLER_POWER)
+            // Once B9 has supplied the latched controller temperature, later
+            // A9 board temperatures no longer update this ControllerData field.
+            if (rideStatsTemperatureC == null) add(TelemetryMetric.ESC_TEMPERATURE)
+            add(TelemetryMetric.ODOMETER)
+            add(TelemetryMetric.TRIP)
+        }
+        motion = publishControllerUpdate(decodedMotion, freshControllerFields)
     }
 
     private fun parseRideStats(frame: ByteArray) {
         val temperature = frame.i16Le(14) / 100f
         if (temperature !in -40f..150f) return
         rideStatsTemperatureC = temperature
-        motion = motion?.copy(escTempC = temperature)
+        val hadMotion = motion != null
+        val decoded = motion?.copy(escTempC = temperature)
+            ?: ControllerData(escTempC = temperature, isConnected = true)
+        val published = publishControllerUpdate(decoded, setOf(TelemetryMetric.ESC_TEMPERATURE))
+        if (hadMotion) motion = published
     }
 
     private fun parseOutput(frame: ByteArray) {
         val duty = frame[15].u8().toFloat()
         if (duty !in 0f..100f) return
         dutyPercentValue = duty
-        motion = motion?.copy(dutyPercent = duty, hasDuty = true)
+        val hadMotion = motion != null
+        val decoded = motion?.copy(dutyPercent = duty, hasDuty = true)
+            ?: ControllerData(dutyPercent = duty, hasDuty = true, isConnected = true)
+        val published = publishControllerUpdate(decoded, setOf(TelemetryMetric.DUTY))
+        if (hadMotion) motion = published
     }
 
     private fun parseBms(frame: ByteArray) {
@@ -278,6 +310,12 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
                 }
                 state.seen = true
                 smartBmsSeen = true
+                val decoded = state.toData() ?: return
+                publishBatteryUpdate(
+                    decoded,
+                    setOf(TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.SOC),
+                    localIndex = bmsIndex
+                )
             }
 
             PAGE_TEMPERATURES -> {
@@ -295,19 +333,30 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
                 state.temperaturesC.addAll(values)
                 state.seen = true
                 smartBmsSeen = true
+                val decoded = state.toData() ?: BmsData(
+                    hasCurrent = false,
+                    hasPower = false,
+                    socKnown = false,
+                    temperatures = state.temperaturesC.toList(),
+                    isConnected = true
+                )
+                publishBatteryUpdate(decoded, setOf(TelemetryMetric.BATTERY_TEMPERATURE), localIndex = bmsIndex)
             }
 
             in PAGE_CELLS_START..PAGE_CELLS_END -> {
                 val page = frame[PAGE_OFFSET].u8() - PAGE_CELLS_START
                 var accepted = false
+                var freshEighthTemperature = false
                 if (frame[PAGE_OFFSET].u8() == PAGE_CELLS_END) {
                     val raw = frame.u16Le(PAGE_SIX_TEMPERATURE_OFFSET)
                     if (raw in BMS_TEMPERATURE_MIN_RAW..BMS_TEMPERATURE_MAX_RAW) {
                         val celsius = (raw - KELVIN_OFFSET_DECI).toFloat() / 10f
                         state.eighthTemperatureC = celsius
+                        freshEighthTemperature = true
                         accepted = true
                     }
                 }
+                val freshCellReadings = mutableListOf<TelemetryReading>()
                 repeat(CELLS_PER_PAGE) { i ->
                     val cellIndex = page * CELLS_PER_PAGE + i
                     if (cellIndex >= MAX_CELLS) return@repeat
@@ -316,12 +365,42 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
                     // model: KingSong cells seen by WheelLog are 1.5..5.0 V.
                     if (mv in MIN_CELL_MV..MAX_CELL_MV) {
                         state.cellsMv[cellIndex] = mv
+                        freshCellReadings += TelemetryReading.measured(
+                            TelemetryMetric.CELL,
+                            (mv / 1000f).toDouble(),
+                            cellIndex = cellIndex
+                        )
                         accepted = true
+                    } else {
+                        // Keep this incoming index visible as invalid so the
+                        // history consumer cannot reuse a prior page's cell.
+                        freshCellReadings += TelemetryReading(
+                            TelemetryMetric.CELL,
+                            null,
+                            TelemetryUnknown.INVALID_VALUE,
+                            cellIndex
+                        )
                     }
                 }
                 if (!accepted) return
                 state.seen = true
                 smartBmsSeen = true
+                observeTelemetry(TelemetryOrigin.BATTERY, bmsIndex) {
+                    buildList {
+                        addAll(freshCellReadings)
+                        if (freshEighthTemperature) {
+                            // The canonical temperature is the maximum across
+                            // the pack. A fresh eighth sensor alone cannot
+                            // establish that aggregate against seven cached
+                            // readings, so keep the sample explicitly partial.
+                            add(TelemetryReading(
+                                TelemetryMetric.BATTERY_TEMPERATURE,
+                                null,
+                                TelemetryUnknown.PARTIAL_SOURCE
+                            ))
+                        }
+                    }
+                }
             }
 
             else -> Unit

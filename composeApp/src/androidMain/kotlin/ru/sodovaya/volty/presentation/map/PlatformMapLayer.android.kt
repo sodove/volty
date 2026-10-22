@@ -75,6 +75,9 @@ import ru.sodovaya.volty.domain.location.RideLocationFix
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
 import ru.sodovaya.volty.presentation.history.HistoryMapScene
+import ru.sodovaya.volty.presentation.history.HISTORY_MAP_LOW_ARGB
+import ru.sodovaya.volty.presentation.history.HISTORY_MAP_HIGH_ARGB
+import ru.sodovaya.volty.presentation.history.HISTORY_MAP_MAX_COLOR_STROKES
 import ru.sodovaya.volty.domain.history.HistoryGpsFix
 import kotlin.math.cos
 import kotlin.math.pow
@@ -98,6 +101,8 @@ private const val DESTINATION_SOURCE_ID = "volty-destination-source"
 private const val DESTINATION_LAYER_ID = "volty-destination-layer"
 private const val HISTORY_ROUTE_SOURCE_ID = "volty-history-route-source"
 private const val HISTORY_ROUTE_LAYER_ID = "volty-history-route-layer"
+private const val HISTORY_COLOR_SOURCE_ID = "volty-history-color-source"
+private const val HISTORY_COLOR_LAYER_ID = "volty-history-color-layer"
 private const val HISTORY_POINTS_SOURCE_ID = "volty-history-points-source"
 private const val HISTORY_POINTS_LAYER_ID = "volty-history-points-layer"
 private const val HISTORY_CURSOR_SOURCE_ID = "volty-history-cursor-source"
@@ -128,12 +133,16 @@ actual fun PlatformRideMapLayer(
     darkTheme: Boolean,
     onCameraGesture: (Long) -> Unit,
     modifier: Modifier,
+    onHistoryMediaClick: (String) -> Unit,
+    showAttribution: Boolean,
 ) {
     AndroidMapLibreView(
         cacheKey = "ride",
         darkTheme = darkTheme,
         scene = scene,
         onCameraGesture = onCameraGesture,
+        onHistoryMediaClick = onHistoryMediaClick,
+        showAttribution = showAttribution,
         modifier = modifier,
     )
 }
@@ -173,6 +182,8 @@ private fun AndroidMapLibreView(
     scene: NavigationMapScene,
     onCameraGesture: (Long) -> Unit,
     modifier: Modifier,
+    onHistoryMediaClick: (String) -> Unit = {},
+    showAttribution: Boolean = true,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -181,6 +192,7 @@ private fun AndroidMapLibreView(
     var lastCameraRequest by remember(cacheKey) { mutableStateOf<MapCameraRequest?>(null) }
     val latestScene = rememberUpdatedState(scene)
     val latestGestureCallback = rememberUpdatedState(onCameraGesture)
+    val latestMediaCallback = rememberUpdatedState(onHistoryMediaClick)
     val motionEstimator = remember(cacheKey) { RideMapMotionEstimator() }
     val cameraSmoother = remember(cacheKey) { RideMapCameraSmoother() }
     val hazeState = rememberHazeState()
@@ -249,6 +261,24 @@ private fun AndroidMapLibreView(
         }
         readyMap.addOnCameraMoveStartedListener(listener)
         onDispose { readyMap.removeOnCameraMoveStartedListener(listener) }
+    }
+
+    DisposableEffect(map) {
+        val readyMap = map ?: return@DisposableEffect onDispose { }
+        val listener = MapLibreMap.OnMapClickListener { coordinate ->
+            val current = latestScene.value.history
+            if (current == null || current.mediaFixes.isEmpty()) false else {
+                val screen = readyMap.projection.toScreenLocation(coordinate)
+                val radius = 24f * context.resources.displayMetrics.density
+                val id = readyMap.queryRenderedFeatures(android.graphics.RectF(screen.x - radius, screen.y - radius,
+                    screen.x + radius, screen.y + radius), HISTORY_POINTS_LAYER_ID)
+                    .firstOrNull { it.hasProperty("mediaId") && it.getStringProperty("mediaId") in current.mediaFixes }
+                    ?.getStringProperty("mediaId")
+                if (id == null) false else { latestMediaCallback.value(id); true }
+            }
+        }
+        readyMap.addOnMapClickListener(listener)
+        onDispose { readyMap.removeOnMapClickListener(listener) }
     }
 
     LaunchedEffect(map, styleReady, latestScene.value.cameraRequest) {
@@ -370,7 +400,12 @@ private fun AndroidMapLibreView(
         val readyMap = map ?: return@LaunchedEffect
         if (styleReady) updateHistoryRouteGeoJson(readyMap, latestScene.value.history)
     }
-    LaunchedEffect(map, styleReady, latestScene.value.history?.startFix, latestScene.value.history?.endFix, latestScene.value.history?.gapFixes) {
+    LaunchedEffect(map, styleReady, latestScene.value.history?.coloring) {
+        val readyMap = map ?: return@LaunchedEffect
+        if (styleReady) updateHistoryColorGeoJson(readyMap, latestScene.value.history)
+    }
+    LaunchedEffect(map, styleReady, latestScene.value.history?.startFix, latestScene.value.history?.endFix, latestScene.value.history?.gapFixes,
+        latestScene.value.history?.mediaFixes) {
         val readyMap = map ?: return@LaunchedEffect
         if (styleReady) updateHistoryAnchorsGeoJson(readyMap, latestScene.value.history)
     }
@@ -398,7 +433,7 @@ private fun AndroidMapLibreView(
                 .hazeSource(state = hazeState, zIndex = 0f),
         )
         MapTopBottomBlur(hazeState = hazeState, modifier = Modifier.fillMaxSize())
-        Text(
+        if (showAttribution) Text(
             text = "© OpenFreeMap © OpenMapTiles © OpenStreetMap",
             color = if (darkTheme) ComposeColor(0xB8C8D4DA) else ComposeColor(0x88364048),
             fontSize = 9.sp,
@@ -531,13 +566,21 @@ private fun MapBlurBand(modifier: Modifier) {
 }
 
 private fun configureStyle(style: Style, darkTheme: Boolean) {
-    // Neutral until an earned metric color scale is supplied. Missing data is not zero.
+    // Full neutral geometry remains underneath the bounded earned-value overlay.
     addLineSourceAndLayer(style, HISTORY_ROUTE_SOURCE_ID, HISTORY_ROUTE_LAYER_ID, "#94A8B8", 5f, 0.95f)
+    if (style.getSource(HISTORY_COLOR_SOURCE_ID) == null) style.addSource(GeoJsonSource(HISTORY_COLOR_SOURCE_ID, emptyFeatureCollection()))
+    if (style.getLayer(HISTORY_COLOR_LAYER_ID) == null) style.addLayer(
+        LineLayer(HISTORY_COLOR_LAYER_ID, HISTORY_COLOR_SOURCE_ID).withProperties(
+            lineColor(Expression.interpolate(Expression.linear(), Expression.get("fraction"),
+                Expression.stop(0f, Expression.color(HISTORY_MAP_LOW_ARGB.toInt())),
+                Expression.stop(1f, Expression.color(HISTORY_MAP_HIGH_ARGB.toInt())))),
+            lineWidth(6f), lineOpacity(0.95f), lineCap("round")))
     if (style.getSource(HISTORY_POINTS_SOURCE_ID) == null) style.addSource(GeoJsonSource(HISTORY_POINTS_SOURCE_ID, emptyFeatureCollection()))
     if (style.getLayer(HISTORY_POINTS_LAYER_ID) == null) style.addLayer(
         CircleLayer(HISTORY_POINTS_LAYER_ID, HISTORY_POINTS_SOURCE_ID).withProperties(
             circleColor(Expression.switchCase(
                 Expression.eq(Expression.get("role"), "gap"), Expression.color(Color.parseColor("#FFB454")),
+                Expression.eq(Expression.get("role"), "media"), Expression.color(Color.parseColor("#C084FC")),
                 Expression.color(Color.parseColor("#94A8B8")))),
             circleRadius(7f), circleStrokeColor(Color.WHITE), circleStrokeWidth(2f)))
     if (style.getSource(HISTORY_CURSOR_SOURCE_ID) == null) style.addSource(GeoJsonSource(HISTORY_CURSOR_SOURCE_ID, emptyFeatureCollection()))
@@ -691,6 +734,16 @@ private fun updateHistoryRouteGeoJson(map: MapLibreMap, scene: HistoryMapScene?)
         }))
 }
 
+private fun updateHistoryColorGeoJson(map: MapLibreMap, scene: HistoryMapScene?) {
+    map.style?.getSourceAs<GeoJsonSource>(HISTORY_COLOR_SOURCE_ID)?.setGeoJson(FeatureCollection.fromFeatures(
+        scene?.coloring?.strokes.orEmpty().take(HISTORY_MAP_MAX_COLOR_STROKES).mapNotNull { stroke ->
+            if (!stroke.fraction.isFinite() || stroke.fraction !in 0.0..1.0) return@mapNotNull null
+            Feature.fromGeometry(LineString.fromLngLats(listOf(
+                Point.fromLngLat(stroke.start.lon, stroke.start.lat), Point.fromLngLat(stroke.end.lon, stroke.end.lat))))
+                .apply { addNumberProperty("fraction", stroke.fraction) }
+        }))
+}
+
 private fun updateHistoryAnchorsGeoJson(map: MapLibreMap, scene: HistoryMapScene?) {
     val style = map.style ?: return
     val points = mutableListOf<Feature>()
@@ -700,6 +753,11 @@ private fun updateHistoryAnchorsGeoJson(map: MapLibreMap, scene: HistoryMapScene
     // These are loaded-portion endpoints, not invented full-trip start/finish claims.
     point(scene?.startFix, "endpoint"); point(scene?.endFix, "endpoint")
     scene?.gapFixes?.forEach { point(it, "gap") }
+    scene?.mediaFixes?.forEach { (id, fix) ->
+        points += Feature.fromGeometry(Point.fromLngLat(fix.lon, fix.lat)).apply {
+            addStringProperty("role", "media"); addStringProperty("mediaId", id)
+        }
+    }
     style.getSourceAs<GeoJsonSource>(HISTORY_POINTS_SOURCE_ID)?.setGeoJson(FeatureCollection.fromFeatures(points))
 }
 
