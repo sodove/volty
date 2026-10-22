@@ -75,7 +75,57 @@ Original legacy and V2 facts were not modified by those checks.
 
 h687 final full suite after the extra review coverage: 4615 tests / 480 fresh XML, zero failures/errors/skips/stale results.
 
-Final release artifact hashes and source revision are recorded after assembly. The preceding transport/native BLE acceptance is in
+## Final signed candidate
+
+Implementation/source revision: `df0ec02683233d915118351f0f2f4355956371a0`.
+h688 signed ARM and x86 builds completed serially in 218 seconds (114 tasks,
+42 executed). Version 0.7.28 / code 51, package `ru.sodovaya.volty`, min API 26,
+target API 36. Both signatures verify with APK v2 and the existing certificate
+SHA-256 `c2a4af514b119c4e5a4504bd73131a6f7ce142ed18a89e2e47c0bd075ada61bd`.
+The ARM artifact contains ARM64/ARMv7 Valhalla libraries; the emulator variant
+also contains x86/x86_64. DEX scans find no history visual-probe fixture markers;
+the release package is not debuggable.
+
+| Artifact | Bytes | SHA-256 |
+|---|---:|---|
+| ARM APK | 66,229,031 | `16ffeb229ff333a1c15cd66f9d1f62df708d31927c28d7e7f2799dce5b7dbada` |
+| x86 acceptance APK | 140,555,910 | `2b50e217d3683fbe1e095538751d4aa8dac8131d70532b19164cbd26361dd7ec` |
+| Matching source ZIP | 17,936,251 | `4376209eb0a8bfd651d23f3c9d7fcea98d41fe460955ae7e767fac4cce3a234b` |
+
+The git archive contains the matching source, Gradle wrapper and build scripts,
+notices and original GPL text. Private signing/machine files are not tracked;
+complete literal private-key blocks/service-account JSON were not found in the
+archive. A first naive scanner matched a key-parser test's header literal; this
+was a scanner false positive, not a discovered credential. The final scoped scan
+requires a complete encoded key block and inspects service-account JSON values.
+AGP's version-control-info reports `NO_VALID_GIT_FOUND` for this managed worktree;
+the explicit source revision and hashes above provide the actual build record.
+
+h690 installed the final signed emulator artifact without clearing application
+data. Cold Activity launch: 1083 ms; no new am_anr event. The actual production
+navigation opened the recorded Bumble ride, selected speed/controller current,
+collapsed home charts, opened fullscreen charts and moved their common cursor.
+The signed build then retained the chart page, both metrics and cursor through
+360x640 dp / font 1.5 and 800x1280 dp configurations. Final screenshots are native
+PNG captures with no visual editing:
+
+- `release-0.7.28/map.png`: recorded route and source-qualified range summary.
+- `release-0.7.28/charts.png`: two recorded signals, real BLE gap and common cursor.
+- `release-0.7.28/metrics.png`: source/group metric drawer and actual selection.
+
+Files and `volty-history-0.7.28-manifest.json` are in the ignored execution
+artifact directory `.superpowers/sdd/2026-10-13-ride-history-rebuild/`.
+h691 quiescent snapshot passes integrity checking; all nine history tables match
+h671 exactly after the final signed UI/resize checks. Original 18 legacy rides /
+191,504 points and all earlier V2 facts remain unchanged. Emulator dimensions,
+density, font, animation scales, light mode, application locale list and shell
+ADB mode were restored; Volty is stopped and no owned Bumble actor remains.
+
+The software candidate and its recorded emulator gates are complete for this
+correction. Physical vehicle/phone-vendor acceptance remains unperformed. The
+runtime license evidence inventory is not a combined-application legal conclusion;
+public-distribution compatibility questions recorded in the provenance document
+are not silently marked resolved by producing this local signed candidate. The preceding transport/native BLE acceptance is in
 `2026-10-22-history-common-decoder-output-acceptance.md`.
 
 Physical vehicles and phone-vendor behavior cannot be certified from the emulator.
