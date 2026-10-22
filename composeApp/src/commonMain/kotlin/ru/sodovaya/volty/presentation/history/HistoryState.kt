@@ -22,4 +22,5 @@ data class HistoryUiState(
     val previewRevision: Long = 0,
     val windowPreview: ru.sodovaya.volty.domain.history.HistoryRange? = null,
     val mapMetricKey: ru.sodovaya.volty.domain.history.HistorySeriesKey? = null,
+    val totals: HistoryTotalsState = HistoryTotalsState(),
 )

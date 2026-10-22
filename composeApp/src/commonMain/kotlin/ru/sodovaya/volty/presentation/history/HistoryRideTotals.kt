@@ -1,0 +1,133 @@
+package ru.sodovaya.volty.presentation.history
+
+import kotlin.math.*
+import ru.sodovaya.volty.domain.history.*
+
+enum class HistoryTotalKind {
+    DISTANCE_KM, DURATION_MILLIS, AVERAGE_KMH, MAX_KMH, ENERGY_WH, WH_PER_KM,
+    BATTERY_USED_PERCENT, MAX_POWER_W, MOTOR_TEMP_C, CONTROLLER_TEMP_C, BATTERY_TEMP_C,
+}
+
+/** [approximate] when a contributing stat was incomplete; a missing input omits the tile instead. */
+data class HistoryTotal(val kind: HistoryTotalKind, val value: Double, val approximate: Boolean = false)
+
+private val motionTiers = listOf(setOf(HistorySourceKind.VEHICLE_MOTION), setOf(HistorySourceKind.CONTROLLER))
+private val batteryTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY), setOf(HistorySourceKind.BATTERY))
+private val batteryTemperatureTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY),
+    setOf(HistorySourceKind.BATTERY, HistorySourceKind.BATTERY_ASSEMBLY))
+
+private val motionMetrics = listOf("speed_kmh", "trip_distance_km", "odometer_km", "motor_temperature_c",
+    "esc_temperature_c", "controller_power_w")
+private val batteryMetrics = listOf("soc_percent", "power_w")
+
+/**
+ * One tier of sources per metric: a vehicle aggregate when there is one, else its contributors.
+ * Never both — an aggregate summed with the batteries it aggregates double-counts.
+ */
+private fun tier(sources: List<HistorySource>, tiers: List<Set<HistorySourceKind>>): List<HistorySource> =
+    tiers.firstNotNullOfOrNull { kinds -> sources.filter { it.kind in kinds }.takeIf { it.isNotEmpty() } }.orEmpty()
+
+/** Stats to read for the tiles of a ride with these sources. */
+fun historyTotalsKeys(sources: List<HistorySource>): List<HistorySeriesKey> {
+    val motion = tier(sources, motionTiers).flatMap { source -> motionMetrics.map { HistorySeriesKey(source.id, it) } }
+    val battery = tier(sources, batteryTiers).flatMap { source -> batteryMetrics.map { HistorySeriesKey(source.id, it) } }
+    val temperature = tier(sources, batteryTemperatureTiers).map { HistorySeriesKey(it.id, "battery_temperature_c") }
+    return (motion + battery + temperature).distinct()
+}
+
+/**
+ * The ride's headline numbers from whole-ride stats. Distance prefers the controller's trip counter,
+ * then its odometer, then the GPS track; average speed and consumption are derived from it.
+ */
+fun historyRideTotals(
+    sources: List<HistorySource>,
+    stats: Map<HistorySeriesKey, HistoryStats>,
+    durationMillis: Long?,
+    gpsDistanceKm: Double?,
+): List<HistoryTotal> {
+    fun values(tierSources: List<HistorySource>, metric: String) =
+        tierSources.mapNotNull { source -> stats[HistorySeriesKey(source.id, metric)]?.let { metric to it } }
+    fun summaries(tierSources: List<HistorySource>, metric: String) = tierSources.mapNotNull { source ->
+        val key = HistorySeriesKey(source.id, metric)
+        stats[key]?.let { historyMetricSummary(key, it) }
+    }
+    fun peak(tierSources: List<HistorySource>, metric: String): HistoryTotal? {
+        val found = summaries(tierSources, metric).filter { it.maximum.value != null }
+        val best = found.maxByOrNull { it.maximum.value!! } ?: return null
+        return HistoryTotal(HistoryTotalKind.MAX_KMH, best.maximum.value!!, found.any { it.maximum.quality != SummaryQuality.EXACT })
+    }
+    fun delta(tierSources: List<HistorySource>, metric: String): Pair<Double, Boolean>? {
+        val spans = values(tierSources, metric).mapNotNull { (_, s) ->
+            val low = s.minimum; val high = s.maximum
+            if (low == null || high == null) null else (high - low) to !s.complete
+        }
+        return spans.maxByOrNull { it.first }
+    }
+
+    val motion = tier(sources, motionTiers)
+    val battery = tier(sources, batteryTiers)
+    val result = mutableListOf<HistoryTotal>()
+
+    val counted = delta(motion, "trip_distance_km")?.takeIf { it.first > 0 } ?: delta(motion, "odometer_km")?.takeIf { it.first > 0 }
+    val distance = counted?.let { HistoryTotal(HistoryTotalKind.DISTANCE_KM, it.first, it.second) }
+        ?: gpsDistanceKm?.takeIf { it > 0 }?.let { HistoryTotal(HistoryTotalKind.DISTANCE_KM, it) }
+    distance?.let(result::add)
+    val duration = durationMillis?.takeIf { it > 0 }
+    duration?.let { result += HistoryTotal(HistoryTotalKind.DURATION_MILLIS, it.toDouble()) }
+    if (distance != null && duration != null)
+        result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH, distance.value / (duration / 3_600_000.0), distance.approximate)
+    peak(motion, "speed_kmh")?.let { result += it.copy(kind = HistoryTotalKind.MAX_KMH) }
+
+    // Battery energy is the pack's own measurement; the controller's is the fallback.
+    val packEnergy = summaries(battery, "power_w").filter { it.energy.value != null }
+    val energy = if (packEnergy.isNotEmpty())
+        HistoryTotal(HistoryTotalKind.ENERGY_WH, packEnergy.sumOf { it.energy.value!! }, packEnergy.any { it.energy.quality != SummaryQuality.EXACT })
+    else summaries(motion, "controller_power_w").filter { it.energy.value != null }.takeIf { it.isNotEmpty() }?.let { found ->
+        HistoryTotal(HistoryTotalKind.ENERGY_WH, found.maxOf { it.energy.value!! }, found.any { it.energy.quality != SummaryQuality.EXACT })
+    }
+    energy?.let(result::add)
+    if (energy != null && distance != null && distance.value >= MIN_CONSUMPTION_DISTANCE_KM)
+        result += HistoryTotal(HistoryTotalKind.WH_PER_KM, energy.value / distance.value, energy.approximate || distance.approximate)
+
+    val soc = values(battery, "soc_percent").mapNotNull { (_, s) ->
+        val low = s.minimum; val high = s.maximum
+        if (low == null || high == null) null else (high - low) to !s.complete
+    }
+    if (soc.isNotEmpty()) result += HistoryTotal(HistoryTotalKind.BATTERY_USED_PERCENT, soc.map { it.first }.average(), soc.any { it.second })
+
+    // A summed peak of several packs is not knowable from their separate peaks: only a single source counts.
+    val packPower = summaries(battery, "power_w").filter { it.maximum.value != null }
+    val power = packPower.singleOrNull()?.maximum ?: summaries(motion, "controller_power_w")
+        .filter { it.maximum.value != null }.maxByOrNull { it.maximum.value!! }?.maximum
+    power?.value?.takeIf { it > 0 }?.let { result += HistoryTotal(HistoryTotalKind.MAX_POWER_W, it, power.quality != SummaryQuality.EXACT) }
+
+    peak(motion, "motor_temperature_c")?.let { result += it.copy(kind = HistoryTotalKind.MOTOR_TEMP_C) }
+    peak(motion, "esc_temperature_c")?.let { result += it.copy(kind = HistoryTotalKind.CONTROLLER_TEMP_C) }
+    peak(tier(sources, batteryTemperatureTiers), "battery_temperature_c")?.let { result += it.copy(kind = HistoryTotalKind.BATTERY_TEMP_C) }
+    return result
+}
+
+/** Below this the Wh/km figure is noise from parking-lot moves. */
+private const val MIN_CONSUMPTION_DISTANCE_KM = 0.5
+
+/** Track length over consecutive fixes; a jump after a long silence is a GPS gap, not riding. */
+fun historyGpsDistanceKm(fixes: List<HistoryGpsFix>): Double {
+    var meters = 0.0
+    fixes.zipWithNext { a, b ->
+        val seconds = (b.tick.epochMillis - a.tick.epochMillis) / 1000.0
+        if (seconds <= 0 || seconds > GPS_GAP_SECONDS) return@zipWithNext
+        if (a.accuracyMeters > GPS_MAX_ACCURACY_M || b.accuracyMeters > GPS_MAX_ACCURACY_M) return@zipWithNext
+        meters += haversineMeters(a.lat, a.lon, b.lat, b.lon)
+    }
+    return meters / 1000.0
+}
+
+private const val GPS_GAP_SECONDS = 30.0
+private const val GPS_MAX_ACCURACY_M = 50.0
+
+private fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val r = 6_371_000.0
+    val dLat = (lat2 - lat1) * PI / 180; val dLon = (lon2 - lon1) * PI / 180
+    val h = sin(dLat / 2).pow(2) + cos(lat1 * PI / 180) * cos(lat2 * PI / 180) * sin(dLon / 2).pow(2)
+    return 2 * r * asin(sqrt(h))
+}

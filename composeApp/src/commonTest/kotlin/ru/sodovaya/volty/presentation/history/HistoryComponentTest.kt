@@ -229,6 +229,16 @@ class HistoryComponentTest {
             assertEquals(HistoryDestination.CATALOG, c.state.value.destination); assertNull(c.state.value.selectedRideId)
         } finally { c.close() }
     }
+    @Test fun selectedRideShowsWholeRideTotalsAndLeavingClearsThem() = runTest {
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
+            Repo(), { HistoryTick(6000, 5010, 1) }, {}, totalsRepository = Repo())
+        try {
+            c.openRide("a"); runCurrent()
+            assertEquals("a", c.state.value.totals.rideId)
+            assertEquals(4000.0, c.state.value.totals.totals.single { it.kind == HistoryTotalKind.DURATION_MILLIS }.value)
+            c.back(); runCurrent(); assertTrue(c.state.value.totals.totals.isEmpty()); assertNull(c.state.value.totals.rideId)
+        } finally { c.close() }
+    }
     private val origin = HistoryTick(1000, 10, 1)
     private val full = HistoryRange(1000, 5000)
     private val key = HistorySeriesKey("pack", "voltage_v")

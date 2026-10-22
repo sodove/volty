@@ -74,7 +74,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     exportRepository: HistoryExportRepository? = null,
     recordingRepository: HistoryRecordingRepository? = null,
     /** Open the ride being recorded, else the newest, once the first catalog page arrives. */
-    private val openLatestOnLoad: Boolean = false) : HistoryComponent {
+    private val openLatestOnLoad: Boolean = false,
+    /** Reads whole-ride totals for the tiles; null shows none (its reads would otherwise join every selection). */
+    totalsRepository: HistoryReadRepository? = null) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -87,6 +89,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val deletion = HistoryRideDeletionComponent(componentContext, scope, deletionRepository)
     private val exports = HistoryExportComponent(componentContext, scope, exportRepository)
     private val recording = HistoryRecordingComponent(componentContext, scope, recordingRepository) { refresh() }
+    private val totals = totalsRepository?.let { HistoryTotalsComponent(componentContext, scope, it) }
     override fun startRecording(observed: HistoryRecordingStatus) { if (lifetime.isActive) recording.start(observed) }
     override fun stopRecording(observed: HistoryRecordingStatus) { if (lifetime.isActive) recording.stop(observed) }
     override fun retryRecordingLocation() { if (lifetime.isActive) recording.retryLocation() }
@@ -201,6 +204,11 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                 }
             }
         }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            totals?.state?.collect { next ->
+                if (lifetime.isActive && next.rideId == selectedRideId) mutableState.value = mutableState.value.copy(totals = next)
+            }
+        }
         scope.launch(start = CoroutineStart.UNDISPATCHED) { detail.state.collect(::onDetail) }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             presets.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(presets = it) }
@@ -264,6 +272,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         mutableState.value = current.copy(detail = next, mapMetricKey = current.mapMetricKey?.takeIf { it in next.selectedKeys }, route = if (needsRoute)
             HistoryRouteState(rideId = ride?.id, range = range, loading = true) else current.route)
         syncMediaFavorite()
+        val whole = next.availableRange
+        if (lifetime.isActive && selection === captured && ride != null && whole != null && !next.loading && next.sources.isNotEmpty())
+            totals?.open(ride.id, next.sources, whole)
         // UI publication can synchronously choose another ride or leave history.
         if (lifetime.isActive && selection === captured && needsRoute) route.open(checkNotNull(ride), checkNotNull(range))
         val saved = pendingRestoration
@@ -324,7 +335,8 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         val captured = selection
         mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE, selectedRideId = id,
             detail = HistoryDetailState(rideId = id, loading = true), route = HistoryRouteState(), windowPreview = null,
-            mapMetricKey = null, selectedFavorite = favorite, media = HistoryMediaState(available = media.state.value.available))
+            mapMetricKey = null, selectedFavorite = favorite, media = HistoryMediaState(available = media.state.value.available),
+            totals = HistoryTotalsState())
         media.selectFavorite(null)
         if (!lifetime.isActive || selection !== captured) return
         route.clear()
@@ -451,13 +463,14 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
 
     private fun clearSelection() {
         pendingRestoration = null
+        totals?.clear()
         exports.dismiss()
         selectedRideId = null; selectedSource = null; selection = Any(); pendingFavoriteSave = null
         windowIntent = Any(); windowGesture = null
         val captured = selection
         mutableState.value = mutableState.value.copy(destination = HistoryDestination.CATALOG, selectedRideId = null,
             detail = HistoryDetailState(), route = HistoryRouteState(), windowPreview = null, mapMetricKey = null,
-            selectedFavorite = null, media = HistoryMediaState(available = media.state.value.available))
+            selectedFavorite = null, media = HistoryMediaState(available = media.state.value.available), totals = HistoryTotalsState())
         media.selectFavorite(null)
         if (lifetime.isActive && selection === captured) { detail.clear(); route.clear() }
     }
@@ -467,7 +480,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         pendingRestoration = null
         selection = Any(); catalogIntent = Any(); selectedRideId = null; selectedSource = null
         windowIntent = Any(); windowGesture = null
-        recording.close(); catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); deletion.close(); exports.close(); previewImages?.close(); lifetime.cancel()
+        totals?.close(); recording.close(); catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); deletion.close(); exports.close(); previewImages?.close(); lifetime.cancel()
     }
 }
 

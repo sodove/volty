@@ -770,7 +770,7 @@ class DefaultRootComponent(
                     context, scope, reads, clock::readTick, ::onBack,
                     presetStore = get(), imageLoader = get(), favoriteStore = get(),
                     mediaRepository = get(), deletionRepository = get(), exportRepository = get(),
-                    recordingRepository = get(), openLatestOnLoad = true).also { it.refresh() },
+                    recordingRepository = get(), openLatestOnLoad = true, totalsRepository = reads).also { it.refresh() },
                     combine(vehicleRepository.vehicles, bmsRepository.activeVehicle) { saved, current ->
                         (saved + listOfNotNull(current)).associate { it.id to it.name }
                     })

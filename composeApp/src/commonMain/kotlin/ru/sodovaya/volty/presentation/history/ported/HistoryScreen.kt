@@ -212,6 +212,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                     HistoryNavigationStrip(title, subtitle, neighbors.previousId != null, neighbors.nextId != null,
                         { neighbors.previousId?.let(openRide) }, { neighbors.nextId?.let(openRide) },
                         { listOpen = true }, owner::showCharts, { metricsOpen = true }, Modifier.padding(8.dp), singleRow = wide)
+                    HistoryTotalsRow(state.totals, Modifier.padding(bottom = 8.dp))
                     if (content.phase == HistoryScreenPhase.READY) {
                         Surface(onClick = { chartsExpanded = !chartsExpanded }, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
