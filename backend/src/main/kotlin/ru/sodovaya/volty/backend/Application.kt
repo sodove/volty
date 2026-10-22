@@ -378,11 +378,23 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
             post("/auth/refresh") {
                 val body = call.receive<RefreshRequest>()
                 val hash = dependencies.refreshTokenService.hash(body.refreshToken)
-                val row = dependencies.store.findRefreshToken(hash) ?: throw ApiException(HttpStatusCode.Unauthorized, "unauthorized", "Refresh token is invalid")
+                val presented = dependencies.store.findRefreshToken(hash) ?: throw ApiException(HttpStatusCode.Unauthorized, "unauthorized", "Refresh token is invalid")
                 val now = Instant.now().epochSecond
-                if (row.revokedAtEpochSeconds != null) {
-                    dependencies.store.revokeAllUserTokens(row.userId, now)
-                    throw ApiException(HttpStatusCode.Unauthorized, "refresh_reuse", "Refresh token has already been used")
+                val revokedAt = presented.revokedAtEpochSeconds
+                val row = if (revokedAt == null) presented else {
+                    // A response lost on a mobile link makes the client retry with the token
+                    // the server already rotated. Treating that as theft revoked every session
+                    // of the account and logged a rider out mid-ride. Within the grace window an
+                    // unused successor marks it as that retry: rotate the successor instead.
+                    val successor = presented.replacedByHash
+                        ?.takeIf { now - revokedAt <= REFRESH_RETRY_GRACE_SECONDS }
+                        ?.let { dependencies.store.findRefreshToken(it) }
+                        ?.takeIf { it.revokedAtEpochSeconds == null && it.userId == presented.userId }
+                    if (successor == null) {
+                        dependencies.store.revokeAllUserTokens(presented.userId, now)
+                        throw ApiException(HttpStatusCode.Unauthorized, "refresh_reuse", "Refresh token has already been used")
+                    }
+                    successor
                 }
                 if (row.expiresAtEpochSeconds <= now) throw ApiException(HttpStatusCode.Unauthorized, "refresh_expired", "Refresh token has expired")
                 val user = dependencies.store.findUserById(row.userId) ?: throw ApiException(HttpStatusCode.Unauthorized, "unauthorized", "Account is unavailable")

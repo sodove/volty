@@ -165,7 +165,12 @@ data class RefreshRow(
     val tokenHash: String,
     val expiresAtEpochSeconds: Long,
     val revokedAtEpochSeconds: Long?,
+    /** Set when this token was rotated (not when it was revoked with the whole account). */
+    val replacedByHash: String? = null,
 )
+
+/** How long a rotated refresh token may be retried before reuse counts as theft. */
+internal const val REFRESH_RETRY_GRACE_SECONDS = 300L
 
 data class FriendshipRow(
     val id: String,
@@ -344,8 +349,8 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
     }
 
     override fun findRefreshToken(hash: String): RefreshRow? = dataSource.connection.use { connection ->
-        connection.prepareStatement("SELECT id,user_id,token_hash,expires_at,revoked_at FROM refresh_tokens WHERE token_hash = ?").use { statement ->
-            statement.setString(1, hash); statement.executeQuery().use { if (it.next()) RefreshRow(it.getString("id"), it.getString("user_id"), it.getString("token_hash"), it.getLong("expires_at"), it.longOrNull("revoked_at")) else null }
+        connection.prepareStatement("SELECT id,user_id,token_hash,expires_at,revoked_at,replaced_by_hash FROM refresh_tokens WHERE token_hash = ?").use { statement ->
+            statement.setString(1, hash); statement.executeQuery().use { if (it.next()) RefreshRow(it.getString("id"), it.getString("user_id"), it.getString("token_hash"), it.getLong("expires_at"), it.longOrNull("revoked_at"), it.getString("replaced_by_hash")) else null }
         }
     }
 
