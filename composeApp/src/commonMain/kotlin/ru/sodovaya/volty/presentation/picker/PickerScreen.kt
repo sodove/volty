@@ -59,8 +59,6 @@ import volty.composeapp.generated.resources.picker_found_nearby
 import volty.composeapp.generated.resources.picker_guest_subtitle
 import volty.composeapp.generated.resources.picker_guest_title
 import volty.composeapp.generated.resources.picker_my_in_range
-import volty.composeapp.generated.resources.picker_my_away
-import volty.composeapp.generated.resources.picker_my_away_hint
 import volty.composeapp.generated.resources.picker_other_nearby
 import volty.composeapp.generated.resources.picker_pick_type_title
 import volty.composeapp.generated.resources.picker_scanning
@@ -77,6 +75,12 @@ import volty.composeapp.generated.resources.picker_type_unknown
 @Composable
 fun PickerScreen(component: PickerComponent) {
     val state by component.state.collectAsState()
+    // Without a connection the picker is the app's home: it reads as a garage, not a device list.
+    if (state.mode == "cold") {
+        GarageScreen(component, state)
+        PickerTypeSheet(state, component)
+        return
+    }
     val title = when (state.mode) {
         "add" -> stringResource(Res.string.picker_add_title)
         "guest" -> stringResource(Res.string.picker_guest_title)
@@ -127,12 +131,6 @@ fun PickerScreen(component: PickerComponent) {
                             onClick = { component.onConnectKnown(v) }
                         )
                     }
-                }
-
-                val away = state.saved.filter { v -> state.myInRange.none { it.id == v.id } }
-                if (state.mode == "cold" && away.isNotEmpty()) {
-                    item { SectionHeader(stringResource(Res.string.picker_my_away)) }
-                    items(away, key = { "away-" + it.id }) { v -> AwayVehicleRow(v) { component.onOpenSaved(v) } }
                 }
 
                 if (state.otherNearby.isNotEmpty()) {
@@ -215,53 +213,59 @@ fun PickerScreen(component: PickerComponent) {
             }
         }
 
-        state.typePickerFor?.let { device ->
-            ModalBottomSheet(onDismissRequest = component::onTypeSheetDismissed) {
-                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-                    val preselected = preselectedChoice(device)
-                    val manualBmsTypes = BmsType.entries.filter {
-                        it != BmsType.BEGODE &&
-                            it != BmsType.LEAPERKIM &&
-                            it != BmsType.VESC_BMS
-                    }
+        PickerTypeSheet(state, component)
+    }
+}
 
-                    // The sheet reports the available height to the lazy list,
-                    // so long type lists scroll inside the sheet on compact
-                    // windows instead of extending under the app navigation bar.
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .heightIn(max = maxHeight)
-                            .padding(horizontal = 16.dp)
-                    ) {
-                        item(key = "picker-title") {
-                            Text(
-                                stringResource(Res.string.picker_pick_type_title),
-                                fontSize = 16.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                modifier = Modifier.padding(bottom = 8.dp)
-                            )
-                        }
-                        item(key = "controller-section") {
-                            SectionHeader(stringResource(Res.string.picker_section_controller))
-                        }
-                        items(ControllerType.entries, key = { "controller-${it.name}" }) { type ->
-                            TypeRow(
-                                label = type.label,
-                                selected = preselected == SourceChoice.Controller(type),
-                                onClick = { component.onConnectWithType(device, SourceChoice.Controller(type)) }
-                            )
-                        }
-                        item(key = "battery-section") {
-                            SectionHeader(stringResource(Res.string.picker_section_battery))
-                        }
-                        items(manualBmsTypes, key = { "bms-${it.name}" }) { type ->
-                            TypeRow(
-                                label = bmsTypeLabel(type),
-                                selected = preselected == SourceChoice.Battery(type),
-                                onClick = { component.onConnectWithType(device, SourceChoice.Battery(type)) }
-                            )
-                        }
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun PickerTypeSheet(state: PickerComponent.State, component: PickerComponent) {
+    state.typePickerFor?.let { device ->
+        ModalBottomSheet(onDismissRequest = component::onTypeSheetDismissed) {
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val preselected = preselectedChoice(device)
+                val manualBmsTypes = BmsType.entries.filter {
+                    it != BmsType.BEGODE &&
+                        it != BmsType.LEAPERKIM &&
+                        it != BmsType.VESC_BMS
+                }
+
+                // The sheet reports the available height to the lazy list,
+                // so long type lists scroll inside the sheet on compact
+                // windows instead of extending under the app navigation bar.
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = maxHeight)
+                        .padding(horizontal = 16.dp)
+                ) {
+                    item(key = "picker-title") {
+                        Text(
+                            stringResource(Res.string.picker_pick_type_title),
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
+                    }
+                    item(key = "controller-section") {
+                        SectionHeader(stringResource(Res.string.picker_section_controller))
+                    }
+                    items(ControllerType.entries, key = { "controller-${it.name}" }) { type ->
+                        TypeRow(
+                            label = type.label,
+                            selected = preselected == SourceChoice.Controller(type),
+                            onClick = { component.onConnectWithType(device, SourceChoice.Controller(type)) }
+                        )
+                    }
+                    item(key = "battery-section") {
+                        SectionHeader(stringResource(Res.string.picker_section_battery))
+                    }
+                    items(manualBmsTypes, key = { "bms-${it.name}" }) { type ->
+                        TypeRow(
+                            label = bmsTypeLabel(type),
+                            selected = preselected == SourceChoice.Battery(type),
+                            onClick = { component.onConnectWithType(device, SourceChoice.Battery(type)) }
+                        )
                     }
                 }
             }
@@ -299,28 +303,6 @@ private fun SectionHeader(text: String) {
     )
 }
 
-/** A saved vehicle not seen nearby: opens its recorded data instead of trying to connect. */
-@Composable
-private fun AwayVehicleRow(vehicle: Vehicle, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 2.dp)
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .clickable(onClick = onClick)
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        Avatar(letter = iconKeyToEmoji(vehicle.iconKey), bg = MaterialTheme.colorScheme.outline)
-        Column(modifier = Modifier.weight(1f)) {
-            Text(vehicle.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(stringResource(Res.string.picker_my_away_hint), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-    }
-}
-
 @Composable
 private fun VehicleRow(vehicle: Vehicle, isConnecting: Boolean, onClick: () -> Unit) {
     Row(
@@ -350,7 +332,7 @@ private fun VehicleRow(vehicle: Vehicle, isConnecting: Boolean, onClick: () -> U
 }
 
 @Composable
-private fun DeviceRow(device: DiscoveredDevice, isConnecting: Boolean, onClick: () -> Unit) {
+internal fun DeviceRow(device: DiscoveredDevice, isConnecting: Boolean, onClick: () -> Unit) {
     val identity = device.scanDeviceLabel()
     Row(
         modifier = Modifier

@@ -59,6 +59,29 @@
     <string name="vehicle_reading_cell_max">Max cell</string>
     <string name="vehicle_reading_cell_delta">Imbalance</string>
     <string name="vehicle_reading_temperature">Temperature</string>
+    <string name="garage_title">Garage</string>
+    <string name="garage_count">In the garage: %1$d</string>
+    <string name="garage_scanning">Looking nearby…</string>
+    <string name="garage_found">Nearby: %1$d</string>
+    <string name="garage_near">Nearby</string>
+    <string name="garage_away">Away</string>
+    <string name="garage_details">Details</string>
+    <string name="garage_more">Also in the garage</string>
+    <string name="garage_new_nearby">New nearby</string>
+    <string name="garage_add">+ Add</string>
+    <string name="garage_demo_scooter">Demo: scooter</string>
+    <string name="garage_demo_wheel">Demo: unicycle</string>
+    <string name="garage_empty_title">The garage is empty</string>
+    <string name="garage_empty_text">Add a vehicle — the app will remember it and connect by itself next time.</string>
+    <string name="garage_add_vehicle">Add a vehicle</string>
+    <string name="garage_no_rides">No rides yet</string>
+    <string name="garage_soc">charge</string>
+    <string name="when_today">today, %1$s</string>
+    <string name="when_yesterday">yesterday, %1$s</string>
+    <string name="when_days_ago">%1$d days ago</string>
+    <string name="vehicle_overview_offline_at">Not connected · data as of %1$s</string>
+    <string name="vehicle_overview_cells">cells · imbalance %1$s</string>
+    <string name="vehicle_overview_all_rides">All rides in history</string>
     <string name="picker_other_nearby">Other BMS nearby</string>
     <string name="picker_detected">BMS detected</string>
     <string name="picker_add_new">+ Add new vehicle</string>
@@ -112,7 +135,7 @@
 
     <string name="tab_ride">Ride</string>
     <string name="tab_battery">Battery</string>
-    <string name="tab_connect">Connect</string>
+    <string name="tab_connect">Garage</string>
     <string name="tab_cells">Cells</string>
     <string name="tab_graph">Graph</string>
 

@@ -59,6 +59,29 @@
     <string name="vehicle_reading_cell_max">Макс. ячейка</string>
     <string name="vehicle_reading_cell_delta">Разбаланс</string>
     <string name="vehicle_reading_temperature">Температура</string>
+    <string name="garage_title">Гараж</string>
+    <string name="garage_count">В гараже: %1$d</string>
+    <string name="garage_scanning">Ищу рядом…</string>
+    <string name="garage_found">Рядом: %1$d</string>
+    <string name="garage_near">Рядом</string>
+    <string name="garage_away">Не рядом</string>
+    <string name="garage_details">Подробнее</string>
+    <string name="garage_more">Ещё в гараже</string>
+    <string name="garage_new_nearby">Новое рядом</string>
+    <string name="garage_add">+ Добавить</string>
+    <string name="garage_demo_scooter">Демо: самокат</string>
+    <string name="garage_demo_wheel">Демо: моноколесо</string>
+    <string name="garage_empty_title">Гараж пока пуст</string>
+    <string name="garage_empty_text">Добавьте транспорт — приложение запомнит его и в следующий раз подключится само.</string>
+    <string name="garage_add_vehicle">Добавить транспорт</string>
+    <string name="garage_no_rides">Поездок ещё нет</string>
+    <string name="garage_soc">заряд</string>
+    <string name="when_today">сегодня, %1$s</string>
+    <string name="when_yesterday">вчера, %1$s</string>
+    <string name="when_days_ago">%1$d дн. назад</string>
+    <string name="vehicle_overview_offline_at">Не подключено · данные на %1$s</string>
+    <string name="vehicle_overview_cells">ячейки · разбаланс %1$s</string>
+    <string name="vehicle_overview_all_rides">Все поездки в истории</string>
     <string name="picker_other_nearby">Другие BMS рядом</string>
     <string name="picker_detected">BMS обнаружено</string>
     <string name="picker_add_new">+ Добавить новый транспорт</string>
@@ -112,7 +135,7 @@
 
     <string name="tab_ride">Поездка</string>
     <string name="tab_battery">Батарея</string>
-    <string name="tab_connect">Подключение</string>
+    <string name="tab_connect">Гараж</string>
     <string name="tab_cells">Ячейки</string>
     <string name="tab_graph">График</string>
 

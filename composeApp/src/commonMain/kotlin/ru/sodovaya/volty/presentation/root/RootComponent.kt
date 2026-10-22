@@ -531,6 +531,12 @@ class DefaultRootComponent(
 
     override fun onOpenHistory() { goTo(Config.History()) }
 
+    private fun vehicleHistoryReader(): ru.sodovaya.volty.presentation.vehicle.VehicleHistoryReader {
+        val clock = get<ru.sodovaya.volty.data.history.HistoryRecordingClock>()
+        return ru.sodovaya.volty.presentation.vehicle.VehicleHistoryReader(
+            ru.sodovaya.volty.data.history.PreparedHistoryReadRepository(get(), clock::prepare), clock::readTick)
+    }
+
     override fun onOpenGroupMap() {
         goTo(Config.GroupMap)
     }
@@ -637,6 +643,13 @@ class DefaultRootComponent(
                     },
                     onDemoConnected = { replaceAll(homeConfig()) },
                     onOpenSavedRequested = { id -> goTo(Config.VehicleOverview(id)) },
+                    onConnectSavedRequested = { id -> replaceAll(Config.AutoConnect(id)) },
+                    loadGlances = { ids ->
+                        val reader = vehicleHistoryReader()
+                        reader.newestRides(ids, perVehicle = 1).mapNotNull { (id, rides) ->
+                            rides.firstOrNull()?.let { ride -> id to reader.glance(ride) }
+                        }.toMap()
+                    },
                     onCancelled = { nav.pop() }
                 )
             )
@@ -776,10 +789,8 @@ class DefaultRootComponent(
                 )
             )
             is Config.VehicleOverview -> {
-                val clock = get<ru.sodovaya.volty.data.history.HistoryRecordingClock>()
                 RootComponent.Child.VehicleOverview(ru.sodovaya.volty.presentation.vehicle.DefaultVehicleOverviewComponent(
-                    context, scope, config.vehicleId, get(),
-                    ru.sodovaya.volty.data.history.PreparedHistoryReadRepository(get(), clock::prepare), clock::readTick,
+                    context, scope, config.vehicleId, get(), vehicleHistoryReader(),
                     onConnectRequested = { id -> replaceAll(Config.AutoConnect(id)) },
                     onOpenRideRequested = { rideId -> goTo(Config.History(rideId)) },
                     onEditRequested = { id -> goTo(Config.VehicleEdit(id)) },

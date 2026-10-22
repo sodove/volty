@@ -60,7 +60,7 @@ class VehicleOverviewComponentTest {
 
     private fun TestScope.component(history: History, vehicles: List<Vehicle> = listOf(bike), maxRides: Int = 10) =
         DefaultVehicleOverviewComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
-            "bike", Vehicles(vehicles), history, { HistoryTick(40_000_000, 40_000_000, 1) }, {}, {}, {}, {}, {}, maxRides = maxRides)
+            "bike", Vehicles(vehicles), VehicleHistoryReader(history, { HistoryTick(40_000_000, 40_000_000, 1) }), {}, {}, {}, {}, {}, maxRides = maxRides)
 
     @Test fun showsOnlyThisVehiclesRidesAndTheLastKnownBatteryOfTheNewest() = runTest {
         val history = History(); val c = component(history); runCurrent()
@@ -74,7 +74,7 @@ class VehicleOverviewComponentTest {
         assertEquals(23_598_000, battery.atEpochMillis)
         // Only the tail of the ride is read for the last state, not the whole ride.
         assertTrue(history.seriesRanges.all { it == HistoryRange(23_000_000, 23_600_000) })
-        assertEquals("r2", s.totals.rideId); assertTrue(s.totals.totals.isNotEmpty())
+        assertTrue(s.lastTotals.isNotEmpty()); assertEquals(setOf("r2", "r1"), s.rideTotals.keys, "every listed ride gets its numbers")
     }
 
     @Test fun stopsPagingOnceEnoughRidesAreFound() = runTest {

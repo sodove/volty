@@ -35,38 +35,43 @@ class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: Co
         job = scope.launch {
             // The same ride growing while recorded: keep the shown tiles and coalesce the updates.
             if (sameRide) delay(refreshMillis)
-            val totals = read(rideId, sources, range)
+            val totals = readHistoryTotals(repository, rideId, sources, range, maxGpsPages)
             if (requested == next) mutableState.value = HistoryTotalsState(rideId = rideId, totals = totals)
         }
     }
 
-    private suspend fun read(rideId: String, sources: List<HistorySource>, range: HistoryRange): List<HistoryTotal> {
-        val stats = historyTotalsKeys(sources).mapNotNull { key ->
-            try { key to repository.stats(rideId, key, range) }
-            catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { null }
-        }.toMap()
-        val duration = range.endEpochMillis - range.startEpochMillis
-        val counted = historyRideTotals(sources, stats, duration, null)
-        if (counted.any { it.kind == HistoryTotalKind.DISTANCE_KM }) return counted
-        val gps = try { gpsDistanceKm(rideId, range) }
-            catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { null }
-        return historyRideTotals(sources, stats, duration, gps)
-    }
-
-    private suspend fun gpsDistanceKm(rideId: String, range: HistoryRange): Double? {
-        val fixes = mutableListOf<HistoryGpsFix>()
-        var after: HistoryCursor? = null
-        repeat(maxGpsPages) {
-            val page = repository.route(rideId, range, after)
-            fixes += page.fixes.items
-            after = page.fixes.next ?: return historyGpsDistanceKm(fixes)
-        }
-        // A capped read would understate the distance: show none rather than a short one.
-        return null
-    }
-
     fun clear() { job?.cancel(); requested = null; mutableState.value = HistoryTotalsState() }
     fun close() { job?.cancel(); lifetime.cancel() }
+}
+
+/** Whole-ride totals read from storage; a failed stat only drops its tiles, a capped GPS read gives no distance. */
+internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId: String, sources: List<HistorySource>,
+    range: HistoryRange, maxGpsPages: Int = 16): List<HistoryTotal> {
+    val stats = historyTotalsKeys(sources).mapNotNull { key ->
+        try { key to repository.stats(rideId, key, range) }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { null }
+    }.toMap()
+    val duration = range.endEpochMillis - range.startEpochMillis
+    val counted = historyRideTotals(sources, stats, duration, null)
+    if (counted.any { it.kind == HistoryTotalKind.DISTANCE_KM }) return historyVisibleTotals(counted)
+    val gps = try {
+        val fixes = readHistoryRouteFixes(repository, rideId, range, maxGpsPages)
+        fixes?.let(::historyGpsDistanceKm)
+    } catch (cancel: CancellationException) { throw cancel }
+    catch (_: Exception) { null }
+    return historyVisibleTotals(historyRideTotals(sources, stats, duration, gps))
+}
+
+/** Every recorded fix of a range, or null when the page budget ran out first (a partial track would mislead). */
+internal suspend fun readHistoryRouteFixes(repository: HistoryReadRepository, rideId: String, range: HistoryRange,
+    maxPages: Int): List<HistoryGpsFix>? {
+    val fixes = mutableListOf<HistoryGpsFix>()
+    var after: HistoryCursor? = null
+    repeat(maxPages) {
+        val page = repository.route(rideId, range, after)
+        fixes += page.fixes.items
+        after = page.fixes.next ?: return fixes
+    }
+    return null
 }

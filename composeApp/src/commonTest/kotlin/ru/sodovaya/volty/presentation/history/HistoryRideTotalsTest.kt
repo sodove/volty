@@ -82,4 +82,13 @@ class HistoryRideTotalsTest {
         val km = historyGpsDistanceKm(listOf(fix(0, 55.000), fix(5, 55.001), fix(600, 55.101), fix(605, 55.102, accuracy = 200.0), fix(610, 55.103)))
         assertEquals(0.111, km, 0.002)
     }
+
+    @Test fun valuesThatWouldPrintAsZeroAreNotShown() {
+        val shown = historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.DISTANCE_KM, 0.04), HistoryTotal(HistoryTotalKind.AVERAGE_KMH, 1.2),
+            HistoryTotal(HistoryTotalKind.ENERGY_WH, 0.3), HistoryTotal(HistoryTotalKind.BATTERY_USED_PERCENT, 0.2),
+            HistoryTotal(HistoryTotalKind.DURATION_MILLIS, 120_000.0), HistoryTotal(HistoryTotalKind.MAX_KMH, 1.9))).map { it.kind }
+        assertEquals(listOf(HistoryTotalKind.DURATION_MILLIS, HistoryTotalKind.MAX_KMH), shown,
+            "an average over a distance too short to show is hidden with it")
+        assertEquals(2, historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.DISTANCE_KM, 0.1), HistoryTotal(HistoryTotalKind.AVERAGE_KMH, 6.0))).size)
+    }
 }

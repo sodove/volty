@@ -46,6 +46,8 @@ interface PickerComponent {
     /** Start "Try demo" for [profile] — the two profiles are different vehicles. */
     fun onTryDemo(profile: DemoProfile)
     fun onOpenSaved(vehicle: Vehicle)
+    /** Connect a saved vehicle that has not been seen yet: scans for it rather than failing at once. */
+    fun onConnectSaved(vehicle: Vehicle)
     fun onBack()
 
     data class State(
@@ -53,6 +55,9 @@ interface PickerComponent {
         val myInRange: List<Vehicle> = emptyList(),
         /** Every saved vehicle; those not in [myInRange] are offered for an offline look. */
         val saved: List<Vehicle> = emptyList(),
+        /** Newest recorded ride of each saved vehicle, for the garage; absent while loading or never ridden. */
+        val glances: Map<String, ru.sodovaya.volty.presentation.vehicle.VehicleGlance> = emptyMap(),
+        val glancesLoaded: Boolean = false,
         val otherNearby: List<DiscoveredDevice> = emptyList(),   // detected (bmsType != null)
         val otherDevices: List<DiscoveredDevice> = emptyList(),  // undetected (bmsType == null)
         val showAll: Boolean = false,
@@ -74,7 +79,9 @@ class DefaultPickerComponent(
     private val onAddNewBatteryRequested: () -> Unit,
     private val onDemoConnected: () -> Unit,
     private val onCancelled: () -> Unit,
-    private val onOpenSavedRequested: (vehicleId: String) -> Unit = {}
+    private val onOpenSavedRequested: (vehicleId: String) -> Unit = {},
+    private val onConnectSavedRequested: (vehicleId: String) -> Unit = {},
+    private val loadGlances: (suspend (Set<String>) -> Map<String, ru.sodovaya.volty.presentation.vehicle.VehicleGlance>)? = null
 ) : PickerComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -90,7 +97,15 @@ class DefaultPickerComponent(
 
     private suspend fun startScan() {
         val saved = vehicleRepository.vehicles.first()
-        _state.update { it.copy(saved = saved.filterNot { v -> v.isGuest || v.isDemo }) }
+        val garage = saved.filterNot { v -> v.isGuest || v.isDemo }
+        _state.update { it.copy(saved = garage) }
+        // History reads run beside the scan; the garage renders its vehicles before their numbers arrive.
+        loadGlances?.let { load -> scope.launch {
+            val glances = try { load(garage.map { it.id }.toSet()) }
+                catch (cancel: CancellationException) { throw cancel }
+                catch (_: Exception) { emptyMap() }
+            _state.update { it.copy(glances = glances, glancesLoaded = true) }
+        } }
         // Indexed by every address of every vehicle, not just the primary pack's:
         // a controller-only vehicle has no pack address, so keying on that alone
         // meant its own advertisement never matched it. See [vehiclesByAddress].
@@ -337,4 +352,5 @@ class DefaultPickerComponent(
 
     override fun onBack() { onCancelled() }
     override fun onOpenSaved(vehicle: Vehicle) { onOpenSavedRequested(vehicle.id) }
+    override fun onConnectSaved(vehicle: Vehicle) { onConnectSavedRequested(vehicle.id) }
 }

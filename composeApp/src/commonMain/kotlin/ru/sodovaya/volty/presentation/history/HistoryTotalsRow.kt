@@ -30,7 +30,7 @@ fun HistoryTotalsRow(state: HistoryTotalsState, modifier: Modifier = Modifier) {
     }
 }
 
-private fun HistoryTotalKind.title() = when (this) {
+internal fun HistoryTotalKind.title() = when (this) {
     HistoryTotalKind.DISTANCE_KM -> Res.string.history_total_distance
     HistoryTotalKind.DURATION_MILLIS -> Res.string.history_total_duration
     HistoryTotalKind.AVERAGE_KMH -> Res.string.history_total_average
@@ -45,7 +45,7 @@ private fun HistoryTotalKind.title() = when (this) {
 }
 
 @Composable
-private fun HistoryTotal.text(): String {
+internal fun HistoryTotal.text(): String {
     val v = value.toFloat()
     return when (kind) {
         HistoryTotalKind.DISTANCE_KM -> "${formatFixed(v, if (value < 100) 1 else 0)} ${stringResource(Res.string.history_unit_km)}"

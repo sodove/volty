@@ -107,6 +107,20 @@ fun historyRideTotals(
     return result
 }
 
+/**
+ * Tiles worth a glance: a value that would print as zero ("0.0 km", "−0 %") says nothing on a
+ * parking-lot recording, and an average over no distance is noise. Measured, but not news.
+ */
+fun historyVisibleTotals(totals: List<HistoryTotal>): List<HistoryTotal> {
+    val distance = totals.firstOrNull { it.kind == HistoryTotalKind.DISTANCE_KM }?.value ?: 0.0
+    return totals.filter { t -> when (t.kind) {
+        HistoryTotalKind.DISTANCE_KM -> t.value >= 0.05
+        HistoryTotalKind.AVERAGE_KMH -> distance >= 0.05 && t.value >= 0.05
+        HistoryTotalKind.ENERGY_WH, HistoryTotalKind.BATTERY_USED_PERCENT, HistoryTotalKind.MAX_POWER_W -> t.value >= 0.5
+        else -> true
+    } }
+}
+
 /** Below this the Wh/km figure is noise from parking-lot moves. */
 private const val MIN_CONSUMPTION_DISTANCE_KM = 0.5
 
