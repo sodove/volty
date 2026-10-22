@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.presentation.map
 
+import android.view.View
 import android.content.Context
 import android.graphics.Color
 import android.os.SystemClock
@@ -135,6 +136,7 @@ actual fun PlatformRideMapLayer(
     modifier: Modifier,
     onHistoryMediaClick: (String) -> Unit,
     showAttribution: Boolean,
+    active: Boolean,
 ) {
     AndroidMapLibreView(
         cacheKey = "ride",
@@ -143,6 +145,7 @@ actual fun PlatformRideMapLayer(
         onCameraGesture = onCameraGesture,
         onHistoryMediaClick = onHistoryMediaClick,
         showAttribution = showAttribution,
+        active = active,
         modifier = modifier,
     )
 }
@@ -184,6 +187,7 @@ private fun AndroidMapLibreView(
     modifier: Modifier,
     onHistoryMediaClick: (String) -> Unit = {},
     showAttribution: Boolean = true,
+    active: Boolean = true,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -239,17 +243,35 @@ private fun AndroidMapLibreView(
         }
     }
 
-    DisposableEffect(lifecycleOwner, mapView) {
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_START -> mapView.onStart()
-                Lifecycle.Event.ON_STOP -> mapView.onStop()
-                else -> Unit
+    // Rendering runs only while the activity is started AND the map is wanted.
+    // A paused MapView keeps its style, tiles and camera, so resuming does not
+    // reload anything. Retraction: an earlier revision followed the activity
+    // lifecycle alone, so a hidden (alpha 0) map kept drawing every update,
+    // and it was never stopped when this composable left the composition.
+    DisposableEffect(lifecycleOwner, mapView, active) {
+        var started = false
+        fun reconcile() {
+            val wanted = active && lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)
+            if (wanted && !started) {
+                mapView.visibility = View.VISIBLE
+                mapView.onStart()
+                started = true
+            } else if (!wanted && started) {
+                mapView.onStop()
+                mapView.visibility = View.INVISIBLE
+                started = false
             }
         }
+        val observer = LifecycleEventObserver { _, _ -> reconcile() }
         lifecycleOwner.lifecycle.addObserver(observer)
-        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) mapView.onStart()
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        reconcile()
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            if (started) {
+                mapView.onStop()
+                mapView.visibility = View.INVISIBLE
+            }
+        }
     }
 
     DisposableEffect(map) {

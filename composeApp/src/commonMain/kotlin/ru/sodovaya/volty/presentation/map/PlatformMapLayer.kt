@@ -13,6 +13,8 @@ expect fun PlatformRideMapLayer(
     modifier: Modifier = Modifier,
     onHistoryMediaClick: (String) -> Unit = {},
     showAttribution: Boolean = true,
+    /** False pauses rendering; the retained map keeps its style, tiles and camera. */
+    active: Boolean = true,
 )
 
 /** Compatibility surface for the root host until Task 11 supplies the retained scene. */

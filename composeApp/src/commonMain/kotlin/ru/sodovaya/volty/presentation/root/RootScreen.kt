@@ -28,6 +28,8 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -76,6 +78,8 @@ import ru.sodovaya.volty.presentation.root.nearby.nearbyChannelMarkers
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
 import ru.sodovaya.volty.presentation.map.rideMapHostState
+import ru.sodovaya.volty.presentation.map.rideMapRenderActive
+import ru.sodovaya.volty.presentation.map.RIDE_MAP_FADE_MILLIS
 import ru.sodovaya.volty.presentation.map.NavigationMapRenderPolicy
 import ru.sodovaya.volty.presentation.map.NavigationMapScene
 import ru.sodovaya.volty.presentation.map.MapCameraRequest
@@ -298,6 +302,13 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val detailsMaximumHeight = maxHeight * 0.8f
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
+            // The map fades with the screen crossfade instead of jumping 0/1 at the
+            // start of a transition, which let it flash through a fading screen.
+            val mapAlpha by animateFloatAsState(
+                targetValue = if (mapHost.visible) 1f else 0f,
+                animationSpec = tween(RIDE_MAP_FADE_MILLIS),
+                label = "rideMapAlpha",
+            )
             if (mapHost.mounted) {
                 PlatformRideMapLayer(
                     scene = mapScene,
@@ -307,7 +318,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     },
                     modifier = Modifier
                         .fillMaxSize()
-                        .alpha(if (mapHost.visible) 1f else 0f),
+                        .alpha(mapAlpha),
                     onHistoryMediaClick = { id ->
                         activeHistory?.component?.let { owner ->
                             owner.state.value.media.items.singleOrNull { it.id == id }?.let(owner::openMedia)
@@ -316,11 +327,12 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     // History renders the same required attribution in its
                     // measured bottom panel, above the system gesture area.
                     showAttribution = activeHistory == null,
+                    active = rideMapRenderActive(mapHost.visible, mapAlpha),
                 )
             }
             Children(
                 stack = component.stack,
-                animation = stackAnimation(fade())
+                animation = stackAnimation(fade(tween(RIDE_MAP_FADE_MILLIS)))
             ) { child ->
                 when (val instance = child.instance) {
                     is RootComponent.Child.Loading -> Box(

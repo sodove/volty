@@ -59,12 +59,16 @@ class RideMapHostPolicyTest {
         )
     }
 
+    // Retraction: these tests used to require the Nearby tab to show the shared
+    // map. The current Nearby tab (VoiceSpacesNearbyScreen) is fully opaque, so
+    // the map only flashed through its crossfade and then rendered unseen under
+    // it. The group map is the Nearby surface that actually shows the map.
     @Test
-    fun nearby_map_is_visible_without_a_vehicle_and_does_not_request_own_location() {
+    fun nearby_tab_does_not_mount_the_map_without_a_vehicle() {
         assertEquals(
             RideMapHostState(
-                mounted = true,
-                visible = true,
+                mounted = false,
+                visible = false,
                 requestLocationPermission = false,
             ),
             rideMapHostState(
@@ -76,11 +80,11 @@ class RideMapHostPolicyTest {
     }
 
     @Test
-    fun nearby_map_keeps_location_request_disabled_even_when_a_vehicle_is_connected() {
+    fun nearby_tab_keeps_the_ride_map_retained_but_hidden_and_never_requests_location() {
         assertEquals(
             RideMapHostState(
                 mounted = true,
-                visible = true,
+                visible = false,
                 requestLocationPermission = false,
             ),
             rideMapHostState(
@@ -105,5 +109,15 @@ class RideMapHostPolicyTest {
                 activeStyle = DashboardStyle.LIGHT,
             ),
         )
+    }
+
+    @Test fun hiddenMapStopsRenderingOnlyAfterItHasFadedOut() {
+        assertTrue(rideMapRenderActive(visible = true, alpha = 0f))
+        assertTrue(rideMapRenderActive(visible = false, alpha = 0.4f))
+        assertEquals(false, rideMapRenderActive(visible = false, alpha = 0f))
+    }
+
+    @Test fun mapFadeMatchesTheScreenCrossfade() {
+        assertEquals(300, RIDE_MAP_FADE_MILLIS)
     }
 }
