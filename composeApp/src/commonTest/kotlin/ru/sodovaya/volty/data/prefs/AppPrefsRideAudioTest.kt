@@ -55,10 +55,10 @@ class AppPrefsRideAudioTest {
         assertEquals(false, initial.speechGate, "the speech gate is opt-in")
         assertEquals(0.5f, initial.speechGateThreshold)
         p.setMicPhoneNoiseSuppressor(true); p.setMicSpeechGate(true); p.setMicSpeechGateThreshold(5f)
-        val after = p.micProcessingSettings.first { it.speechGate }
-        assertEquals(true, after.phoneNoiseSuppressor)
-        assertEquals(0.9f, after.speechGateThreshold)
+        // The StateFlow is fed on Dispatchers.Default: three writes are three emissions, and an
+        // intermediate one (gate on, old threshold) is legal. Wait for the whole expected state.
+        p.micProcessingSettings.first { it.speechGate && it.phoneNoiseSuppressor && it.speechGateThreshold == 0.9f }
         p.setMicSpeechGateThreshold(-1f)
-        assertEquals(0.1f, p.micProcessingSettings.first { it.speechGateThreshold < 0.5f }.speechGateThreshold)
+        p.micProcessingSettings.first { it.speechGateThreshold == 0.1f }
     }
 }
