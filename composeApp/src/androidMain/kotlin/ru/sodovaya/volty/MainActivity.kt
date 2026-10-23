@@ -12,7 +12,7 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.lifecycle.lifecycleScope
-import com.arkivanov.decompose.defaultComponentContext
+import com.arkivanov.decompose.retainedComponent
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.presentation.root.Config
 import ru.sodovaya.volty.presentation.root.DefaultRootComponent
@@ -31,7 +31,10 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         historyLocation.attachHost(this)
-        rootComponent = DefaultRootComponent(defaultComponentContext())
+        // Retained across configuration changes: a rotation used to rebuild the whole root, and with it
+        // the navigator's route, which lives in memory only. The root holds application-scoped
+        // dependencies alone, so outliving one Activity instance leaks nothing.
+        rootComponent = retainedComponent { context -> DefaultRootComponent(context) }
         nearbyPermissions = ru.sodovaya.volty.presentation.root.nearby.AndroidNearbyPermissionBridge(
             this,getKoin().get(),getKoin().get(),getKoin().get(),getKoin().get(),
         )
