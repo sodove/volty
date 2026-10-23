@@ -41,5 +41,6 @@ fun historyStats(
         }
     }
     return HistoryStats(known.minOrNull(), known.maxOrNull(),
-        energy.takeIf { intervals > 0 && !numericFailure }, complete)
+        energy.takeIf { intervals > 0 && !numericFailure }, complete,
+        known.fold(0.0) { sum, v -> sum + v }.div(known.size).takeIf { it.isFinite() })
 }

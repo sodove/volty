@@ -174,7 +174,7 @@ class HistoryExportSourceTest {
         // Deliberately incoherent with current writers: migrated retained facts
         // have earned aggregates but none of the later captured-time columns.
         db.rideHistoryBucketQueries.putBucket("ride", "pack", "power_w", -1,
-            10, 2010, -100.0, 20.0, 4.5, 100, 1, null, null, null, null, null, null, null)
+            10, 2010, -100.0, 20.0, 4.5, 100, 1, null, null, null, null, null, null, null, null, null)
         val request = store.request(HistoryExportFormat.JSON)
         val reader = SqlDelightHistoryExportSource(provider, pageSize = 1)
         for (format in listOf(HistoryExportFormat.JSON, HistoryExportFormat.CSV)) {
@@ -206,7 +206,7 @@ class HistoryExportSourceTest {
         fun bucket(source: String, first: Long, last: Long) {
             db.rideHistoryBucketQueries.putBucket("ride", source, "power_w", -1, 10, 10 + last,
                 -100.0, 20.0, 4.5, 100, 0, 1000 + first, 10 + first, 1000 + last,
-                1000 + first, 10 + first, 1000 + last, 10 + last)
+                1000 + first, 10 + first, 1000 + last, 10 + last, null, null)
         }
         bucket("pack", 1000, 2000); bucket("pack2", 1000, 2500); bucket("pack3", 0, 2000)
         val request = store.request(HistoryExportFormat.JSON).copy(range = HistoryRange(2000, 4000))

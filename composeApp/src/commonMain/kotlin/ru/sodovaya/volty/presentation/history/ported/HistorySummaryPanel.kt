@@ -24,70 +24,40 @@ import ru.sodovaya.volty.util.formatFixed
 import volty.composeapp.generated.resources.*
 import kotlin.math.abs
 
-/** Read-only selected-window summary. Expansion never starts more data reads.
- * No aggregate/contributor addition or summary from decimated chart samples.
+/**
+ * The ride's totals: distance, time, speeds, energy, battery, peaks. Retraction: this panel used to
+ * repeat each selected chart's minimum and maximum, which now sit on the charts themselves; the
+ * totals that sat under the ride title moved here. Expansion never starts more data reads.
  */
 @Composable
-fun HistorySummaryPanel(state: HistoryDetailState, expanded: Boolean, onExpandedChange: (Boolean) -> Unit,
+fun HistorySummaryPanel(totals: HistoryTotalsState, expanded: Boolean, onExpandedChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier, reduceMotion: Boolean = false) {
-    val text = historyMetricText()
-    val labels = historySourceLabels(state.sources)
     val expandedLabel = stringResource(if (expanded) Res.string.history_summary_collapse else Res.string.history_summary_expand)
-    BoxWithConstraints(modifier) {
-    // The host already bounds this panel. Column gives the lazy body only the
-    // remaining space after the header; applying another 40% bound here clipped
-    // the quality labels in the composed home (the old full-screen probe hid it).
-    val bodyHeight = minOf(maxHeight, if (expanded) 300.dp else 190.dp)
-    Surface(Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), tonalElevation = 3.dp) {
+    Surface(modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp), tonalElevation = 3.dp) {
         Column(if (reduceMotion) Modifier else Modifier.animateContentSize()) {
             Surface(onClick = { onExpandedChange(!expanded) }, color = MaterialTheme.colorScheme.surfaceContainerHigh,
                 modifier = Modifier.fillMaxWidth().semantics { stateDescription = expandedLabel }) {
                 Row(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(stringResource(if (state.range != null && state.range == state.availableRange)
-                        Res.string.history_summary_recording else Res.string.history_summary_range),
-                        Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                    Text(stringResource(Res.string.history_summary_recording), Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
                     Icon(if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown, expandedLabel)
                 }
             }
-            if (state.selectedKeys.isEmpty()) {
-                Text(stringResource(Res.string.history_metrics_selected_empty), Modifier.padding(12.dp),
+            when {
+                totals.loading -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(12.dp))
+                totals.totals.isEmpty() -> Text(stringResource(Res.string.history_summary_unavailable), Modifier.padding(12.dp),
                     style = MaterialTheme.typography.bodySmall)
-            } else LazyColumn(Modifier.fillMaxWidth().heightIn(max = bodyHeight),
-                contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(if (expanded) state.selectedKeys else state.selectedKeys.take(1), key = ::historyMetricItemKey) { key ->
-                    val source = state.sources.singleOrNull { it.id == key.sourceId }
-                    val descriptor = HistoryMetricRegistry.descriptor(key.metricId)
-                    val summary = historyMetricSummary(key, state.stats[key].takeIf { source?.kind in descriptor?.sourceKinds.orEmpty() })
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(text.title(key), style = MaterialTheme.typography.titleSmall)
-                        Text(source?.let { "${labels.getValue(it.id)} · ${text.kinds.getValue(it.kind)}" }
-                            ?: stringResource(Res.string.history_summary_source_unavailable),
-                            style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        when {
-                            key in state.loadingKeys -> LinearProgressIndicator(Modifier.fillMaxWidth())
-                            key in state.metricErrors -> Text(stringResource(Res.string.history_metric_chart_error),
-                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                            else -> FlowRow(horizontalArrangement = Arrangement.spacedBy(20.dp),
-                                verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                SummaryCell(stringResource(Res.string.history_summary_min), summary.minimum, summary.unit)
-                                SummaryCell(stringResource(Res.string.history_summary_max), summary.maximum, summary.unit)
-                                if (descriptor?.consumptionMultiplier != null)
-                                    SummaryCell(stringResource(Res.string.history_summary_energy), summary.energy, HistoryUnit.WH)
-                            }
-                        }
-                    }
-                }
+                // Collapsed shows the first row of headline numbers; expanded shows all of them.
+                else -> ru.sodovaya.volty.presentation.vehicle.TotalsTiles(
+                    if (expanded) totals.totals else totals.totals.take(COLLAPSED_TOTALS), Modifier.padding(12.dp))
             }
         }
     }
-    }
 }
 
+private const val COLLAPSED_TOTALS = 4
+
 @Composable
-private fun SummaryCell(title: String, value: HistorySummaryValue, unit: HistoryUnit?) {
+internal fun SummaryCell(title: String, value: HistorySummaryValue, unit: HistoryUnit?) {
     Column(Modifier.widthIn(min = 90.dp)) {
         Text(title, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         val number = value.value?.let {

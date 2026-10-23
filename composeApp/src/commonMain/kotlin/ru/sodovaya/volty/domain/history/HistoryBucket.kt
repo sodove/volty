@@ -13,6 +13,9 @@ data class HistoryBucket(
     val energyWh: Double?,
     val sampleCount: Long,
     val complete: Boolean,
+    /** Sum of the bucket's numeric values; null for buckets recorded before it was kept. */
+    val valueSum: Double? = null,
+    val valueCount: Long = 0,
 ) {
     init {
         require(slot >= 0 && sampleCount > 0)
@@ -25,6 +28,8 @@ data class HistoryBucket(
         if (minimum != null && maximum != null) require(checkNotNull(minimum.value) <= checkNotNull(maximum.value))
         require(energyWh == null || energyWh.isFinite())
         require(!complete || minimum != null)
+        require(valueSum == null || (valueSum.isFinite() && valueCount > 0))
     }
-    val stats: HistoryStats get() = HistoryStats(minimum?.value, maximum?.value, energyWh, complete)
+    val stats: HistoryStats get() = HistoryStats(minimum?.value, maximum?.value, energyWh, complete,
+        valueSum?.let { it / valueCount })
 }

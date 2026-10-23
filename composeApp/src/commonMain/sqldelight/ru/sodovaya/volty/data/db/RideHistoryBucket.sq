@@ -17,6 +17,8 @@ CREATE TABLE HistoryBucketV2 (
   minElapsedMillis INTEGER,
   maxEpochMillis INTEGER,
   maxElapsedMillis INTEGER,
+  valueSum REAL,
+  valueCount INTEGER,
   PRIMARY KEY(rideId, sourceId, metricId, cellIndex, startElapsedMillis),
   FOREIGN KEY(rideId, sourceId) REFERENCES HistorySourceV2(rideId, id) ON DELETE CASCADE
 );
@@ -32,9 +34,11 @@ AND metricId = :metricId AND cellIndex = :cellIndex AND startElapsedMillis = :st
 putBucket:
 INSERT OR REPLACE INTO HistoryBucketV2(rideId, sourceId, metricId, cellIndex, startElapsedMillis,
 endElapsedMillis, minimum, maximum, energyWh, sampleCount, complete, firstEpochMillis,
-firstElapsedMillis, lastEpochMillis, minEpochMillis, minElapsedMillis, maxEpochMillis, maxElapsedMillis)
+firstElapsedMillis, lastEpochMillis, minEpochMillis, minElapsedMillis, maxEpochMillis, maxElapsedMillis,
+valueSum, valueCount)
 VALUES (:rideId, :sourceId, :metricId, :cellIndex, :startElapsed, :endElapsed, :minimum, :maximum,
-:energyWh, :sampleCount, :complete, :firstEpoch, :firstElapsed, :lastEpoch, :minEpoch, :minElapsed, :maxEpoch, :maxElapsed);
+:energyWh, :sampleCount, :complete, :firstEpoch, :firstElapsed, :lastEpoch, :minEpoch, :minElapsed, :maxEpoch, :maxElapsed,
+:valueSum, :valueCount);
 
 pageBuckets:
 SELECT * FROM HistoryBucketV2 WHERE rideId = :rideId AND sourceId = :sourceId
@@ -51,6 +55,9 @@ MAX(CASE WHEN maxElapsedMillis >= :fromElapsed AND maxElapsedMillis <= :toElapse
 SUM(CASE WHEN firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN energyWh END) AS energyWh,
 MIN(CASE WHEN firstEpochMillis IS NOT NULL AND lastEpochMillis IS NOT NULL
 AND firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN complete ELSE 0 END) AS complete,
-COUNT(*) AS bucketCount
+COUNT(*) AS bucketCount,
+SUM(CASE WHEN firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN valueSum END) AS valueSum,
+SUM(CASE WHEN firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN valueCount END) AS valueCount,
+MIN(CASE WHEN firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed AND valueCount IS NULL THEN 0 ELSE 1 END) AS valuesKnown
 FROM HistoryBucketV2 WHERE rideId = :rideId AND sourceId = :sourceId AND metricId = :metricId AND cellIndex = :cellIndex
 AND endElapsedMillis >= :fromElapsed AND COALESCE(firstElapsedMillis, startElapsedMillis) <= :toElapsed;

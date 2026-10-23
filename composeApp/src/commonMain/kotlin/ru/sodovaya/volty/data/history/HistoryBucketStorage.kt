@@ -31,7 +31,8 @@ internal class HistoryBucketStorage(private val database: VoltyDatabase) {
                 bucket.minimum?.value, bucket.maximum?.value, bucket.energyWh, bucket.sampleCount,
                 if (bucket.complete) 1 else 0, bucket.first.epochMillis, bucket.first.elapsedMillis,
                 bucket.last.epochMillis, bucket.minimum?.tick?.epochMillis, bucket.minimum?.tick?.elapsedMillis,
-                bucket.maximum?.tick?.epochMillis, bucket.maximum?.tick?.elapsedMillis)
+                bucket.maximum?.tick?.epochMillis, bucket.maximum?.tick?.elapsedMillis,
+                bucket.valueSum, bucket.valueSum?.let { bucket.valueCount })
             if (last == null || bucket.last.elapsedMillis >= checkNotNull(last).elapsedMillis) last = bucket.last
         }
         return last
@@ -45,5 +46,5 @@ internal fun HistoryBucketV2.toHistoryBucket(origin: HistoryTick): HistoryBucket
     return HistoryBucket(key, (startElapsedMillis - origin.elapsedMillis) / HISTORY_SUMMARY_BUCKET_MILLIS,
         tick(firstEpochMillis, firstElapsedMillis), tick(lastEpochMillis, endElapsedMillis),
         peak(minimum, minEpochMillis, minElapsedMillis), peak(maximum, maxEpochMillis, maxElapsedMillis),
-        energyWh, sampleCount, complete == 1L)
+        energyWh, sampleCount, complete == 1L, valueSum?.takeIf { (valueCount ?: 0) > 0 }, valueCount ?: 0)
 }

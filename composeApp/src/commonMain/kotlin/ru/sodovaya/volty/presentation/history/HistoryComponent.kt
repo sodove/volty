@@ -168,6 +168,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private var handledDeletion: HistoryRideDeletionResult? = null
     // Declared before init: the catalog collector below runs during construction.
     private var autoOpened = false
+    private val openedOnRide = initialRideId != null
     private var pendingRestoration = componentContext.stateKeeper.consume("history-selection-v1", HistorySavedSelection.serializer())
     private val savedStateOwner = componentContext.stateKeeper
     private var windowGesture: WindowGesture? = null
@@ -460,7 +461,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                 mutableState.value = mutableState.value.copy(destination = HistoryDestination.RIDE, windowPreview = null)
             }
             HistoryDestination.CATALOG -> onBack()
-            HistoryDestination.RIDE -> clearSelection()
+            // Opened on one ride from elsewhere (the vehicle card): back returns there, not to the
+            // all-vehicle list the rider never asked for. Retraction: it used to stop on that list first.
+            HistoryDestination.RIDE -> if (openedOnRide) onBack() else clearSelection()
         }
     }
 

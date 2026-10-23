@@ -1,0 +1,5 @@
+-- Sum and count of the numeric samples in each summary bucket, so a range's mean comes from the
+-- full stream rather than from thinned detail rows. Rows written before this migration keep NULL:
+-- their mean is unknown, never estimated.
+ALTER TABLE HistoryBucketV2 ADD COLUMN valueSum REAL;
+ALTER TABLE HistoryBucketV2 ADD COLUMN valueCount INTEGER;

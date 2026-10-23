@@ -455,6 +455,33 @@ class SqlDelightHistoryStoreTest {
         assertEquals(listOf(10.0, 20.0), store.samples("ride", power, range, null).items.map { it.value })
     }
 
+    @Test fun theMeanComesFromTheFullStreamNotTheThinnedDetail() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val power = key.copy(metricId = "power_w")
+        val raw = listOf(HistorySample(tick(0), power, 10.0), HistorySample(tick(100), power, 4200.0), HistorySample(tick(400), power, 20.0))
+        val accumulator = HistoryBucketAccumulator(origin, power)
+        raw.forEach { accumulator.offer(it) }
+        // Detail keeps only the ends; the 4200 W peak lives in the summary alone.
+        store.append(HistoryBatch("ride", listOf(raw.first(), raw.last()), emptyList(), emptyList(), "summary-1", listOf(assertNotNull(accumulator.snapshot()))))
+        assertEquals(1410.0, assertNotNull(store.stats("ride", power, range).average), 1e-9)
+    }
+
+    @Test fun bucketsWithoutASumGiveNoMeanRatherThanAPartialOne() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val power = key.copy(metricId = "power_w")
+        val accumulator = HistoryBucketAccumulator(origin, power)
+        accumulator.offer(HistorySample(tick(0), power, 10.0))
+        val legacy = assertNotNull(accumulator.snapshot()).copy(valueSum = null, valueCount = 0)
+        store.append(HistoryBatch("ride", emptyList(), emptyList(), emptyList(), "summary-1", listOf(legacy)))
+        assertNull(store.stats("ride", power, range).average)
+        // One bucket recorded after the upgrade beside one from before: still no mean, not a half one.
+        accumulator.offer(HistorySample(tick(70_000), power, 30.0))
+        store.append(HistoryBatch("ride", emptyList(), emptyList(), emptyList(), "summary-2", listOf(assertNotNull(accumulator.snapshot()))))
+        val wide = HistoryRange(10000, 90000)
+        assertNotNull(store.stats("ride", power, wide).maximum)
+        assertNull(store.stats("ride", power, wide).average)
+    }
+
     @Test fun earlierReceiptStillAcknowledgesAfterBucketHasAdvancedButConflictingSummaryIsRejected() = runTest {
         val (_, store) = fixture(); begin(store)
         val power = key.copy(metricId = "power_w"); val accumulator = HistoryBucketAccumulator(origin, power)

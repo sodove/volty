@@ -60,7 +60,10 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         val gap = database.rideHistoryMarkerQueries.hasEvidenceGap(rideId, bounds.first, bounds.last, key.sourceId).executeAsOne()
         return HistoryStats(minimum, maximum, energy, ride.status != HistoryRideStatus.INTERRUPTED && summary.complete == 1L && !gap &&
             detail.unknownCount == 0L &&
-            (summary.energyWh == null || energy != null))
+            (summary.energyWh == null || energy != null),
+            // Every bucket of the range must carry its sum: a mean over part of the stream is not a mean.
+            summary.valueCount?.toDouble()?.takeIf { it > 0 && summary.valuesKnown?.toLong() == 1L }
+                ?.let { count -> summary.valueSum?.toDouble()?.div(count) }?.takeIf { it.isFinite() })
     }
 
     fun rides(before: HistoryCursor?, limit: Int): HistoryPage<HistoryRide> {

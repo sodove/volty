@@ -36,7 +36,7 @@ class HistoryRideDeletionSqlTest {
         store.append(HistoryBatch(rideId, listOf(HistorySample(start, HistorySeriesKey("pack", "voltage_v"), 72.0)),
             listOf(HistoryGpsFix(start, 56.0, 60.0, 3.0, null)), listOf(HistoryMarker(start, HistoryMarkerKind.CONNECTED)), "receipt"))
         db.rideHistoryBucketQueries.putBucket(rideId, "pack", "voltage_v", -1, 10, 1010, 72.0, 72.0, null, 1, 1,
-            1000, 10, 2000, 1000, 10, 1000, 10)
+            1000, 10, 2000, 1000, 10, 1000, 10, null, null)
         store.finish(rideId, end, HistoryRideStatus.COMPLETED)
         return assertNotNull(store.ride(rideId))
     }

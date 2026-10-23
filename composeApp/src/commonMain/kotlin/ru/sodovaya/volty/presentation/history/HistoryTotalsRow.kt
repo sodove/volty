@@ -12,24 +12,6 @@ import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.util.formatFixed
 import volty.composeapp.generated.resources.*
 
-/** Whole-ride headline tiles; renders what [historyRideTotals] decided and nothing while empty. */
-@Composable
-fun HistoryTotalsRow(state: HistoryTotalsState, modifier: Modifier = Modifier) {
-    if (state.totals.isEmpty()) return
-    LazyRow(modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(state.totals, key = { it.kind }) { total ->
-            Surface(shape = RoundedCornerShape(10.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-                Column(Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
-                    Text(stringResource(total.kind.title()), style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text((if (total.approximate) "≈ " else "") + total.text(), style = MaterialTheme.typography.titleSmall)
-                }
-            }
-        }
-    }
-}
-
 internal fun HistoryTotalKind.title() = when (this) {
     HistoryTotalKind.DISTANCE_KM -> Res.string.history_total_distance
     HistoryTotalKind.DURATION_MILLIS -> Res.string.history_total_duration

@@ -201,7 +201,7 @@ class HistoryUiProbeActivity : ComponentActivity() {
         val fit = remember(identity, insets) { MapCameraRequest.FitHistory(1, identity, insets, reduceMotion = true) }
         Box(Modifier.fillMaxSize()) {
             PlatformRideMapLayer(historyMapNavigationScene(history, fit), darkTheme = true, onCameraGesture = {}, modifier = Modifier.fillMaxSize())
-            if (showSummary) HistorySummaryPanel(state.detail, summaryExpanded, { summaryExpanded = it },
+            if (showSummary) HistorySummaryPanel(state.totals, summaryExpanded, { summaryExpanded = it },
                 Modifier.align(Alignment.TopCenter).statusBarsPadding().padding(16.dp).fillMaxWidth())
             Surface(Modifier.align(Alignment.BottomCenter).fillMaxWidth().navigationBarsPadding(), tonalElevation = 3.dp) {
                 Column(Modifier.padding(16.dp)) {

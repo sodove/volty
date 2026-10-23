@@ -56,6 +56,22 @@ fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
                             tint = if (mapMetricKey == key) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     }
+                    // The chart's own numbers over the shown window: lowest, mean, highest (and energy where it applies).
+                    val source = state.sources.singleOrNull { it.id == key.sourceId }
+                    val descriptor = HistoryMetricRegistry.descriptor(key.metricId)
+                    val stats = state.stats[key]?.takeIf { source?.kind in descriptor?.sourceKinds.orEmpty() }
+                    if (stats != null && key !in state.loadingKeys && key !in state.metricErrors) {
+                        val summary = historyMetricSummary(key, stats)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            SummaryCell(stringResource(Res.string.history_summary_min), summary.minimum, summary.unit)
+                            // Rides recorded before means were kept have none: omit it rather than show a dash.
+                            if (summary.average.value != null)
+                                SummaryCell(stringResource(Res.string.history_summary_avg), summary.average, summary.unit)
+                            SummaryCell(stringResource(Res.string.history_summary_max), summary.maximum, summary.unit)
+                            if (descriptor?.consumptionMultiplier != null)
+                                SummaryCell(stringResource(Res.string.history_summary_energy), summary.energy, HistoryUnit.WH)
+                        }
+                    }
                     val density = LocalDensity.current
                     var bodyHeight by remember(key, compact, density.density, density.fontScale) { mutableStateOf(if (compact) 100.dp else 180.dp) }
                     // A slower range query clears facts, not the row's geometry.

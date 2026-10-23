@@ -210,6 +210,24 @@ class HistoryComponentTest {
             assertEquals(HistoryDestination.CATALOG, c.state.value.destination, "the list the rider went back to stays")
         } finally { c.close() }
     }
+    @Test fun backFromARideOpenedFromElsewhereLeavesHistoryInOneStep() = runTest {
+        var left = 0
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
+            Repo(), { HistoryTick(6000, 5010, 1) }, { left++ }, initialRideId = "b")
+        try {
+            runCurrent(); assertEquals("b", c.state.value.selectedRideId)
+            c.back(); runCurrent()
+            assertEquals(1, left, "back returns to the vehicle card, not to the all-vehicle list")
+        } finally { c.close() }
+    }
+    @Test fun backFromARideChosenInHistoryStillShowsTheList() = runTest {
+        var left = 0
+        val c = component(Repo()) { left++ }
+        try {
+            c.openRide("a"); runCurrent(); c.back(); runCurrent()
+            assertEquals(0, left); assertEquals(HistoryDestination.CATALOG, c.state.value.destination)
+        } finally { c.close() }
+    }
     @Test fun aRequestedRideOpensInsteadOfTheNewest() = runTest {
         val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
             Repo(), { HistoryTick(6000, 5010, 1) }, {}, openLatestOnLoad = true, initialRideId = "b")

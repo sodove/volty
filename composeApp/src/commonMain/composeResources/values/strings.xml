@@ -1165,6 +1165,7 @@
     <string name="history_summary_source_unavailable">Recorded source unavailable</string>
     <string name="history_summary_min">Minimum</string>
     <string name="history_summary_max">Maximum</string>
+    <string name="history_summary_avg">Average</string>
     <string name="history_summary_energy">Net energy</string>
     <string name="history_summary_partial">Partial data</string>
     <string name="history_summary_unavailable">No data</string>

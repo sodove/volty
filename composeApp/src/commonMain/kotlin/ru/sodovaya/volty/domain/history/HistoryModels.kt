@@ -139,11 +139,14 @@ data class HistoryStats(
     val maximum: Double?,
     val energyWh: Double?,
     val complete: Boolean,
+    /** Mean of the recorded samples in the range (sample-weighted, not time-weighted); null when none. */
+    val average: Double? = null,
 ) {
     init {
         require(minimum == null || minimum.isFinite())
         require(maximum == null || maximum.isFinite())
         require(energyWh == null || energyWh.isFinite())
+        require(average == null || average.isFinite())
         require(minimum == null || maximum == null || minimum <= maximum)
     }
 }

@@ -1163,6 +1163,7 @@
     <string name="history_summary_source_unavailable">Источник записи недоступен</string>
     <string name="history_summary_min">Минимум</string>
     <string name="history_summary_max">Максимум</string>
+    <string name="history_summary_avg">Среднее</string>
     <string name="history_summary_energy">Баланс энергии</string>
     <string name="history_summary_partial">Неполные данные</string>
     <string name="history_summary_unavailable">Нет данных</string>

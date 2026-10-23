@@ -19,6 +19,8 @@ class HistoryBucketAccumulator(
         val numericFailure: Boolean = false,
         val complete: Boolean = true,
         val barrier: Boolean = false,
+        val valueSum: Double = 0.0,
+        val valueCount: Long = 0,
     )
     init { require(maxIntervalMillis > 0) }
     private var state: State? = null
@@ -41,7 +43,8 @@ class HistoryBucketAccumulator(
         val minimum = sample.takeIf { it.value != null && (base.minimum == null || checkNotNull(it.value) < checkNotNull(base.minimum.value)) } ?: base.minimum
         val maximum = sample.takeIf { it.value != null && (base.maximum == null || checkNotNull(it.value) > checkNotNull(base.maximum.value)) } ?: base.maximum
         var updated = base.copy(last = sample, minimum = minimum, maximum = maximum,
-            sampleCount = base.sampleCount + 1, complete = base.complete && sample.value != null && (old == null || usable), barrier = false)
+            sampleCount = base.sampleCount + 1, complete = base.complete && sample.value != null && (old == null || usable), barrier = false,
+            valueSum = base.valueSum + (sample.value ?: 0.0), valueCount = base.valueCount + if (sample.value != null) 1 else 0)
         val wh = pair?.energyWh?.takeIf { usable }
         if (wh != null) {
             val adjusted = wh - updated.correction
@@ -78,7 +81,8 @@ class HistoryBucketAccumulator(
 
     fun snapshot(): HistoryBucket? = state?.let {
         HistoryBucket(key, it.slot, it.first, it.last.tick, it.minimum, it.maximum,
-            it.energy.takeIf { _ -> it.hasEnergy && !it.numericFailure }, it.sampleCount, it.complete)
+            it.energy.takeIf { _ -> it.hasEnergy && !it.numericFailure }, it.sampleCount, it.complete,
+            it.valueSum.takeIf { _ -> it.valueCount > 0 && it.valueSum.isFinite() }, it.valueCount)
     }
 
     /** An IO owner advances the fork only after its snapshot transaction is acknowledged. */

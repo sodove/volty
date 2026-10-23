@@ -78,7 +78,8 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         if (favoritesTab && !state.favorites.loaded && !state.favorites.busy) owner.loadFavorites()
     }
     var summaryExpanded by remember(state.selectedRideId) { mutableStateOf(false) }
-    var chartsExpanded by remember { mutableStateOf(true) }
+    // Closed by default: the map and the totals are the ride at a glance; charts are opened on purpose.
+    var chartsExpanded by remember { mutableStateOf(false) }
     LaunchedEffect(state.destination, state.mapMetricKey) {
         if (state.destination == HistoryDestination.RIDE && state.mapMetricKey != null) chartsExpanded = false
     }
@@ -194,7 +195,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                         }
                     }
                 }
-                if (content.detail != null) HistorySummaryPanel(content.detail, summaryExpanded, { summaryExpanded = it },
+                if (content.detail != null) HistorySummaryPanel(state.totals, summaryExpanded, { summaryExpanded = it },
                     Modifier.fillMaxWidth().heightIn(max = readableSummaryHeight), reduceMotion)
                 HistoryRouteStatus(content, owner)
             }
@@ -212,7 +213,6 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                     HistoryNavigationStrip(title, subtitle, neighbors.previousId != null, neighbors.nextId != null,
                         { neighbors.previousId?.let(openRide) }, { neighbors.nextId?.let(openRide) },
                         { listOpen = true }, owner::showCharts, { metricsOpen = true }, Modifier.padding(8.dp), singleRow = wide)
-                    HistoryTotalsRow(state.totals, Modifier.padding(bottom = 8.dp))
                     if (content.phase == HistoryScreenPhase.READY) {
                         Surface(onClick = { chartsExpanded = !chartsExpanded }, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
                             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
