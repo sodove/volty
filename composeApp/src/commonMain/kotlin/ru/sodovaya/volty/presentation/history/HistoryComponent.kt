@@ -78,7 +78,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     /** Reads whole-ride totals for the tiles; null shows none (its reads would otherwise join every selection). */
     totalsRepository: HistoryReadRepository? = null,
     /** Open this ride first (a restored view still wins); replaces the newest-ride default. */
-    initialRideId: String? = null) : HistoryComponent {
+    initialRideId: String? = null,
+    /** Chart speed and power when a ride opens with nothing chosen, instead of an empty chart panel. */
+    private val defaultMetrics: Boolean = false) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -169,6 +171,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     // Declared before init: the catalog collector below runs during construction.
     private var autoOpened = false
     private val openedOnRide = initialRideId != null
+    private var defaultsAppliedTo: Any? = null
     private var pendingRestoration = componentContext.stateKeeper.consume("history-selection-v1", HistorySavedSelection.serializer())
     private val savedStateOwner = componentContext.stateKeeper
     private var windowGesture: WindowGesture? = null
@@ -276,6 +279,15 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         mutableState.value = current.copy(detail = next, mapMetricKey = current.mapMetricKey?.takeIf { it in next.selectedKeys }, route = if (needsRoute)
             HistoryRouteState(rideId = ride?.id, range = range, loading = true) else current.route)
         syncMediaFavorite()
+        // Once per selection, and never over a restored view or the rider's own choice.
+        if (defaultMetrics && pendingRestoration == null && ride != null && !next.loading && next.error == null &&
+            next.selectedKeys.isEmpty() && defaultsAppliedTo !== captured) {
+            defaultsAppliedTo = captured
+            historyDefaultMetrics(next.sources).takeIf { it.isNotEmpty() }?.let { keys ->
+                detail.replaceMetrics(keys)
+                if (!lifetime.isActive || selection !== captured) return
+            }
+        }
         val whole = next.availableRange
         if (lifetime.isActive && selection === captured && ride != null && whole != null && !next.loading && next.sources.isNotEmpty())
             totals?.open(ride.id, next.sources, whole)

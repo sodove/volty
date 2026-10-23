@@ -91,4 +91,14 @@ class HistoryRideTotalsTest {
             "an average over a distance too short to show is hidden with it")
         assertEquals(2, historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.DISTANCE_KM, 0.1), HistoryTotal(HistoryTotalKind.AVERAGE_KMH, 6.0))).size)
     }
+
+    @Test fun aRideWithNothingChosenChartsSpeedAndPower() {
+        assertEquals(listOf(HistorySeriesKey("esc", "speed_kmh"), HistorySeriesKey("pack", "power_w")),
+            historyDefaultMetrics(listOf(controller, pack)))
+        // The aggregate, never also its contributing pack.
+        assertEquals(listOf(HistorySeriesKey("vehicle", "power_w")), historyDefaultMetrics(listOf(vehicle, pack)))
+        assertEquals(listOf(HistorySeriesKey("esc", "speed_kmh"), HistorySeriesKey("esc", "controller_power_w")),
+            historyDefaultMetrics(listOf(controller)), "no battery: the controller's power")
+        assertTrue(historyDefaultMetrics(emptyList()).isEmpty())
+    }
 }

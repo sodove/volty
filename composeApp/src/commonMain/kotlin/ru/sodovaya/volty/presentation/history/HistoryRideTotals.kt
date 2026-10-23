@@ -11,7 +11,7 @@ enum class HistoryTotalKind {
 /** [approximate] when a contributing stat was incomplete; a missing input omits the tile instead. */
 data class HistoryTotal(val kind: HistoryTotalKind, val value: Double, val approximate: Boolean = false)
 
-private val motionTiers = listOf(setOf(HistorySourceKind.VEHICLE_MOTION), setOf(HistorySourceKind.CONTROLLER))
+internal val motionTiers = listOf(setOf(HistorySourceKind.VEHICLE_MOTION), setOf(HistorySourceKind.CONTROLLER))
 internal val batteryTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY), setOf(HistorySourceKind.BATTERY))
 private val batteryTemperatureTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY),
     setOf(HistorySourceKind.BATTERY, HistorySourceKind.BATTERY_ASSEMBLY))
@@ -26,6 +26,18 @@ private val batteryMetrics = listOf("soc_percent", "power_w")
  */
 internal fun tier(sources: List<HistorySource>, tiers: List<Set<HistorySourceKind>>): List<HistorySource> =
     tiers.firstNotNullOfOrNull { kinds -> sources.filter { it.kind in kinds }.takeIf { it.isNotEmpty() } }.orEmpty()
+
+/**
+ * What a ride shows when the rider has chosen nothing: speed from the motion source, power from the
+ * battery (the controller's when there is no battery power). One tier each, so an aggregate and its
+ * contributors never both appear.
+ */
+fun historyDefaultMetrics(sources: List<HistorySource>): List<HistorySeriesKey> {
+    val speed = tier(sources, motionTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "speed_kmh") }
+    val power = tier(sources, batteryTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "power_w") }
+        ?: tier(sources, motionTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "controller_power_w") }
+    return listOfNotNull(speed, power)
+}
 
 /** Stats to read for the tiles of a ride with these sources. */
 fun historyTotalsKeys(sources: List<HistorySource>): List<HistorySeriesKey> {

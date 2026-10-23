@@ -849,7 +849,7 @@ class DefaultRootComponent(
                     presetStore = get(), imageLoader = get(), favoriteStore = get(),
                     mediaRepository = get(), deletionRepository = get(), exportRepository = get(),
                     recordingRepository = get(), openLatestOnLoad = true, totalsRepository = reads,
-                    initialRideId = config.rideId).also { it.refresh() },
+                    initialRideId = config.rideId, defaultMetrics = true).also { it.refresh() },
                     combine(vehicleRepository.vehicles, bmsRepository.activeVehicle) { saved, current ->
                         (saved + listOfNotNull(current)).associate { it.id to it.name }
                     })

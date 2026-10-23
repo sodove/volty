@@ -228,6 +228,16 @@ class HistoryComponentTest {
             assertEquals(0, left); assertEquals(HistoryDestination.CATALOG, c.state.value.destination)
         } finally { c.close() }
     }
+    @Test fun aRideOpenedWithNothingChosenChartsItsDefaultsOnceAndKeepsTheRidersChoice() = runTest {
+        val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
+            Repo(), { HistoryTick(6000, 5010, 1) }, {}, defaultMetrics = true)
+        try {
+            c.openRide("a"); runCurrent()
+            assertEquals(listOf(HistorySeriesKey("pack", "power_w")), c.state.value.detail.selectedKeys)
+            c.removeMetric(HistorySeriesKey("pack", "power_w")); runCurrent()
+            assertTrue(c.state.value.detail.selectedKeys.isEmpty(), "the rider cleared it: no defaults forced back")
+        } finally { c.close() }
+    }
     @Test fun aRequestedRideOpensInsteadOfTheNewest() = runTest {
         val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
             Repo(), { HistoryTick(6000, 5010, 1) }, {}, openLatestOnLoad = true, initialRideId = "b")
