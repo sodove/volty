@@ -988,6 +988,9 @@
     <string name="nearby_panel_roster_connecting">Подключается</string>
     <string name="nearby_panel_roster_more">Ещё участников: %1$d</string>
     <string name="settings_voice_audio">Звук Nearby</string>
+    <string name="settings_sound_section">Звук</string>
+    <string name="settings_voice_volume">Громкость голоса</string>
+    <string name="settings_voice_volume_db">%1$d дБ</string>
     <string name="settings_voice_output">Звук собеседников</string>
     <string name="settings_voice_output_auto">Авто</string>
     <string name="settings_voice_output_headset">Наушники</string>
@@ -1245,4 +1248,8 @@
     <string name="history_media_on_map">На записанном маршруте</string>
     <string name="history_media_unpositioned">Без точки на карте</string>
     <string name="history_recording_telemetry_limited">Данные устройства записываются не полностью. Время поездки сохраняется, маршрут — при доступной геолокации.</string>
+    <string name="nearby_participant_volume">Громкость %1$s</string>
+    <string name="nearby_participant_volume_db">%1$d дБ</string>
+    <string name="nearby_participant_volume_reset">Сбросить</string>
+    <string name="nearby_participant_volume_done">Готово</string>
 </resources>

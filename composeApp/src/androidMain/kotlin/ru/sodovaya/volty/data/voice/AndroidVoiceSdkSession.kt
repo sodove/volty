@@ -25,10 +25,11 @@ class AndroidVoiceSdkSessionFactory(
     private val preferences: VoiceAudioPreferences,
     private val listen: StateFlow<VoiceListenSettings>,
     private val diagnostics: VoiceDiagnostics,
+    private val actorFor: (identity: String) -> String? = { null },
 ) : VoiceSdkSessionFactory {
     private val application = context.applicationContext
     override fun create(tag: VoiceSessionTag, emit: (VoiceSessionEvent) -> Unit): VoiceSdkSession {
-        return AndroidVoiceSdkSession(application, tag, preferences, listen, diagnostics, emit)
+        return AndroidVoiceSdkSession(application, tag, preferences, listen, diagnostics, emit, actorFor)
     }
 }
 
@@ -40,6 +41,7 @@ internal class AndroidVoiceSdkSession(
     private val listen: StateFlow<VoiceListenSettings>,
     private val diagnostics: VoiceDiagnostics,
     private val emit: (VoiceSessionEvent) -> Unit,
+    private val actorFor: (identity: String) -> String? = { null },
 ) : VoiceSdkSession {
     init { AndroidVoiceDiagnosticStore.attach(context, diagnostics) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -131,6 +133,9 @@ internal class AndroidVoiceSdkSession(
             disableAudioPrewarming = true, disableCommunicationModeWorkaround = true,
         ))).also { room = it }
         scope.launch { ownedRoom.events.collect { onRoomEvent(it, ownedRoom) } }
+        // Gains follow the settings at once; reconcileRemoteAudio re-applies them on every
+        // (re)subscription and on the one-second poll, so a reconnect never resets a volume.
+        scope.launch { listen.collect { room?.let(::reconcileRemoteAudio) } }
         scope.launch {
             while (isActive) {
                 delay(DUCK_TICK_MILLIS)
@@ -330,9 +335,19 @@ internal class AndroidVoiceSdkSession(
 
     private fun reconcileRemoteAudio(ownedRoom: Room) {
         if (closing) return
-        audio?.remoteTracks(ownedRoom.remoteParticipants.values.flatMap { participant ->
-            participant.trackPublications.values.mapNotNull { it.track as? io.livekit.android.room.track.RemoteAudioTrack }
-        })
+        val settings = listen.value
+        val gains = LinkedHashMap<io.livekit.android.room.track.RemoteAudioTrack, Double>()
+        ownedRoom.remoteParticipants.values.forEach { participant ->
+            val gain = listenGain(settings, participant.identity?.value?.let(actorFor))
+            participant.trackPublications.values.forEach { publication ->
+                (publication.track as? io.livekit.android.room.track.RemoteAudioTrack)?.let { track ->
+                    gains[track] = gain
+                    // SDK rendering. Phone capture plays through PhoneVoicePlayback, scaled there.
+                    track.setVolume(gain)
+                }
+            }
+        }
+        audio?.remoteTracks(gains.keys.toList(), gains)
         val observations = ownedRoom.remoteParticipants.values.flatMap { participant ->
             participant.trackPublications.values.map { publication ->
                 VoiceRemoteAudioObservation(participant.sid.toString(),

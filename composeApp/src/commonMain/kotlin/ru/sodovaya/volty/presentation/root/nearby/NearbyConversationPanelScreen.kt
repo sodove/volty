@@ -36,6 +36,12 @@ import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.data.voice.VoiceAudioChangeResult
 import ru.sodovaya.volty.data.voice.VoiceConversationAudioState
 import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
+import ru.sodovaya.volty.domain.audio.MAX_LISTEN_GAIN_DB
+import ru.sodovaya.volty.domain.audio.MIN_LISTEN_GAIN_DB
+import ru.sodovaya.volty.domain.audio.VoiceListenSettings
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
+import kotlin.math.roundToInt
 import ru.sodovaya.volty.domain.voice.VoiceInputPreference
 import ru.sodovaya.volty.domain.voice.VoiceOperationId
 import ru.sodovaya.volty.domain.voice.VoiceOutputPreference
@@ -65,6 +71,8 @@ internal fun NearbyConversationPanelScreen(
     modifier: Modifier = Modifier,
     maxHeight: Dp = 400.dp,
     onOpenDetails: () -> Unit = {},
+    listen: VoiceListenSettings = VoiceListenSettings(),
+    onParticipantGain: (actorId: String, db: Float) -> Unit = { _, _ -> },
 ) {
     val panel = nearbyConversationPanel(voice, sharing)
     val roster = nearbyChannelRosterPanel(voice)
@@ -107,7 +115,7 @@ internal fun NearbyConversationPanelScreen(
             verticalArrangement = Arrangement.spacedBy(if (expanded) 12.dp else 4.dp),
         ) {
             if (voice.operation != null && expanded) {
-                ExpandedConversation(voice, sharing, panel, roster, actions)
+                ExpandedConversation(voice, sharing, panel, roster, actions, listen, onParticipantGain)
             } else if (voice.operation != null) {
                 ConversationHeader(voice, panel.connection)
                 ConversationActions(panel, actions, expanded = false, onOpenDetails)
@@ -248,6 +256,8 @@ private fun ExpandedConversation(
     panel: NearbyConversationPanelView,
     roster: NearbyChannelRosterPanel,
     actions: NearbyConversationPanelActions,
+    listen: VoiceListenSettings,
+    onParticipantGain: (String, Float) -> Unit,
 ) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
@@ -266,7 +276,7 @@ private fun ExpandedConversation(
     }
     ConversationActions(panel, actions, expanded = true, onOpenDetails = {})
     panel.audio?.let { audio -> NearbyAudioStatus(audio, showPending = false) }
-    if (voice.kind == NearbyConversationKind.CHANNEL) ParticipantRows(roster)
+    if (voice.kind == NearbyConversationKind.CHANNEL) ParticipantRows(roster, listen, onParticipantGain)
     PositionRow(panel, sharing, actions)
 }
 
@@ -301,8 +311,14 @@ private fun StatusDot(color: Color) {
     Box(Modifier.size(8.dp).background(color, CircleShape))
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ParticipantRows(roster: NearbyChannelRosterPanel) {
+private fun ParticipantRows(
+    roster: NearbyChannelRosterPanel,
+    listen: VoiceListenSettings,
+    onParticipantGain: (String, Float) -> Unit,
+) {
+    var adjusting by remember { mutableStateOf<String?>(null) }
     if (!roster.known) {
         Text(stringResource(Res.string.nearby_panel_roster_unknown), style = MaterialTheme.typography.bodySmall)
         return
@@ -311,7 +327,11 @@ private fun ParticipantRows(roster: NearbyChannelRosterPanel) {
         roster.peers.take(12).forEach { row ->
             val name = roster.profileNames[row.peer.actorId]
                 ?: stringResource(Res.string.nearby_panel_roster_peer, row.peer.actorId.take(4))
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                // Long press opens this person's volume; a tap does nothing, so it cannot be hit by accident.
+                Modifier.combinedClickable(onClick = {}, onLongClick = { adjusting = row.peer.actorId }),
+                verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
                 Box(
                     Modifier.size(28.dp).background(MaterialTheme.colorScheme.primaryContainer, CircleShape),
                     contentAlignment = Alignment.Center,
@@ -330,6 +350,28 @@ private fun ParticipantRows(roster: NearbyChannelRosterPanel) {
                     StatusDot(if (row.connected) ConnectedGreen else WaitingAmber)
                 }
             }
+        }
+        adjusting?.let { actorId ->
+            val name = roster.profileNames[actorId]
+                ?: stringResource(Res.string.nearby_panel_roster_peer, actorId.take(4))
+            val db = listen.participantGainDb[actorId] ?: 0f
+            AlertDialog(
+                onDismissRequest = { adjusting = null },
+                title = { Text(stringResource(Res.string.nearby_participant_volume, name)) },
+                text = {
+                    Column {
+                        Text(stringResource(Res.string.nearby_participant_volume_db, db.roundToInt()))
+                        Slider(
+                            value = db.coerceIn(MIN_LISTEN_GAIN_DB, MAX_LISTEN_GAIN_DB),
+                            onValueChange = { onParticipantGain(actorId, it.roundToInt().toFloat()) },
+                            valueRange = MIN_LISTEN_GAIN_DB..MAX_LISTEN_GAIN_DB,
+                            steps = (MAX_LISTEN_GAIN_DB - MIN_LISTEN_GAIN_DB).roundToInt() - 1,
+                        )
+                    }
+                },
+                confirmButton = { TextButton(onClick = { adjusting = null }) { Text(stringResource(Res.string.nearby_participant_volume_done)) } },
+                dismissButton = { TextButton(onClick = { onParticipantGain(actorId, 0f) }) { Text(stringResource(Res.string.nearby_participant_volume_reset)) } },
+            )
         }
         if (roster.peers.size > 12) {
             Text(stringResource(Res.string.nearby_panel_roster_more, roster.peers.size - 12), style = MaterialTheme.typography.bodySmall)

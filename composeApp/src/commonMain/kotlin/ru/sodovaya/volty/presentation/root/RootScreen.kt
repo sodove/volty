@@ -140,6 +140,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         qualifiedHistoryMap(historyFrame, historyState.detail.ride?.favoriteSource(), historyState.detail.range) else null
     val darkTheme = LocalVoltyDarkTheme.current
     val nearby by component.nearby.state.collectAsState()
+    val voiceListen by component.voiceListen.collectAsState()
     var conversationDetailsVisible by remember { mutableStateOf(false) }
     val conversationVisible = nearbyConversationPanelVisible(nearby.voice, nearby.sharing)
     LaunchedEffect(conversationVisible) {
@@ -445,6 +446,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             NearbyConversationPanelScreen(
                 nearby.voice, nearby.sharing, expanded=true, actions=component.nearby.actions,
                 maxHeight=detailsMaximumHeight,
+                listen=voiceListen, onParticipantGain=component::setParticipantGain,
             )
         }
     }

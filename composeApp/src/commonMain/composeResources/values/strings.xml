@@ -990,6 +990,9 @@
     <string name="nearby_panel_roster_connecting">Connecting</string>
     <string name="nearby_panel_roster_more">%1$d more participants</string>
     <string name="settings_voice_audio">Nearby audio</string>
+    <string name="settings_sound_section">Sound</string>
+    <string name="settings_voice_volume">Voice volume</string>
+    <string name="settings_voice_volume_db">%1$d dB</string>
     <string name="settings_voice_output">Voice playback</string>
     <string name="settings_voice_output_auto">Auto</string>
     <string name="settings_voice_output_headset">Headset</string>
@@ -1247,4 +1250,8 @@
     <string name="history_media_on_map">On recorded route</string>
     <string name="history_media_unpositioned">Not positioned on map</string>
     <string name="history_recording_telemetry_limited">Device data is not fully recorded. Ride time is saved; GPS route recording requires location permission.</string>
+    <string name="nearby_participant_volume">Volume: %1$s</string>
+    <string name="nearby_participant_volume_db">%1$d dB</string>
+    <string name="nearby_participant_volume_reset">Reset</string>
+    <string name="nearby_participant_volume_done">Done</string>
 </resources>

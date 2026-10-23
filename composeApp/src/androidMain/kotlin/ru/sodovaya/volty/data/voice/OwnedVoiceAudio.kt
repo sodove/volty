@@ -125,8 +125,9 @@ internal class OwnedVoiceAudio(
         playbackMuted = value; playback.mute(value); module.setSpeakerMute(phoneCapture || value)
         diagnostics.update { it.copy(playbackMuted = value) }
     }
-    fun remoteTracks(tracks: List<io.livekit.android.room.track.RemoteAudioTrack>) =
-        playback.reconcile(if (phoneCapture) tracks else emptyList())
+    fun remoteTracks(tracks: List<io.livekit.android.room.track.RemoteAudioTrack>,
+                     gains: Map<io.livekit.android.room.track.RemoteAudioTrack, Double> = emptyMap()) =
+        playback.reconcile(if (phoneCapture) tracks else emptyList(), gains)
     fun samplePlayback() = playback.sampleDiagnostics()
     fun playbackAvailable(preference: VoiceAudioPreferences): Boolean =
         playback.available(preference.input == VoiceInputPreference.PHONE, preference.output)

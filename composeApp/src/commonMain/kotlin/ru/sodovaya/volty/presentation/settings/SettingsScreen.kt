@@ -115,6 +115,11 @@ import volty.composeapp.generated.resources.settings_voice_microphone_headset_hi
 import volty.composeapp.generated.resources.settings_voice_microphone_phone
 import volty.composeapp.generated.resources.settings_voice_microphone_subtitle
 import volty.composeapp.generated.resources.settings_voice_audio
+import volty.composeapp.generated.resources.settings_sound_section
+import volty.composeapp.generated.resources.settings_voice_volume
+import volty.composeapp.generated.resources.settings_voice_volume_db
+import ru.sodovaya.volty.domain.audio.MAX_LISTEN_GAIN_DB
+import kotlin.math.roundToInt
 import volty.composeapp.generated.resources.settings_voice_output
 import volty.composeapp.generated.resources.settings_voice_output_auto
 import volty.composeapp.generated.resources.settings_voice_output_headset
@@ -150,6 +155,9 @@ import volty.composeapp.generated.resources.settings_offline_delete_title
 import volty.composeapp.generated.resources.settings_offline_delete_text
 import volty.composeapp.generated.resources.settings_tab_general
 import volty.composeapp.generated.resources.settings_tab_debug
+
+/** The settings slider stops at -10 dB; the per-participant slider alone reaches the -30 dB floor. */
+private const val SETTINGS_VOICE_GAIN_MIN_DB = -10f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -276,6 +284,20 @@ fun SettingsScreen(component: SettingsComponent) {
                 }
             }
 
+            }
+            SettingsSection(
+                title = stringResource(Res.string.settings_sound_section),
+                initiallyExpanded = false,
+            ) {
+            SectionLabel(stringResource(Res.string.settings_voice_volume))
+            Text(stringResource(Res.string.settings_voice_volume_db, state.voiceMasterGainDb.roundToInt()),
+                fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Slider(
+                value = state.voiceMasterGainDb.coerceIn(SETTINGS_VOICE_GAIN_MIN_DB, MAX_LISTEN_GAIN_DB),
+                onValueChange = { component.onVoiceMasterGainChanged(it.roundToInt().toFloat()) },
+                valueRange = SETTINGS_VOICE_GAIN_MIN_DB..MAX_LISTEN_GAIN_DB,
+                steps = (MAX_LISTEN_GAIN_DB - SETTINGS_VOICE_GAIN_MIN_DB).roundToInt() - 1,
+            )
             }
             SettingsSection(
                 title = stringResource(Res.string.settings_voice_audio),

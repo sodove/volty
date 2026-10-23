@@ -204,6 +204,7 @@ val androidModule = module {
             monotonicMillis = SystemClock::elapsedRealtime,
             // Cold per-subscription source. Cancellation belongs to the roster owner.
             pulses = flow { while (true) { delay(1_000L); emit(Unit) } },
+            identities = get(),
         )
     }
     single {
@@ -252,7 +253,8 @@ val androidModule = module {
         )
     }
     single<LocationProvider> { AndroidLocationProvider(get()) }
-    single { AndroidVoiceAudioFactory(androidContext(), get<AppPrefs>().voiceListenSettings) }
+    single { ru.sodovaya.volty.domain.voice.VoiceIdentityDirectory() }
+    single { AndroidVoiceAudioFactory(androidContext(), get<AppPrefs>().voiceListenSettings, get()) }
     single { AndroidVoiceForegroundController(androidContext(), get()) }
     single<ru.sodovaya.volty.data.voice.VoiceConversationChannelAudienceFactory> {
         ru.sodovaya.volty.di.nearby.ChannelSharingAudienceAccountFactory(

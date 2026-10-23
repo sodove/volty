@@ -19,6 +19,8 @@ internal class VoiceRosterAccountSession(
     queuedDispatcher: CoroutineDispatcher,
     pulses: Flow<Unit>,
     monotonicMillis: () -> Long,
+    /** Receives session id -> actor rows for the audio layer; cleared when this roster ends. */
+    identities: VoiceIdentityDirectory? = null,
 ) {
     private val parent = account.scope()
 
@@ -60,6 +62,15 @@ internal class VoiceRosterAccountSession(
 
     private val runtime = VoiceRosterRuntime(parent, queuedDispatcher, tag, port, pulses, monotonicMillis)
     val state = runtime.state
+    private val identityFeed = identities?.let { directory ->
+        parent.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                state.takeWhile { !it.retired }.collect { view ->
+                    directory.publish(view.peers?.filter { it.leaseFresh }?.map { it.peer })
+                }
+            } finally { directory.publish(null) }
+        }
+    }
     private val guardian = parent.launch(start = CoroutineStart.UNDISPATCHED) {
         try {
             // An earlier revision waited only for account cancellation. Runtime-local

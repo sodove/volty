@@ -96,6 +96,9 @@ interface RootComponent {
 
     /** Root borrows the process conversation; navigation never owns voice or sharing. */
     val nearby: NearbyRootPresentation
+    /** Listening volume (master and per participant) for the conversation panel. */
+    val voiceListen: StateFlow<ru.sodovaya.volty.domain.audio.VoiceListenSettings>
+    fun setParticipantGain(actorId: String, db: Float)
 
     fun onBack()
     fun onTab(tab: Tab)
@@ -442,6 +445,8 @@ class DefaultRootComponent(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val nearbyPresenter = NearbyRootPresenter(scope,get(),get(),get())
     override val nearby: NearbyRootPresentation = nearbyPresenter
+    override val voiceListen: StateFlow<ru.sodovaya.volty.domain.audio.VoiceListenSettings> = get<AppPrefs>().voiceListenSettings
+    override fun setParticipantGain(actorId: String, db: Float) { scope.launch { get<AppPrefs>().setParticipantGainDb(actorId, db) } }
     private val navigationVehicleId: StateFlow<String?> = bmsRepository.activeVehicle
         .map { it?.id }
         .stateIn(

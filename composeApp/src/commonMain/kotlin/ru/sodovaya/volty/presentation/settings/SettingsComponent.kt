@@ -42,6 +42,7 @@ interface SettingsComponent {
     fun onFaultDisplayDurationChanged(seconds: Int)
     fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource)
     fun onVoiceOutputPreferenceChanged(preference: VoiceOutputPreference)
+    fun onVoiceMasterGainChanged(db: Float)
     fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean)
     fun onRefreshOfflineRegions()
     fun onDownloadOfflineRegion(regionId: String)
@@ -71,6 +72,7 @@ interface SettingsComponent {
         val faultDisplayDurationSec: Int = 60,
         val voiceMicrophoneSource: VoiceMicrophoneSource = VoiceMicrophoneSource.AUTO,
         val voiceOutputPreference: VoiceOutputPreference? = null,
+        val voiceMasterGainDb: Float = 0f,
         val offlineSkipMeteredConfirmation: Boolean = false,
         val offlineRegions: List<OfflineRegionPackageState> = emptyList(),
         val offlinePreparation: List<OfflineRegionPreparationState> = emptyList(),
@@ -108,6 +110,7 @@ class DefaultSettingsComponent(
             defaultDashboardStyle = appPrefs.defaultDashboardStyle.value,
             faultDisplayDurationSec = appPrefs.faultDisplayDurationSec.value,
             voiceMicrophoneSource = appPrefs.voiceMicrophoneSource.value,
+            voiceMasterGainDb = appPrefs.voiceListenSettings.value.masterGainDb,
             offlineSkipMeteredConfirmation = appPrefs.offlineSkipMeteredConfirmation.value,
         )
     )
@@ -129,6 +132,9 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.defaultDashboardStyle.collect { v -> _state.update { it.copy(defaultDashboardStyle = v) } } }
         scope.launch { appPrefs.faultDisplayDurationSec.collect { v -> _state.update { it.copy(faultDisplayDurationSec = v) } } }
         // One actual storage snapshot supplies both choices; initial AUTO is not loaded evidence.
+        scope.launch { appPrefs.voiceListenSettings.collect { listen ->
+            _state.update { it.copy(voiceMasterGainDb = listen.masterGainDb) }
+        } }
         scope.launch { appPrefs.voiceAudioPreferences.collect { preferences ->
             val input = when (preferences.input) {
                 VoiceInputPreference.AUTO -> VoiceMicrophoneSource.AUTO
@@ -152,6 +158,7 @@ class DefaultSettingsComponent(
     override fun onDefaultDashboardStyleChanged(style: DashboardStyle) { scope.launch { appPrefs.setDefaultDashboardStyle(style) } }
     override fun onFaultDisplayDurationChanged(seconds: Int) { scope.launch { appPrefs.setFaultDisplayDurationSec(seconds) } }
     override fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource) { scope.launch { appPrefs.setVoiceMicrophoneSource(source) } }
+    override fun onVoiceMasterGainChanged(db: Float) { scope.launch { appPrefs.setMasterListenGainDb(db) } }
     override fun onVoiceOutputPreferenceChanged(preference: VoiceOutputPreference) { scope.launch { appPrefs.setVoiceOutputPreference(preference) } }
     override fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean) {
         scope.launch { appPrefs.setOfflineSkipMeteredConfirmation(enabled) }

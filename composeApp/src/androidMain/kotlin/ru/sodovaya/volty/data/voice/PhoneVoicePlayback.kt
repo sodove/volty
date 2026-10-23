@@ -72,16 +72,21 @@ internal class PhoneVoicePlayback(
         report()
     }
 
-    fun reconcile(current: List<RemoteAudioTrack>) {
+    /** [gains] maps each live remote track to its linear listening gain (default 1.0). */
+    fun reconcile(current: List<RemoteAudioTrack>, gains: Map<RemoteAudioTrack, Double> = emptyMap()) {
         val removed: List<Stream>
         val added: List<Stream>
         synchronized(lock) {
             if (closed) return
+            // WebRTC setVolume never reaches this PCM; the gain is applied in Stream.onData.
+            current.forEach { streams[it]?.gain = gains[it] ?: 1.0 }
             removed = (streams.keys - current.toSet()).map { streams.remove(it)!! }
             // Fence callbacks before invoking SDK removeSink, which can wait on its RTC thread.
             removed.forEach { it.retired = true; it.release() }
             pendingDetach.addAll(removed)
-            added = current.filter { it !in streams }.map { remote -> Stream(remote).also { streams[remote] = it } }
+            added = current.filter { it !in streams }.map { remote ->
+                Stream(remote).also { it.gain = gains[remote] ?: 1.0; streams[remote] = it }
+            }
             report()
         }
         detach(removed)
@@ -145,6 +150,7 @@ internal class PhoneVoicePlayback(
 
     private inner class Stream(val remote: RemoteAudioTrack) : AudioTrackSink {
         var retired = false
+        var gain = 1.0
         var track: AudioTrack? = null
         private var rate = 0
         private var channels = 0
@@ -195,7 +201,10 @@ internal class PhoneVoicePlayback(
                     val backlog = checkNotNull(buffered)
                     if (!permitted) backlog.clear()
                     val pcm = ByteArray(bytes)
-                    if (permitted) data.duplicate().get(pcm)
+                    if (permitted) {
+                        data.duplicate().get(pcm)
+                        if (gain != 1.0) scalePcm16Le(pcm, bytes, gain)
+                    }
                     backlog.append(pcm)
                     // A nonblocking AudioTrack write may accept only a prefix or zero bytes.
                     // Keep the tail for later callbacks; cap delay instead of growing forever.
