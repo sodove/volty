@@ -203,14 +203,19 @@ internal fun activeVehicleForCreatePrefill(
  *
  * Any active vehicle lands on the Ride dashboard. A BMS-only vehicle uses
  * the same surface with GPS speed and BMS telemetry while controller-only
- * metrics remain unavailable. With no active vehicle, the battery dashboard
- * remains the safe fallback.
+ * metrics remain unavailable. With no active vehicle, home is the garage
+ * ([configAfterDisconnect]).
+ *
+ * RETRACTION: an earlier revision said the battery dashboard "remains the safe
+ * fallback" with no vehicle. That predated the garage; it opened "No active
+ * vehicle" with no tab highlighted after leaving the setup wizard (emulator,
+ * 2026-10-24). The Battery TAB still reaches [Config.Dashboard] ([configForTab]).
  *
  * Extracted as a pure function so it can be unit-tested without standing up
  * Decompose's [ComponentContext] and Koin: see `RootNavigationTest`.
  */
 internal fun homeConfigFor(vehicle: Vehicle?): Config =
-    if (vehicle != null) Config.Ride else Config.Dashboard
+    if (vehicle != null) Config.Ride else configAfterDisconnect()
 
 /**
  * Destination of each bottom-bar tab. Pure for the same reason as

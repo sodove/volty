@@ -96,10 +96,27 @@ class RootNavigationTest {
     }
 
     @Test
-    fun home_is_battery_when_there_is_no_active_vehicle() {
-        // Guest / cold-start: never strand the user on a Ride screen with no
-        // motion source behind it.
-        assertEquals(Config.Dashboard, homeConfigFor(null))
+    fun withoutAVehicleHomeIsTheGarage() {
+        // RETRACTION: this was home_is_battery_when_there_is_no_active_vehicle and pinned
+        // Config.Dashboard, a fallback from before the garage existed. It sent a rider who left the
+        // setup wizard with no vehicle to "No active vehicle" with no tab highlighted (emulator,
+        // 2026-10-24). Without a vehicle, home is the garage.
+        assertEquals(Config.Picker(mode = "cold"), homeConfigFor(null))
+        assertEquals(configAfterDisconnect(), homeConfigFor(null))
+    }
+
+    @Test
+    fun withAVehicleHomeIsStillTheRide() {
+        assertEquals(Config.Ride, homeConfigFor(vehicle()))
+        assertEquals(Config.Dashboard, configForTab(RootComponent.Tab.Battery))
+    }
+
+    @Test
+    fun leavingTheWizardWithoutAVehicleLandsInTheGarage() {
+        val (nav, stack) = buildStack(Config.Picker(mode = "cold"))
+        nav.push(Config.SetupWizard(prefillFromActiveConnection = false))
+        leaveSetupWizard(nav, homeConfigFor(null))
+        assertEquals(Config.Picker(mode = "cold"), stack.value.active.configuration)
     }
 
     @Test
