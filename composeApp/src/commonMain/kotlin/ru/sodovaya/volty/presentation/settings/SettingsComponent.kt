@@ -1,9 +1,13 @@
 package ru.sodovaya.volty.presentation.settings
 
 import com.arkivanov.decompose.ComponentContext
+import com.arkivanov.essenty.backhandler.BackCallback
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.diagnostics.LogExporter
+import ru.sodovaya.volty.domain.alert.AlarmMusicMode
+import ru.sodovaya.volty.domain.audio.AlertSoundKind
+import ru.sodovaya.volty.domain.audio.AlertSoundSettings
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.BleDiagnosticsState
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -32,6 +36,8 @@ import kotlinx.coroutines.launch
 
 interface SettingsComponent {
     val state: StateFlow<State>
+    /** The open settings page, or null while the hub itself is showing. */
+    val page: StateFlow<SettingsPage?>
 
     fun onThemeChanged(theme: String)
     fun onDynamicColorChanged(enabled: Boolean)
@@ -60,13 +66,16 @@ interface SettingsComponent {
     fun onDeleteVehicle(id: String)
     fun onAddBattery()
     fun onSendLogs()
+    fun onOpenPage(page: SettingsPage)
+    /** Closes an open page first; leaves the settings screen only from the hub. */
     fun onBack()
-    fun onTabSelected(tab: Tab)
+    fun onAlertSoundKindChanged(kind: AlertSoundKind)
+    fun onAlertGainChanged(db: Float)
+    fun onAlarmMusicModeChanged(mode: AlarmMusicMode)
+    fun onDuckMusicWhileSpeakingChanged(on: Boolean)
     fun onStartBleCapture()
     fun onStopBleCapture()
     fun onClearBleCapture()
-
-    enum class Tab { GENERAL, DEBUG }
 
     data class State(
         val themeMode: String = "system",
@@ -79,6 +88,9 @@ interface SettingsComponent {
         val voiceMicrophoneSource: VoiceMicrophoneSource = VoiceMicrophoneSource.AUTO,
         val voiceOutputPreference: VoiceOutputPreference? = null,
         val voiceMasterGainDb: Float = 0f,
+        val voiceDuckMusic: Boolean = true,
+        val alertSound: AlertSoundSettings = AlertSoundSettings(),
+        val alarmMusicMode: AlarmMusicMode = AlarmMusicMode.DUCK_MEDIA,
         val mic: ru.sodovaya.volty.domain.audio.MicProcessingSettings = ru.sodovaya.volty.domain.audio.MicProcessingSettings(),
         val offlineSkipMeteredConfirmation: Boolean = false,
         val offlineRegions: List<OfflineRegionPackageState> = emptyList(),
@@ -86,7 +98,6 @@ interface SettingsComponent {
         val offlineCatalogRefreshing: Boolean = false,
         val offlineCatalogError: Boolean = false,
         val vehicles: List<Vehicle> = emptyList(),
-        val selectedTab: Tab = Tab.GENERAL,
         val diagnostics: BleDiagnosticsState = BleDiagnosticsState(),
         val activeVehicle: Vehicle? = null
     )
@@ -107,6 +118,10 @@ class DefaultSettingsComponent(
 ) : SettingsComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val pages = SettingsPageNavigator(onExit = onBackRequested)
+    override val page: StateFlow<SettingsPage?> = pages.page
+    // Only while a page is open: the system back gesture then closes the page instead of the screen.
+    private val pageBackCallback = BackCallback(isEnabled = false) { onBack() }
     private val _state = MutableStateFlow(
         SettingsComponent.State(
             themeMode = appPrefs.themeMode.value,
@@ -118,6 +133,9 @@ class DefaultSettingsComponent(
             faultDisplayDurationSec = appPrefs.faultDisplayDurationSec.value,
             voiceMicrophoneSource = appPrefs.voiceMicrophoneSource.value,
             voiceMasterGainDb = appPrefs.voiceListenSettings.value.masterGainDb,
+            voiceDuckMusic = appPrefs.voiceListenSettings.value.duckMusicWhileSpeaking,
+            alertSound = appPrefs.alertSoundSettings.value,
+            alarmMusicMode = appPrefs.alarmMusicMode.value,
             mic = appPrefs.micProcessingSettings.value,
             offlineSkipMeteredConfirmation = appPrefs.offlineSkipMeteredConfirmation.value,
         )
@@ -126,6 +144,7 @@ class DefaultSettingsComponent(
 
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
+        backHandler.register(pageBackCallback)
 
         scope.launch {
             vehicleRepository.vehicles.collect { list ->
@@ -141,8 +160,10 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.faultDisplayDurationSec.collect { v -> _state.update { it.copy(faultDisplayDurationSec = v) } } }
         // One actual storage snapshot supplies both choices; initial AUTO is not loaded evidence.
         scope.launch { appPrefs.voiceListenSettings.collect { listen ->
-            _state.update { it.copy(voiceMasterGainDb = listen.masterGainDb) }
+            _state.update { it.copy(voiceMasterGainDb = listen.masterGainDb, voiceDuckMusic = listen.duckMusicWhileSpeaking) }
         } }
+        scope.launch { appPrefs.alertSoundSettings.collect { v -> _state.update { it.copy(alertSound = v) } } }
+        scope.launch { appPrefs.alarmMusicMode.collect { v -> _state.update { it.copy(alarmMusicMode = v) } } }
         scope.launch { appPrefs.micProcessingSettings.collect { m -> _state.update { it.copy(mic = m) } } }
         scope.launch { appPrefs.voiceAudioPreferences.collect { preferences ->
             val input = when (preferences.input) {
@@ -219,8 +240,18 @@ class DefaultSettingsComponent(
     override fun onDeleteVehicle(id: String) { scope.launch { vehicleRepository.delete(id) } }
     override fun onAddBattery() { onAddBatteryRequested() }
     override fun onSendLogs() { logExporter.exportLogs() }
-    override fun onBack() { onBackRequested() }
-    override fun onTabSelected(tab: SettingsComponent.Tab) { _state.update { it.copy(selectedTab = tab) } }
+    override fun onOpenPage(page: SettingsPage) {
+        pages.open(page)
+        pageBackCallback.isEnabled = true
+    }
+    override fun onBack() {
+        pages.back()
+        pageBackCallback.isEnabled = pages.page.value != null
+    }
+    override fun onAlertSoundKindChanged(kind: AlertSoundKind) { scope.launch { appPrefs.setAlertSoundKind(kind) } }
+    override fun onAlertGainChanged(db: Float) { scope.launch { appPrefs.setAlertGainDb(db) } }
+    override fun onAlarmMusicModeChanged(mode: AlarmMusicMode) { scope.launch { appPrefs.setAlarmMusicMode(mode) } }
+    override fun onDuckMusicWhileSpeakingChanged(on: Boolean) { scope.launch { appPrefs.setDuckMusicWhileSpeaking(on) } }
     override fun onStartBleCapture() = bleDiagnosticsRepository.startCapture()
     override fun onStopBleCapture() = bleDiagnosticsRepository.stopCapture()
     override fun onClearBleCapture() = bleDiagnosticsRepository.clearCapture()

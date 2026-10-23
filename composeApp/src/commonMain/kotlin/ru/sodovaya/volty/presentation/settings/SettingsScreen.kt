@@ -173,6 +173,66 @@ import volty.composeapp.generated.resources.settings_offline_delete_text
 import volty.composeapp.generated.resources.settings_tab_general
 import volty.composeapp.generated.resources.settings_tab_debug
 
+import volty.composeapp.generated.resources.settings_page_back
+import volty.composeapp.generated.resources.settings_group_drive
+import volty.composeapp.generated.resources.settings_group_sound
+import volty.composeapp.generated.resources.settings_group_app
+import volty.composeapp.generated.resources.settings_group_vehicles
+import volty.composeapp.generated.resources.settings_page_dashboard
+import volty.composeapp.generated.resources.settings_page_units
+import volty.composeapp.generated.resources.settings_page_connection
+import volty.composeapp.generated.resources.settings_page_alerts
+import volty.composeapp.generated.resources.settings_page_voice
+import volty.composeapp.generated.resources.settings_page_microphone
+import volty.composeapp.generated.resources.settings_page_offline_maps
+import volty.composeapp.generated.resources.settings_page_theme
+import volty.composeapp.generated.resources.settings_page_developer
+import volty.composeapp.generated.resources.settings_summary_connection
+import volty.composeapp.generated.resources.settings_summary_theme_dynamic
+import volty.composeapp.generated.resources.settings_summary_alerts
+import volty.composeapp.generated.resources.settings_summary_voice_ducking
+import volty.composeapp.generated.resources.settings_summary_voice_plain
+import volty.composeapp.generated.resources.settings_summary_mic_none
+import volty.composeapp.generated.resources.settings_summary_mic_auto_gain
+import volty.composeapp.generated.resources.settings_summary_mic_phone_ns
+import volty.composeapp.generated.resources.settings_summary_mic_speech_gate
+import volty.composeapp.generated.resources.settings_summary_offline_none
+import volty.composeapp.generated.resources.settings_summary_offline_installed
+import volty.composeapp.generated.resources.settings_summary_offline_downloading
+import volty.composeapp.generated.resources.settings_summary_developer
+import volty.composeapp.generated.resources.settings_voice_duck_music
+import volty.composeapp.generated.resources.settings_voice_duck_music_hint
+import volty.composeapp.generated.resources.alerts_music_mode
+import volty.composeapp.generated.resources.alerts_music_mode_subtitle
+import volty.composeapp.generated.resources.alerts_music_mode_duck
+import volty.composeapp.generated.resources.alerts_music_mode_overlay
+import volty.composeapp.generated.resources.alerts_sound_kind
+import volty.composeapp.generated.resources.alerts_sound_kind_subtitle
+import volty.composeapp.generated.resources.alerts_sound_kind_navigation
+import volty.composeapp.generated.resources.alerts_sound_kind_alarm
+import volty.composeapp.generated.resources.alerts_gain
+import volty.composeapp.generated.resources.alerts_gain_value
+import androidx.compose.material.icons.filled.Speed
+import androidx.compose.material.icons.filled.Straighten
+import androidx.compose.material.icons.filled.Bluetooth
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import ru.sodovaya.volty.domain.alert.AlarmMusicMode
+import ru.sodovaya.volty.domain.audio.AlertSoundKind
+import ru.sodovaya.volty.domain.audio.MAX_ALERT_GAIN_DB
+import ru.sodovaya.volty.domain.audio.VoiceListenSettings
+import ru.sodovaya.volty.presentation.common.settings.SettingsChoiceRow
+import ru.sodovaya.volty.presentation.common.settings.SettingsGroup
+import ru.sodovaya.volty.presentation.common.settings.SettingsNavRow
+import ru.sodovaya.volty.presentation.common.settings.SettingsRowDivider
+import ru.sodovaya.volty.presentation.common.settings.SettingsSliderRow
+import ru.sodovaya.volty.presentation.common.settings.SettingsSwitchRow
+import ru.sodovaya.volty.presentation.common.settings.SettingsTint
 /** The settings slider stops at -10 dB; the per-participant slider alone reaches the -30 dB floor. */
 private const val SETTINGS_VOICE_GAIN_MIN_DB = -10f
 private const val SETTINGS_MIC_CEILING_MIN_DBFS = -12f
@@ -182,17 +242,22 @@ private const val SETTINGS_MIC_CEILING_MAX_DBFS = -1f
 @Composable
 fun SettingsScreen(component: SettingsComponent) {
     val state by component.state.collectAsState()
-    var pendingDelete by remember { mutableStateOf<Vehicle?>(null) }
+    val page by component.page.collectAsState()
     var pendingOfflineDelete by remember { mutableStateOf<OfflineRegionPackageState?>(null) }
     var offlineRegionQuery by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(stringResource(Res.string.settings_title), fontWeight = FontWeight.SemiBold) },
+                title = {
+                    Text(
+                        page?.let { settingsPageTitle(it) } ?: stringResource(Res.string.settings_title),
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                },
                 navigationIcon = {
                     IconButton(onClick = component::onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.settings_page_back))
                     }
                 }
             )
@@ -204,428 +269,29 @@ fun SettingsScreen(component: SettingsComponent) {
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                val tabs = listOf(SettingsComponent.Tab.GENERAL, SettingsComponent.Tab.DEBUG)
-                tabs.forEachIndexed { index, tab ->
-                    SegmentedButton(
-                        selected = state.selectedTab == tab,
-                        onClick = { component.onTabSelected(tab) },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = tabs.size),
-                    ) {
-                        Text(stringResource(if (tab == SettingsComponent.Tab.GENERAL) Res.string.settings_tab_general else Res.string.settings_tab_debug))
-                    }
-                }
-            }
-            if (state.selectedTab == SettingsComponent.Tab.DEBUG) {
-                DebugSettingsTab(state, component::onStartBleCapture, component::onStopBleCapture, component::onClearBleCapture)
-            } else {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            SettingsSection(
-                title = stringResource(Res.string.settings_theme),
-                initiallyExpanded = true,
-            ) {
-            val themes = listOf("system", "light", "dark")
-            val themeLabels = mapOf(
-                "system" to stringResource(Res.string.settings_theme_system),
-                "light" to stringResource(Res.string.settings_theme_light),
-                "dark" to stringResource(Res.string.settings_theme_dark)
-            )
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                themes.forEachIndexed { idx, t ->
-                    SegmentedButton(
-                        selected = state.themeMode == t,
-                        onClick = { component.onThemeChanged(t) },
-                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = themes.size)
-                    ) { Text(themeLabels[t] ?: t) }
-                }
-            }
-
-            // DYNAMIC COLOR
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(Res.string.settings_dynamic_color), fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text(stringResource(Res.string.settings_dynamic_color_subtitle), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = state.dynamicColor, onCheckedChange = component::onDynamicColorChanged)
-            }
-
-            }
-            HorizontalDivider()
-
-            SettingsSection(
-                title = stringResource(Res.string.settings_connection),
-                initiallyExpanded = false,
-            ) {
-            SectionLabel(stringResource(Res.string.settings_scan_timeout))
-            Text(stringResource(Res.string.settings_seconds, state.scanTimeoutSec), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Slider(
-                value = state.scanTimeoutSec.toFloat(),
-                onValueChange = { component.onScanTimeoutChanged(it.toInt()) },
-                valueRange = 1f..15f,
-                steps = 13
-            )
-
-            // AUTO CONNECT COUNTDOWN
-            SectionLabel(stringResource(Res.string.settings_auto_connect_countdown))
-            Text(stringResource(Res.string.settings_seconds, state.autoConnectCountdownSec), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Slider(
-                value = state.autoConnectCountdownSec.toFloat(),
-                onValueChange = { component.onAutoConnectCountdownChanged(it.toInt()) },
-                valueRange = 0f..10f,
-                steps = 9
-            )
-
-            }
-            HorizontalDivider()
-
-            SettingsSection(
-                title = stringResource(Res.string.settings_units),
-                initiallyExpanded = false,
-            ) {
-            val unitSystems = listOf(UnitSystem.METRIC, UnitSystem.IMPERIAL)
-            val unitLabels = mapOf(
-                UnitSystem.METRIC to stringResource(Res.string.settings_units_metric),
-                UnitSystem.IMPERIAL to stringResource(Res.string.settings_units_imperial)
-            )
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                unitSystems.forEachIndexed { idx, u ->
-                    SegmentedButton(
-                        selected = state.unitSystem == u,
-                        onClick = { component.onUnitSystemChanged(u) },
-                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = unitSystems.size)
-                    ) { Text(unitLabels[u] ?: u.name) }
-                }
-            }
-
-            }
-            SettingsSection(
-                title = stringResource(Res.string.settings_sound_section),
-                initiallyExpanded = false,
-            ) {
-            SectionLabel(stringResource(Res.string.settings_voice_volume))
-            Text(stringResource(Res.string.settings_voice_volume_db, state.voiceMasterGainDb.roundToInt()),
-                fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Slider(
-                value = state.voiceMasterGainDb.coerceIn(SETTINGS_VOICE_GAIN_MIN_DB, MAX_LISTEN_GAIN_DB),
-                onValueChange = { component.onVoiceMasterGainChanged(it.roundToInt().toFloat()) },
-                valueRange = SETTINGS_VOICE_GAIN_MIN_DB..MAX_LISTEN_GAIN_DB,
-                steps = (MAX_LISTEN_GAIN_DB - SETTINGS_VOICE_GAIN_MIN_DB).roundToInt() - 1,
-            )
-            SectionLabel(stringResource(Res.string.settings_mic_section))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(Res.string.settings_mic_auto_gain), fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text(stringResource(Res.string.settings_mic_auto_gain_hint), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = state.mic.autoGain, onCheckedChange = component::onMicAutoGainChanged)
-            }
-            Text(stringResource(Res.string.settings_mic_sensitivity) + ": " +
-                stringResource(Res.string.settings_mic_db, state.mic.sensitivityDb.roundToInt()),
-                fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Slider(
-                value = state.mic.sensitivityDb.coerceIn(0f, MAX_MIC_SENSITIVITY_DB),
-                onValueChange = { component.onMicSensitivityChanged(it.roundToInt().toFloat()) },
-                valueRange = 0f..MAX_MIC_SENSITIVITY_DB,
-                steps = MAX_MIC_SENSITIVITY_DB.roundToInt() - 1,
-            )
-            Text(stringResource(Res.string.settings_mic_ceiling) + ": " +
-                stringResource(Res.string.settings_mic_dbfs, state.mic.limiterCeilingDbfs.roundToInt()),
-                fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Slider(
-                value = state.mic.limiterCeilingDbfs.coerceIn(SETTINGS_MIC_CEILING_MIN_DBFS, SETTINGS_MIC_CEILING_MAX_DBFS),
-                onValueChange = { component.onMicLimiterCeilingChanged(it.roundToInt().toFloat()) },
-                valueRange = SETTINGS_MIC_CEILING_MIN_DBFS..SETTINGS_MIC_CEILING_MAX_DBFS,
-                steps = (SETTINGS_MIC_CEILING_MAX_DBFS - SETTINGS_MIC_CEILING_MIN_DBFS).roundToInt() - 1,
-            )
-            Text(stringResource(Res.string.settings_mic_ceiling_hint), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            MicSwitchRow(stringResource(Res.string.settings_mic_phone_ns), stringResource(Res.string.settings_mic_phone_ns_hint),
-                state.mic.phoneNoiseSuppressor, component::onMicPhoneNoiseSuppressorChanged)
-            MicSwitchRow(stringResource(Res.string.settings_mic_speech_gate), stringResource(Res.string.settings_mic_speech_gate_hint),
-                state.mic.speechGate, component::onMicSpeechGateChanged)
-            if (state.mic.speechGate) {
-                Text(stringResource(Res.string.settings_mic_speech_gate_threshold) + ": " +
-                    (state.mic.speechGateThreshold * 100).roundToInt() + "%",
-                    fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Slider(
-                    value = state.mic.speechGateThreshold.coerceIn(MIN_SPEECH_GATE_THRESHOLD, MAX_SPEECH_GATE_THRESHOLD),
-                    onValueChange = { component.onMicSpeechGateThresholdChanged((it * 20).roundToInt() / 20f) },
-                    valueRange = MIN_SPEECH_GATE_THRESHOLD..MAX_SPEECH_GATE_THRESHOLD,
-                    steps = 15,
+            when (page) {
+                null -> SettingsHub(state, component)
+                SettingsPage.DASHBOARD -> DashboardPage(state, component)
+                SettingsPage.UNITS -> UnitsPage(state, component)
+                SettingsPage.CONNECTION -> ConnectionPage(state, component)
+                SettingsPage.ALERT_SOUND -> AlertSoundPage(state, component)
+                SettingsPage.VOICE -> VoicePage(state, component)
+                SettingsPage.MICROPHONE -> MicrophonePage(state, component)
+                SettingsPage.OFFLINE_MAPS -> OfflineMapsPage(
+                    state = state,
+                    component = component,
+                    query = offlineRegionQuery,
+                    onQueryChange = { offlineRegionQuery = it },
+                    onDeleteRequest = { pendingOfflineDelete = it },
                 )
-                Text(stringResource(Res.string.settings_mic_speech_gate_threshold_hint), fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            }
-            SettingsSection(
-                title = stringResource(Res.string.settings_voice_audio),
-                initiallyExpanded = false,
-            ) {
-            SectionLabel(stringResource(Res.string.settings_voice_microphone))
-            Text(
-                stringResource(Res.string.settings_voice_microphone_subtitle),
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            val microphoneSources = listOf(
-                VoiceMicrophoneSource.AUTO,
-                VoiceMicrophoneSource.PHONE,
-                VoiceMicrophoneSource.HEADSET,
-            )
-            val microphoneLabels = mapOf(
-                VoiceMicrophoneSource.AUTO to stringResource(Res.string.settings_voice_microphone_auto),
-                VoiceMicrophoneSource.PHONE to stringResource(Res.string.settings_voice_microphone_phone),
-                VoiceMicrophoneSource.HEADSET to stringResource(Res.string.settings_voice_microphone_headset),
-            )
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                microphoneSources.forEachIndexed { idx, source ->
-                    SegmentedButton(
-                        selected = state.voiceMicrophoneSource == source && state.voiceOutputPreference != null,
-                        enabled = state.voiceOutputPreference != null,
-                        onClick = { component.onVoiceMicrophoneSourceChanged(source) },
-                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = microphoneSources.size),
-                    ) { Text(microphoneLabels[source] ?: source.name) }
-                }
-            }
-            // Phone vs headset is a latency trade on Bluetooth: the phone mic forces A2DP playback.
-            if (state.voiceOutputPreference != null) Text(
-                stringResource(when (state.voiceMicrophoneSource) {
-                    VoiceMicrophoneSource.AUTO -> Res.string.settings_voice_microphone_auto_hint
-                    VoiceMicrophoneSource.PHONE -> Res.string.settings_voice_microphone_phone_hint
-                    VoiceMicrophoneSource.HEADSET -> Res.string.settings_voice_microphone_headset_hint
-                }),
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            SectionLabel(stringResource(Res.string.settings_voice_output))
-            val outputChoices = VoiceOutputPreference.entries
-            val outputLabels = mapOf(
-                VoiceOutputPreference.AUTO to stringResource(Res.string.settings_voice_output_auto),
-                VoiceOutputPreference.HEADSET to stringResource(Res.string.settings_voice_output_headset),
-                VoiceOutputPreference.SPEAKER to stringResource(Res.string.settings_voice_output_speaker),
-            )
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                outputChoices.forEachIndexed { index, preference ->
-                    SegmentedButton(
-                        selected = state.voiceOutputPreference == preference,
-                        enabled = state.voiceOutputPreference != null,
-                        onClick = { component.onVoiceOutputPreferenceChanged(preference) },
-                        shape = SegmentedButtonDefaults.itemShape(index = index, count = outputChoices.size),
-                    ) { Text(outputLabels.getValue(preference)) }
-                }
-            }
-
-            }
-            SettingsSection(
-                title = stringResource(Res.string.settings_dashboard_style),
-                initiallyExpanded = false,
-            ) {
-            SectionLabel(stringResource(Res.string.settings_dashboard_style))
-            val dashboardStyles = DashboardStyle.entries
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                dashboardStyles.forEachIndexed { idx, style ->
-                    SegmentedButton(
-                        selected = state.defaultDashboardStyle == style,
-                        onClick = { component.onDefaultDashboardStyleChanged(style) },
-                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = dashboardStyles.size)
-                    ) { Text(dashboardStyleLabel(style)) }
-                }
-            }
-
-            // FAULT DISPLAY DURATION
-            SectionLabel(stringResource(Res.string.settings_fault_display_duration))
-            Text(
-                if (state.faultDisplayDurationSec == 0) {
-                    stringResource(Res.string.settings_fault_display_duration_active)
-                } else {
-                    stringResource(Res.string.settings_minutes, state.faultDisplayDurationSec / 60)
-                },
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Slider(
-                value = state.faultDisplayDurationSec.toFloat(),
-                onValueChange = { component.onFaultDisplayDurationChanged(it.toInt()) },
-                valueRange = 0f..300f,
-                steps = 9
-            )
-
-            }
-            HorizontalDivider()
-
-            SettingsSection(
-                title = stringResource(Res.string.settings_offline_navigation),
-                subtitle = stringResource(Res.string.settings_offline_navigation_subtitle),
-                initiallyExpanded = false,
-            ) {
-            Text(
-                stringResource(Res.string.settings_offline_navigation_subtitle),
-                fontSize = 12.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                stringResource(Res.string.settings_offline_attribution),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    stringResource(Res.string.settings_offline_mobile_data),
-                    modifier = Modifier.weight(1f),
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
-                )
-                Switch(
-                    checked = state.offlineSkipMeteredConfirmation,
-                    onCheckedChange = component::onOfflineSkipMeteredConfirmationChanged,
-                )
-            }
-            TextButton(
-                onClick = component::onRefreshOfflineRegions,
-                enabled = !state.offlineCatalogRefreshing,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                if (state.offlineCatalogRefreshing) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                }
-                Spacer(Modifier.size(6.dp))
-                Text(
-                    stringResource(
-                        if (state.offlineCatalogRefreshing) {
-                            Res.string.settings_offline_refreshing
-                        } else {
-                            Res.string.settings_offline_refresh
-                        }
-                    )
-                )
-            }
-            if (state.offlineCatalogError) {
-                Text(
-                    stringResource(Res.string.settings_offline_catalog_failed),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.error,
-                )
-            }
-            OutlinedTextField(
-                value = offlineRegionQuery,
-                onValueChange = { offlineRegionQuery = it },
-                modifier = Modifier.fillMaxWidth(),
-                singleLine = true,
-                label = { Text(stringResource(Res.string.settings_offline_add_region)) },
-                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
-            )
-            val visibleOfflineRegions = OfflineRegionListPolicy.filterAndOrder(
-                states = state.offlineRegions,
-                query = offlineRegionQuery,
-            )
-            if (state.offlineRegions.isEmpty() && !state.offlineCatalogError) {
-                Text(
-                    stringResource(Res.string.settings_offline_not_configured),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else if (visibleOfflineRegions.isEmpty()) {
-                Text(
-                    stringResource(Res.string.settings_offline_no_region_match),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            } else {
-                visibleOfflineRegions.forEach { region ->
-                    OfflineRegionRow(
-                        region = region,
-                        preparation = state.offlinePreparation.firstOrNull { it.regionId == region.region.regionId },
-                        component = component,
-                        onDeleteRequest = { pendingOfflineDelete = region },
-                    )
-                }
-            }
-
-            }
-            HorizontalDivider()
-
-            SettingsSection(
-                title = stringResource(Res.string.settings_my_batteries),
-                initiallyExpanded = true,
-            ) {
-            state.vehicles.forEach { v ->
-                VehicleRow(
-                    vehicle = v,
-                    onEdit = { component.onEditVehicle(v.id) },
-                    onDelete = { pendingDelete = v }
-                )
-            }
-            TextButton(onClick = component::onAddBattery, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(Res.string.settings_add_new_battery))
-            }
-
-            }
-            HorizontalDivider()
-
-            SettingsSection(
-                title = stringResource(Res.string.settings_diagnostics),
-                initiallyExpanded = false,
-            ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(MaterialTheme.colorScheme.surfaceContainer)
-                    .clickable(onClick = component::onSendLogs)
-                    .padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Icon(
-                    Icons.Default.Share,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(stringResource(Res.string.settings_send_logs), fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text(
-                        stringResource(Res.string.settings_send_logs_subtitle),
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
+                SettingsPage.THEME -> ThemePage(state, component)
+                SettingsPage.DEVELOPER -> DeveloperPage(state, component)
             }
             Spacer(Modifier.height(24.dp))
-            }
-            }
         }
 
-        pendingDelete?.let { v ->
-            AlertDialog(
-                onDismissRequest = { pendingDelete = null },
-                confirmButton = {
-                    TextButton(onClick = {
-                        component.onDeleteVehicle(v.id)
-                        pendingDelete = null
-                    }) { Text(stringResource(Res.string.settings_delete), color = MaterialTheme.colorScheme.error) }
-                },
-                dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text(stringResource(Res.string.action_cancel)) } },
-                title = { Text(stringResource(Res.string.settings_delete_title, v.name)) },
-                text = { Text(stringResource(Res.string.settings_delete_text)) }
-            )
-        }
         pendingOfflineDelete?.let { region ->
             AlertDialog(
                 onDismissRequest = { pendingOfflineDelete = null },
@@ -650,6 +316,550 @@ fun SettingsScreen(component: SettingsComponent) {
             )
         }
     }
+}
+
+@Composable
+private fun settingsPageTitle(page: SettingsPage): String = stringResource(
+    when (page) {
+        SettingsPage.DASHBOARD -> Res.string.settings_page_dashboard
+        SettingsPage.UNITS -> Res.string.settings_page_units
+        SettingsPage.CONNECTION -> Res.string.settings_page_connection
+        SettingsPage.ALERT_SOUND -> Res.string.settings_page_alerts
+        SettingsPage.VOICE -> Res.string.settings_page_voice
+        SettingsPage.MICROPHONE -> Res.string.settings_page_microphone
+        SettingsPage.OFFLINE_MAPS -> Res.string.settings_page_offline_maps
+        SettingsPage.THEME -> Res.string.settings_page_theme
+        SettingsPage.DEVELOPER -> Res.string.settings_page_developer
+    }
+)
+
+// ---------------------------------------------------------------------------------------------
+// The hub
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+private fun SettingsHub(state: SettingsComponent.State, component: SettingsComponent) {
+    SettingsGroup(stringResource(Res.string.settings_group_drive)) {
+        SettingsNavRow(
+            icon = Icons.Filled.Speed,
+            tint = SettingsTint.DRIVE,
+            title = stringResource(Res.string.settings_page_dashboard),
+            summary = dashboardStyleLabel(state.defaultDashboardStyle),
+            onClick = { component.onOpenPage(SettingsPage.DASHBOARD) },
+        )
+        SettingsRowDivider()
+        SettingsNavRow(
+            icon = Icons.Filled.Straighten,
+            tint = SettingsTint.DRIVE,
+            title = stringResource(Res.string.settings_page_units),
+            summary = unitSystemLabel(state.unitSystem),
+            onClick = { component.onOpenPage(SettingsPage.UNITS) },
+        )
+        SettingsRowDivider()
+        SettingsNavRow(
+            icon = Icons.Filled.Bluetooth,
+            tint = SettingsTint.DRIVE,
+            title = stringResource(Res.string.settings_page_connection),
+            summary = stringResource(Res.string.settings_summary_connection, state.scanTimeoutSec, state.autoConnectCountdownSec),
+            onClick = { component.onOpenPage(SettingsPage.CONNECTION) },
+        )
+    }
+    SettingsGroup(stringResource(Res.string.settings_group_sound)) {
+        SettingsNavRow(
+            icon = Icons.Filled.NotificationsActive,
+            tint = SettingsTint.SOUND,
+            title = stringResource(Res.string.settings_page_alerts),
+            summary = stringResource(
+                Res.string.settings_summary_alerts,
+                alertSoundKindLabel(state.alertSound.kind),
+                state.alertSound.gainDb.roundToInt(),
+            ),
+            onClick = { component.onOpenPage(SettingsPage.ALERT_SOUND) },
+        )
+        SettingsRowDivider()
+        val (gainDb, duck) = voiceSummary(
+            VoiceListenSettings(duckMusicWhileSpeaking = state.voiceDuckMusic, masterGainDb = state.voiceMasterGainDb)
+        )
+        SettingsNavRow(
+            icon = Icons.Filled.Headphones,
+            tint = SettingsTint.SOUND,
+            title = stringResource(Res.string.settings_page_voice),
+            summary = stringResource(
+                if (duck) Res.string.settings_summary_voice_ducking else Res.string.settings_summary_voice_plain,
+                gainDb.roundToInt(),
+            ),
+            onClick = { component.onOpenPage(SettingsPage.VOICE) },
+        )
+        SettingsRowDivider()
+        SettingsNavRow(
+            icon = Icons.Filled.Mic,
+            tint = SettingsTint.SOUND,
+            title = stringResource(Res.string.settings_page_microphone),
+            summary = micSummaryText(state),
+            onClick = { component.onOpenPage(SettingsPage.MICROPHONE) },
+        )
+    }
+    SettingsGroup(stringResource(Res.string.settings_group_app)) {
+        SettingsNavRow(
+            icon = Icons.Filled.Map,
+            tint = SettingsTint.MAPS,
+            title = stringResource(Res.string.settings_page_offline_maps),
+            summary = offlineSummaryText(state),
+            onClick = { component.onOpenPage(SettingsPage.OFFLINE_MAPS) },
+        )
+        SettingsRowDivider()
+        SettingsNavRow(
+            icon = Icons.Filled.Palette,
+            tint = SettingsTint.MAPS,
+            title = stringResource(Res.string.settings_page_theme),
+            summary = themeSummaryText(state),
+            onClick = { component.onOpenPage(SettingsPage.THEME) },
+        )
+    }
+    SettingsGroup(stringResource(Res.string.settings_group_vehicles)) {
+        state.vehicles.forEach { v ->
+            VehicleRow(vehicle = v, onEdit = { component.onEditVehicle(v.id) })
+            SettingsRowDivider()
+        }
+        TextButton(onClick = component::onAddBattery, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(Res.string.settings_add_new_battery))
+        }
+    }
+    SettingsGroup(null) {
+        SettingsNavRow(
+            icon = Icons.Filled.Code,
+            tint = SettingsTint.NEUTRAL,
+            title = stringResource(Res.string.settings_page_developer),
+            summary = stringResource(Res.string.settings_summary_developer),
+            onClick = { component.onOpenPage(SettingsPage.DEVELOPER) },
+        )
+    }
+}
+
+@Composable
+private fun unitSystemLabel(system: UnitSystem): String = stringResource(
+    when (system) {
+        UnitSystem.METRIC -> Res.string.settings_units_metric
+        UnitSystem.IMPERIAL -> Res.string.settings_units_imperial
+    }
+)
+
+@Composable
+private fun themeLabel(mode: String): String = stringResource(
+    when (mode) {
+        "light" -> Res.string.settings_theme_light
+        "dark" -> Res.string.settings_theme_dark
+        else -> Res.string.settings_theme_system
+    }
+)
+
+@Composable
+private fun themeSummaryText(state: SettingsComponent.State): String =
+    if (state.dynamicColor) {
+        stringResource(Res.string.settings_summary_theme_dynamic, themeLabel(state.themeMode))
+    } else {
+        themeLabel(state.themeMode)
+    }
+
+@Composable
+private fun alertSoundKindLabel(kind: AlertSoundKind): String = stringResource(
+    when (kind) {
+        AlertSoundKind.NAVIGATION -> Res.string.alerts_sound_kind_navigation
+        AlertSoundKind.ALARM -> Res.string.alerts_sound_kind_alarm
+    }
+)
+
+@Composable
+private fun micSummaryText(state: SettingsComponent.State): String {
+    val parts = micSummaryParts(state.mic)
+    if (parts.isEmpty()) return stringResource(Res.string.settings_summary_mic_none)
+    val labels = parts.map { part ->
+        stringResource(
+            when (part) {
+                MicSummaryPart.AUTO_GAIN -> Res.string.settings_summary_mic_auto_gain
+                MicSummaryPart.PHONE_NS -> Res.string.settings_summary_mic_phone_ns
+                MicSummaryPart.SPEECH_GATE -> Res.string.settings_summary_mic_speech_gate
+            }
+        )
+    }
+    return labels.joinToString(", ").replaceFirstChar { it.uppercase() }
+}
+
+@Composable
+private fun offlineSummaryText(state: SettingsComponent.State): String {
+    val summary = offlineMapsSummary(state.offlineRegions)
+    val base = if (summary.installedRegions == 0) {
+        stringResource(Res.string.settings_summary_offline_none)
+    } else {
+        stringResource(
+            Res.string.settings_summary_offline_installed,
+            summary.installedRegions,
+            formatOfflineBytes(summary.installedBytes),
+        )
+    }
+    return if (summary.downloading > 0) {
+        stringResource(Res.string.settings_summary_offline_downloading, base, summary.downloading)
+    } else {
+        base
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Pages. Each existing setting lives on exactly one of them.
+// ---------------------------------------------------------------------------------------------
+
+@Composable
+private fun ThemePage(state: SettingsComponent.State, component: SettingsComponent) {
+    SettingsGroup(null) {
+        SettingsChoiceRow(
+            title = stringResource(Res.string.settings_theme),
+            options = listOf("system", "light", "dark").map { it to themeLabel(it) },
+            selected = state.themeMode,
+            onSelect = component::onThemeChanged,
+        )
+        SettingsRowDivider()
+        SettingsSwitchRow(
+            title = stringResource(Res.string.settings_dynamic_color),
+            hint = stringResource(Res.string.settings_dynamic_color_subtitle),
+            checked = state.dynamicColor,
+            onChange = component::onDynamicColorChanged,
+        )
+    }
+}
+
+@Composable
+private fun ConnectionPage(state: SettingsComponent.State, component: SettingsComponent) {
+    SettingsGroup(null) {
+        SettingsSliderRow(
+            title = stringResource(Res.string.settings_scan_timeout),
+            valueText = stringResource(Res.string.settings_seconds, state.scanTimeoutSec),
+            value = state.scanTimeoutSec.toFloat(),
+            range = 1f..15f,
+            steps = 13,
+            onChange = { component.onScanTimeoutChanged(it.toInt()) },
+        )
+        SettingsRowDivider()
+        SettingsSliderRow(
+            title = stringResource(Res.string.settings_auto_connect_countdown),
+            valueText = stringResource(Res.string.settings_seconds, state.autoConnectCountdownSec),
+            value = state.autoConnectCountdownSec.toFloat(),
+            range = 0f..10f,
+            steps = 9,
+            onChange = { component.onAutoConnectCountdownChanged(it.toInt()) },
+        )
+    }
+}
+
+@Composable
+private fun UnitsPage(state: SettingsComponent.State, component: SettingsComponent) {
+    SettingsGroup(null) {
+        SettingsChoiceRow(
+            title = stringResource(Res.string.settings_units),
+            options = listOf(UnitSystem.METRIC, UnitSystem.IMPERIAL).map { it to unitSystemLabel(it) },
+            selected = state.unitSystem,
+            onSelect = component::onUnitSystemChanged,
+        )
+    }
+}
+
+@Composable
+private fun DashboardPage(state: SettingsComponent.State, component: SettingsComponent) {
+    SettingsGroup(null) {
+        SettingsChoiceRow(
+            title = stringResource(Res.string.settings_dashboard_style),
+            options = DashboardStyle.entries.map { it to dashboardStyleLabel(it) },
+            selected = state.defaultDashboardStyle,
+            onSelect = component::onDefaultDashboardStyleChanged,
+        )
+        SettingsRowDivider()
+        SettingsSliderRow(
+            title = stringResource(Res.string.settings_fault_display_duration),
+            valueText = if (state.faultDisplayDurationSec == 0) {
+                stringResource(Res.string.settings_fault_display_duration_active)
+            } else {
+                stringResource(Res.string.settings_minutes, state.faultDisplayDurationSec / 60)
+            },
+            value = state.faultDisplayDurationSec.toFloat(),
+            range = 0f..300f,
+            steps = 9,
+            onChange = { component.onFaultDisplayDurationChanged(it.toInt()) },
+        )
+    }
+}
+
+/** The global alert sound; the vehicle alerts screen keeps the same controls over the same prefs. */
+@Composable
+private fun AlertSoundPage(state: SettingsComponent.State, component: SettingsComponent) {
+    SettingsGroup(null) {
+        SettingsChoiceRow(
+            title = stringResource(Res.string.alerts_music_mode),
+            hint = stringResource(Res.string.alerts_music_mode_subtitle),
+            options = listOf(
+                AlarmMusicMode.DUCK_MEDIA to stringResource(Res.string.alerts_music_mode_duck),
+                AlarmMusicMode.PLAY_OVER_MEDIA to stringResource(Res.string.alerts_music_mode_overlay),
+            ),
+            selected = state.alarmMusicMode,
+            onSelect = component::onAlarmMusicModeChanged,
+        )
+        SettingsRowDivider()
+        SettingsChoiceRow(
+            title = stringResource(Res.string.alerts_sound_kind),
+            hint = stringResource(Res.string.alerts_sound_kind_subtitle),
+            options = listOf(
+                AlertSoundKind.NAVIGATION to stringResource(Res.string.alerts_sound_kind_navigation),
+                AlertSoundKind.ALARM to stringResource(Res.string.alerts_sound_kind_alarm),
+            ),
+            selected = state.alertSound.kind,
+            onSelect = component::onAlertSoundKindChanged,
+        )
+        SettingsRowDivider()
+        SettingsSliderRow(
+            title = stringResource(Res.string.alerts_gain),
+            valueText = stringResource(Res.string.alerts_gain_value, state.alertSound.gainDb.toInt()),
+            value = state.alertSound.gainDb,
+            range = 0f..MAX_ALERT_GAIN_DB,
+            steps = MAX_ALERT_GAIN_DB.toInt() - 1,
+            onChange = { component.onAlertGainChanged(it.toInt().toFloat()) },
+        )
+    }
+}
+
+@Composable
+private fun VoicePage(state: SettingsComponent.State, component: SettingsComponent) {
+    SettingsGroup(null) {
+        SettingsSliderRow(
+            title = stringResource(Res.string.settings_voice_volume),
+            valueText = stringResource(Res.string.settings_voice_volume_db, state.voiceMasterGainDb.roundToInt()),
+            value = state.voiceMasterGainDb.coerceIn(SETTINGS_VOICE_GAIN_MIN_DB, MAX_LISTEN_GAIN_DB),
+            range = SETTINGS_VOICE_GAIN_MIN_DB..MAX_LISTEN_GAIN_DB,
+            steps = (MAX_LISTEN_GAIN_DB - SETTINGS_VOICE_GAIN_MIN_DB).roundToInt() - 1,
+            onChange = { component.onVoiceMasterGainChanged(it.roundToInt().toFloat()) },
+        )
+        SettingsRowDivider()
+        SettingsSwitchRow(
+            title = stringResource(Res.string.settings_voice_duck_music),
+            hint = stringResource(Res.string.settings_voice_duck_music_hint),
+            checked = state.voiceDuckMusic,
+            onChange = component::onDuckMusicWhileSpeakingChanged,
+        )
+        SettingsRowDivider()
+        SettingsChoiceRow(
+            title = stringResource(Res.string.settings_voice_output),
+            options = VoiceOutputPreference.entries.map { preference ->
+                preference to stringResource(
+                    when (preference) {
+                        VoiceOutputPreference.AUTO -> Res.string.settings_voice_output_auto
+                        VoiceOutputPreference.HEADSET -> Res.string.settings_voice_output_headset
+                        VoiceOutputPreference.SPEAKER -> Res.string.settings_voice_output_speaker
+                    }
+                )
+            },
+            selected = state.voiceOutputPreference,
+            enabled = state.voiceOutputPreference != null,
+            onSelect = component::onVoiceOutputPreferenceChanged,
+        )
+    }
+}
+
+@Composable
+private fun MicrophonePage(state: SettingsComponent.State, component: SettingsComponent) {
+    SettingsGroup(stringResource(Res.string.settings_voice_microphone)) {
+        // Phone vs headset is a latency trade on Bluetooth: the phone mic forces A2DP playback.
+        SettingsChoiceRow(
+            title = stringResource(Res.string.settings_voice_microphone),
+            hint = if (state.voiceOutputPreference != null) {
+                stringResource(when (state.voiceMicrophoneSource) {
+                    VoiceMicrophoneSource.AUTO -> Res.string.settings_voice_microphone_auto_hint
+                    VoiceMicrophoneSource.PHONE -> Res.string.settings_voice_microphone_phone_hint
+                    VoiceMicrophoneSource.HEADSET -> Res.string.settings_voice_microphone_headset_hint
+                })
+            } else {
+                stringResource(Res.string.settings_voice_microphone_subtitle)
+            },
+            options = listOf(
+                VoiceMicrophoneSource.AUTO to stringResource(Res.string.settings_voice_microphone_auto),
+                VoiceMicrophoneSource.PHONE to stringResource(Res.string.settings_voice_microphone_phone),
+                VoiceMicrophoneSource.HEADSET to stringResource(Res.string.settings_voice_microphone_headset),
+            ),
+            // The initial AUTO is not loaded evidence: nothing is selected until the stored choice arrives.
+            selected = if (state.voiceOutputPreference != null) state.voiceMicrophoneSource else null,
+            enabled = state.voiceOutputPreference != null,
+            onSelect = component::onVoiceMicrophoneSourceChanged,
+        )
+    }
+    SettingsGroup(stringResource(Res.string.settings_mic_section)) {
+        SettingsSwitchRow(
+            title = stringResource(Res.string.settings_mic_auto_gain),
+            hint = stringResource(Res.string.settings_mic_auto_gain_hint),
+            checked = state.mic.autoGain,
+            onChange = component::onMicAutoGainChanged,
+        )
+        SettingsRowDivider()
+        SettingsSliderRow(
+            title = stringResource(Res.string.settings_mic_sensitivity),
+            valueText = stringResource(Res.string.settings_mic_db, state.mic.sensitivityDb.roundToInt()),
+            value = state.mic.sensitivityDb.coerceIn(0f, MAX_MIC_SENSITIVITY_DB),
+            range = 0f..MAX_MIC_SENSITIVITY_DB,
+            steps = MAX_MIC_SENSITIVITY_DB.roundToInt() - 1,
+            onChange = { component.onMicSensitivityChanged(it.roundToInt().toFloat()) },
+        )
+        SettingsRowDivider()
+        SettingsSliderRow(
+            title = stringResource(Res.string.settings_mic_ceiling),
+            valueText = stringResource(Res.string.settings_mic_dbfs, state.mic.limiterCeilingDbfs.roundToInt()),
+            value = state.mic.limiterCeilingDbfs.coerceIn(SETTINGS_MIC_CEILING_MIN_DBFS, SETTINGS_MIC_CEILING_MAX_DBFS),
+            range = SETTINGS_MIC_CEILING_MIN_DBFS..SETTINGS_MIC_CEILING_MAX_DBFS,
+            steps = (SETTINGS_MIC_CEILING_MAX_DBFS - SETTINGS_MIC_CEILING_MIN_DBFS).roundToInt() - 1,
+            hint = stringResource(Res.string.settings_mic_ceiling_hint),
+            onChange = { component.onMicLimiterCeilingChanged(it.roundToInt().toFloat()) },
+        )
+        SettingsRowDivider()
+        SettingsSwitchRow(
+            title = stringResource(Res.string.settings_mic_phone_ns),
+            hint = stringResource(Res.string.settings_mic_phone_ns_hint),
+            checked = state.mic.phoneNoiseSuppressor,
+            onChange = component::onMicPhoneNoiseSuppressorChanged,
+        )
+        SettingsRowDivider()
+        SettingsSwitchRow(
+            title = stringResource(Res.string.settings_mic_speech_gate),
+            hint = stringResource(Res.string.settings_mic_speech_gate_hint),
+            checked = state.mic.speechGate,
+            onChange = component::onMicSpeechGateChanged,
+        )
+        if (state.mic.speechGate) {
+            SettingsRowDivider()
+            SettingsSliderRow(
+                title = stringResource(Res.string.settings_mic_speech_gate_threshold),
+                valueText = "${(state.mic.speechGateThreshold * 100).roundToInt()}%",
+                value = state.mic.speechGateThreshold.coerceIn(MIN_SPEECH_GATE_THRESHOLD, MAX_SPEECH_GATE_THRESHOLD),
+                range = MIN_SPEECH_GATE_THRESHOLD..MAX_SPEECH_GATE_THRESHOLD,
+                steps = 15,
+                hint = stringResource(Res.string.settings_mic_speech_gate_threshold_hint),
+                onChange = { component.onMicSpeechGateThresholdChanged((it * 20).roundToInt() / 20f) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun OfflineMapsPage(
+    state: SettingsComponent.State,
+    component: SettingsComponent,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    onDeleteRequest: (OfflineRegionPackageState) -> Unit,
+) {
+    Text(
+        stringResource(Res.string.settings_offline_navigation_subtitle),
+        fontSize = 12.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    Text(
+        stringResource(Res.string.settings_offline_attribution),
+        fontSize = 11.sp,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+    SettingsGroup(null) {
+        SettingsSwitchRow(
+            title = stringResource(Res.string.settings_offline_mobile_data),
+            hint = null,
+            checked = state.offlineSkipMeteredConfirmation,
+            onChange = component::onOfflineSkipMeteredConfirmationChanged,
+        )
+    }
+    TextButton(
+        onClick = component::onRefreshOfflineRegions,
+        enabled = !state.offlineCatalogRefreshing,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        if (state.offlineCatalogRefreshing) {
+            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+        } else {
+            Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+        }
+        Spacer(Modifier.size(6.dp))
+        Text(
+            stringResource(
+                if (state.offlineCatalogRefreshing) {
+                    Res.string.settings_offline_refreshing
+                } else {
+                    Res.string.settings_offline_refresh
+                }
+            )
+        )
+    }
+    if (state.offlineCatalogError) {
+        Text(
+            stringResource(Res.string.settings_offline_catalog_failed),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.error,
+        )
+    }
+    OutlinedTextField(
+        value = query,
+        onValueChange = onQueryChange,
+        modifier = Modifier.fillMaxWidth(),
+        singleLine = true,
+        label = { Text(stringResource(Res.string.settings_offline_add_region)) },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+    )
+    val visibleOfflineRegions = OfflineRegionListPolicy.filterAndOrder(
+        states = state.offlineRegions,
+        query = query,
+    )
+    if (state.offlineRegions.isEmpty() && !state.offlineCatalogError) {
+        Text(
+            stringResource(Res.string.settings_offline_not_configured),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else if (visibleOfflineRegions.isEmpty()) {
+        Text(
+            stringResource(Res.string.settings_offline_no_region_match),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    } else {
+        visibleOfflineRegions.forEach { region ->
+            OfflineRegionRow(
+                region = region,
+                preparation = state.offlinePreparation.firstOrNull { it.regionId == region.region.regionId },
+                component = component,
+                onDeleteRequest = { onDeleteRequest(region) },
+            )
+        }
+    }
+}
+
+/** The former "Debug" tab plus the log export that used to sit under "Diagnostics". */
+@Composable
+private fun DeveloperPage(state: SettingsComponent.State, component: SettingsComponent) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(onClick = component::onSendLogs)
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(
+            Icons.Default.Share,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(stringResource(Res.string.settings_send_logs), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(
+                stringResource(Res.string.settings_send_logs_subtitle),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+    DebugSettingsTab(state, component::onStartBleCapture, component::onStopBleCapture, component::onClearBleCapture)
 }
 
 @Composable
@@ -816,114 +1026,41 @@ internal fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
     )
 }
 
+/** Opens the vehicle editor; deleting a vehicle lives there now ("Удалить ТС"), not on this row. */
 @Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text.uppercase(),
-        fontSize = 11.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 8.dp)
-    )
-}
-
-@Composable
-private fun SettingsSection(
-    title: String,
-    subtitle: String? = null,
-    initiallyExpanded: Boolean,
-    content: @Composable ColumnScope.() -> Unit,
-) {
-    var expanded by remember { mutableStateOf(initiallyExpanded) }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(22.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f)),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    )
-    {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clickable { expanded = !expanded }
-                .padding(horizontal = 16.dp, vertical = 14.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-                subtitle?.let {
-                    Text(
-                        it,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                    )
-                }
-            }
-            Icon(
-                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                contentDescription = if (expanded) "Свернуть" else "Развернуть",
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (expanded) {
-            Column(
-                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-                content = content,
-            )
-        }
-    }
-}
-
-@Composable
-private fun VehicleRow(vehicle: Vehicle, onEdit: () -> Unit, onDelete: () -> Unit) {
+private fun VehicleRow(vehicle: Vehicle, onEdit: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer)
             .clickable(onClick = onEdit)
-            .padding(12.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
     ) {
         Box(
             modifier = Modifier.size(36.dp)
-                .clip(RoundedCornerShape(14.dp, 22.dp, 22.dp, 14.dp))
+                .clip(RoundedCornerShape(10.dp))
                 .background(MaterialTheme.colorScheme.primary),
             contentAlignment = Alignment.Center
         ) {
-            Text(iconKeyToEmoji(vehicle.iconKey), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text(iconKeyToEmoji(vehicle.iconKey), color = MaterialTheme.colorScheme.onPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         }
         Column(modifier = Modifier.weight(1f)) {
-            Text(vehicle.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            Text(vehicle.name, fontSize = 15.sp, fontWeight = FontWeight.Medium)
             // Chemistry always renders; the source segment and its separator
             // drop out together when the vehicle has no nameable source.
             val source = vehicleSourceLabel(vehicle)
             val chemistry = chemistryLabel(vehicle.chemistry)
             Text(
                 if (source != null) "$source  ·  $chemistry" else chemistry,
-                fontSize = 11.sp,
+                fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
-        TextButton(onClick = onDelete) { Text(stringResource(Res.string.settings_delete), color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
-    }
-}
-
-@Composable
-private fun MicSwitchRow(title: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
-            Text(hint, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Switch(checked = checked, onCheckedChange = onChange)
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
