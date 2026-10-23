@@ -221,6 +221,34 @@ internal const val ABSENT_SUMMARY_DELAY_MILLIS = ru.sodovaya.volty.domain.histor
 internal fun absentSummaryApplies(active: Config): Boolean = active is Config.Ride || active is Config.Dashboard
 
 /**
+ * The stack once an absent vehicle's summary is due, or null when no dashboard is in it.
+ * A dashboard on top is covered by the summary. One buried under a screen the rider chose is
+ * swapped for the summary in place: that screen stays, and back lands on the card instead of
+ * frozen numbers. An earlier revision only looked at the top entry, so a rider in Settings swiped
+ * back into a dead dashboard.
+ */
+internal fun stackAfterAbsence(stack: List<Config>, vehicleId: String): List<Config>? {
+    if (stack.none(::absentSummaryApplies)) return null
+    val summary = Config.VehicleOverview(vehicleId)
+    if (absentSummaryApplies(stack.last())) return stackAfterGoTo(stack, summary)
+    var placed = summary in stack
+    return stack.flatMap { config ->
+        when {
+            !absentSummaryApplies(config) -> listOf(config)
+            placed -> emptyList()
+            else -> { placed = true; listOf(summary) }
+        }
+    }
+}
+
+/** The vehicle is back: a summary that stood in for a buried dashboard gives its place back to [home]. */
+internal fun stackAfterReturn(stack: List<Config>, vehicleId: String, home: Config): List<Config>? {
+    val summary = Config.VehicleOverview(vehicleId)
+    if (summary !in stack || stack.last() == summary || home in stack) return null
+    return stack.map { if (it == summary) home else it }
+}
+
+/**
  * A rider who pressed Disconnect lands in the garage, which marks nearby vehicles but never connects
  * on its own. Retraction: this used to be Config.Scanning, the cold-start screen, which connects at
  * once to a lone saved vehicle in range: disconnecting from a wheel next to a scooter connected the
@@ -493,9 +521,10 @@ class DefaultRootComponent(
                 if (connected) { leaveAbsentSummary(); return@collectLatest }
                 if (vehicleId == null) return@collectLatest
                 delay(ABSENT_SUMMARY_DELAY_MILLIS)
-                if ((stack.value.active.configuration as? Config)?.let(::absentSummaryApplies) == true) {
+                val configs = stack.value.items.map { it.configuration as Config }
+                if (stackAfterAbsence(configs, vehicleId) != null) {
                     absentSummaryVehicleId = vehicleId
-                    goTo(Config.VehicleOverview(vehicleId))
+                    nav.navigate { current -> stackAfterAbsence(current, vehicleId) ?: current }
                 }
             }
         }
@@ -507,7 +536,9 @@ class DefaultRootComponent(
     private fun leaveAbsentSummary() {
         val id = absentSummaryVehicleId ?: return
         absentSummaryVehicleId = null
-        if (stack.value.active.configuration == Config.VehicleOverview(id) && stack.value.items.size > 1) nav.pop()
+        if (stack.value.active.configuration == Config.VehicleOverview(id) && stack.value.items.size > 1) { nav.pop(); return }
+        val home = homeConfigFor(bmsRepository.activeVehicle.value)
+        nav.navigate { current -> stackAfterReturn(current, id, home) ?: current }
     }
 
     /**

@@ -119,6 +119,29 @@ class RootNavigationTest {
     }
 
     @Test
+    fun a_dashboard_buried_under_settings_becomes_the_summary_so_back_reaches_the_card() {
+        val card = Config.VehicleOverview("v")
+        // On top: covered, as before.
+        assertEquals(listOf(Config.Ride, card), stackAfterAbsence(listOf(Config.Ride), "v"))
+        // Buried: the rider's screen stays on top, and back now lands on the card.
+        assertEquals(listOf(card, Config.Settings), stackAfterAbsence(listOf(Config.Ride, Config.Settings), "v"))
+        assertEquals(listOf(Config.Picker("cold"), card, Config.Nearby),
+            stackAfterAbsence(listOf(Config.Picker("cold"), Config.Dashboard, Config.Nearby), "v"))
+        // Never a duplicate entry: a card already in the stack absorbs the dashboard.
+        assertEquals(listOf(card, Config.Settings), stackAfterAbsence(listOf(card, Config.Ride, Config.Settings), "v"))
+        assertNull(stackAfterAbsence(listOf(Config.Picker("cold"), Config.Settings), "v"), "no dashboard, nothing to replace")
+    }
+
+    @Test
+    fun a_returning_vehicle_gets_its_dashboard_back_where_the_card_stood_in() {
+        val card = Config.VehicleOverview("v")
+        assertEquals(listOf(Config.Ride, Config.Settings), stackAfterReturn(listOf(card, Config.Settings), "v", Config.Ride))
+        assertNull(stackAfterReturn(listOf(Config.Ride, card), "v", Config.Ride), "a card on top is popped by the caller")
+        assertNull(stackAfterReturn(listOf(Config.Ride, card, Config.Settings), "v", Config.Ride), "never a duplicate dashboard")
+        assertNull(stackAfterReturn(listOf(Config.Settings), "v", Config.Ride))
+    }
+
+    @Test
     fun the_connect_tab_reaches_the_cold_picker() {
         assertEquals(Config.Picker(mode = "cold"), configForTab(RootComponent.Tab.Connect))
     }
