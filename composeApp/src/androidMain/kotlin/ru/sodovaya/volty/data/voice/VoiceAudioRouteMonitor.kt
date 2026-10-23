@@ -199,7 +199,9 @@ internal class VoiceAudioRouteMonitor(
         handler.post {
             if (closed) return@post
             try {
-                if (active && duckFocus == null) {
+                // Phone capture already holds mediaFocus (may-duck); a second request would push it
+                // down the focus stack and its listener would mute the call output.
+                if (requestsDuckFocus(phoneCapture, active) && duckFocus == null) {
                     val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
                         .setAudioAttributes(AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)

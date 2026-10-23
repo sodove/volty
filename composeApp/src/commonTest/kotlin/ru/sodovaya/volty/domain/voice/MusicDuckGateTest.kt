@@ -56,4 +56,10 @@ class MusicDuckGateTest {
         // A stale tick after release must not resurrect the duck.
         assertFalse(gate.onTick(100))
     }
+
+    @Test fun phoneCaptureNeverRequestsASecondFocus() {
+        assertFalse(requestsDuckFocus(phoneCapture = true, duck = true))
+        assertTrue(requestsDuckFocus(phoneCapture = false, duck = true))
+        assertFalse(requestsDuckFocus(phoneCapture = false, duck = false))
+    }
 }

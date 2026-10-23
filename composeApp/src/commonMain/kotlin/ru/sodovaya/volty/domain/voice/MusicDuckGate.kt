@@ -38,3 +38,10 @@ class MusicDuckGate(private val holdMillis: Long = 1_500) {
         return false
     }
 }
+
+/**
+ * Whether the Android side should take a separate duck focus. Phone-capture mode already holds a
+ * transient-may-duck focus for the whole session; a second request would push it down the focus
+ * stack and its listener would then mute the call output while someone speaks.
+ */
+fun requestsDuckFocus(phoneCapture: Boolean, duck: Boolean): Boolean = duck && !phoneCapture
