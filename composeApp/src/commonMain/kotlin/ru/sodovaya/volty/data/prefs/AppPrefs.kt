@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import kotlinx.coroutines.CoroutineScope
@@ -18,6 +19,15 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import ru.sodovaya.volty.domain.alert.AlarmMusicMode
 import ru.sodovaya.volty.domain.alert.AlarmModalities
+import ru.sodovaya.volty.domain.audio.AlertSoundKind
+import ru.sodovaya.volty.domain.audio.AlertSoundSettings
+import ru.sodovaya.volty.domain.audio.MAX_ALERT_GAIN_DB
+import ru.sodovaya.volty.domain.audio.MAX_MIC_SENSITIVITY_DB
+import ru.sodovaya.volty.domain.audio.MicProcessingSettings
+import ru.sodovaya.volty.domain.audio.VoiceListenSettings
+import ru.sodovaya.volty.domain.audio.clampListenGainDb
+import ru.sodovaya.volty.domain.audio.decodeParticipantGains
+import ru.sodovaya.volty.domain.audio.encodeParticipants
 import ru.sodovaya.volty.domain.navigation.routing.NavigationPreferencesStore
 import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import ru.sodovaya.volty.domain.model.DashboardStyle
@@ -146,6 +156,37 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         }
         .stateIn(scope, SharingStarted.Eagerly, AlarmMusicMode.DUCK_MEDIA)
 
+    val alertSoundSettings: StateFlow<AlertSoundSettings> = store.data
+        .map {
+            AlertSoundSettings(
+                kind = runCatching {
+                    AlertSoundKind.valueOf(it[Keys.ALERT_SOUND_KIND] ?: AlertSoundKind.NAVIGATION.name)
+                }.getOrDefault(AlertSoundKind.NAVIGATION),
+                gainDb = (it[Keys.ALERT_GAIN_DB] ?: 0f).coerceIn(0f, MAX_ALERT_GAIN_DB),
+            )
+        }
+        .stateIn(scope, SharingStarted.Eagerly, AlertSoundSettings())
+
+    val voiceListenSettings: StateFlow<VoiceListenSettings> = store.data
+        .map {
+            VoiceListenSettings(
+                duckMusicWhileSpeaking = it[Keys.VOICE_DUCK_MUSIC] ?: true,
+                masterGainDb = clampListenGainDb(it[Keys.VOICE_MASTER_GAIN_DB] ?: 0f),
+                participantGainDb = decodeParticipantGains(it[Keys.VOICE_PARTICIPANT_GAINS]),
+            )
+        }
+        .stateIn(scope, SharingStarted.Eagerly, VoiceListenSettings())
+
+    val micProcessingSettings: StateFlow<MicProcessingSettings> = store.data
+        .map {
+            MicProcessingSettings(
+                autoGain = it[Keys.MIC_AUTO_GAIN] ?: true,
+                sensitivityDb = (it[Keys.MIC_SENSITIVITY_DB] ?: 0f).coerceIn(0f, MAX_MIC_SENSITIVITY_DB),
+                limiterCeilingDbfs = (it[Keys.MIC_LIMITER_CEILING_DBFS] ?: -3f).coerceIn(-12f, -1f),
+            )
+        }
+        .stateIn(scope, SharingStarted.Eagerly, MicProcessingSettings())
+
     /**
      * The three switches as the one value `AudibleAlarm.setModalities` takes.
      *
@@ -235,6 +276,29 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     suspend fun setAlarmVibrationEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_VIBRATION_ENABLED] = enabled }
     suspend fun setAlarmMusicMode(mode: AlarmMusicMode) = store.edit { it[Keys.ALARM_MUSIC_MODE] = mode.name }
 
+    suspend fun setAlertSoundKind(kind: AlertSoundKind) = store.edit { it[Keys.ALERT_SOUND_KIND] = kind.name }
+    suspend fun setAlertGainDb(db: Float) = store.edit { it[Keys.ALERT_GAIN_DB] = db.coerceIn(0f, MAX_ALERT_GAIN_DB) }
+    suspend fun setDuckMusicWhileSpeaking(on: Boolean) = store.edit { it[Keys.VOICE_DUCK_MUSIC] = on }
+    suspend fun setMasterListenGainDb(db: Float) =
+        store.edit { it[Keys.VOICE_MASTER_GAIN_DB] = clampListenGainDb(db) }
+
+    /** Read-modify-write inside one `edit`, so concurrent participants never lose each other's gain. */
+    suspend fun setParticipantGainDb(actorId: String, db: Float) {
+        if (actorId.isBlank() || ';' in actorId || '=' in actorId) return
+        store.edit {
+            val current = decodeParticipantGains(it[Keys.VOICE_PARTICIPANT_GAINS])
+            it[Keys.VOICE_PARTICIPANT_GAINS] =
+                VoiceListenSettings(participantGainDb = current + (actorId to clampListenGainDb(db)))
+                    .encodeParticipants()
+        }
+    }
+
+    suspend fun setMicAutoGain(on: Boolean) = store.edit { it[Keys.MIC_AUTO_GAIN] = on }
+    suspend fun setMicSensitivityDb(db: Float) =
+        store.edit { it[Keys.MIC_SENSITIVITY_DB] = db.coerceIn(0f, MAX_MIC_SENSITIVITY_DB) }
+    suspend fun setMicLimiterCeilingDbfs(dbfs: Float) =
+        store.edit { it[Keys.MIC_LIMITER_CEILING_DBFS] = dbfs.coerceIn(-12f, -1f) }
+
     private object Keys {
         val LAST_VEHICLE_ID = stringPreferencesKey("last_vehicle_id")
         val THEME_MODE = stringPreferencesKey("theme_mode")
@@ -258,6 +322,14 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         val ALARM_TONE_ENABLED = booleanPreferencesKey("alarm_tone_enabled")
         val ALARM_VIBRATION_ENABLED = booleanPreferencesKey("alarm_vibration_enabled")
         val ALARM_MUSIC_MODE = stringPreferencesKey("alarm_music_mode")
+        val ALERT_SOUND_KIND = stringPreferencesKey("alert_sound_kind")
+        val ALERT_GAIN_DB = floatPreferencesKey("alert_gain_db")
+        val VOICE_DUCK_MUSIC = booleanPreferencesKey("voice_duck_music")
+        val VOICE_MASTER_GAIN_DB = floatPreferencesKey("voice_master_gain_db")
+        val VOICE_PARTICIPANT_GAINS = stringPreferencesKey("voice_participant_gains")
+        val MIC_AUTO_GAIN = booleanPreferencesKey("mic_auto_gain")
+        val MIC_SENSITIVITY_DB = floatPreferencesKey("mic_sensitivity_db")
+        val MIC_LIMITER_CEILING_DBFS = floatPreferencesKey("mic_limiter_ceiling_dbfs")
     }
 }
 
