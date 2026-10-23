@@ -684,12 +684,16 @@ class DefaultVehicleEditComponent(
             // only for activeVehicleData would leave opcode 91 stranded in the
             // protocol snapshot forever. Any motion emission is a safe retry
             // boundary and still folds the same vehicle-level telemetry.
-            combine(bmsRepository.activeVehicle, bmsRepository.activeVehicleData, bmsRepository.activeMotion) { v, d, _ ->
-                v to d
-            }
-                .collect { (active, data) ->
+            combine(
+                bmsRepository.activeVehicle,
+                bmsRepository.activeVehicleData,
+                bmsRepository.activeMotion,
+                bmsRepository.connectionState
+            ) { v, d, _, st -> Triple(v, d, st) }
+                .collect { (active, data, st) ->
                     observe(active, data)
-                    refreshLearnedCellCount(active)
+                    // The connection state is an input so a disconnect clears the learned count.
+                    refreshLearnedCellCount(active, st)
                 }
         }
     }
@@ -698,11 +702,12 @@ class DefaultVehicleEditComponent(
      * Only for the vehicle being edited, for the reason [observe] gives: another vehicle's wheel
      * must not label this vehicle's S row.
      */
-    private fun learnedNow(active: Vehicle?): Int? =
-        if (vehicleId != null && active?.id == vehicleId) learnedCellCountSource?.learnedCellCount() else null
+    private fun learnedNow(active: Vehicle?, st: ru.sodovaya.volty.domain.model.ConnectionState): Int? =
+        if (vehicleId != null && active?.id == vehicleId && st is ru.sodovaya.volty.domain.model.ConnectionState.Connected)
+            learnedCellCountSource?.learnedCellCount() else null
 
-    private fun refreshLearnedCellCount(active: Vehicle?) {
-        val learned = learnedNow(active)
+    private fun refreshLearnedCellCount(active: Vehicle?, st: ru.sodovaya.volty.domain.model.ConnectionState) {
+        val learned = learnedNow(active, st)
         _state.update { if (it.learnedCellCount == learned) it else it.copy(learnedCellCount = learned) }
     }
 
@@ -808,7 +813,7 @@ class DefaultVehicleEditComponent(
                     // straight here) would otherwise see no scan button until
                     // the next connection event, and there may never be one.
                     canScanTarget = canScanTarget(draftOf(v), liveAddresses),
-                    learnedCellCount = learnedNow(bmsRepository.activeVehicle.value)
+                    learnedCellCount = learnedNow(bmsRepository.activeVehicle.value, bmsRepository.connectionState.value)
                 )
                 _state.value = loaded.copy(savedValues = loaded.editableValues)
                 return
@@ -1193,7 +1198,13 @@ class DefaultVehicleEditComponent(
 
     override fun onSave() {
         val s = _state.value
-        if (s.name.isBlank()) { _state.update { it.copy(nameError = true) }; return }
+        if (s.name.isBlank()) {
+            _state.update { it.copy(nameError = true) }
+            // The error renders only on the hub header and the name page; from any other page the
+            // refused Save would look dead, so take the rider to where the message is.
+            onOpenSection(VehicleEditSection.IDENTITY)
+            return
+        }
         // A blocking issue is a self-contradictory config: conflicting protocol
         // kinds at one address or two sources claiming one CAN id (both of
         // which `planLinks` throws on), or two sources on one gateway link both

@@ -843,6 +843,7 @@ class KableBmsRepository private constructor(
      * internally. There is no way to reach that raw field from a published
      * [BmsData] — so the fix is to ask the object that still has it.
      */
+    @Volatile
     private var primaryPackProtocol: BmsProtocol? = null
 
     /** Current connection's controller-indexed setup accessors. */

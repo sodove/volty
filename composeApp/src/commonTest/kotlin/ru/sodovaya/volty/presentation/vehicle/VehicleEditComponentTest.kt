@@ -939,6 +939,37 @@ class VehicleEditComponentTest {
     }
 
     @Test
+    fun `a refused save for a blank name opens the name section`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        c.onNameChanged("")
+        c.onOpenSection(VehicleEditSection.BATTERY)
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(VehicleEditSection.IDENTITY, c.section.value)
+        assertTrue(c.state.value.nameError)
+        assertTrue(repo.upserts.isEmpty())
+    }
+
+    @Test
+    fun `the learned count clears when the vehicle disconnects`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vehicle = controllerOnlyVehicle()
+        val source = object : LearnedCellCountSource { override fun learnedCellCount(): Int? = 24 }
+        val bms = FakeBmsRepo()
+        bms.goLive(vehicle)
+        val c = component(FakeVehicleRepo(listOf(vehicle)), bmsRepo = bms, learnedCellCountSource = source)
+        advanceUntilIdle()
+        assertEquals(24, c.state.value.learnedCellCount)
+
+        bms.connectionState.value = ConnectionState.Disconnected
+        advanceUntilIdle()
+        assertNull(c.state.value.learnedCellCount)
+    }
+
+    @Test
     fun `saving establishes the new clean baseline before navigation is published`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         lateinit var c: DefaultVehicleEditComponent
