@@ -36,6 +36,8 @@ internal class OwnedVoiceAudio(
     private var nativeStopped = false
     @Volatile var phoneCapture = false
         private set
+    /** Built off the audio thread by [setMicProcessing]; the callback reads the reference once per frame. */
+    @Volatile private var micStage: MicGainStage? = null
     @Volatile private var playbackMuted = false
     @Volatile private var sdkRendering = false
     private val playback = PhoneVoicePlayback(context.applicationContext, context.getSystemService(Context.AUDIO_SERVICE) as AudioManager,
@@ -66,11 +68,12 @@ internal class OwnedVoiceAudio(
                         SystemClock.sleep(10)
                         started
                     }
-                    phoneCapture -> capture.fill(buffer, format, channels, rate)
+                    phoneCapture -> capture.fill(buffer, format, channels, rate).also { applyMic(buffer, format) }
                     else -> {
                         // bytesRead is the SDK's actual native read result, unlike buffer
                         // capacity (the disabled SDK also supplies a full zero buffer).
                         if (bytesRead == buffer.capacity()) {
+                            applyMic(buffer, format)
                             diagnostics.addCaptureBytes(bytesRead)
                             if (diagnostics.state.value.captureRunning != true) captureState(true)
                         } else {
@@ -116,6 +119,27 @@ internal class OwnedVoiceAudio(
             override fun onWebRtcAudioTrackError(errorMessage: String?) = fail(VoiceDiagnosticCode.TRACK_RUNTIME_ERROR)
         })
         .createAudioDeviceModule()
+
+    /** Installs a fresh stage (new limiter state); safe from any thread. */
+    fun setMicProcessing(settings: ru.sodovaya.volty.domain.audio.MicProcessingSettings) {
+        micStage = MicGainStage(settings, MIC_SAMPLE_RATE)
+    }
+
+    /** Audio thread, under captureLock, real captured frames only. Allocation-free. */
+    private fun applyMic(buffer: ByteBuffer, format: Int) {
+        val stage = micStage ?: return
+        if (format != AudioFormat.ENCODING_PCM_16BIT) return
+        var i = 0
+        val end = buffer.capacity() - 1
+        while (i < end) {
+            // Little-endian PCM16; the high byte is read signed, the low byte unsigned.
+            val v = (buffer.get(i).toInt() and 0xFF) or (buffer.get(i + 1).toInt() shl 8)
+            val out = stage.processSample(v)
+            buffer.put(i, out.toByte())
+            buffer.put(i + 1, (out shr 8).toByte())
+            i += 2
+        }
+    }
 
     fun muteMicrophone(value: Boolean) {
         capture.mute(value); module.setMicrophoneMute(value)
@@ -272,4 +296,5 @@ internal class OwnedVoiceAudio(
     }
     private fun record(code: VoiceDiagnosticCode) = diagnostics.record(SystemClock.elapsedRealtime(), code)
     private fun fail(code: VoiceDiagnosticCode) { record(code); emit(VoiceSessionEvent.EngineFailed(tag)) }
+    private companion object { const val MIC_SAMPLE_RATE = 48_000 }
 }

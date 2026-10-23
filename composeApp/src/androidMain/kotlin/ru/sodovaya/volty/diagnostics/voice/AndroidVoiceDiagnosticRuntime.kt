@@ -9,6 +9,7 @@ import ru.sodovaya.volty.domain.social.*
 class AndroidVoiceDiagnosticRuntime(
     context: Context, social: SocialRepository, legacy: VoiceRoomRepository,
     listen: kotlinx.coroutines.flow.StateFlow<ru.sodovaya.volty.domain.audio.VoiceListenSettings>,
+    mic: kotlinx.coroutines.flow.StateFlow<ru.sodovaya.volty.domain.audio.MicProcessingSettings>,
 ) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val controller: VoiceDiagnosticController = VoiceDiagnosticController(scope, object : VoiceDiagnosticPort {
@@ -30,7 +31,7 @@ class AndroidVoiceDiagnosticRuntime(
             if (social.leaveVoice(RideGroupId(group)) is SocialResult.Failure) throw VoiceEngineException(VoiceEngineError.CLEANUP)
         }
     }) { _, preferences, diagnostics ->
-        VoiceEngineDriver(scope, AndroidVoiceSdkSessionFactory(context, preferences, listen, diagnostics), ::diagnosticAuthorized)
+        VoiceEngineDriver(scope, AndroidVoiceSdkSessionFactory(context, preferences, listen, mic, diagnostics), ::diagnosticAuthorized)
     }
     private fun diagnosticAuthorized(tag: ru.sodovaya.volty.domain.voice.VoiceSessionTag): Boolean =
         scope.isActive && controller.authorizesEngine(tag)

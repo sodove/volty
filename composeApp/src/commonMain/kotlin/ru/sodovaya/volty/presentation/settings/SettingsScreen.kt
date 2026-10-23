@@ -116,7 +116,16 @@ import volty.composeapp.generated.resources.settings_voice_microphone_phone
 import volty.composeapp.generated.resources.settings_voice_microphone_subtitle
 import volty.composeapp.generated.resources.settings_voice_audio
 import volty.composeapp.generated.resources.settings_sound_section
+import volty.composeapp.generated.resources.settings_mic_section
+import volty.composeapp.generated.resources.settings_mic_auto_gain
+import volty.composeapp.generated.resources.settings_mic_auto_gain_hint
+import volty.composeapp.generated.resources.settings_mic_sensitivity
+import volty.composeapp.generated.resources.settings_mic_ceiling
+import volty.composeapp.generated.resources.settings_mic_ceiling_hint
+import volty.composeapp.generated.resources.settings_mic_db
+import volty.composeapp.generated.resources.settings_mic_dbfs
 import volty.composeapp.generated.resources.settings_voice_volume
+import ru.sodovaya.volty.domain.audio.MAX_MIC_SENSITIVITY_DB
 import volty.composeapp.generated.resources.settings_voice_volume_db
 import ru.sodovaya.volty.domain.audio.MAX_LISTEN_GAIN_DB
 import kotlin.math.roundToInt
@@ -158,6 +167,8 @@ import volty.composeapp.generated.resources.settings_tab_debug
 
 /** The settings slider stops at -10 dB; the per-participant slider alone reaches the -30 dB floor. */
 private const val SETTINGS_VOICE_GAIN_MIN_DB = -10f
+private const val SETTINGS_MIC_CEILING_MIN_DBFS = -12f
+private const val SETTINGS_MIC_CEILING_MAX_DBFS = -1f
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -298,6 +309,37 @@ fun SettingsScreen(component: SettingsComponent) {
                 valueRange = SETTINGS_VOICE_GAIN_MIN_DB..MAX_LISTEN_GAIN_DB,
                 steps = (MAX_LISTEN_GAIN_DB - SETTINGS_VOICE_GAIN_MIN_DB).roundToInt() - 1,
             )
+            SectionLabel(stringResource(Res.string.settings_mic_section))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(Res.string.settings_mic_auto_gain), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(stringResource(Res.string.settings_mic_auto_gain_hint), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Switch(checked = state.mic.autoGain, onCheckedChange = component::onMicAutoGainChanged)
+            }
+            Text(stringResource(Res.string.settings_mic_sensitivity) + ": " +
+                stringResource(Res.string.settings_mic_db, state.mic.sensitivityDb.roundToInt()),
+                fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Slider(
+                value = state.mic.sensitivityDb.coerceIn(0f, MAX_MIC_SENSITIVITY_DB),
+                onValueChange = { component.onMicSensitivityChanged(it.roundToInt().toFloat()) },
+                valueRange = 0f..MAX_MIC_SENSITIVITY_DB,
+                steps = MAX_MIC_SENSITIVITY_DB.roundToInt() - 1,
+            )
+            Text(stringResource(Res.string.settings_mic_ceiling) + ": " +
+                stringResource(Res.string.settings_mic_dbfs, state.mic.limiterCeilingDbfs.roundToInt()),
+                fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Slider(
+                value = state.mic.limiterCeilingDbfs.coerceIn(SETTINGS_MIC_CEILING_MIN_DBFS, SETTINGS_MIC_CEILING_MAX_DBFS),
+                onValueChange = { component.onMicLimiterCeilingChanged(it.roundToInt().toFloat()) },
+                valueRange = SETTINGS_MIC_CEILING_MIN_DBFS..SETTINGS_MIC_CEILING_MAX_DBFS,
+                steps = (SETTINGS_MIC_CEILING_MAX_DBFS - SETTINGS_MIC_CEILING_MIN_DBFS).roundToInt() - 1,
+            )
+            Text(stringResource(Res.string.settings_mic_ceiling_hint), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             SettingsSection(
                 title = stringResource(Res.string.settings_voice_audio),

@@ -254,7 +254,7 @@ val androidModule = module {
     }
     single<LocationProvider> { AndroidLocationProvider(get()) }
     single { ru.sodovaya.volty.domain.voice.VoiceIdentityDirectory() }
-    single { AndroidVoiceAudioFactory(androidContext(), get<AppPrefs>().voiceListenSettings, get()) }
+    single { AndroidVoiceAudioFactory(androidContext(), get<AppPrefs>().voiceListenSettings, get<AppPrefs>().micProcessingSettings, get()) }
     single { AndroidVoiceForegroundController(androidContext(), get()) }
     single<ru.sodovaya.volty.data.voice.VoiceConversationChannelAudienceFactory> {
         ru.sodovaya.volty.di.nearby.ChannelSharingAudienceAccountFactory(
@@ -354,6 +354,7 @@ val androidModule = module {
                 .stateIn(get<CoroutineScope>(named(RADIO_SCOPE)), kotlinx.coroutines.flow.SharingStarted.Eagerly,
                     ru.sodovaya.volty.domain.voice.VoiceAudioPreferences())
                 .let { state -> { state.value } },
+            micProcessing = get<AppPrefs>().micProcessingSettings.let { flow -> { flow.value } },
         )
     }
     single { ru.sodovaya.volty.data.radio.AppVisibility() }
@@ -561,7 +562,7 @@ val androidModule = module {
     }
     single { LogExporter(androidContext()) }
     single { ru.sodovaya.volty.diagnostics.VoiceDiagnosticLauncher(androidContext()) }
-    single { ru.sodovaya.volty.diagnostics.voice.AndroidVoiceDiagnosticRuntime(androidContext(), get(), get(), get<AppPrefs>().voiceListenSettings) }
+    single { ru.sodovaya.volty.diagnostics.voice.AndroidVoiceDiagnosticRuntime(androidContext(), get(), get(), get<AppPrefs>().voiceListenSettings, get<AppPrefs>().micProcessingSettings) }
 }
 
 private const val HISTORY_LOCATION_DEMAND = "history-location-demand"

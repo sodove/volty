@@ -10,10 +10,12 @@ import io.livekit.android.events.RoomEvent
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
 import io.livekit.android.room.track.LocalAudioTrack
+import io.livekit.android.room.track.LocalAudioTrackOptions
 import io.livekit.android.room.track.LocalTrackPublication
 import io.livekit.android.room.track.Track
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.StateFlow
+import ru.sodovaya.volty.domain.audio.MicProcessingSettings
 import ru.sodovaya.volty.domain.audio.VoiceListenSettings
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -24,12 +26,13 @@ class AndroidVoiceSdkSessionFactory(
     context: Context,
     private val preferences: VoiceAudioPreferences,
     private val listen: StateFlow<VoiceListenSettings>,
+    private val mic: StateFlow<MicProcessingSettings>,
     private val diagnostics: VoiceDiagnostics,
     private val actorFor: (identity: String) -> String? = { null },
 ) : VoiceSdkSessionFactory {
     private val application = context.applicationContext
     override fun create(tag: VoiceSessionTag, emit: (VoiceSessionEvent) -> Unit): VoiceSdkSession {
-        return AndroidVoiceSdkSession(application, tag, preferences, listen, diagnostics, emit, actorFor)
+        return AndroidVoiceSdkSession(application, tag, preferences, listen, mic, diagnostics, emit, actorFor)
     }
 }
 
@@ -39,6 +42,7 @@ internal class AndroidVoiceSdkSession(
     private val tag: VoiceSessionTag,
     private val preferences: VoiceAudioPreferences,
     private val listen: StateFlow<VoiceListenSettings>,
+    private val mic: StateFlow<MicProcessingSettings>,
     private val diagnostics: VoiceDiagnostics,
     private val emit: (VoiceSessionEvent) -> Unit,
     private val actorFor: (identity: String) -> String? = { null },
@@ -114,6 +118,7 @@ internal class AndroidVoiceSdkSession(
         val ownedKeeper = VoiceCommunicationKeeper(diagnostics).also { keeper = it }
         val ownedAudio = OwnedVoiceAudio(context, tag, diagnostics, ::event, ownedKeeper).also { audio = it }
         check(ownedAudio.configurePlayback(preferences) == VoiceAudioChangeResult.REQUESTED)
+        ownedAudio.setMicProcessing(mic.value)
         ownedAudio.muteMicrophone(true) // Initial intent installed before any native capture.
         ownedAudio.mutePlayback(deafened || !outputAvailable)
         ownedAudio.applyInput(manager, preferences.input)
@@ -136,6 +141,9 @@ internal class AndroidVoiceSdkSession(
         // Gains follow the settings at once; reconcileRemoteAudio re-applies them on every
         // (re)subscription and on the one-second poll, so a reconnect never resets a volume.
         scope.launch { listen.collect { room?.let(::reconcileRemoteAudio) } }
+        // A new stage per change, built here (main) and swapped in by reference; AGC is a track
+        // option and only applies on the next publication.
+        scope.launch { mic.collect { audio?.setMicProcessing(it) } }
         scope.launch {
             while (isActive) {
                 delay(DUCK_TICK_MILLIS)
@@ -150,7 +158,9 @@ internal class AndroidVoiceSdkSession(
             check(!closing)
             val ownedRoom = checkNotNull(room)
             checkNotNull(audio).muteMicrophone(muted)
-            val track = ownedRoom.localParticipant.createAudioTrack().also { localTrack = it }
+            val track = ownedRoom.localParticipant.createAudioTrack(
+                options = LocalAudioTrackOptions(autoGainControl = mic.value.autoGain),
+            ).also { localTrack = it }
             track.enabled = !muted
             ownedRoom to track
         }

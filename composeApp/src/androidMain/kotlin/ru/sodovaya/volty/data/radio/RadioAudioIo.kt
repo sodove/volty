@@ -15,10 +15,12 @@ import android.media.audiofx.NoiseSuppressor
 import android.os.Build
 import android.os.Process
 import android.util.Log
+import ru.sodovaya.volty.domain.audio.MicProcessingSettings
 import ru.sodovaya.volty.domain.radio.RADIO_FRAME_SAMPLES
 import ru.sodovaya.volty.domain.radio.RadioDeviceKind
 import ru.sodovaya.volty.domain.radio.RadioOutputChoice
 import ru.sodovaya.volty.domain.radio.radioAudioPlan
+import ru.sodovaya.volty.domain.voice.MicGainStage
 import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
 
 /**
@@ -42,6 +44,8 @@ class RadioAudioIo(
     context: Context,
     /** The rider's server-voice microphone/output settings, read at each start. */
     private val preferences: () -> VoiceAudioPreferences = { VoiceAudioPreferences() },
+    /** The voice microphone gain/limiter settings, read at each start. */
+    private val micProcessing: () -> MicProcessingSettings = { MicProcessingSettings() },
 ) {
     private val app = context.applicationContext ?: context
     private val audioManager = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
@@ -245,6 +249,7 @@ class RadioAudioIo(
             Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             val recorder = record ?: return
             var consecutiveErrors = 0
+            val stage = MicGainStage(micProcessing(), SAMPLE_RATE) // one per start; settings apply on the next radio join
             while (running) {
                 val frame = ShortArray(RADIO_FRAME_SAMPLES)
                 var filled = 0
@@ -254,6 +259,7 @@ class RadioAudioIo(
                     filled += n
                 }
                 if (!running) return
+                stage.process(frame, frame.size)
                 try {
                     onFrame(frame)
                     consecutiveErrors = 0

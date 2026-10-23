@@ -116,6 +116,9 @@ class RadioRuntime(
     /** The rider's voice microphone/output settings; the radio follows them too. */
     private val audioPreferences: () -> ru.sodovaya.volty.domain.voice.VoiceAudioPreferences =
         { ru.sodovaya.volty.domain.voice.VoiceAudioPreferences() },
+    /** The rider's microphone gain/limiter settings; the radio mic follows them too. */
+    private val micProcessing: () -> ru.sodovaya.volty.domain.audio.MicProcessingSettings =
+        { ru.sodovaya.volty.domain.audio.MicProcessingSettings() },
 ) {
     private val app = context.applicationContext ?: context
     private val _members = MutableStateFlow<List<RadioMember>>(emptyList())
@@ -305,7 +308,7 @@ class RadioRuntime(
     ) {
         private val isHub = hubAddress == null
         private val inbox = ArrayBlockingQueue<Inbox>(INBOX_CAPACITY)
-        private val io = RadioAudioIo(app, audioPreferences)
+        private val io = RadioAudioIo(app, audioPreferences, micProcessing)
         private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
         private var transport: RadioUdpTransport? = null
 

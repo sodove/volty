@@ -43,6 +43,9 @@ interface SettingsComponent {
     fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource)
     fun onVoiceOutputPreferenceChanged(preference: VoiceOutputPreference)
     fun onVoiceMasterGainChanged(db: Float)
+    fun onMicAutoGainChanged(on: Boolean)
+    fun onMicSensitivityChanged(db: Float)
+    fun onMicLimiterCeilingChanged(dbfs: Float)
     fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean)
     fun onRefreshOfflineRegions()
     fun onDownloadOfflineRegion(regionId: String)
@@ -73,6 +76,7 @@ interface SettingsComponent {
         val voiceMicrophoneSource: VoiceMicrophoneSource = VoiceMicrophoneSource.AUTO,
         val voiceOutputPreference: VoiceOutputPreference? = null,
         val voiceMasterGainDb: Float = 0f,
+        val mic: ru.sodovaya.volty.domain.audio.MicProcessingSettings = ru.sodovaya.volty.domain.audio.MicProcessingSettings(),
         val offlineSkipMeteredConfirmation: Boolean = false,
         val offlineRegions: List<OfflineRegionPackageState> = emptyList(),
         val offlinePreparation: List<OfflineRegionPreparationState> = emptyList(),
@@ -111,6 +115,7 @@ class DefaultSettingsComponent(
             faultDisplayDurationSec = appPrefs.faultDisplayDurationSec.value,
             voiceMicrophoneSource = appPrefs.voiceMicrophoneSource.value,
             voiceMasterGainDb = appPrefs.voiceListenSettings.value.masterGainDb,
+            mic = appPrefs.micProcessingSettings.value,
             offlineSkipMeteredConfirmation = appPrefs.offlineSkipMeteredConfirmation.value,
         )
     )
@@ -135,6 +140,7 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.voiceListenSettings.collect { listen ->
             _state.update { it.copy(voiceMasterGainDb = listen.masterGainDb) }
         } }
+        scope.launch { appPrefs.micProcessingSettings.collect { m -> _state.update { it.copy(mic = m) } } }
         scope.launch { appPrefs.voiceAudioPreferences.collect { preferences ->
             val input = when (preferences.input) {
                 VoiceInputPreference.AUTO -> VoiceMicrophoneSource.AUTO
@@ -159,6 +165,9 @@ class DefaultSettingsComponent(
     override fun onFaultDisplayDurationChanged(seconds: Int) { scope.launch { appPrefs.setFaultDisplayDurationSec(seconds) } }
     override fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource) { scope.launch { appPrefs.setVoiceMicrophoneSource(source) } }
     override fun onVoiceMasterGainChanged(db: Float) { scope.launch { appPrefs.setMasterListenGainDb(db) } }
+    override fun onMicAutoGainChanged(on: Boolean) { scope.launch { appPrefs.setMicAutoGain(on) } }
+    override fun onMicSensitivityChanged(db: Float) { scope.launch { appPrefs.setMicSensitivityDb(db) } }
+    override fun onMicLimiterCeilingChanged(dbfs: Float) { scope.launch { appPrefs.setMicLimiterCeilingDbfs(dbfs) } }
     override fun onVoiceOutputPreferenceChanged(preference: VoiceOutputPreference) { scope.launch { appPrefs.setVoiceOutputPreference(preference) } }
     override fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean) {
         scope.launch { appPrefs.setOfflineSkipMeteredConfirmation(enabled) }
