@@ -1,3 +1,8 @@
+import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
+import java.net.URI
+import java.security.MessageDigest
 import java.util.Base64
 import java.util.Properties
 import java.util.zip.ZipFile
@@ -11,6 +16,43 @@ import org.gradle.api.tasks.PathSensitive
 import org.gradle.api.tasks.PathSensitivity
 import org.gradle.api.tasks.TaskAction
 import org.gradle.work.DisableCachingByDefault
+
+/**
+ * RNNoise's model is ~78 MB of generated C, so it is not vendored: it is downloaded exactly the way
+ * xiph's own download_model.sh does it and accepted only if its sha256 equals the pinned model_version.
+ * The archive is cached in the Gradle user home, so clean builds and CI reuse it.
+ */
+@DisableCachingByDefault(because = "Downloads and unpacks a pinned, checksum-verified archive")
+abstract class FetchRnnoiseModelTask : DefaultTask() {
+    @get:Input abstract val modelVersion: org.gradle.api.provider.Property<String>
+    @get:org.gradle.api.tasks.Internal abstract val cacheDir: org.gradle.api.file.DirectoryProperty
+    @get:org.gradle.api.tasks.OutputDirectory abstract val outputDir: org.gradle.api.file.DirectoryProperty
+    @get:javax.inject.Inject abstract val archives: org.gradle.api.file.ArchiveOperations
+    @get:javax.inject.Inject abstract val files: org.gradle.api.file.FileSystemOperations
+
+    @TaskAction
+    fun fetch() {
+        val hash = modelVersion.get()
+        val archive = cacheDir.get().file("rnnoise_data-$hash.tar.gz").asFile
+        fun sha256(f: File): String = MessageDigest.getInstance("SHA-256").let { md: MessageDigest ->
+            f.inputStream().use { input -> val buf = ByteArray(1 shl 16); while (true) { val n = input.read(buf); if (n < 0) break; md.update(buf, 0, n) } }
+            md.digest().joinToString("") { b: Byte -> "%02x".format(b) }
+        }
+        if (!archive.isFile || sha256(archive) != hash) {
+            archive.parentFile.mkdirs()
+            val partial = File(archive.path + ".part")
+            URI("https://media.xiph.org/rnnoise/models/rnnoise_data-$hash.tar.gz").toURL().openStream().use { input: InputStream ->
+                partial.outputStream().use { output: OutputStream -> input.copyTo(output) }
+            }
+            check(sha256(partial) == hash) { "RNNoise model checksum mismatch: refusing ${partial.name}" }
+            check(partial.renameTo(archive) || (archive.delete() && partial.renameTo(archive))) { "Cannot move ${partial.name}" }
+        }
+        files.sync {
+            from(archives.tarTree(archives.gzip(archive))) { include("src/rnnoise_data.c", "src/rnnoise_data.h") }
+            into(outputDir)
+        }
+    }
+}
 
 @DisableCachingByDefault(because = "The task inspects the assembled APK contents")
 abstract class VerifyProductionReleaseTask : DefaultTask() {
@@ -196,6 +238,15 @@ android {
     }
 
     namespace = "ru.sodovaya.volty"
+    ndkVersion = "27.0.12077973"
+    // RNNoise (speech detection for the microphone gate). Sources in src/androidMain/cpp; the model is
+    // fetched by fetchRnnoiseModel below.
+    externalNativeBuild {
+        cmake {
+            path = file("src/androidMain/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
     // Native UI acceptance fixture is declared only in the debug manifest.
     sourceSets.getByName("debug").manifest.srcFile("src/androidDebug/AndroidManifest.xml")
     compileSdk = 36
@@ -239,6 +290,11 @@ android {
 
     defaultConfig {
         applicationId = "ru.sodovaya.volty"
+        externalNativeBuild {
+            cmake {
+                arguments += "-DRNNOISE_MODEL_DIR=${layout.buildDirectory.dir("rnnoise-model").get().asFile.invariantSeparatorsPath}"
+            }
+        }
         // Firebase documents direct string resources as an alternative to the
         // Google-services plugin. Only the matching Android client's fields are used.
         val firebaseConfig = file("google-services.json")
@@ -360,4 +416,14 @@ sqldelight {
             verifyMigrations.set(true)
         }
     }
+}
+
+// xiph/rnnoise model_version at the vendored commit (src/androidMain/cpp/rnnoise/VERSION).
+val fetchRnnoiseModel = tasks.register<FetchRnnoiseModelTask>("fetchRnnoiseModel") {
+    modelVersion.set("0a8755f8e2d834eff6a54714ecc7d75f9932e845df35f8b59bc52a7cfe6e8b37")
+    cacheDir.set(file("${gradle.gradleUserHomeDir}/caches/volty-rnnoise"))
+    outputDir.set(layout.buildDirectory.dir("rnnoise-model"))
+}
+tasks.configureEach {
+    if (name.startsWith("configureCMake") || name.startsWith("buildCMake")) dependsOn(fetchRnnoiseModel)
 }

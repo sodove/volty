@@ -23,6 +23,9 @@ import ru.sodovaya.volty.domain.audio.AlertSoundKind
 import ru.sodovaya.volty.domain.audio.AlertSoundSettings
 import ru.sodovaya.volty.domain.audio.MAX_ALERT_GAIN_DB
 import ru.sodovaya.volty.domain.audio.MAX_MIC_SENSITIVITY_DB
+import ru.sodovaya.volty.domain.audio.DEFAULT_SPEECH_GATE_THRESHOLD
+import ru.sodovaya.volty.domain.audio.MAX_SPEECH_GATE_THRESHOLD
+import ru.sodovaya.volty.domain.audio.MIN_SPEECH_GATE_THRESHOLD
 import ru.sodovaya.volty.domain.audio.MicProcessingSettings
 import ru.sodovaya.volty.domain.audio.VoiceListenSettings
 import ru.sodovaya.volty.domain.audio.clampListenGainDb
@@ -183,6 +186,10 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
                 autoGain = it[Keys.MIC_AUTO_GAIN] ?: true,
                 sensitivityDb = (it[Keys.MIC_SENSITIVITY_DB] ?: 0f).coerceIn(0f, MAX_MIC_SENSITIVITY_DB),
                 limiterCeilingDbfs = (it[Keys.MIC_LIMITER_CEILING_DBFS] ?: -3f).coerceIn(-12f, -1f),
+                phoneNoiseSuppressor = it[Keys.MIC_PHONE_NOISE_SUPPRESSOR] ?: false,
+                speechGate = it[Keys.MIC_SPEECH_GATE] ?: false,
+                speechGateThreshold = (it[Keys.MIC_SPEECH_GATE_THRESHOLD] ?: DEFAULT_SPEECH_GATE_THRESHOLD)
+                    .coerceIn(MIN_SPEECH_GATE_THRESHOLD, MAX_SPEECH_GATE_THRESHOLD),
             )
         }
         .stateIn(scope, SharingStarted.Eagerly, MicProcessingSettings())
@@ -299,6 +306,11 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         store.edit { it[Keys.MIC_SENSITIVITY_DB] = db.coerceIn(0f, MAX_MIC_SENSITIVITY_DB) }
     suspend fun setMicLimiterCeilingDbfs(dbfs: Float) =
         store.edit { it[Keys.MIC_LIMITER_CEILING_DBFS] = dbfs.coerceIn(-12f, -1f) }
+    suspend fun setMicPhoneNoiseSuppressor(on: Boolean) = store.edit { it[Keys.MIC_PHONE_NOISE_SUPPRESSOR] = on }
+    suspend fun setMicSpeechGate(on: Boolean) = store.edit { it[Keys.MIC_SPEECH_GATE] = on }
+    suspend fun setMicSpeechGateThreshold(threshold: Float) = store.edit {
+        it[Keys.MIC_SPEECH_GATE_THRESHOLD] = threshold.coerceIn(MIN_SPEECH_GATE_THRESHOLD, MAX_SPEECH_GATE_THRESHOLD)
+    }
 
     private object Keys {
         val LAST_VEHICLE_ID = stringPreferencesKey("last_vehicle_id")
@@ -331,6 +343,9 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         val MIC_AUTO_GAIN = booleanPreferencesKey("mic_auto_gain")
         val MIC_SENSITIVITY_DB = floatPreferencesKey("mic_sensitivity_db")
         val MIC_LIMITER_CEILING_DBFS = floatPreferencesKey("mic_limiter_ceiling_dbfs")
+        val MIC_PHONE_NOISE_SUPPRESSOR = booleanPreferencesKey("mic_phone_noise_suppressor")
+        val MIC_SPEECH_GATE = booleanPreferencesKey("mic_speech_gate")
+        val MIC_SPEECH_GATE_THRESHOLD = floatPreferencesKey("mic_speech_gate_threshold")
     }
 }
 

@@ -44,6 +44,9 @@ interface SettingsComponent {
     fun onVoiceOutputPreferenceChanged(preference: VoiceOutputPreference)
     fun onVoiceMasterGainChanged(db: Float)
     fun onMicAutoGainChanged(on: Boolean)
+    fun onMicPhoneNoiseSuppressorChanged(on: Boolean)
+    fun onMicSpeechGateChanged(on: Boolean)
+    fun onMicSpeechGateThresholdChanged(threshold: Float)
     fun onMicSensitivityChanged(db: Float)
     fun onMicLimiterCeilingChanged(dbfs: Float)
     fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean)
@@ -166,6 +169,9 @@ class DefaultSettingsComponent(
     override fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource) { scope.launch { appPrefs.setVoiceMicrophoneSource(source) } }
     override fun onVoiceMasterGainChanged(db: Float) { scope.launch { appPrefs.setMasterListenGainDb(db) } }
     override fun onMicAutoGainChanged(on: Boolean) { scope.launch { appPrefs.setMicAutoGain(on) } }
+    override fun onMicPhoneNoiseSuppressorChanged(on: Boolean) { scope.launch { appPrefs.setMicPhoneNoiseSuppressor(on) } }
+    override fun onMicSpeechGateChanged(on: Boolean) { scope.launch { appPrefs.setMicSpeechGate(on) } }
+    override fun onMicSpeechGateThresholdChanged(threshold: Float) { scope.launch { appPrefs.setMicSpeechGateThreshold(threshold) } }
     override fun onMicSensitivityChanged(db: Float) { scope.launch { appPrefs.setMicSensitivityDb(db) } }
     override fun onMicLimiterCeilingChanged(dbfs: Float) { scope.launch { appPrefs.setMicLimiterCeilingDbfs(dbfs) } }
     override fun onVoiceOutputPreferenceChanged(preference: VoiceOutputPreference) { scope.launch { appPrefs.setVoiceOutputPreference(preference) } }

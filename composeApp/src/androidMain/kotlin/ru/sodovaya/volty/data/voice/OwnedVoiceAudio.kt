@@ -21,11 +21,13 @@ internal class OwnedVoiceAudio(
     private val diagnostics: VoiceDiagnostics,
     private val emit: (VoiceSessionEvent) -> Unit,
     private val keeper: VoiceCommunicationKeeper,
+    /** Settings at session start: the phone's noise suppressor is fixed when the audio module is built. */
+    initialMic: ru.sodovaya.volty.domain.audio.MicProcessingSettings = ru.sodovaya.volty.domain.audio.MicProcessingSettings(),
 ) {
     private var released = false
     private val evidenceLock = Any()
     private val mediaEvidence = VoiceNativeAudioEvidence(tag)
-    private val capture = OwnedVoiceCapture(diagnostics, ::captureState, ::fail)
+    private val capture = OwnedVoiceCapture(diagnostics, ::captureState, ::fail, initialMic.phoneNoiseSuppressor)
     private val captureLock = Any()
     private var sdkInput: AudioDeviceInfo? = null
     val preferredInputId: Int? get() = synchronized(captureLock) { if (phoneCapture) capture.preferredInputId else sdkInput?.id }
@@ -51,7 +53,8 @@ internal class OwnedVoiceAudio(
         // needs a separate recorder; ordinary calls retain SDK pacing and shared render.
         // Software WebRTC processing remains enabled for both paths.
         .setUseHardwareAcousticEchoCanceler(false)
-        .setUseHardwareNoiseSuppressor(false)
+        // The vendor suppressor is opt-in (quality varies by phone); WebRTC's own stays on either way.
+        .setUseHardwareNoiseSuppressor(initialMic.phoneNoiseSuppressor && JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported())
         .setAudioBufferCallback { buffer, format, channels, rate, bytesRead, timestamp ->
             synchronized(captureLock) {
                 val started = System.nanoTime()
@@ -68,12 +71,12 @@ internal class OwnedVoiceAudio(
                         SystemClock.sleep(10)
                         started
                     }
-                    phoneCapture -> capture.fill(buffer, format, channels, rate).also { applyMic(buffer, format) }
+                    phoneCapture -> capture.fill(buffer, format, channels, rate).also { applyMic(buffer, format, channels, rate) }
                     else -> {
                         // bytesRead is the SDK's actual native read result, unlike buffer
                         // capacity (the disabled SDK also supplies a full zero buffer).
                         if (bytesRead == buffer.capacity()) {
-                            applyMic(buffer, format)
+                            applyMic(buffer, format, channels, rate)
                             diagnostics.addCaptureBytes(bytesRead)
                             if (diagnostics.state.value.captureRunning != true) captureState(true)
                         } else {
@@ -123,12 +126,34 @@ internal class OwnedVoiceAudio(
     /** Installs a fresh stage (new limiter state); safe from any thread. */
     fun setMicProcessing(settings: ru.sodovaya.volty.domain.audio.MicProcessingSettings) {
         micStage = MicGainStage(settings, MIC_SAMPLE_RATE)
+        // The RNNoise state is built here, off the audio thread; the swap and the free of the old one
+        // happen under captureLock, so the callback never runs on a freed native handle.
+        val next = if (!settings.speechGate) null else RnnoiseVad.createOrNull()?.let { vad ->
+            SpeechStage(vad, ru.sodovaya.volty.domain.voice.SpeechGate(settings.speechGateThreshold))
+        }
+        synchronized(captureLock) {
+            // A change that lands after stopNative must not leave a native state nobody frees.
+            if (nativeStopped) { next?.vad?.close(); return }
+            speech?.vad?.close()
+            speech = next
+        }
     }
 
+    private class SpeechStage(val vad: RnnoiseVad, val gate: ru.sodovaya.volty.domain.voice.SpeechGate) {
+        val frame = ShortArray(RnnoiseVad.FRAME_SIZE)
+    }
+    /** Read and replaced only under captureLock. */
+    private var speech: SpeechStage? = null
+
     /** Audio thread, under captureLock, real captured frames only. Allocation-free. */
-    private fun applyMic(buffer: ByteBuffer, format: Int) {
-        val stage = micStage ?: return
+    private fun applyMic(buffer: ByteBuffer, format: Int, channels: Int, rate: Int) {
         if (format != AudioFormat.ENCODING_PCM_16BIT) return
+        applyGain(buffer)
+        applySpeechGate(buffer, channels, rate)
+    }
+
+    private fun applyGain(buffer: ByteBuffer) {
+        val stage = micStage ?: return
         var i = 0
         val end = buffer.capacity() - 1
         while (i < end) {
@@ -138,6 +163,22 @@ internal class OwnedVoiceAudio(
             buffer.put(i, out.toByte())
             buffer.put(i + 1, (out shr 8).toByte())
             i += 2
+        }
+    }
+
+    /** RNNoise only judges the frame; the gate mutes non-speech, 20 ms behind. 10 ms mono 48 kHz frames only. */
+    private fun applySpeechGate(buffer: ByteBuffer, channels: Int, rate: Int) {
+        val stage = speech ?: return
+        if (channels != 1 || rate != MIC_SAMPLE_RATE || buffer.capacity() != RnnoiseVad.FRAME_SIZE * 2) return
+        val frame = stage.frame
+        for (n in 0 until RnnoiseVad.FRAME_SIZE) {
+            frame[n] = ((buffer.get(2 * n).toInt() and 0xFF) or (buffer.get(2 * n + 1).toInt() shl 8)).toShort()
+        }
+        stage.gate.process(frame, stage.vad.probability(frame))
+        for (n in 0 until RnnoiseVad.FRAME_SIZE) {
+            val v = frame[n].toInt()
+            buffer.put(2 * n, v.toByte())
+            buffer.put(2 * n + 1, (v shr 8).toByte())
         }
     }
 
@@ -188,7 +229,7 @@ internal class OwnedVoiceAudio(
 
     /** Stop owned callbacks before SDK release waits for its capture/RTC threads. */
     fun stopNative() {
-        synchronized(captureLock) { nativeStopped = true; capture.close() }
+        synchronized(captureLock) { nativeStopped = true; capture.close(); speech?.vad?.close(); speech = null }
         playback.close()
         playback.sampleDiagnostics()
     }

@@ -34,6 +34,10 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      # RNNoise (the microphone speech gate) is native: composeApp/src/androidMain/cpp.
+      - name: Install the pinned NDK and CMake
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.0.12077973" "cmake;3.22.1" > /dev/null
+
       # No `:composeApp:` prefix on purpose: these run in every module, so
       # :dumper is compiled and its tests run too. :dumper depends on the same
       # Kable and coroutines versions as the app, and nothing else builds it.

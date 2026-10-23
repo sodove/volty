@@ -1261,4 +1261,10 @@
     <string name="nearby_participant_volume_db">%1$d дБ</string>
     <string name="nearby_participant_volume_reset">Сбросить</string>
     <string name="nearby_participant_volume_done">Готово</string>
+    <string name="settings_mic_phone_ns">Шумоподавление телефона</string>
+    <string name="settings_mic_phone_ns_hint">Встроенный шумодав производителя. Качество зависит от модели. Применится при следующем подключении</string>
+    <string name="settings_mic_speech_gate">Пропускать только речь</string>
+    <string name="settings_mic_speech_gate_hint">RNNoise глушит паузы без речи: молнию, вдох, стук. Сам голос не меняется</string>
+    <string name="settings_mic_speech_gate_threshold">Порог речи</string>
+    <string name="settings_mic_speech_gate_threshold_hint">выше — режет больше, но может съедать тихие слова</string>
 </resources>

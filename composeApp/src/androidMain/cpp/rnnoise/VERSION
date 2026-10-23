@@ -1,0 +1,4 @@
+xiph/rnnoise 70f1d256acd4b34a572f999a05c87bf00b67730d (2025-02-22), BSD-3-Clause (COPYING).
+Only the library sources the autotools build compiles (Makefile.am RNNOISE_SOURCES); from src/x86 only the headers vec.h includes, no x86 RTCD sources.
+The model (src/rnnoise_data.c/.h, 78 MB of generated C) is not vendored: Gradle downloads
+rnnoise_data-<model_version>.tar.gz from media.xiph.org and verifies its sha256 (= model_version).

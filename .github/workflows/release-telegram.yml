@@ -62,6 +62,11 @@ jobs:
           java-version: '17'
           cache: gradle
 
+      # RNNoise (the microphone speech gate) is native: composeApp/src/androidMain/cpp.
+      - name: Install the pinned NDK and CMake
+        if: env.CONFIGURED == 'true'
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.0.12077973" "cmake;3.22.1" > /dev/null
+
       - name: Restore signing key and Firebase config
         if: env.CONFIGURED == 'true'
         env:

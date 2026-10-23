@@ -15,11 +15,14 @@ internal class OwnedVoiceCapture(
     private val diagnostics: VoiceDiagnostics,
     private val state: (Boolean) -> Unit,
     private val failed: (VoiceDiagnosticCode) -> Unit,
+    /** Attach the phone's built-in noise suppressor to the owned recorder (opt-in). */
+    private val phoneNoiseSuppressor: Boolean = false,
 ) {
     private val lock = Any()
     private val gate = VoiceCaptureFrameGate()
     private val cadence = VoiceCaptureCadence()
     private var record: AudioRecord? = null
+    private var suppressor: android.media.audiofx.NoiseSuppressor? = null
     private var device: AudioDeviceInfo? = null
     private var preference = VoiceInputPreference.AUTO
     private var closed = false
@@ -79,6 +82,11 @@ internal class OwnedVoiceCapture(
                         record = allocated // Retain it even if native setup fails, for cleanup.
                         check(allocated.state == AudioRecord.STATE_INITIALIZED)
                         check(allocated.setPreferredDevice(device))
+                        if (phoneNoiseSuppressor && android.media.audiofx.NoiseSuppressor.isAvailable()) {
+                            suppressor = runCatching {
+                                android.media.audiofx.NoiseSuppressor.create(allocated.audioSessionId)?.also { it.enabled = true }
+                            }.getOrNull()
+                        }
                         allocated.startRecording()
                         check(allocated.recordingState == AudioRecord.RECORDSTATE_RECORDING)
                         sampleRate = rate; channels = count
@@ -145,6 +153,8 @@ internal class OwnedVoiceCapture(
     fun close() = synchronized(lock) { closed = true; gate.close(); stopLocked() }
     private fun stopLocked() {
         cadence.reset()
+        runCatching { suppressor?.release() }
+        suppressor = null
         val owned = record ?: return
         if (owned.recordingState == AudioRecord.RECORDSTATE_RECORDING) owned.stop()
         owned.release()

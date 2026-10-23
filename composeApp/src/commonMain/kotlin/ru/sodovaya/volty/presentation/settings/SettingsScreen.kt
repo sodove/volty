@@ -122,6 +122,14 @@ import volty.composeapp.generated.resources.settings_mic_auto_gain_hint
 import volty.composeapp.generated.resources.settings_mic_sensitivity
 import volty.composeapp.generated.resources.settings_mic_ceiling
 import volty.composeapp.generated.resources.settings_mic_ceiling_hint
+import volty.composeapp.generated.resources.settings_mic_phone_ns
+import volty.composeapp.generated.resources.settings_mic_phone_ns_hint
+import volty.composeapp.generated.resources.settings_mic_speech_gate
+import volty.composeapp.generated.resources.settings_mic_speech_gate_hint
+import volty.composeapp.generated.resources.settings_mic_speech_gate_threshold
+import volty.composeapp.generated.resources.settings_mic_speech_gate_threshold_hint
+import ru.sodovaya.volty.domain.audio.MIN_SPEECH_GATE_THRESHOLD
+import ru.sodovaya.volty.domain.audio.MAX_SPEECH_GATE_THRESHOLD
 import volty.composeapp.generated.resources.settings_mic_db
 import volty.composeapp.generated.resources.settings_mic_dbfs
 import volty.composeapp.generated.resources.settings_voice_volume
@@ -340,6 +348,23 @@ fun SettingsScreen(component: SettingsComponent) {
                 steps = (SETTINGS_MIC_CEILING_MAX_DBFS - SETTINGS_MIC_CEILING_MIN_DBFS).roundToInt() - 1,
             )
             Text(stringResource(Res.string.settings_mic_ceiling_hint), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            MicSwitchRow(stringResource(Res.string.settings_mic_phone_ns), stringResource(Res.string.settings_mic_phone_ns_hint),
+                state.mic.phoneNoiseSuppressor, component::onMicPhoneNoiseSuppressorChanged)
+            MicSwitchRow(stringResource(Res.string.settings_mic_speech_gate), stringResource(Res.string.settings_mic_speech_gate_hint),
+                state.mic.speechGate, component::onMicSpeechGateChanged)
+            if (state.mic.speechGate) {
+                Text(stringResource(Res.string.settings_mic_speech_gate_threshold) + ": " +
+                    (state.mic.speechGateThreshold * 100).roundToInt() + "%",
+                    fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Slider(
+                    value = state.mic.speechGateThreshold.coerceIn(MIN_SPEECH_GATE_THRESHOLD, MAX_SPEECH_GATE_THRESHOLD),
+                    onValueChange = { component.onMicSpeechGateThresholdChanged((it * 20).roundToInt() / 20f) },
+                    valueRange = MIN_SPEECH_GATE_THRESHOLD..MAX_SPEECH_GATE_THRESHOLD,
+                    steps = 15,
+                )
+                Text(stringResource(Res.string.settings_mic_speech_gate_threshold_hint), fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             }
             SettingsSection(
                 title = stringResource(Res.string.settings_voice_audio),
@@ -885,5 +910,20 @@ private fun VehicleRow(vehicle: Vehicle, onEdit: () -> Unit, onDelete: () -> Uni
             )
         }
         TextButton(onClick = onDelete) { Text(stringResource(Res.string.settings_delete), color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
+    }
+}
+
+@Composable
+private fun MicSwitchRow(title: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(hint, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }

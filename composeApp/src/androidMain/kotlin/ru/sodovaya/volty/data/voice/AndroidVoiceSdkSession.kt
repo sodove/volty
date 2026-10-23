@@ -116,7 +116,7 @@ internal class AndroidVoiceSdkSession(
         LiveKit.init(context)
         val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val ownedKeeper = VoiceCommunicationKeeper(diagnostics).also { keeper = it }
-        val ownedAudio = OwnedVoiceAudio(context, tag, diagnostics, ::event, ownedKeeper).also { audio = it }
+        val ownedAudio = OwnedVoiceAudio(context, tag, diagnostics, ::event, ownedKeeper, mic.value).also { audio = it }
         check(ownedAudio.configurePlayback(preferences) == VoiceAudioChangeResult.REQUESTED)
         ownedAudio.setMicProcessing(mic.value)
         ownedAudio.muteMicrophone(true) // Initial intent installed before any native capture.

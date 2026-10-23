@@ -27,7 +27,17 @@ data class MicProcessingSettings(
     val autoGain: Boolean = true,
     val sensitivityDb: Float = 0f,
     val limiterCeilingDbfs: Float = -3f,
+    /** The phone's built-in (vendor) noise suppressor; off by default, quality varies by device. */
+    val phoneNoiseSuppressor: Boolean = false,
+    /** Mute frames RNNoise does not hear speech in; the voice itself is never altered. Off by default. */
+    val speechGate: Boolean = false,
+    /** RNNoise speech probability that opens the gate, [MIN_SPEECH_GATE_THRESHOLD]..[MAX_SPEECH_GATE_THRESHOLD]. */
+    val speechGateThreshold: Float = DEFAULT_SPEECH_GATE_THRESHOLD,
 )
+
+const val DEFAULT_SPEECH_GATE_THRESHOLD = 0.5f
+const val MIN_SPEECH_GATE_THRESHOLD = 0.1f
+const val MAX_SPEECH_GATE_THRESHOLD = 0.9f
 
 fun dbToGain(db: Float): Double = 10.0.pow(db / 20.0)
 

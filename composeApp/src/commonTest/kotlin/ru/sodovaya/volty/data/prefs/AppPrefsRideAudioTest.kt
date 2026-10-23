@@ -46,4 +46,19 @@ class AppPrefsRideAudioTest {
         assertEquals(12f, mic.sensitivityDb)
         assertEquals(-1f, mic.limiterCeilingDbfs)
     }
+
+    @Test
+    fun theNoiseOptionsAreOffByDefaultAndTheThresholdIsClamped() = runTest {
+        val p = prefs()
+        val initial = p.micProcessingSettings.first()
+        assertEquals(false, initial.phoneNoiseSuppressor, "the vendor suppressor varies by phone: opt-in")
+        assertEquals(false, initial.speechGate, "the speech gate is opt-in")
+        assertEquals(0.5f, initial.speechGateThreshold)
+        p.setMicPhoneNoiseSuppressor(true); p.setMicSpeechGate(true); p.setMicSpeechGateThreshold(5f)
+        val after = p.micProcessingSettings.first { it.speechGate }
+        assertEquals(true, after.phoneNoiseSuppressor)
+        assertEquals(0.9f, after.speechGateThreshold)
+        p.setMicSpeechGateThreshold(-1f)
+        assertEquals(0.1f, p.micProcessingSettings.first { it.speechGateThreshold < 0.5f }.speechGateThreshold)
+    }
 }

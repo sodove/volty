@@ -1263,4 +1263,10 @@
     <string name="nearby_participant_volume_db">%1$d dB</string>
     <string name="nearby_participant_volume_reset">Reset</string>
     <string name="nearby_participant_volume_done">Done</string>
+    <string name="settings_mic_phone_ns">Phone noise suppression</string>
+    <string name="settings_mic_phone_ns_hint">The manufacturer’s built-in suppressor. Quality depends on the model. Applies on the next connection</string>
+    <string name="settings_mic_speech_gate">Pass speech only</string>
+    <string name="settings_mic_speech_gate_hint">RNNoise mutes pauses without speech: zippers, breaths, knocks. The voice itself is untouched</string>
+    <string name="settings_mic_speech_gate_threshold">Speech threshold</string>
+    <string name="settings_mic_speech_gate_threshold_hint">higher cuts more but may swallow quiet words</string>
 </resources>
