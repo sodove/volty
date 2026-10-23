@@ -599,6 +599,27 @@ class VoiceConversationStartupTest {
         } finally {boundary.close();ui.cancel();root.close();f.close()}
     }
 
+    @Test fun aNewConversationThatFailsAtOnceIsRedialledOrReleasedNeverLeaked()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(2_000)))
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val first=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(first,true,boundary);runCurrent();connect(f)
+            // Switch to a conversation whose join is refused: FAILED before the controller has committed it.
+            f.rejectJoin=true
+            val second=assertNotNull(root.requestChannel(account,channel,"Other"));runCurrent()
+            root.begin(second,true,boundary);runCurrent()
+            assertEquals(VoiceConversationPhase.FAILED,f.owner.state.value.phase,"precondition: the new conversation failed")
+            assertEquals(VoiceOperationId(second),f.owner.state.value.operationId)
+            // Either a rejoin is pending for the NEW conversation (service kept for it) ...
+            assertTrue(root.state.value.rejoining,"a rejoin must be scheduled for the new conversation")
+            assertNotNull(f.gate.current.value)
+            // ... and leaving it releases the service, so nothing is left holding the microphone.
+            root.disconnect(VoiceOperationId(second));runCurrent()
+            assertNull(f.gate.current.value)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
     private class Switches: NearbyVoiceSwitchGuard {
         var confirm=false
         val withdrawn=mutableListOf<VoiceOperationId?>()

@@ -104,7 +104,8 @@ internal class VoiceConversationStartup(
         /** A FAILED end keeps the foreground ticket (the running service) for a pending rejoin. */
         var retainForeground = false
     }
-    private var retainedTicket: VoiceForegroundTicket? = null
+    // Written from the queued dispatcher and from the controller's scope; @Volatile keeps both views coherent.
+    @Volatile private var retainedTicket: VoiceForegroundTicket? = null
 
     /** True while a failed conversation's foreground service is still running and a rejoin can reuse it without any UI. */
     fun hasRetainedForeground(): Boolean = retainedTicket?.let {foreground.current.value === it} == true

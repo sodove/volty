@@ -258,11 +258,13 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
                 retainForegroundOnFailure=destination is VoiceConversationTarget.Channel)
             if(!selected(work) || voice.state.value.operationId!=request.operation) return
             committed=request;submitted=true
+            // The new conversation may already have failed while `committed` still named the old one.
+            noteVoice(voice.state.value)
         } catch(cancelled: CancellationException) {
             if(currentCoroutineContext().isActive && selected(work)) failure=request.account to NearbyVoiceError.UNAVAILABLE
         } catch(_: Exception) {if(selected(work)) failure=request.account to NearbyVoiceError.UNAVAILABLE}
         finally {
-            if(!submitted) withContext(NonCancellable) {voice.stop(request.operation)}
+            if(!submitted) withContext(NonCancellable) {voice.stop(request.operation);voice.releaseRetainedForeground()}
             if(starting===work) {starting=null;render()}
         }
     }
