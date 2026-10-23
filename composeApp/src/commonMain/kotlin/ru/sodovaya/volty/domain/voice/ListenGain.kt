@@ -42,11 +42,23 @@ fun scalePcm16Le(bytes: ByteArray, count: Int, gain: Double) {
  * The roster publishes its rows here so the audio session can resolve identity -> actor.
  */
 class VoiceIdentityDirectory {
-    @Volatile private var actors: Map<String, String> = emptyMap()
+    private val lock = Any()
+    // Immutable snapshot: owner -> (session id -> actor id). Readers never lock.
+    @Volatile private var byOwner: Map<Any, Map<String, String>> = emptyMap()
 
-    fun publish(peers: List<VoiceRosterPeer>?) {
-        actors = peers.orEmpty().associate { it.sessionId.value to it.actorId }
+    /** Replaces only [owner]'s rows; other rosters' mappings are untouched. */
+    fun publish(owner: Any, peers: Map<String, String>) {
+        synchronized(lock) { byOwner = byOwner + (owner to peers.toMap()) }
     }
 
-    fun actorFor(identity: String): String? = actors[identity]
+    /** Removes only [owner]'s rows, so a retiring roster cannot erase a newer one's. */
+    fun clear(owner: Any) {
+        synchronized(lock) { byOwner = byOwner - owner }
+    }
+
+    /** Session ids are unique, so the lookup spans every owner. */
+    fun actorFor(identity: String): String? {
+        for (rows in byOwner.values) rows[identity]?.let { return it }
+        return null
+    }
 }

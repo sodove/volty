@@ -66,9 +66,10 @@ internal class VoiceRosterAccountSession(
         parent.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 state.takeWhile { !it.retired }.collect { view ->
-                    directory.publish(view.peers?.filter { it.leaseFresh }?.map { it.peer })
+                    directory.publish(this@VoiceRosterAccountSession,
+                        view.peers?.filter { it.leaseFresh }?.associate { it.peer.sessionId.value to it.peer.actorId }.orEmpty())
                 }
-            } finally { directory.publish(null) }
+            } finally { directory.clear(this@VoiceRosterAccountSession) }
         }
     }
     private val guardian = parent.launch(start = CoroutineStart.UNDISPATCHED) {

@@ -41,13 +41,22 @@ class ListenGainTest {
         assertEquals(byteArrayOf(0x20, 0x4E, 0x00, 0x80.toByte()).toList(), bytes.toList())
     }
 
-    @Test fun identityDirectoryResolvesSessionToActorAndForgetsOnNull() {
+    @Test fun identityDirectoryResolvesSessionToActorAndForgetsOnClear() {
         val dir = VoiceIdentityDirectory()
-        val peer = VoiceRosterPeer("actor-1", VoiceSessionId("sess-1"), VoiceOperationId("op"),
-            VoiceRosterPhase.CONNECTED, 0L, null, true)
-        dir.publish(listOf(peer))
+        val owner = Any()
+        dir.publish(owner, mapOf("sess-1" to "actor-1"))
         assertEquals("actor-1", dir.actorFor("sess-1"))
-        dir.publish(null)
+        dir.clear(owner)
         assertNull(dir.actorFor("sess-1"))
+    }
+
+    @Test fun aRetiringRosterDoesNotEraseAnotherRostersMapping() {
+        val dir = VoiceIdentityDirectory()
+        val a = Any(); val b = Any()
+        dir.publish(a, mapOf("sess-a" to "actor-a"))
+        dir.publish(b, mapOf("sess-b" to "actor-b"))
+        dir.clear(a)
+        assertEquals("actor-b", dir.actorFor("sess-b"))
+        assertNull(dir.actorFor("sess-a"))
     }
 }
