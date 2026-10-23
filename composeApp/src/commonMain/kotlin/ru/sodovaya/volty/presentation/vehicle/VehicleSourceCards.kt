@@ -49,7 +49,8 @@ import volty.composeapp.generated.resources.vehicle_field_alias_group
 import volty.composeapp.generated.resources.vehicle_field_alias_group_caption
 import volty.composeapp.generated.resources.vehicle_field_bms_type
 import volty.composeapp.generated.resources.vehicle_field_can_id
-import volty.composeapp.generated.resources.vehicle_field_cell_count
+import volty.composeapp.generated.resources.vehicle_battery_series
+import volty.composeapp.generated.resources.vehicle_battery_series_learned
 import volty.composeapp.generated.resources.vehicle_field_controller_type
 import volty.composeapp.generated.resources.vehicle_field_derived_battery
 import volty.composeapp.generated.resources.vehicle_field_derived_battery_caption
@@ -139,22 +140,6 @@ internal fun ControllerSourceCard(
         )
         LabelField(draft.label) { component.onControllerLabelChanged(draft.key, it) }
 
-        // MotorConfig, per controller. Two motors on one vehicle are two
-        // different wheels, so these can never be one shared set of numbers —
-        // which is exactly what the flat Motor card this replaced was.
-        IntField(
-            stringResource(Res.string.vehicle_field_pole_pairs),
-            draft.motor.polePairs
-        ) { component.onControllerPolePairsChanged(draft.key, it) }
-        IntField(
-            stringResource(Res.string.vehicle_field_wheel_diameter),
-            draft.motor.wheelDiameterMm
-        ) { component.onControllerWheelDiameterChanged(draft.key, it) }
-        FloatField(
-            stringResource(Res.string.vehicle_field_gear_ratio),
-            draft.motor.gearRatio
-        ) { component.onControllerGearRatioChanged(draft.key, it) }
-
         // `G §6`. Shown resolved — the rule's answer until the rider overrides
         // it, theirs afterwards — and not hidden behind Advanced, because on a
         // controller-only vehicle it is the switch that decides whether the
@@ -168,6 +153,83 @@ internal fun ControllerSourceCard(
     }
 }
 
+/**
+ * One controller's wheel and motor geometry (the "Wheel and motor" page).
+ * Per controller: two motors on one vehicle are two different wheels, so these can never be one
+ * shared set of numbers.
+ */
+@Composable
+internal fun ControllerMotorCard(
+    draft: ControllerDraft,
+    index: Int,
+    component: VehicleEditComponent
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(
+            text = "${stringResource(Res.string.vehicle_source_controller)} ${index + 1}" +
+                draft.label.takeIf { it.isNotBlank() }?.let { " - $it" }.orEmpty(),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        IntField(
+            stringResource(Res.string.vehicle_field_pole_pairs),
+            draft.motor.polePairs
+        ) { component.onControllerPolePairsChanged(draft.key, it) }
+        IntField(
+            stringResource(Res.string.vehicle_field_wheel_diameter),
+            draft.motor.wheelDiameterMm
+        ) { component.onControllerWheelDiameterChanged(draft.key, it) }
+        FloatField(
+            stringResource(Res.string.vehicle_field_gear_ratio),
+            draft.motor.gearRatio
+        ) { component.onControllerGearRatioChanged(draft.key, it) }
+    }
+}
+
+/**
+ * The series count for a battery a controller provides (`Controller.derivedCellCount`): typed
+ * value first; when it is empty and the live link has proven one, that one is named as
+ * "determined by the wheel" under the field. A typed value outranks the learned one.
+ */
+@Composable
+internal fun DerivedSeriesRow(
+    draft: ControllerDraft,
+    index: Int,
+    learnedCellCount: Int?,
+    component: VehicleEditComponent
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f))
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        Text(
+            text = "${stringResource(Res.string.vehicle_source_controller)} ${index + 1}" +
+                draft.label.takeIf { it.isNotBlank() }?.let { " - $it" }.orEmpty(),
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        IntField(stringResource(Res.string.vehicle_battery_series), draft.derivedCellCount) {
+            component.onControllerDerivedCellCountChanged(draft.key, it)
+        }
+        if (draft.derivedCellCount == null && learnedCellCount != null) {
+            Caption(stringResource(Res.string.vehicle_battery_series_learned, learnedCellCount))
+        }
+    }
+}
+
 @Composable
 internal fun PackSourceCard(
     draft: PackDraft,
@@ -178,6 +240,8 @@ internal fun PackSourceCard(
     linkAddresses: List<String>,
     /** Every OTHER pack in the draft, in draft order, with its 1-based number. */
     otherPacks: List<Pair<Int, PackDraft>>,
+    /** What the live link proved about S; shown under an empty S field of the first pack. */
+    learnedCellCount: Int?,
     component: VehicleEditComponent
 ) {
     SourceCard(
@@ -234,9 +298,12 @@ internal fun PackSourceCard(
         // WITH a smart BMS from one without), so a claim of necessity here
         // would be wrong on every card except the one it was written for.
         IntField(
-            stringResource(Res.string.vehicle_field_cell_count),
+            stringResource(Res.string.vehicle_battery_series),
             draft.cellCount
         ) { component.onPackCellCountChanged(draft.key, it) }
+        if (index == 0 && draft.cellCount == null && learnedCellCount != null) {
+            Caption(stringResource(Res.string.vehicle_battery_series_learned, learnedCellCount))
+        }
     }
 }
 

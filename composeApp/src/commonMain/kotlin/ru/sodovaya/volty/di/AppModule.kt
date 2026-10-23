@@ -67,6 +67,7 @@ val appModule = module {
         BmsRepository::class,
         CanDiscovery::class,
         ControllerConfigSource::class,
+        ru.sodovaya.volty.data.bms.LearnedCellCountSource::class,
         BleDiagnosticsRepository::class
     )
     single { AlertEngine(get(), get()) }

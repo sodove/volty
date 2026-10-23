@@ -12,6 +12,7 @@ import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.ProtocolDiagnosticValues
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
+import ru.sodovaya.volty.data.bms.LearnedCellCountSource
 import ru.sodovaya.volty.data.bms.BmsTypeDetector
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
 import ru.sodovaya.volty.data.bms.JbdBmsProtocol
@@ -151,7 +152,7 @@ class KableBmsRepository private constructor(
     private val bleAdapterStateProvider: BleAdapterStateProvider,
     private val historyStartup: (suspend () -> HistoryTelemetryIngress)? = null,
     private val historyShutdown: (suspend () -> Unit)? = null,
-) : BmsRepository, CanDiscovery, ControllerConfigSource, BleDiagnosticsRepository {
+) : BmsRepository, CanDiscovery, ControllerConfigSource, LearnedCellCountSource, BleDiagnosticsRepository {
 
     private val diagnosticBuffer = BleDiagnosticBuffer()
 
@@ -859,6 +860,9 @@ class KableBmsRepository private constructor(
         } ?: return null
         return source.latestControllerConfig(localIndex)
     }
+
+    /** See [LearnedCellCountSource]: the primary pack's Begode decoder, else null. */
+    override fun learnedCellCount(): Int? = (primaryPackProtocol as? BegodeProtocol)?.derivedCellCount()
 
     private fun clearControllerConfigSources() = synchronized(controllerConfigLock) {
         controllerConfigSources = emptyMap()

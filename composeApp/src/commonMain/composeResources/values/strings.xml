@@ -1299,4 +1299,36 @@
     <string name="settings_voice_duck_music_hint">Music gets quieter while someone talks in the channel</string>
     <string name="settings_alert_sound_section">Alert sound</string>
     <string name="settings_page_back">Back</string>
+
+    <!-- Vehicle editor hub (settings/vehicle redesign, Task 4) -->
+    <string name="vehicle_hub_group_device">Device</string>
+    <string name="vehicle_hub_group_ride">On the ride</string>
+    <string name="vehicle_hub_back">Back to the vehicle</string>
+    <string name="vehicle_hub_identity">Name and icon</string>
+    <string name="vehicle_hub_controller">Controller</string>
+    <string name="vehicle_hub_battery">Battery</string>
+    <string name="vehicle_hub_motor">Wheel and motor</string>
+    <string name="vehicle_hub_layout">Layout and sources</string>
+    <string name="vehicle_hub_dashboard">Dashboard</string>
+    <string name="vehicle_hub_alerts">Alerts</string>
+    <string name="vehicle_hub_speed_volume">Volume by speed</string>
+    <string name="vehicle_hub_delete">Delete vehicle</string>
+    <string name="vehicle_hub_issue_prefix">Needs attention</string>
+    <string name="vehicle_hub_none_added">Not added</string>
+    <string name="vehicle_hub_controller_more">%1$s and %2$d more</string>
+    <string name="vehicle_hub_layout_summary">Controllers: %1$d, batteries: %2$d</string>
+    <string name="vehicle_hub_motor_summary">Pole pairs %1$d, wheel %2$d mm</string>
+    <string name="vehicle_hub_motor_summary_no_diameter">Pole pairs %1$d, diameter not set</string>
+    <string name="vehicle_hub_motor_unset">Not set</string>
+    <string name="vehicle_hub_on">On</string>
+    <string name="vehicle_hub_off">Off</string>
+    <string name="vehicle_battery_source_label">Source</string>
+    <string name="vehicle_battery_source_own">Own BMS</string>
+    <string name="vehicle_battery_source_controller">From the controller</string>
+    <string name="vehicle_battery_source_both">One device: controller and battery</string>
+    <string name="vehicle_battery_source_none">No battery</string>
+    <string name="vehicle_battery_none_hint">This vehicle has no battery source yet. Add one in Layout and sources.</string>
+    <string name="vehicle_battery_series">Cells in series (S)</string>
+    <string name="vehicle_battery_series_learned">%1$d: determined by the wheel</string>
+    <string name="vehicle_controller_none">No controller added</string>
 </resources>

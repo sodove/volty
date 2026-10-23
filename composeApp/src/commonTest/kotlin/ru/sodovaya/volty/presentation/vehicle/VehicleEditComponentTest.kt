@@ -37,6 +37,7 @@ import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit
 import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
+import ru.sodovaya.volty.data.bms.LearnedCellCountSource
 import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.data.ble.isGatewayLink
 import ru.sodovaya.volty.data.ble.planAliasHandoffs
@@ -373,6 +374,7 @@ class VehicleEditComponentTest {
         bmsRepo: FakeBmsRepo = FakeBmsRepo(),
         canDiscovery: CanDiscovery? = null,
         controllerConfigSource: ControllerConfigSource? = null,
+        learnedCellCountSource: LearnedCellCountSource? = null,
         onSaved: () -> Unit = {},
         onCancelled: () -> Unit = {},
         backDispatcher: BackDispatcher? = null
@@ -388,6 +390,7 @@ class VehicleEditComponentTest {
             onDeleted = {},
             canDiscovery = canDiscovery,
             controllerConfigSource = controllerConfigSource,
+            learnedCellCountSource = learnedCellCountSource,
             prefilledBmsType = prefilledBmsType,
             prefilledBmsAddress = prefilledBmsAddress
         )
@@ -852,6 +855,87 @@ class VehicleEditComponentTest {
         assertTrue(back.back())
         assertEquals(1, cancelled)
         assertFalse(c.state.value.discardPrompt)
+    }
+
+    @Test
+    fun `back closes the open section and not the draft`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val back = BackDispatcher()
+        var cancelled = 0
+        val c = component(
+            FakeVehicleRepo(listOf(existingVehicle())),
+            onCancelled = { cancelled++ },
+            backDispatcher = back
+        )
+        advanceUntilIdle()
+        c.onNameChanged("Half-typed")
+        c.onOpenSection(VehicleEditSection.BATTERY)
+        assertEquals(VehicleEditSection.BATTERY, c.section.value)
+
+        assertTrue(back.back(), "the system gesture must be intercepted by the open section")
+        assertNull(c.section.value, "the first back leaves the section")
+        assertFalse(c.state.value.discardPrompt, "leaving a section is not leaving the editor")
+        assertEquals(0, cancelled)
+        assertEquals("Half-typed", c.state.value.name)
+
+        assertTrue(back.back())
+        assertTrue(c.state.value.discardPrompt, "with no section open back is the ordinary Cancel contract")
+    }
+
+    @Test
+    fun `onBack closes a section first and cancels only from the hub`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var cancelled = 0
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), onCancelled = { cancelled++ })
+        advanceUntilIdle()
+        c.onOpenSection(VehicleEditSection.MOTOR)
+        c.onBack()
+        assertNull(c.section.value)
+        assertEquals(0, cancelled)
+        c.onBack()
+        assertEquals(1, cancelled)
+    }
+
+    @Test
+    fun `a section edit survives leaving the section and nothing is saved`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        var saved = 0
+        val c = component(repo, onSaved = { saved++ })
+        advanceUntilIdle()
+        c.onOpenSection(VehicleEditSection.BATTERY)
+        c.onChemistryChanged(Chemistry.LIFEPO4)
+        c.onCloseSection()
+
+        assertNull(c.section.value)
+        assertEquals(Chemistry.LIFEPO4, c.state.value.chemistry)
+        assertTrue(c.state.value.isDirty)
+        assertTrue(repo.upserts.isEmpty(), "a draft is written only by Save")
+        assertEquals(0, saved)
+    }
+
+    @Test
+    fun `the learned cell count is read only while the edited vehicle is the connected one`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vehicle = controllerOnlyVehicle()
+        val source = object : LearnedCellCountSource { override fun learnedCellCount(): Int? = 24 }
+
+        val offline = component(FakeVehicleRepo(listOf(vehicle)), learnedCellCountSource = source)
+        advanceUntilIdle()
+        assertNull(offline.state.value.learnedCellCount, "not connected: nothing has been learned for THIS vehicle")
+
+        val bms = FakeBmsRepo()
+        bms.goLive(vehicle)
+        val live = component(FakeVehicleRepo(listOf(vehicle)), bmsRepo = bms, learnedCellCountSource = source)
+        advanceUntilIdle()
+        assertEquals(24, live.state.value.learnedCellCount)
+        assertFalse(live.state.value.isDirty, "a learned count is evidence, not an edit")
+
+        val other = FakeBmsRepo()
+        other.activeVehicle.value = vehicle.copy(id = "someone-else")
+        val foreign = component(FakeVehicleRepo(listOf(vehicle)), bmsRepo = other, learnedCellCountSource = source)
+        advanceUntilIdle()
+        assertNull(foreign.state.value.learnedCellCount, "another vehicle's wheel must not label this one's S")
     }
 
     @Test

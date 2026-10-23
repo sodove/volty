@@ -31,6 +31,7 @@ import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
+import ru.sodovaya.volty.data.bms.LearnedCellCountSource
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.picker.addBmsType
 import ru.sodovaya.volty.presentation.picker.addControllerType
@@ -51,6 +52,21 @@ import kotlin.time.ExperimentalTime
 
 interface VehicleEditComponent : DraftExitComponent {
     val state: StateFlow<State>
+
+    /**
+     * The hub page that is open, or null on the hub itself. **View state, not draft state**:
+     * opening and closing a section changes nothing in [state], is never dirty, and survives
+     * nothing - it is the rider's position in one sitting.
+     */
+    val section: StateFlow<VehicleEditSection?>
+    fun onOpenSection(section: VehicleEditSection)
+    fun onCloseSection()
+
+    /**
+     * Back from the screen's own arrow: leaves the open section, and only from the hub does
+     * what [onCancel] does. The system gesture takes the same route.
+     */
+    fun onBack()
 
     fun onNameChanged(name: String)
     fun onIconChanged(iconKey: String)
@@ -432,6 +448,12 @@ interface VehicleEditComponent : DraftExitComponent {
          * head unit first" rather than offering a scan that cannot work.
          */
         val canScanTarget: String? = null,
+        /**
+         * What the live link has proven about this vehicle's series cell count, or null (not
+         * connected to THIS vehicle, or not proven yet). Evidence for the S row's "determined
+         * by the wheel" label; deliberately not part of [editableValues].
+         */
+        val learnedCellCount: Int? = null,
         /** Where a `PING_CAN` stands — see [CanScanState]. */
         val canScan: CanScanState = CanScanState.Idle
     ) {
@@ -584,6 +606,8 @@ class DefaultVehicleEditComponent(
     private val canDiscovery: CanDiscovery? = null,
     /** Live opcode-91 answers, when the active connection speaks VESC setup. */
     private val controllerConfigSource: ControllerConfigSource? = null,
+    /** What the live link has proven about the series cell count; null in builds/tests without one. */
+    private val learnedCellCountSource: LearnedCellCountSource? = null,
     // Optional prefilled BMS info when creating from Picker
     private val prefilledBmsType: BmsType? = null,
     private val prefilledBmsAddress: String? = null,
@@ -624,9 +648,19 @@ class DefaultVehicleEditComponent(
     /** Same interception as VehicleAlerts: child back outranks stack pop. */
     private val backCallback = BackCallback(onBack = ::onCancel)
 
+    private val _section = MutableStateFlow<VehicleEditSection?>(null)
+    override val section: StateFlow<VehicleEditSection?> = _section.asStateFlow()
+
+    /**
+     * Outranks [backCallback] (priority 1 vs 0) and is enabled only while a page is open, so the
+     * first back leaves the page and the ordinary Cancel/discard contract stays untouched.
+     */
+    private val sectionBackCallback = BackCallback(isEnabled = false, priority = 1) { onCloseSection() }
+
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
         backHandler.register(backCallback)
+        backHandler.register(sectionBackCallback)
         scope.launch { initialize() }
         // A CAN scan needs a live link, and whether there is one changes under
         // the form: the rider can arrive here connected, drop, or reconnect. The
@@ -653,8 +687,23 @@ class DefaultVehicleEditComponent(
             combine(bmsRepository.activeVehicle, bmsRepository.activeVehicleData, bmsRepository.activeMotion) { v, d, _ ->
                 v to d
             }
-                .collect { (active, data) -> observe(active, data) }
+                .collect { (active, data) ->
+                    observe(active, data)
+                    refreshLearnedCellCount(active)
+                }
         }
+    }
+
+    /**
+     * Only for the vehicle being edited, for the reason [observe] gives: another vehicle's wheel
+     * must not label this vehicle's S row.
+     */
+    private fun learnedNow(active: Vehicle?): Int? =
+        if (vehicleId != null && active?.id == vehicleId) learnedCellCountSource?.learnedCellCount() else null
+
+    private fun refreshLearnedCellCount(active: Vehicle?) {
+        val learned = learnedNow(active)
+        _state.update { if (it.learnedCellCount == learned) it else it.copy(learnedCellCount = learned) }
     }
 
     /**
@@ -758,7 +807,8 @@ class DefaultVehicleEditComponent(
                     // `G §3` flow 4 — the picker connects, then navigates
                     // straight here) would otherwise see no scan button until
                     // the next connection event, and there may never be one.
-                    canScanTarget = canScanTarget(draftOf(v), liveAddresses)
+                    canScanTarget = canScanTarget(draftOf(v), liveAddresses),
+                    learnedCellCount = learnedNow(bmsRepository.activeVehicle.value)
                 )
                 _state.value = loaded.copy(savedValues = loaded.editableValues)
                 return
@@ -783,6 +833,20 @@ class DefaultVehicleEditComponent(
             issues = validate(createDraft)
         )
         _state.value = loaded.copy(savedValues = loaded.editableValues)
+    }
+
+    override fun onOpenSection(section: VehicleEditSection) {
+        _section.value = section
+        sectionBackCallback.isEnabled = true
+    }
+
+    override fun onCloseSection() {
+        _section.value = null
+        sectionBackCallback.isEnabled = false
+    }
+
+    override fun onBack() {
+        if (_section.value != null) onCloseSection() else onCancel()
     }
 
     override fun onNameChanged(name: String) {

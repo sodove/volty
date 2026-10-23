@@ -1297,4 +1297,36 @@
     <string name="settings_voice_duck_music_hint">Музыка тише, пока кто-то говорит в канале</string>
     <string name="settings_alert_sound_section">Звук алертов</string>
     <string name="settings_page_back">Назад</string>
+
+    <!-- Vehicle editor hub (settings/vehicle redesign, Task 4) -->
+    <string name="vehicle_hub_group_device">Устройство</string>
+    <string name="vehicle_hub_group_ride">В поездке</string>
+    <string name="vehicle_hub_back">Назад к ТС</string>
+    <string name="vehicle_hub_identity">Название и значок</string>
+    <string name="vehicle_hub_controller">Контроллер</string>
+    <string name="vehicle_hub_battery">Батарея</string>
+    <string name="vehicle_hub_motor">Колесо и мотор</string>
+    <string name="vehicle_hub_layout">Схема и источники</string>
+    <string name="vehicle_hub_dashboard">Дашборд</string>
+    <string name="vehicle_hub_alerts">Алерты</string>
+    <string name="vehicle_hub_speed_volume">Громкость от скорости</string>
+    <string name="vehicle_hub_delete">Удалить ТС</string>
+    <string name="vehicle_hub_issue_prefix">Требует внимания</string>
+    <string name="vehicle_hub_none_added">Не добавлен</string>
+    <string name="vehicle_hub_controller_more">%1$s и ещё %2$d</string>
+    <string name="vehicle_hub_layout_summary">Контроллеров: %1$d, батарей: %2$d</string>
+    <string name="vehicle_hub_motor_summary">Пар полюсов %1$d, колесо %2$d мм</string>
+    <string name="vehicle_hub_motor_summary_no_diameter">Пар полюсов %1$d, диаметр не задан</string>
+    <string name="vehicle_hub_motor_unset">Не задано</string>
+    <string name="vehicle_hub_on">Вкл</string>
+    <string name="vehicle_hub_off">Выкл</string>
+    <string name="vehicle_battery_source_label">Источник</string>
+    <string name="vehicle_battery_source_own">Своя BMS</string>
+    <string name="vehicle_battery_source_controller">Из контроллера</string>
+    <string name="vehicle_battery_source_both">Одно устройство: контроллер и батарея</string>
+    <string name="vehicle_battery_source_none">Нет батареи</string>
+    <string name="vehicle_battery_none_hint">У этого ТС пока нет источника батареи. Добавьте его в разделе «Схема и источники».</string>
+    <string name="vehicle_battery_series">Банок последовательно (S)</string>
+    <string name="vehicle_battery_series_learned">%1$d: определено по колесу</string>
+    <string name="vehicle_controller_none">Контроллер не добавлен</string>
 </resources>
