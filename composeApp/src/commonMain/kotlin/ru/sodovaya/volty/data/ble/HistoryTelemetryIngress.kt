@@ -10,6 +10,7 @@ import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.history.*
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.typedDerivedCellCount
 
 internal enum class HistoryTelemetryIngressFailure { FULL, CLOSED, OVERFLOW, SETUP, RETIRED }
 internal data class HistoryTelemetryIngressDiagnostics(
@@ -66,7 +67,7 @@ internal class HistoryTelemetryIngress(
             } }
             historySessionTelemetryCapture(protocol, sessionId, controller, readTick, { ownership.isCurrent() && nativeLifecycle?.isAccepting != false },
                 binding, preparation, dispatchObservation = native?.dispatchObservation ?: { action -> action() },
-                enrich = { observation -> withHistoryEstimatedSoc(observation, vehicle, linkBatteryType) {
+                enrich = { observation -> withHistoryEstimatedSoc(observation, vehicle, linkBatteryType, vehicle.typedDerivedCellCount(spec.address)) {
                     (protocol as? BegodeProtocol)?.derivedCellCount() } }) { telemetry ->
                 if (nativeLifecycle != null) {
                     val offered = telemetry.offer(controller, ownership::isCurrent)

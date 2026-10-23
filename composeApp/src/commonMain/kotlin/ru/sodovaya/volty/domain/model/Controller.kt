@@ -22,6 +22,15 @@ data class MotorConfig(
 /** Where the editable motor geometry came from. This is session provenance, not a wire value. */
 enum class MotorConfigProvenance { CONTROLLER, INHERITED, RIDER }
 
+/**
+ * The series count the rider typed for the battery a controller on [address] provides, or null.
+ * One definition for the dashboard (KableBmsRepository) and the history recorder, so the two
+ * cannot disagree about the same wheel.
+ */
+fun Vehicle?.typedDerivedCellCount(address: String): Int? = this?.controllers
+    ?.firstOrNull { it.address == address && it.providesDerivedBattery && it.derivedCellCount != null }
+    ?.derivedCellCount
+
 data class Controller(
     val index: Int,
     val label: String,

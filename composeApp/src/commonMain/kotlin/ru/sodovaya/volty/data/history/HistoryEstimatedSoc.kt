@@ -15,14 +15,14 @@ import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
  * through untouched, as in [VoltageSocEstimator.withEstimatedSoc].
  */
 internal fun withHistoryEstimatedSoc(observation: TelemetryObservation, vehicle: Vehicle?, fallbackType: BmsType?,
-    learnedCellCount: () -> Int?): TelemetryObservation {
+    typedDerivedCellCount: Int? = null, learnedCellCount: () -> Int?): TelemetryObservation {
     if (vehicle == null || observation.origin != TelemetryOrigin.BATTERY || observation.role != TelemetryRole.CONTRIBUTOR) return observation
     val soc = observation.readings.firstOrNull { it.metric == TelemetryMetric.SOC } ?: return observation
     if (soc.value != null) return observation
     val voltage = observation.readings.firstOrNull { it.metric == TelemetryMetric.VOLTAGE }?.value ?: return observation
     val pack = vehicle.packs.firstOrNull { it.index == observation.localIndex }
     if ((pack?.bmsType ?: fallbackType ?: return observation).reportsStateOfCharge) return observation
-    val estimate = VoltageSocEstimator.estimateFromPackVoltage(voltage.toFloat(), pack?.cellCount ?: learnedCellCount(),
+    val estimate = VoltageSocEstimator.estimateFromPackVoltage(voltage.toFloat(), pack?.cellCount ?: typedDerivedCellCount ?: learnedCellCount(),
         vehicle.chemistry, vehicle.alertConfig) ?: return observation
     return TelemetryObservation(observation.origin, observation.localIndex,
         observation.readings.map { if (it === soc) TelemetryReading.measured(TelemetryMetric.SOC, estimate.toDouble()) else it },
