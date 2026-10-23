@@ -1,0 +1,3 @@
+-- The series-cell count the rider typed for a controller-provided battery (a Begode T4 without a
+-- smart BMS). Rows written before this migration keep NULL: no count was ever typed.
+ALTER TABLE ControllerRow ADD COLUMN derivedCellCount INTEGER;

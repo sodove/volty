@@ -249,6 +249,8 @@ data class ControllerDraft(
     /** Usable geometry reported by the controller, or null for an unconfigured wheel. */
     val reportedMotor: MotorConfig? = null,
     val derivedBattery: DerivedBatteryChoice = DerivedBatteryChoice.AUTO,
+    /** The series count typed for the controller's own battery; see [Controller.derivedCellCount]. */
+    val derivedCellCount: Int? = null,
     val origin: Controller? = null
 ) {
     val protocolKind: ProtocolKind get() = controllerType.protocolKind()
@@ -266,7 +268,8 @@ data class ControllerDraft(
             address = address,
             canId = canId,
             motor = motor.resolve(),
-            providesDerivedBattery = providesDerivedBattery
+            providesDerivedBattery = providesDerivedBattery,
+            derivedCellCount = derivedCellCount
         )
 }
 
@@ -512,6 +515,7 @@ fun draftOf(vehicle: Vehicle): VehicleDraft {
                 canId = c.canId,
                 motor = MotorDraft.of(c.motor),
                 derivedBattery = derivedBatteryChoiceFor(c, default),
+                derivedCellCount = c.derivedCellCount,
                 origin = c
             )
         }

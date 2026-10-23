@@ -1500,6 +1500,12 @@ class KableBmsRepository private constructor(
                     .expandedTo(counts[i])
             )
         }
+        // The series count the rider typed for the controller-provided battery: the synthesised slot has
+        // no Pack row to hold one. It outranks the count a wheel learns from its own frames (see
+        // [makeLinkOnSample]); both are shadowed by a stored pack's explicit count, which never gets here.
+        fun typedDerivedCount(address: String): Int? = vehicle?.controllers
+            ?.firstOrNull { it.address == address && it.providesDerivedBattery && it.derivedCellCount != null }
+            ?.derivedCellCount
         var nextDerivedIndex = (sized.flatMap { it.packs }.maxOfOrNull { it.index } ?: -1) + 1
         return sized.mapIndexed { i, linkPacks ->
             if (linkPacks.packs.isNotEmpty() || counts[i] == 0) return@mapIndexed linkPacks
@@ -1518,7 +1524,8 @@ class KableBmsRepository private constructor(
                         // Labelled VESC_BMS they claimed to, and the voltage
                         // estimate never ran (a T4's dashboard showed volts, no %).
                         bmsType = if (linkPacks.spec.protocolKind == ProtocolKind.BEGODE) BmsType.BEGODE else BmsType.VESC_BMS,
-                        bmsAddress = linkPacks.spec.address
+                        bmsAddress = linkPacks.spec.address,
+                        cellCount = typedDerivedCount(linkPacks.spec.address)
                     )
                 }
             )

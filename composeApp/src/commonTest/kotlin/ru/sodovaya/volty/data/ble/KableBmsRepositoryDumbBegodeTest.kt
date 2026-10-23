@@ -146,6 +146,59 @@ class KableBmsRepositoryDumbBegodeTest {
         assertTrue(data.socKnown, "the count proven from the wheel's own frames turns volts into a charge")
     }
 
+    private fun t4ControllerBattery(derivedCellCount: Int?) =
+        ru.sodovaya.volty.domain.model.wheelVehicle("v1", "T4", "unicycle", ADDRESS, Chemistry.LI_ION_NMC,
+            Instant.fromEpochSeconds(0)).let { it.copy(packs = emptyList(),
+                controllers = it.controllers.map { c ->
+                    c.copy(providesDerivedBattery = true, derivedCellCount = derivedCellCount)
+                }) }
+
+    @Test
+    fun `a typed count wins over the learned one and clearing it restores the learned one`() = repoTest { repo ->
+        val typed = Wire(repo, t4ControllerBattery(derivedCellCount = 20))
+        BegodeT4Fixture.notifications.forEach { typed.notify(it) }
+        val typedData = repo.activeData.value
+        assertTrue(typedData.socKnown)
+        // The wheel proves 24S (90.7 V branch vs 60.53 V live); the rider typed 20S. 90.7 V over 20 cells
+        // is 4.54 V a cell -- a full pack -- while the learned 24S reads 3.78 V a cell, a mid charge.
+        assertTrue(typedData.soc > 99f, "typed 20S rates 4.54 V/cell as full, got ${typedData.soc}")
+
+        val cleared = Wire(repo, t4ControllerBattery(derivedCellCount = null))
+        BegodeT4Fixture.notifications.forEach { cleared.notify(it) }
+        val learnedData = repo.activeData.value
+        assertTrue(learnedData.socKnown)
+        assertTrue(learnedData.soc in 1f..90f, "the learned 24S reads 3.78 V/cell, got ${learnedData.soc}")
+    }
+
+    @Test
+    fun `a controller battery with no typed count falls back to the learned one`() = repoTest { repo ->
+        val learned = Wire(repo, t4ControllerBattery(derivedCellCount = null))
+        BegodeT4Fixture.notifications.forEach { learned.notify(it) }
+        val data = repo.activeData.value
+        assertEquals(90.75f, data.voltage, 0.1f, "the learned 24S shows the 0x01 branch voltage")
+        assertTrue(data.socKnown)
+        assertTrue(data.soc in 1f..99f, "a mid-range charge was estimated from the learned 24S, got ${data.soc}")
+    }
+
+    @Test
+    fun `a controller-only wheel without branch frames uses the typed count`() = repoTest { repo ->
+        val wire = Wire(repo, t4ControllerBattery(derivedCellCount = 24))
+        // Only 0x00 live frames: nothing ever teaches the decoder a count.
+        wire.notify(liveFrame(voltageRaw = 6053, currentRaw = 0, tempRaw = 0))
+        wire.notify(liveFrame(voltageRaw = 6053, currentRaw = 0, tempRaw = 0))
+        val data = repo.activeData.value
+        assertEquals(90.8f, data.voltage, 0.1f, "60.53 V on the 67.2 V scale x 24S")
+        assertTrue(data.socKnown, "the typed 24S is the only source of a count here")
+    }
+
+    @Test
+    fun `a controller-only wheel without branch frames and without a typed count has no charge`() = repoTest { repo ->
+        val wire = Wire(repo, t4ControllerBattery(derivedCellCount = null))
+        wire.notify(liveFrame(voltageRaw = 6053, currentRaw = 0, tempRaw = 0))
+        wire.notify(liveFrame(voltageRaw = 6053, currentRaw = 0, tempRaw = 0))
+        assertFalse(repo.activeData.value.socKnown)
+    }
+
     @Test
     fun `a dumb wheel with no known cell count connects but never fabricates a voltage`() = repoTest { repo ->
         // A brand-new guest profile: no user-set and no auto-filled cell count.

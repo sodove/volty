@@ -198,7 +198,8 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                     polePairs = c.motor.polePairs.toLong(),
                     wheelDiameterMm = c.motor.wheelDiameterMm.toLong(),
                     gearRatio = c.motor.gearRatio.toDouble(),
-                    providesDerivedBattery = if (c.providesDerivedBattery) 1L else 0L
+                    providesDerivedBattery = if (c.providesDerivedBattery) 1L else 0L,
+                    derivedCellCount = c.derivedCellCount?.toLong()
                 )
             }
             // And for the alert levels. Inside the SAME transaction as the
@@ -339,7 +340,8 @@ private fun VehicleRow.toDomain(
                 wheelDiameterMm = c.wheelDiameterMm.toInt(),
                 gearRatio = c.gearRatio.toFloat()
             ),
-            providesDerivedBattery = c.providesDerivedBattery == 1L
+            providesDerivedBattery = c.providesDerivedBattery == 1L,
+            derivedCellCount = c.derivedCellCount?.toInt()
         )
     },
     topology = PackTopology.valueOf(topology),

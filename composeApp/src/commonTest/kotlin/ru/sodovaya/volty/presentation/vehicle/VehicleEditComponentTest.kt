@@ -2158,6 +2158,44 @@ class VehicleEditComponentTest {
         assertEquals(24, repo.upserts.last().packs.single().cellCount, "the rider's typed value must land")
     }
 
+    @Test
+    fun `the derived cell count survives save and reload`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        val key = c.state.value.draft.controllers.first().key
+
+        c.onControllerDerivedCellCountChanged(key, 24)
+        assertTrue(c.state.value.isDirty)
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(24, repo.upserts.last().controllers.first().derivedCellCount)
+
+        val reloaded = component(repo)
+        advanceUntilIdle()
+        assertEquals(24, reloaded.state.value.draft.controllers.first().derivedCellCount)
+    }
+
+    @Test
+    fun `a derived cell count outside 1 to 48 clears it`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        val key = c.state.value.draft.controllers.first().key
+
+        c.onControllerDerivedCellCountChanged(key, 24)
+        c.onControllerDerivedCellCountChanged(key, 49)
+        assertEquals(null, c.state.value.draft.controllers.first().derivedCellCount)
+        c.onControllerDerivedCellCountChanged(key, 24)
+        c.onControllerDerivedCellCountChanged(key, 0)
+        assertEquals(null, c.state.value.draft.controllers.first().derivedCellCount)
+        c.onControllerDerivedCellCountChanged(key, 48)
+        assertEquals(48, c.state.value.draft.controllers.first().derivedCellCount)
+        c.onControllerDerivedCellCountChanged(key, 1)
+        assertEquals(1, c.state.value.draft.controllers.first().derivedCellCount)
+    }
+
     /**
      * Clearing the field is a distinct act from typing a smaller number —
      * `onPackCellCountChanged(key, null)` must land `null`, not silently keep

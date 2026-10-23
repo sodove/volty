@@ -45,4 +45,21 @@ class SqlDelightVehicleRepositoryControllersTest {
         assertEquals(254, back.controllers[0].motor.wheelDiameterMm)
         assertEquals("batt", back.packs[0].aliasGroup)
     }
+
+    @Test
+    fun a_typed_derived_cell_count_round_trips_and_null_stays_null() = runTest {
+        val repo = newInMemoryRepo()
+        val v = Vehicle(
+            id = "v1", name = "Wheel", iconKey = "unicycle", packs = emptyList(),
+            controllers = listOf(
+                Controller(0, "T4", ControllerType.BEGODE, "T4", providesDerivedBattery = true, derivedCellCount = 24),
+                Controller(1, "Other", ControllerType.VESC, "V1")
+            ),
+            chemistry = Chemistry.LI_ION_NMC, createdAt = Clock.System.now()
+        )
+        repo.upsert(v)
+        val back = repo.get("v1")!!
+        assertEquals(24, back.controllers[0].derivedCellCount)
+        assertEquals(null, back.controllers[1].derivedCellCount)
+    }
 }

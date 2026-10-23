@@ -150,6 +150,8 @@ interface VehicleEditComponent : DraftExitComponent {
      * can never derive one. Blank clears to `null`, not `0` — see [PackDraft].
      */
     fun onPackCellCountChanged(key: String, cellCount: Int?)
+    /** The series count of the battery a controller provides (1..48; anything else clears it). */
+    fun onControllerDerivedCellCountChanged(key: String, cellCount: Int?)
 
     fun onControllerLabelChanged(key: String, label: String)
     fun onControllerTypeChanged(key: String, controllerType: ControllerType)
@@ -912,6 +914,11 @@ class DefaultVehicleEditComponent(
     override fun onPackCellCountChanged(key: String, cellCount: Int?) =
         mutateDraft(packs = true) { d ->
             d.updatePack(key) { it.copy(cellCount = cellCount, cellCountEdited = true) }
+        }
+
+    override fun onControllerDerivedCellCountChanged(key: String, cellCount: Int?) =
+        mutateDraft(controllers = true) { d ->
+            d.updateController(key) { it.copy(derivedCellCount = cellCount?.takeIf { n -> n in 1..48 }) }
         }
 
     override fun onControllerLabelChanged(key: String, label: String) =

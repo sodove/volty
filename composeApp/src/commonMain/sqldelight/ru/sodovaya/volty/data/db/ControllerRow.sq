@@ -12,6 +12,7 @@ CREATE TABLE ControllerRow (
     wheelDiameterMm        INTEGER NOT NULL DEFAULT 0,
     gearRatio              REAL NOT NULL DEFAULT 1.0,
     providesDerivedBattery INTEGER NOT NULL DEFAULT 0,
+    derivedCellCount       INTEGER,          -- NULL = not typed (series count of the controller's battery)
     PRIMARY KEY (vehicleId, controllerIndex),
     FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
 );
@@ -22,7 +23,7 @@ SELECT * FROM ControllerRow ORDER BY vehicleId, controllerIndex;
 selectByVehicle:
 SELECT * FROM ControllerRow WHERE vehicleId = :vehicleId ORDER BY controllerIndex;
 upsert:
-INSERT OR REPLACE INTO ControllerRow(vehicleId, controllerIndex, label, controllerType, address, canId, polePairs, wheelDiameterMm, gearRatio, providesDerivedBattery)
-VALUES (:vehicleId, :controllerIndex, :label, :controllerType, :address, :canId, :polePairs, :wheelDiameterMm, :gearRatio, :providesDerivedBattery);
+INSERT OR REPLACE INTO ControllerRow(vehicleId, controllerIndex, label, controllerType, address, canId, polePairs, wheelDiameterMm, gearRatio, providesDerivedBattery, derivedCellCount)
+VALUES (:vehicleId, :controllerIndex, :label, :controllerType, :address, :canId, :polePairs, :wheelDiameterMm, :gearRatio, :providesDerivedBattery, :derivedCellCount);
 deleteByVehicle:
 DELETE FROM ControllerRow WHERE vehicleId = :vehicleId;

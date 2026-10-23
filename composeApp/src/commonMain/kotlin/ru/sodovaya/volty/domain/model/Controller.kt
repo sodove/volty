@@ -29,5 +29,12 @@ data class Controller(
     val address: String,
     val canId: Int? = null,
     val motor: MotorConfig = MotorConfig(),
-    val providesDerivedBattery: Boolean = false
+    val providesDerivedBattery: Boolean = false,
+    /**
+     * The series-cell count the rider typed for the battery this controller provides
+     * ([providesDerivedBattery]). Such a battery has no Pack row to hold a `cellCount`, and a
+     * wheel with no smart BMS (a Begode T4) shows volts but no charge unless the count is known.
+     * `null` = not typed; the wheel's own learned count (if any) is used instead.
+     */
+    val derivedCellCount: Int? = null
 )
