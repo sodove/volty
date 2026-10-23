@@ -581,7 +581,6 @@ interface VehicleEditComponent : DraftExitComponent {
     }
 }
 
-@OptIn(ExperimentalTime::class)
 /** What the wizard's Skip hands to a new vehicle editor; see [DefaultVehicleEditComponent.seed]. */
 data class VehicleEditSeed(
     val draft: VehicleDraft,
@@ -591,6 +590,7 @@ data class VehicleEditSeed(
     val topology: PackTopology
 )
 
+@OptIn(ExperimentalTime::class)
 class DefaultVehicleEditComponent(
     componentContext: ComponentContext,
     private val vehicleId: String?,

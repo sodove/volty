@@ -445,7 +445,9 @@ internal fun leaveSetupWizard(
 /**
  * The stack after the wizard's "Skip": the wizard hands its draft to a new vehicle editor and
  * is gone, rather than lingering underneath as a second copy of the same draft. Everything else
- * keeps its place, and any buried create-editor is replaced so its seed is the one handed over.
+ * keeps its place. A buried create-editor is NOT replaced: the new one carries its own seedId, so
+ * Decompose cannot match it to the old one, and Back from the new editor reveals the old one.
+ * (An earlier revision of this comment said the buried one was replaced; the seedId fix changed that.)
  */
 internal fun stackAfterWizardSkip(stack: List<Config>, seedId: String): List<Config> =
     stack.filterNot { it is Config.SetupWizard } + Config.VehicleEdit(vehicleId = null, seedId = seedId)

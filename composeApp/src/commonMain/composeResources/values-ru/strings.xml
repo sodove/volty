@@ -999,7 +999,7 @@
     <string name="settings_sound_section">Звук</string>
     <string name="settings_voice_volume">Громкость голоса</string>
     <string name="settings_voice_volume_db">%1$d дБ</string>
-    <string name="settings_mic_section">Микрофон</string>
+    <string name="settings_mic_section">Обработка</string>
     <string name="settings_mic_auto_gain">Автоусиление</string>
     <string name="settings_mic_auto_gain_hint">Применится при следующем подключении</string>
     <string name="settings_mic_sensitivity">Чувствительность</string>

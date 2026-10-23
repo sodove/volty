@@ -1001,7 +1001,7 @@
     <string name="settings_sound_section">Sound</string>
     <string name="settings_voice_volume">Voice volume</string>
     <string name="settings_voice_volume_db">%1$d dB</string>
-    <string name="settings_mic_section">Microphone</string>
+    <string name="settings_mic_section">Processing</string>
     <string name="settings_mic_auto_gain">Auto gain</string>
     <string name="settings_mic_auto_gain_hint">Applies on the next connection</string>
     <string name="settings_mic_sensitivity">Sensitivity</string>

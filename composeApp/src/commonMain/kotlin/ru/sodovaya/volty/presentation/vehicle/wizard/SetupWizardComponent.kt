@@ -465,7 +465,8 @@ class DefaultSetupWizardComponent(
 
     private fun openBattery() {
         if (!_state.value.navigationEnabled) return
-        _state.update { it.copy(advanceBlocked = false) }
+        // The controller list closes on leaving its step, so Back does not find it reopened.
+        _state.update { it.copy(advanceBlocked = false, addingController = false) }
         // A fresh Battery step searches for nothing until an exit that needs a second device is
         // chosen (or was chosen on an earlier visit).
         syncBatteryScan()
