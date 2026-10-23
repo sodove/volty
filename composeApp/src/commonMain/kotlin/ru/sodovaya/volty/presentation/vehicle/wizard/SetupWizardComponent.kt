@@ -159,6 +159,13 @@ interface SetupWizardComponent : DraftExitComponent {
         val secondaryGauge: SecondaryGauge,
         val topology: PackTopology = PackTopology.PARALLEL,
         val batteryExit: BatteryExit? = null,
+        /** Controller step: the search list was reopened to add another controller. */
+        val addingController: Boolean = false,
+        /** Battery step: the every-role list was opened ("add another device"). */
+        val showAllDevices: Boolean = false,
+        /** Keys of what the battery step itself added, so switching the exit can take it back. */
+        val batteryAddedPacks: Set<String> = emptySet(),
+        val batteryAddedControllers: Set<String> = emptySet(),
         val draft: VehicleDraft,
         val issues: List<ComposerIssue>,
         val savedValues: EditableValues,
@@ -237,6 +244,8 @@ interface SetupWizardComponent : DraftExitComponent {
     interface ControllerStage : SourceStage {
         val scanRows: List<ScanRow>
         fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd)
+        /** Reopen the search list to add one more controller (the clean view hides it). */
+        fun onAddAnotherController()
         fun onDiscoverCanDevices()
         fun onAddCanCandidate(candidate: CanCandidate, asBattery: Boolean)
         fun onDismissCanScan()
@@ -252,6 +261,9 @@ interface SetupWizardComponent : DraftExitComponent {
 
         /** Choose where the battery comes from. Selecting never advances; only searching exits scan. */
         fun onChooseExit(exit: BatteryExit)
+
+        /** Show every device with every add, whatever exit is chosen. */
+        fun onShowAllDevices()
         fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd)
         fun onUseSeparateBms(device: DiscoveredDevice)
         fun onUseControllerBattery()
@@ -413,8 +425,42 @@ class DefaultSetupWizardComponent(
 
     private fun openControllers() {
         if (!_state.value.navigationEnabled) return
-        sourceScanner.start()
+        syncControllerScan()
         navigation.push(WizardConfig.Controllers)
+    }
+
+    /** The controller list is on screen only while there is no controller yet, or one more is wanted. */
+    private fun syncControllerScan() {
+        val s = _state.value
+        if (s.draft.controllers.isEmpty() || s.addingController) sourceScanner.start() else sourceScanner.stop()
+    }
+
+    private fun addAnotherController() {
+        if (!_state.value.navigationEnabled) return
+        _state.update { it.copy(addingController = true) }
+        syncControllerScan()
+    }
+
+    private fun showAllDevices() {
+        if (!_state.value.navigationEnabled) return
+        _state.update { it.copy(showAllDevices = true) }
+        syncBatteryScan()
+    }
+
+    /** Adds from the battery step, remembering what it added so a changed exit can undo it. */
+    private fun addInBatteryStage(device: DiscoveredDevice, add: ScannedAdd) {
+        if (!_state.value.navigationEnabled) return
+        val before = _state.value.draft
+        addScannedDevice(device, add)
+        val after = _state.value.draft
+        val newPacks = after.packs.map { it.key }.toSet() - before.packs.map { it.key }.toSet()
+        val newControllers = after.controllers.map { it.key }.toSet() - before.controllers.map { it.key }.toSet()
+        _state.update {
+            it.copy(
+                batteryAddedPacks = it.batteryAddedPacks + newPacks,
+                batteryAddedControllers = it.batteryAddedControllers + newControllers
+            )
+        }
     }
 
     private fun openBattery() {
@@ -427,14 +473,22 @@ class DefaultSetupWizardComponent(
     }
 
     private fun syncBatteryScan() {
-        if (_state.value.batteryExit?.needsSearch == true) sourceScanner.start() else sourceScanner.stop()
+        val s = _state.value
+        if (s.batteryExit?.needsSearch == true || s.showAllDevices) sourceScanner.start() else sourceScanner.stop()
     }
 
     private fun chooseBatteryExit(exit: BatteryExit) {
         if (!_state.value.navigationEnabled) return
-        if (exit == BatteryExit.FROM_CONTROLLER && _state.value.draft.controllers.isEmpty()) return
         _state.update { current ->
-            val controllers = current.draft.controllers.map { controller ->
+            // Switching exits takes back what the previous exit added in this step.
+            val switching = current.batteryExit != null && current.batteryExit != exit
+            var base = current.draft
+            if (switching) {
+                current.batteryAddedPacks.forEach { base = base.removeSetupPack(it) }
+                current.batteryAddedControllers.forEach { base = base.removeSetupController(it) }
+            }
+            if (exit == BatteryExit.FROM_CONTROLLER && base.controllers.isEmpty()) return@update current
+            val controllers = base.controllers.map { controller ->
                 when {
                     exit == BatteryExit.FROM_CONTROLLER ->
                         controller.copy(derivedBattery = DerivedBatteryChoice.ON)
@@ -445,11 +499,15 @@ class DefaultSetupWizardComponent(
                     else -> controller
                 }
             }
-            val draft = current.draft.copy(controllers = controllers)
+            val draft = base.copy(controllers = controllers)
             current.copy(
                 batteryExit = exit,
+                showAllDevices = false,
+                batteryAddedPacks = if (switching) emptySet() else current.batteryAddedPacks,
+                batteryAddedControllers = if (switching) emptySet() else current.batteryAddedControllers,
                 draft = draft,
                 issues = validate(draft),
+                canScanTarget = canScanTarget(draft, currentLiveAddresses),
                 advanceBlocked = false,
                 saveBlocked = false
             )
@@ -477,16 +535,16 @@ class DefaultSetupWizardComponent(
     private fun backFromControllers() {
         if (!_state.value.navigationEnabled) return
         sourceScanner.stop()
-        _state.update { it.copy(advanceBlocked = false) }
+        _state.update { it.copy(advanceBlocked = false, addingController = false) }
         navigation.pop()
     }
 
     private fun backFromStage() {
         if (!_state.value.navigationEnabled) return
         _state.update { it.copy(advanceBlocked = false) }
-        // Back on the controller step, which searches again.
-        sourceScanner.start()
+        _state.update { it.copy(showAllDevices = false) }
         navigation.pop()
+        syncControllerScan()
     }
 
     private fun publishScan(scan: VehicleSourceScanState) {
@@ -498,8 +556,11 @@ class DefaultSetupWizardComponent(
 
     /** Nothing until an exit is chosen; then only the devices that exit can use. */
     private fun batteryRows(): List<SetupWizardComponent.ScanRow> {
+        val rows = controllerScanRows(_state.value.scannedDevices)
+        // The secondary "add another device" list: everything, every add, as before the redesign.
+        if (_state.value.showAllDevices) return rows.map { it.copy(additions = ScannedAdd.entries) }
         val exit = _state.value.batteryExit ?: return emptyList()
-        return batteryScanRows(controllerScanRows(_state.value.scannedDevices), exit)
+        return batteryScanRows(rows, exit)
     }
 
     private fun updateName(name: String) {
@@ -740,8 +801,13 @@ class DefaultSetupWizardComponent(
         SourceStageComponent(), SetupWizardComponent.ControllerStage {
         override val scanRows: List<SetupWizardComponent.ScanRow>
             get() = controllerRows()
-        override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) =
+        override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) {
             this@DefaultSetupWizardComponent.addScannedDevice(device, add)
+            // The list closes again once the pick is made.
+            _state.update { it.copy(addingController = false) }
+            syncControllerScan()
+        }
+        override fun onAddAnotherController() = addAnotherController()
         override fun onDiscoverCanDevices() = this@DefaultSetupWizardComponent.discoverCanDevices()
         override fun onAddCanCandidate(candidate: CanCandidate, asBattery: Boolean) =
             this@DefaultSetupWizardComponent.addCanCandidate(candidate, asBattery)
@@ -759,17 +825,18 @@ class DefaultSetupWizardComponent(
         override val canUseControllerBattery: Boolean
             get() = _state.value.draft.controllers.isNotEmpty()
         override fun onChooseExit(exit: BatteryExit) = chooseBatteryExit(exit)
+        override fun onShowAllDevices() = showAllDevices()
         override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) =
-            this@DefaultSetupWizardComponent.addScannedDevice(device, add)
+            addInBatteryStage(device, add)
         override fun onUseSeparateBms(device: DiscoveredDevice) {
-            this@DefaultSetupWizardComponent.addScannedDevice(device, ScannedAdd.BATTERY)
-            _state.update { it.copy(batteryExit = BatteryExit.OWN_BMS) }
+            chooseBatteryExit(BatteryExit.OWN_BMS)
+            addInBatteryStage(device, ScannedAdd.BATTERY)
         }
         override fun onUseControllerBattery() =
             this@DefaultSetupWizardComponent.useControllerBattery()
         override fun onUseDeviceAsBoth(device: DiscoveredDevice) {
-            this@DefaultSetupWizardComponent.addScannedDevice(device, ScannedAdd.WHEEL)
-            _state.update { it.copy(batteryExit = BatteryExit.DEVICE_IS_BOTH) }
+            chooseBatteryExit(BatteryExit.DEVICE_IS_BOTH)
+            addInBatteryStage(device, ScannedAdd.WHEEL)
         }
         override fun onTopologyChanged(topology: PackTopology) =
             this@DefaultSetupWizardComponent.changeTopology(topology)

@@ -205,6 +205,19 @@ private fun ControllerScreen(component: SetupWizardComponent.ControllerStage) {
         } else {
             Hint(stringResource(Res.string.wizard_controller_setup_hint))
             EditableControllerCards(state, component)
+            if (state.addingController) {
+                ScanHeading(state.scannedDevices.size, state.scanning)
+                ScannedDeviceList(
+                    rows = component.scanRows,
+                    addedAddresses = state.draft.controllers.map { it.address }.toSet(),
+                    scanning = state.scanning,
+                    onAdd = component::onAddScannedDevice
+                )
+            } else {
+                TextButton(onClick = component::onAddAnotherController) {
+                    Text(stringResource(Res.string.wizard_add_another_controller))
+                }
+            }
             // The bus block exists only for a link that can be asked about one.
             if (state.showCanBlock) {
                 CanDiscoveryContent(
@@ -280,6 +293,20 @@ private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
                         }
                     }
                 )
+            }
+        }
+        if (state.showAllDevices) {
+            ScanHeading(state.scannedDevices.size, state.scanning)
+            ScannedDeviceList(
+                rows = component.scanRows,
+                addedAddresses = (state.draft.packs.map { it.address } +
+                    state.draft.controllers.map { it.address }).toSet(),
+                scanning = state.scanning,
+                onAdd = component::onAddScannedDevice
+            )
+        } else {
+            TextButton(onClick = component::onShowAllDevices) {
+                Text(stringResource(Res.string.wizard_add_other_device))
             }
         }
         if (state.advanceBlocked) {

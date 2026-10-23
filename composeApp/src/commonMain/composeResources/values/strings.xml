@@ -532,6 +532,8 @@
     <string name="wizard_controller_title">Controller</string>
     <string name="wizard_scanning">looking nearby · %1$d</string>
     <string name="wizard_scan_hint">The address is always shown. The type is a guess you can change on the next screen.</string>
+    <string name="wizard_add_another_controller">Add another controller</string>
+    <string name="wizard_add_other_device">Add another device</string>
     <string name="wizard_scan_empty">Nothing in range yet. Power the device on and bring the phone closer.</string>
     <string name="wizard_controller_setup_hint">The type can be changed here: a guess never locks you in.</string>
     <string name="wizard_battery_from_controller_hint">A computed battery is more honest than a blank, but it is not a measurement — it will be marked “≈”.</string>

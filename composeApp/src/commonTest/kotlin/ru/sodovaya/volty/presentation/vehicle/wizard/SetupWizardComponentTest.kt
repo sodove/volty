@@ -39,7 +39,7 @@ import ru.sodovaya.volty.presentation.root.configForCreateVehicle
 import ru.sodovaya.volty.presentation.root.guardComposerDestruction
 import ru.sodovaya.volty.presentation.root.leaveSetupWizard
 import ru.sodovaya.volty.presentation.root.stackAfterGoTo
-import ru.sodovaya.volty.presentation.root.stackAfterWizardSkip
+import ru.sodovaya.volty.presentation.root.consumeEditorSeed
 import ru.sodovaya.volty.presentation.root.stackAfterWizardSkip
 import ru.sodovaya.volty.presentation.vehicle.CanCandidateKind
 import ru.sodovaya.volty.presentation.vehicle.CanScanState
@@ -48,7 +48,6 @@ import ru.sodovaya.volty.presentation.vehicle.VehicleDraft
 import ru.sodovaya.volty.presentation.vehicle.addController
 import ru.sodovaya.volty.presentation.vehicle.addPack
 import ru.sodovaya.volty.presentation.vehicle.updateController
-import ru.sodovaya.volty.presentation.vehicle.persistableValues
 import ru.sodovaya.volty.presentation.vehicle.persistableValues
 import ru.sodovaya.volty.presentation.vehicle.validate
 import kotlin.test.AfterTest
@@ -930,8 +929,8 @@ class SetupWizardComponentTest {
     fun `skip replaces the wizard with the editor instead of stacking them`() {
         val stack = listOf<Config>(Config.Ride, Config.SetupWizard(), Config.Settings)
         assertEquals(
-            listOf<Config>(Config.Ride, Config.Settings, Config.VehicleEdit(vehicleId = null)),
-            stackAfterWizardSkip(stack)
+            listOf<Config>(Config.Ride, Config.Settings, Config.VehicleEdit(vehicleId = null, seedId = "s")),
+            stackAfterWizardSkip(stack, seedId = "s")
         )
     }
 
@@ -996,5 +995,97 @@ class SetupWizardComponentTest {
             issues = validate(draft),
             savedValues = values
         )
+    }
+
+    @Test
+    fun `aSecondControllerCanBeAddedInTheWizard`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var scanStarts = 0
+        val second = device("VE:09", "Second VESC", controllerType = ControllerType.VESC, rssi = -60)
+        val c = component(scan = kotlinx.coroutines.flow.flow {
+            scanStarts++
+            emit(vescScan)
+            emit(second)
+        })
+        (active(c) as SetupWizardComponent.Child.WhatAreWeBuilding).component.onNext()
+        advanceUntilIdle()
+        val controllers = (active(c) as SetupWizardComponent.Child.Controllers).component
+        controllers.onAddScannedDevice(vescScan, ScannedAdd.CONTROLLER)
+        advanceUntilIdle()
+        assertFalse(c.state.value.scanning, "the list is hidden once a controller is chosen: no scan behind it")
+
+        controllers.onAddAnotherController()
+        advanceUntilIdle()
+        assertEquals(2, scanStarts, "the secondary action reopens the list and its scan")
+        assertTrue(controllers.scanRows.any { it.device.address == "VE:09" })
+        controllers.onAddScannedDevice(second, ScannedAdd.CONTROLLER)
+
+        assertEquals(listOf("VE:01", "VE:09"), c.state.value.draft.controllers.map { it.address })
+        assertFalse(c.state.value.scanning, "adding closes the list again")
+    }
+
+    @Test
+    fun `theBatteryStageCanStillAddAnyRole`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(scan = flowOf(vescScan, antScan))
+        (active(c) as SetupWizardComponent.Child.WhatAreWeBuilding).component.onNext()
+        (active(c) as SetupWizardComponent.Child.Controllers).component.onNoController()
+        val battery = (active(c) as SetupWizardComponent.Child.Battery).component
+        assertFalse(c.state.value.scanning)
+
+        battery.onShowAllDevices()
+        advanceUntilIdle()
+        val rows = battery.scanRows
+        assertEquals(setOf("VE:01", "AN:02"), rows.map { it.device.address }.toSet())
+        assertTrue(rows.all { it.additions == ScannedAdd.entries })
+
+        battery.onAddScannedDevice(vescScan, ScannedAdd.CONTROLLER)
+        assertEquals(listOf("VE:01"), c.state.value.draft.controllers.map { it.address })
+    }
+
+    @Test
+    fun `switchingTheExitRemovesWhatThePreviousExitAdded`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(
+            initialDraft = VehicleDraft().addController(ControllerType.VESC, "VE:01", "VESC")
+        )
+        (active(c) as SetupWizardComponent.Child.WhatAreWeBuilding).component.onNext()
+        (active(c) as SetupWizardComponent.Child.Controllers).component.onNext()
+        val battery = (active(c) as SetupWizardComponent.Child.Battery).component
+
+        battery.onChooseExit(BatteryExit.OWN_BMS)
+        battery.onUseSeparateBms(antScan)
+        assertEquals(listOf("AN:02"), c.state.value.draft.packs.map { it.address })
+
+        battery.onChooseExit(BatteryExit.FROM_CONTROLLER)
+        assertEquals(emptyList(), c.state.value.draft.packs.map { it.address })
+        assertTrue(c.state.value.draft.toControllers().single().providesDerivedBattery)
+        assertEquals(listOf("VE:01"), c.state.value.draft.controllers.map { it.address }, "the earlier controller stays")
+
+        battery.onChooseExit(BatteryExit.OWN_BMS)
+        battery.onUseSeparateBms(antScan)
+        battery.onChooseExit(BatteryExit.DEVICE_IS_BOTH)
+        assertEquals(emptyList(), c.state.value.draft.packs.map { it.address })
+        assertEquals(listOf("VE:01"), c.state.value.draft.controllers.map { it.address })
+    }
+
+    @Test
+    fun `aSkipSeedReachesOnlyItsOwnEditor`() {
+        val buried = Config.VehicleEdit(vehicleId = null)
+        val stack = listOf<Config>(Config.Ride, buried, Config.SetupWizard())
+
+        val after = stackAfterWizardSkip(stack, seedId = "seed-1")
+
+        val top = after.last() as Config.VehicleEdit
+        assertEquals("seed-1", top.seedId)
+        assertTrue(top != buried, "an equal config would let Decompose retain the buried editor and never build the seed one")
+        assertTrue(buried in after, "the buried editor is untouched")
+
+        val handoff = WizardHandoff(VehicleDraft(), "x", "generic", SecondaryGauge.DUTY, PackTopology.PARALLEL)
+        val seeds = mutableMapOf("seed-1" to handoff)
+        assertEquals(null, consumeEditorSeed(seeds, buried), "a plain new-vehicle editor gets no seed")
+        assertEquals(1, seeds.size)
+        assertSame(handoff, consumeEditorSeed(seeds, top))
+        assertEquals(null, consumeEditorSeed(seeds, top), "a seed is consumed once")
     }
 }

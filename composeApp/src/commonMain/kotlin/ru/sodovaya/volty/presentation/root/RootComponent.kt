@@ -161,7 +161,13 @@ sealed class Config {
          * tapped "+ Add" while a guest connection is live, so we can capture
          * the device they're already talking to).
          */
-        val prefillFromActiveConnection: Boolean = false
+        val prefillFromActiveConnection: Boolean = false,
+        /**
+         * Names the wizard draft this create-editor was opened for. Part of the configuration so
+         * Decompose, which matches children by configuration equality, can never hand a new Skip
+         * to an older create-editor that happens to be buried in the stack.
+         */
+        val seedId: String? = null
     ) : Config()
     /**
      * The per-vehicle alert settings screen (F Task 9). Pushed from
@@ -441,9 +447,14 @@ internal fun leaveSetupWizard(
  * is gone, rather than lingering underneath as a second copy of the same draft. Everything else
  * keeps its place, and any buried create-editor is replaced so its seed is the one handed over.
  */
-internal fun stackAfterWizardSkip(stack: List<Config>): List<Config> =
-    stack.filterNot { it is Config.SetupWizard || it == Config.VehicleEdit(vehicleId = null) } +
-        Config.VehicleEdit(vehicleId = null)
+internal fun stackAfterWizardSkip(stack: List<Config>, seedId: String): List<Config> =
+    stack.filterNot { it is Config.SetupWizard } + Config.VehicleEdit(vehicleId = null, seedId = seedId)
+
+/** Takes (removes) the handoff a create-editor configuration was opened for; null for any other. */
+internal fun consumeEditorSeed(
+    seeds: MutableMap<String, WizardHandoff>,
+    config: Config.VehicleEdit
+): WizardHandoff? = if (config.vehicleId == null) config.seedId?.let { seeds.remove(it) } else null
 
 class DefaultRootComponent(
     componentContext: ComponentContext
@@ -491,6 +502,7 @@ class DefaultRootComponent(
     init {
         lifecycle.doOnDestroy {
             scope.coroutineContext[Job]?.cancel()
+            pendingEditorSeeds.clear()
             nearbyPresenter.close()
             navigation.close()
         }
@@ -603,11 +615,12 @@ class DefaultRootComponent(
     }
 
     /** Skip's draft, waiting for the editor it opens; read once by [Config.VehicleEdit]'s factory. */
-    private var pendingEditorSeed: WizardHandoff? = null
+    private val pendingEditorSeeds = mutableMapOf<String, WizardHandoff>()
 
     private fun openEditorFromWizard(handoff: WizardHandoff) {
-        pendingEditorSeed = handoff
-        nav.navigate { stack -> stackAfterWizardSkip(stack) }
+        val seedId = "seed-${kotlin.random.Random.nextLong()}"
+        pendingEditorSeeds[seedId] = handoff
+        nav.navigate { stack -> stackAfterWizardSkip(stack, seedId) }
     }
 
     private fun leaveActiveSetupWizard() {
@@ -837,8 +850,7 @@ class DefaultRootComponent(
                 val prefilledName = prefillVehicle?.name
                     ?.let { if (prefillVehicle.isGuest && it == "Guest BMS") null else it }
                 // The wizard's Skip: take the draft once; a rebuilt editor must not replay it.
-                val seed = if (config.vehicleId == null) pendingEditorSeed else null
-                if (seed != null) pendingEditorSeed = null
+                val seed = consumeEditorSeed(pendingEditorSeeds, config)
                 RootComponent.Child.VehicleEdit(
                     DefaultVehicleEditComponent(
                         componentContext = context,

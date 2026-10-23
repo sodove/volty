@@ -530,6 +530,8 @@
     <string name="wizard_controller_title">Контроллер</string>
     <string name="wizard_scanning">ищу рядом · %1$d</string>
     <string name="wizard_scan_hint">Адрес показан всегда. Тип — догадка, её можно сменить на следующем экране.</string>
+    <string name="wizard_add_another_controller">Добавить ещё контроллер</string>
+    <string name="wizard_add_other_device">Добавить другое устройство</string>
     <string name="wizard_scan_empty">Пока никого не видно. Включи питание устройства и поднеси телефон ближе.</string>
     <string name="wizard_controller_setup_hint">Тип меняется здесь — догадка никогда не запирает.</string>
     <string name="wizard_battery_from_controller_hint">Вычисленная батарея честнее пустого места, но это не измерение — она будет помечена «≈».</string>
