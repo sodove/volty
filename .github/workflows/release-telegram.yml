@@ -1,0 +1,144 @@
+name: Release to Telegram
+
+# A signed production build of every green main: published as a GitHub Release asset (a direct,
+# login-free download link) and announced in a Telegram chat with that link.
+#
+# Why a Release and not the run's artifact: an Actions artifact downloads only for a signed-in
+# GitHub user and arrives zipped. Why a link and not the file: the APK (63 MB in 0.7.45) is past
+# the Bot API's 50 MB upload limit.
+#
+# Runs after CI, so a build whose tests failed is never published; can also be started by hand.
+# One Release per version (tag vX.Y.Z): rebuilding an unbumped version replaces its APK.
+#
+# Repository secrets (Settings -> Secrets and variables -> Actions):
+#   VOLTY_KEYSTORE_BASE64        base64 of 123.jks
+#   VOLTY_KEYSTORE_PASSWORD, VOLTY_KEY_ALIAS, VOLTY_KEY_PASSWORD
+#   VOLTY_GOOGLE_SERVICES_BASE64 base64 of composeApp/google-services.json
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID   (optional: without them nothing is announced)
+# Without the keystore the workflow does nothing, so it is safe to merge before setup.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-telegram
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: read
+
+jobs:
+  release:
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CONFIGURED: ${{ secrets.VOLTY_KEYSTORE_BASE64 != '' }}
+      HAS_TELEGRAM: ${{ secrets.TELEGRAM_BOT_TOKEN != '' && secrets.TELEGRAM_CHAT_ID != '' }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Skip without signing secrets
+        if: env.CONFIGURED != 'true'
+        run: echo "::notice::VOLTY_KEYSTORE_BASE64 is not set; nothing to build."
+
+      - uses: actions/checkout@v4
+        if: env.CONFIGURED == 'true'
+        with:
+          ref: ${{ env.HEAD_SHA }}
+          fetch-depth: 300
+
+      - name: Set up JDK 17
+        if: env.CONFIGURED == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Restore signing key and Firebase config
+        if: env.CONFIGURED == 'true'
+        env:
+          KEYSTORE_BASE64: ${{ secrets.VOLTY_KEYSTORE_BASE64 }}
+          GOOGLE_SERVICES_BASE64: ${{ secrets.VOLTY_GOOGLE_SERVICES_BASE64 }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          echo "$GOOGLE_SERVICES_BASE64" | base64 -d > composeApp/google-services.json
+          echo "VOLTY_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+
+      # The offline-map values are public (every APK's manifest carries them); a rider build
+      # without them silently loses the map catalogue. R8 has failed intermittently under the
+      # repository's 2 GB heap, and the runner has room for more.
+      - name: Assemble signed release
+        if: env.CONFIGURED == 'true'
+        env:
+          VOLTY_KEYSTORE_PASSWORD: ${{ secrets.VOLTY_KEYSTORE_PASSWORD }}
+          VOLTY_KEY_ALIAS: ${{ secrets.VOLTY_KEY_ALIAS }}
+          VOLTY_KEY_PASSWORD: ${{ secrets.VOLTY_KEY_PASSWORD }}
+        run: >
+          ./gradlew :composeApp:assembleRelease
+          -Dorg.gradle.jvmargs="-Xmx6g -Dfile.encoding=UTF-8"
+          -PvoltyProductionRelease=true
+          -PvoltyOfflineCatalogUrl=https://volty.sodove.ru/offline/catalog.json
+          -PvoltyOfflineManifestKeyId=volty-offline-2026-09-06
+          -PvoltyOfflineManifestPublicKey=0kfzftmF3ntVIjqLMoKqqoh75JpmrgiJp/F18uFNznU=
+
+      - name: Verify the APK before publishing
+        if: env.CONFIGURED == 'true'
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^val appVersionName = "\(.*\)"$/\1/p' composeApp/build.gradle.kts)"
+          code="$(sed -n 's/^val appVersionCode = \([0-9]*\)$/\1/p' composeApp/build.gradle.kts)"
+          [ -n "$version" ] && [ -n "$code" ] || { echo "cannot read the app version from build.gradle.kts"; exit 1; }
+          apk="composeApp/build/outputs/apk/release/volty-$version-release.apk"
+          tools="$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)"
+          "$tools/apksigner" verify "$apk"
+          manifest="$("$tools/aapt2" dump xmltree --file AndroidManifest.xml "$apk")"
+          for value in https://volty.sodove.ru/offline/catalog.json volty-offline-2026-09-06 0kfzftmF3ntVIjqLMoKqqoh75JpmrgiJp/F18uFNznU=; do
+            grep -qF "$value" <<<"$manifest" || { echo "offline meta-data $value is missing"; exit 1; }
+          done
+          "$tools/aapt2" dump resources "$apk" | grep -q google_app_id || { echo "no Firebase config: call pushes would be dead"; exit 1; }
+          ls -l "$apk"
+          { echo "VERSION=$version"; echo "VERSION_CODE=$code"; echo "APK=$apk"; } >> "$GITHUB_ENV"
+
+      - name: Publish the GitHub Release
+        if: env.CONFIGURED == 'true'
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          # Changes since the last build this workflow published, or the last few commits on the first run.
+          previous="$(gh run list --workflow release-telegram.yml --status success --limit 1 --json headSha --jq '.[0].headSha // empty' || true)"
+          if [ -n "$previous" ] && git cat-file -e "$previous^{commit}" 2>/dev/null; then
+            changes="$(git log --no-merges --format='- %s' "$previous..$HEAD_SHA" | head -20)"
+          else
+            changes="$(git log --no-merges --format='- %s' -5 "$HEAD_SHA")"
+          fi
+          [ -n "$changes" ] || changes="- rebuild of ${HEAD_SHA:0:8}"
+          printf 'Build %s from %s\n\n%s\n' "$VERSION_CODE" "${HEAD_SHA:0:8}" "$changes" > "$RUNNER_TEMP/notes.md"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$APK" --clobber
+            gh release edit "$tag" --notes-file "$RUNNER_TEMP/notes.md"
+          else
+            gh release create "$tag" "$APK" --target "$HEAD_SHA" --title "Volty $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+          fi
+          asset="$(basename "$APK")"
+          echo "DOWNLOAD_URL=https://github.com/$GITHUB_REPOSITORY/releases/download/$tag/$asset" >> "$GITHUB_ENV"
+          cp "$RUNNER_TEMP/notes.md" "$RUNNER_TEMP/changes.md"
+
+      - name: Announce in Telegram
+        if: env.CONFIGURED == 'true' && env.HAS_TELEGRAM == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          set -euo pipefail
+          text="$(printf 'Volty %s (%s)\n%s\n\n%s' "$VERSION" "$VERSION_CODE" "$DOWNLOAD_URL" "$(tail -n +3 "$RUNNER_TEMP/changes.md")")"
+          # Telegram caps a message at 4096 characters.
+          text="$(python3 -c 'import sys; t=sys.stdin.read(); print(t if len(t)<=4000 else t[:3997]+"...")' <<<"$text")"
+          response="$(curl -sS -w '\n%{http_code}' "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode chat_id="$TELEGRAM_CHAT_ID" --data-urlencode text="$text" -d disable_web_page_preview=true)"
+          [ "$(tail -n1 <<<"$response")" = 200 ] || { echo "Telegram refused: $(head -n -1 <<<"$response")"; exit 1; }
