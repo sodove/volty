@@ -24,9 +24,52 @@ data class HistoryMapScene(
  * Endpoints describe the loaded portion, not a claim that the whole ride was read.
  */
 fun historyMapScene(identity: HistoryMapIdentity, origin: HistoryTick?, fixes: List<HistoryGpsFix>,
-    markers: List<HistoryMarker>, cursorEpochMillis: Long?, maxFixAgeMillis: Long): HistoryMapScene {
+    markers: List<HistoryMarker>, cursorEpochMillis: Long?, maxFixAgeMillis: Long): HistoryMapScene =
+    historyMapTrack(identity, origin, fixes, markers, maxFixAgeMillis).at(cursorEpochMillis)
+
+/**
+ * A route's geometry, built once, with the cursor lookup kept apart from it. A scrubbed cursor moves
+ * every frame; rebuilding the whole route per frame (and hiding the marker until it finished) is what
+ * made the marker blink or vanish under a dragging finger. [at] costs two binary searches.
+ */
+class HistoryMapTrack internal constructor(
+    val scene: HistoryMapScene,
+    private val fixes: List<HistoryGpsFix>,
+    private val times: LongArray,
+    private val boundaries: LongArray,
+    private val maxFixAgeMillis: Long,
+) {
+    fun selectedFix(cursorEpochMillis: Long?): HistoryGpsFix? {
+        val cursor = cursorEpochMillis ?: return null
+        val candidate = lastAtOrBefore(times, cursor)
+        if (candidate < 0) return null
+        val time = times[candidate]
+        val age = cursor - time
+        if (age > maxFixAgeMillis) return null
+        // A recorded boundary between the fix and the cursor: the fix no longer describes the cursor.
+        if (age > 0) { val b = firstAtOrAfter(boundaries, time); if (b < boundaries.size && boundaries[b] <= cursor) return null }
+        return fixes[candidate]
+    }
+
+    fun at(cursorEpochMillis: Long?): HistoryMapScene = scene.copy(selectedFix = selectedFix(cursorEpochMillis))
+
+    private fun lastAtOrBefore(values: LongArray, key: Long): Int {
+        var low = 0; var high = values.size
+        while (low < high) { val mid = (low + high) ushr 1; if (values[mid] <= key) low = mid + 1 else high = mid }
+        return low - 1
+    }
+
+    private fun firstAtOrAfter(values: LongArray, key: Long): Int {
+        var low = 0; var high = values.size
+        while (low < high) { val mid = (low + high) ushr 1; if (values[mid] < key) low = mid + 1 else high = mid }
+        return low
+    }
+}
+
+fun historyMapTrack(identity: HistoryMapIdentity, origin: HistoryTick?, fixes: List<HistoryGpsFix>,
+    markers: List<HistoryMarker>, maxFixAgeMillis: Long): HistoryMapTrack {
     require(maxFixAgeMillis >= 0)
-    val empty = HistoryMapScene(identity, emptyList(), null, emptyList())
+    val empty = HistoryMapTrack(HistoryMapScene(identity, emptyList(), null, emptyList()), emptyList(), LongArray(0), LongArray(0), maxFixAgeMillis)
     fun axis(tick: HistoryTick): Long? = if (origin == null) tick.epochMillis else historyAxisEpochMillis(origin, tick)
     val times = fixes.map { axis(it.tick) ?: return empty }
     if (times.zipWithNext().any { (a, b) -> b < a }) return empty
@@ -50,14 +93,8 @@ fun historyMapScene(identity: HistoryMapIdentity, origin: HistoryTick?, fixes: L
         segment += fix
     }
     if (segment.isNotEmpty()) segments += HistoryMapSegment(segment.toList())
-    val candidate = cursorEpochMillis?.let { cursor -> times.indexOfLast { it <= cursor } } ?: -1
-    val selected = if (candidate >= 0) {
-        val time = times[candidate]
-        val age = checkNotNull(cursorEpochMillis) - time
-        if (age < 0 || age > maxFixAgeMillis ||
-            (age > 0 && boundaries.any { it in time..cursorEpochMillis })) null else fixes[candidate]
-    } else null
-    return HistoryMapScene(identity, segments.toList(), selected, gaps.toList())
+    return HistoryMapTrack(HistoryMapScene(identity, segments.toList(), null, gaps.toList()), fixes.toList(),
+        times.toLongArray(), boundaries.toLongArray(), maxFixAgeMillis)
 }
 
 private val gpsBoundaries = setOf(HistoryMarkerKind.GPS_GAP, HistoryMarkerKind.CLOCK_CHANGE,

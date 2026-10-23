@@ -282,20 +282,21 @@ private fun rememberHistoryMediaPositions(state: HistoryUiState, gpsMaxAgeMillis
 }
 
 private data class BoundHistoryMap(val identity: HistoryMapIdentity, val route: HistoryRouteState?,
-    val cursor: Long?, val age: Long, val origin: HistoryTick?, val scene: HistoryMapScene)
+    val age: Long, val origin: HistoryTick?, val track: HistoryMapTrack)
 
 @Composable
 private fun rememberHistoryScreenMap(identity: HistoryMapIdentity, content: HistoryScreenContent, cursor: Long?, age: Long): HistoryMapScene {
     val route = content.route
     val origin = content.detail?.ride?.takeUnless { it.status == HistoryRideStatus.LEGACY }?.started
-    val bound by produceState<BoundHistoryMap?>(null, identity, route, cursor, age, origin) {
-        value = withContext(Dispatchers.Default) { BoundHistoryMap(identity, route, cursor, age, origin,
-            historyMapScene(identity, origin, route?.fixes.orEmpty(), route?.markers.orEmpty(), cursor, age)) }
+    // The route's geometry is built off UI once per route; the cursor is looked up in the frame itself.
+    // Keying the build on the cursor restarted it on every scrubbed frame, and the marker stayed
+    // hidden until a build finished - which, under a moving finger, it never did.
+    val bound by produceState<BoundHistoryMap?>(null, identity, route, age, origin) {
+        value = withContext(Dispatchers.Default) { BoundHistoryMap(identity, route, age, origin,
+            historyMapTrack(identity, origin, route?.fixes.orEmpty(), route?.markers.orEmpty(), age)) }
     }
     val matching = bound?.takeIf { it.identity == identity && it.route === route && it.age == age && it.origin == origin }
-    // The route remains earned while a new cursor is calculated off UI. Hide the
-    // old selected marker immediately; do not erase/redraw the whole route per frame.
-    return matching?.let { if (it.cursor == cursor) it.scene else it.scene.copy(selectedFix = null) }
+    return remember(matching, cursor) { matching?.track?.at(cursor) }
         ?: HistoryMapScene(identity, emptyList(), null, emptyList())
 }
 

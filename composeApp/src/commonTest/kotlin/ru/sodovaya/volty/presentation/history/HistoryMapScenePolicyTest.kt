@@ -65,4 +65,27 @@ class HistoryMapScenePolicyTest {
         assertEquals(a, scene(listOf(a), listOf(gap), 1000).selectedFix)
         assertNull(scene(listOf(a), listOf(gap), 1001).selectedFix)
     }
+
+    @Test fun aScrubbedCursorFindsTheSameFixAsTheFullSceneRule() {
+        // The per-frame lookup must agree with the rule it replaced: the last fix at or before the
+        // cursor, unless it is older than the cadence or a recorded boundary lies between them.
+        val random = kotlin.random.Random(7)
+        var t = 1000L
+        val fixes = List(400) { fix(t).also { t += listOf(0L, 200L, 500L, 900L, 1500L)[random.nextInt(5)] } }
+        val markers = List(25) { HistoryMarker(fix(1000 + random.nextLong(t - 1000)).tick,
+            listOf(HistoryMarkerKind.GPS_GAP, HistoryMarkerKind.MANUAL_STOP, HistoryMarkerKind.CLOCK_CHANGE)[random.nextInt(3)]) }
+        val track = historyMapTrack(id, origin, fixes, markers, 1000)
+        val times = fixes.map { historyAxisEpochMillis(origin, it.tick)!! }
+        val bounds = markers.map { historyAxisEpochMillis(origin, it.tick)!! }
+        var held = 0
+        for (cursor in 900L..t + 1500 step 37) {
+            val index = times.indexOfLast { it <= cursor }
+            val expected = if (index < 0) null else times[index].let { time ->
+                if (cursor - time > 1000 || (cursor > time && bounds.any { it in time..cursor })) null else fixes[index] }
+            assertSame(expected, track.selectedFix(cursor), "cursor $cursor")
+            if (expected != null) held++
+        }
+        assertTrue(held > 100, "the sweep must exercise the found path, not only the empty one")
+        assertSame(track.scene.segments, track.at(1500).segments, "moving the cursor must not rebuild the route")
+    }
 }
