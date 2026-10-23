@@ -643,6 +643,7 @@
     <string name="nearby_voice_connected">Voice connected</string>
     <string name="nearby_voice_permission_denied">Microphone permission is required to join voice.</string>
     <string name="nearby_voice_connection_failed">Voice connection failed. Try again.</string>
+    <string name="nearby_voice_rejoining">Connection lost, reconnecting…</string>
     <string name="nearby_mic_on">Microphone on</string>
     <string name="nearby_mic_off">Microphone off</string>
     <string name="nearby_mic_enable">Enable</string>

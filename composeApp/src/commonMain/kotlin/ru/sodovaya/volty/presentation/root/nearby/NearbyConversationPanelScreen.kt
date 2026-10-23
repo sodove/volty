@@ -303,7 +303,7 @@ private fun NearbyPanelConnection.dotColor(): Color = when (this) {
     NearbyPanelConnection.CONNECTED -> ConnectedGreen
     NearbyPanelConnection.FAILED -> MaterialTheme.colorScheme.error
     NearbyPanelConnection.STOPPING, NearbyPanelConnection.HIDDEN -> MaterialTheme.colorScheme.outline
-    NearbyPanelConnection.CONNECTING, NearbyPanelConnection.RECONNECTING -> WaitingAmber
+    NearbyPanelConnection.CONNECTING, NearbyPanelConnection.RECONNECTING, NearbyPanelConnection.REJOINING -> WaitingAmber
 }
 
 @Composable
@@ -478,6 +478,7 @@ internal fun NearbyPanelConnection.message(): StringResource = when (this) {
     NearbyPanelConnection.RECONNECTING -> Res.string.nearby_panel_reconnecting
     NearbyPanelConnection.STOPPING -> Res.string.nearby_panel_stopping
     NearbyPanelConnection.FAILED -> Res.string.nearby_voice_connection_failed
+    NearbyPanelConnection.REJOINING -> Res.string.nearby_voice_rejoining
 }
 
 private fun NearbyVoiceError.message(): StringResource = when (this) {

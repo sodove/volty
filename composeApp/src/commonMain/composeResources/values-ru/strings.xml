@@ -641,6 +641,7 @@
     <string name="nearby_voice_connected">Голос подключён</string>
     <string name="nearby_voice_permission_denied">Чтобы войти в голос, нужен доступ к микрофону.</string>
     <string name="nearby_voice_connection_failed">Подключить голос не удалось. Попробуйте ещё раз.</string>
+    <string name="nearby_voice_rejoining">Связь пропала, подключаюсь снова…</string>
     <string name="nearby_mic_on">Микрофон включён</string>
     <string name="nearby_mic_off">Микрофон выключен</string>
     <string name="nearby_mic_enable">Включить</string>

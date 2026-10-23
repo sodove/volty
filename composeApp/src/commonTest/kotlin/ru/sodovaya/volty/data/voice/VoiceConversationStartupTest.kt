@@ -467,6 +467,81 @@ class VoiceConversationStartupTest {
         } finally {sharing.journal.failAcknowledge=false;handle?.close();f.close()}
     }
 
+    // ---- Task 6: the voice comes back by itself after a drop (field 2026-10-23) ----
+    private fun TestScope.rejoinController(f: Fixture,policy: VoiceRejoinPolicy):NearbyVoiceController {
+        var nonce=0
+        return NearbyVoiceController(f.repository,f.owner,f.dispatcher,
+            {"80000000-0000-0000-0000-${(++nonce).toString().padStart(12,'0')}"},{phone},Switches(),
+            rejoin=policy,clockMillis={testScheduler.currentTime})
+    }
+    private fun Fixture.joins()=paths.count {it.endsWith("/join")}
+    private fun TestScope.drop(f: Fixture) {
+        val (tag,emit)=f.emitters.last();emit(VoiceSessionEvent.EngineFailed(tag));runCurrent()
+    }
+    private fun TestScope.connect(f: Fixture) {
+        val (tag,emit)=f.emitters.last()
+        emit(VoiceSessionEvent.TransportConnected(tag));emit(VoiceSessionEvent.CaptureStarted(tag));emit(VoiceSessionEvent.Published(tag))
+        emit(VoiceSessionEvent.Subscribed(tag,"peer"));emit(VoiceSessionEvent.RenderStarted(tag));runCurrent()
+        assertEquals(VoicePhase.CONNECTED,assertNotNull(f.owner.state.value.voice).phase,"precondition: the session really connected")
+    }
+
+    @Test fun aDroppedChannelIsJoinedAgainWithAFreshOperationAfterTheDelay()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(2_000,4_000)))
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val id=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(id,true,boundary);runCurrent();connect(f);assertEquals(1,f.joins())
+            drop(f)
+            assertEquals(VoiceConversationPhase.FAILED,f.owner.state.value.phase,"precondition: the drop reached FAILED")
+            assertTrue(root.state.value.rejoining);assertEquals(1,f.joins())
+            advanceTimeBy(1_999);runCurrent();assertEquals(1,f.joins())
+            advanceTimeBy(1);runCurrent()
+            assertEquals(2,f.joins());assertNotEquals(VoiceOperationId(id),f.owner.state.value.operationId)
+            assertFalse(root.state.value.rejoining)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun aUserLeaveCancelsTheRejoin()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(2_000)))
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val id=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(id,true,boundary);runCurrent();connect(f)
+            drop(f);assertTrue(root.state.value.rejoining,"precondition: a rejoin is pending")
+            root.disconnect(VoiceOperationId(id));runCurrent()
+            assertFalse(root.state.value.rejoining)
+            advanceTimeBy(120_000);runCurrent()
+            assertEquals(1,f.joins());assertEquals(1,f.emitters.size)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun aSuccessfulJoinResetsTheCount()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(1_000,5_000)))
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val id=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(id,true,boundary);runCurrent();connect(f)
+            drop(f);advanceTimeBy(1_000);runCurrent();assertEquals(2,f.joins())
+            connect(f)   // the rejoin worked: the next drop is a first failure again
+            drop(f);advanceTimeBy(1_000);runCurrent()
+            assertEquals(3,f.joins(),"a connection in between must restart at the first delay, not the second")
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun rejoinGivesUpAfterTheBudgetAndShowsTheFailure()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(1_000),2_500))
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val id=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(id,true,boundary);runCurrent();connect(f)
+            repeat(3) {drop(f);advanceTimeBy(1_000);runCurrent()}
+            assertEquals(4,f.joins())
+            drop(f)   // t=3000: past the 2500 ms budget
+            assertEquals(NearbyVoiceUiPhase.FAILED,root.state.value.phase);assertFalse(root.state.value.rejoining)
+            advanceTimeBy(600_000);runCurrent();assertEquals(4,f.joins())
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
     private class Switches: NearbyVoiceSwitchGuard {
         var confirm=false
         val withdrawn=mutableListOf<VoiceOperationId?>()

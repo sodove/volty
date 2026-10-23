@@ -30,14 +30,19 @@ data class NearbyVoiceView(val pending: NearbyPendingVoiceView?=null,val label: 
     val callRoster: DirectCallRosterPresenceView?=null,
     val channelMap: NearbyChannelMapState=NearbyChannelMapState(),
     val channelRoster: VoiceRosterPresenceView?=null,
-    val audio: VoiceConversationAudioState?=null)
+    val audio: VoiceConversationAudioState?=null,
+    /** The channel dropped and a rejoin is pending: show "reconnecting", not the failure. */
+    val rejoining: Boolean=false)
 
 /** All mutations run on the queued process owner. UI supplies explicit permission results and a disposable launcher. */
 internal class NearbyVoiceController(private val repository: DefaultSocialRepository,private val voice: VoiceConversationStartup,
     private val queued: CoroutineDispatcher,private val nextId: ()->String,private val readPreferences: suspend ()->VoiceAudioPreferences,
     private val switches: NearbyVoiceSwitchGuard,
     /** Called just before a server conversation is started; the offline radio uses it to stop itself. */
-    private val onConversationStarting: () -> Unit = {}) {
+    private val onConversationStarting: () -> Unit = {},
+    /** When to dial a dropped channel again; the clock is injected so tests can drive it. */
+    private val rejoin: VoiceRejoinPolicy = VoiceRejoinPolicy(),
+    private val clockMillis: () -> Long = ::monotonicMillis) {
     private val parent=repository.applicationScope()
     private val root=checkNotNull(parent.coroutineContext[Job])
     init {require(root.isActive && queued.isDispatchNeeded(parent.coroutineContext))}
@@ -55,6 +60,13 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
     private var committed: Request?=null
     private var failure: Pair<SocialAuthenticatedAccount,NearbyVoiceError>?=null
     private var closed=false
+    // Rejoin: the user's "I am in this channel" intent outlives a dropped session (field 2026-10-23).
+    private var rejoinBoundary: NearbyVisibleLaunchBoundary?=null
+    private var rejoinJob: Job?=null
+    private var rejoinFailures=0
+    private var rejoinFirstAt=0L
+    private var rejoining=false
+    private var rejoinHandled: VoiceOperationId?=null
     private val issued=mutableSetOf<String>()
     private val output=MutableStateFlow(NearbyVoiceView())
     val state=output.asStateFlow()
@@ -65,6 +77,7 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             pending?.takeIf {it.original!=source.operationId}?.let {pending=null}
             if (source.phase == VoiceConversationPhase.STOPPED && committed?.operation == source.operationId)
                 committed = null
+            noteVoice(source)
             render()
         }}
         scope.launch {repository.authenticatedAccount.collectLatest {account ->
@@ -84,7 +97,7 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
     private fun retire(account: SocialAuthenticatedAccount) {
         if(pending?.account===account) pending=null
         if(starting?.request?.account===account) {starting?.job?.cancel();starting=null}
-        if(committed?.account===account) {switches.withdrawSharing(committed?.operation);committed=null}
+        if(committed?.account===account) {cancelRejoin();switches.withdrawSharing(committed?.operation);committed=null}
         if(failure?.first===account) failure=null
         render()
     }
@@ -107,7 +120,56 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             callRoster=source.callRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
             channelMap=nearbyChannelMapState(source,owner?.operation),
             channelRoster=source.channelRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
-            audio=source.audio.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED})
+            audio=source.audio.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
+            rejoining=rejoining && owner!=null && source.phase==VoiceConversationPhase.FAILED)
+    }
+    private fun cancelRejoin() {
+        rejoinJob?.cancel();rejoinJob=null;rejoining=false;rejoinFailures=0;rejoinHandled=null
+    }
+    private fun noteVoice(source: VoiceConversationState) {
+        val owner=committed ?: return
+        if(source.operationId!=owner.operation) return
+        if(source.phase==VoiceConversationPhase.JOIN_SUBMITTED && source.voice?.phase==VoicePhase.CONNECTED) {
+            rejoinFailures=0;rejoin.reset()
+        }
+        if(source.phase==VoiceConversationPhase.FAILED && rejoinHandled!=owner.operation &&
+            owner.target is VoiceConversationTarget.Channel && current(owner.account)) scheduleRejoin(owner)
+    }
+    /** Counts one more failure and waits the policy's delay; null from the policy gives up and leaves the failure visible. */
+    private fun scheduleRejoin(owner: Request) {
+        val now=clockMillis()
+        if(rejoinFailures==0) rejoinFirstAt=now
+        rejoinFailures++
+        rejoinHandled=owner.operation
+        val wait=rejoin.nextDelay(rejoinFailures,rejoinFirstAt,now)
+        if(wait==null) {rejoining=false;rejoinFailures=0;return}
+        rejoining=true
+        rejoinJob?.cancel()
+        rejoinJob=scope.launch {delay(wait);attemptRejoin(owner)}
+    }
+    private suspend fun attemptRejoin(old: Request) {
+        // Only the still-failed, still-owned conversation is redialled; a leave, a switch or a new account ends it.
+        if(committed!==old || !current(old.account) || voice.state.value.operationId!=old.operation ||
+            voice.state.value.phase!=VoiceConversationPhase.FAILED) {rejoining=false;render();return}
+        val door=rejoinBoundary
+        val id=nextId()
+        if(door==null || !door.available || runCatching {invitationDraftId(id)}.isFailure || !issued.add(id)) {
+            scheduleRejoin(old);render();return
+        }
+        val next=old.copy(id=id,original=old.operation)
+        try {
+            switches.withdrawSharing(old.operation)
+            if(!switches.waitSharingCleanup(old.operation)) {scheduleRejoin(old);render();return}
+            if(committed!==old || !current(old.account)) return
+            onConversationStarting()
+            committed=next;rejoining=false;rejoinHandled=null
+            voice.start(old.account,old.target,next.operation,readPreferences=readPreferences,launch=door::launchVoice)
+        } catch(cancelled: CancellationException) {throw cancelled
+        } catch(_: Exception) {
+            if(committed===next) committed=old
+            if(committed===old) scheduleRejoin(old)
+        }
+        render()
     }
     fun requestChannel(account: SocialAuthenticatedAccount,channel: String,label: String):String? {
         if(!current(account) || runCatching {invitationDraftId(channel)}.isFailure) return null
@@ -152,7 +214,7 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             pending=null;failure=request.account to if(!microphoneGranted) NearbyVoiceError.MICROPHONE_DENIED else NearbyVoiceError.NOT_VISIBLE
             render();return@launch
         }
-        pending=null
+        pending=null;cancelRejoin();rejoinBoundary=boundary
         val work=Start(request);starting=work;failure=null
         work.job=scope.launch(start=CoroutineStart.LAZY) {execute(work,boundary)}
         render();work.job?.start()
@@ -205,7 +267,7 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
         val start=starting?.takeIf {it.request.operation==operation || it.request.original==operation}
         val owner=committed?.takeIf {it.operation==operation && voice.state.value.operationId==operation}
         if(start==null && owner==null) return@launch
-        if(owner!=null) committed=null
+        if(owner!=null) {committed=null;cancelRejoin()}
         if(pending?.original==operation) pending=null
         start?.let {it.job?.cancel();starting=null;voice.stop(it.request.operation)}
         switches.withdrawSharing(owner?.operation ?: start?.request?.original)
@@ -222,10 +284,13 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
         if(closed) return@withContext
         closed=true
         val start=starting;val owner=committed
-        pending=null;starting=null;committed=null
+        pending=null;starting=null;committed=null;cancelRejoin()
         start?.job?.cancel();lifetime.cancel()
         switches.withdrawSharing(owner?.operation ?: start?.request?.original)
         start?.let {voice.stop(it.request.operation)};owner?.let {voice.stop(it.operation)}
         output.value=NearbyVoiceView()
     }
 }
+
+private val clockOrigin=kotlin.time.TimeSource.Monotonic.markNow()
+private fun monotonicMillis():Long=clockOrigin.elapsedNow().inWholeMilliseconds

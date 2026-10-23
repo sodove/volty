@@ -3,7 +3,9 @@ package ru.sodovaya.volty.presentation.root.nearby
 import ru.sodovaya.volty.domain.voice.VoiceOperationId
 import ru.sodovaya.volty.domain.voice.VoicePhase
 
-enum class NearbyPanelConnection { HIDDEN, CONNECTING, CONNECTED, RECONNECTING, STOPPING, FAILED }
+enum class NearbyPanelConnection { HIDDEN, CONNECTING, CONNECTED, RECONNECTING, STOPPING, FAILED,
+    /** The channel dropped and the app is dialling it again by itself. */
+    REJOINING }
 
 /** Keep cancellation, permission errors and cleanup reachable even before/after media exists. */
 internal fun nearbyConversationPanelVisible(voice: NearbyVoiceView, sharing: NearbySharingView): Boolean {
@@ -51,6 +53,7 @@ internal fun nearbyConversationPanel(voice: NearbyVoiceView, sharing: NearbyShar
     val operation = voice.operation
     val evidence = voice.voice?.takeIf { operation != null && it.operationId == operation }
     val connection = when {
+        voice.rejoining -> NearbyPanelConnection.REJOINING
         evidence?.phase == VoicePhase.FAILED || voice.phase == NearbyVoiceUiPhase.FAILED -> NearbyPanelConnection.FAILED
         evidence?.phase == VoicePhase.STOPPING || evidence?.cleanupPending == true || evidence?.wanted == false -> NearbyPanelConnection.STOPPING
         evidence?.phase == VoicePhase.RECONNECTING -> NearbyPanelConnection.RECONNECTING
