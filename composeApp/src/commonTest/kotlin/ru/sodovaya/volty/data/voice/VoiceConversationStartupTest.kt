@@ -563,6 +563,23 @@ class VoiceConversationStartupTest {
         } finally {boundary.close();ui.cancel();root.close();f.close()}
     }
 
+    @Test fun aServiceStoppedFromTheNotificationEndsThePendingRejoin()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(2_000)))
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val id=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(id,true,boundary);runCurrent();connect(f)
+            drop(f)
+            assertEquals(VoiceConversationPhase.FAILED,f.owner.state.value.phase,"precondition: the channel failed")
+            val service=assertNotNull(f.gate.current.value,"precondition: a retained ticket");assertTrue(root.state.value.rejoining)
+            f.gate.stop(service)   // the notification's "Disconnect"; the controller is not told
+            advanceTimeBy(120_000);runCurrent()
+            assertEquals(1,f.joins(),"an explicit disconnect must not be redialled")
+            assertFalse(root.state.value.rejoining)
+            assertEquals(NearbyVoiceUiPhase.FAILED,root.state.value.phase)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
     @Test fun leavingDuringARejoinReleasesTheRetainedService()=runTest {
         val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(2_000)))
         val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)

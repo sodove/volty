@@ -158,8 +158,10 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
         val door=rejoinBoundary
         val id=nextId()
         // The service the dropped session held is still running: no visible UI is needed to start under it.
-        val serviceAlive=voice.hasRetainedForeground()
-        if((!serviceAlive && (door==null || !door.available)) || runCatching {invitationDraftId(id)}.isFailure || !issued.add(id)) {
+        // The pending rejoin REQUIRES the retained service: if the user stopped it from the notification
+        // (explicit disconnect) the rejoin ends here; it never falls back to the visible launch boundary.
+        if(!voice.hasRetainedForeground()) {cancelRejoin();render();return}
+        if(runCatching {invitationDraftId(id)}.isFailure || !issued.add(id)) {
             scheduleRejoin(old);render();return
         }
         val next=old.copy(id=id,original=old.operation)
