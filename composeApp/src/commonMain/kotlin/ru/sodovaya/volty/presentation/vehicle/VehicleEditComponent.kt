@@ -582,6 +582,15 @@ interface VehicleEditComponent : DraftExitComponent {
 }
 
 @OptIn(ExperimentalTime::class)
+/** What the wizard's Skip hands to a new vehicle editor; see [DefaultVehicleEditComponent.seed]. */
+data class VehicleEditSeed(
+    val draft: VehicleDraft,
+    val name: String,
+    val iconKey: String,
+    val secondaryGauge: SecondaryGauge,
+    val topology: PackTopology
+)
+
 class DefaultVehicleEditComponent(
     componentContext: ComponentContext,
     private val vehicleId: String?,
@@ -608,6 +617,11 @@ class DefaultVehicleEditComponent(
     private val controllerConfigSource: ControllerConfigSource? = null,
     /** What the live link has proven about the series cell count; null in builds/tests without one. */
     private val learnedCellCountSource: LearnedCellCountSource? = null,
+    /**
+     * A draft the setup wizard's "Skip" hands over: a NEW vehicle starts from it instead of from
+     * the one-pack bootstrap. Ignored when editing a saved vehicle.
+     */
+    private val seed: VehicleEditSeed? = null,
     // Optional prefilled BMS info when creating from Picker
     private val prefilledBmsType: BmsType? = null,
     private val prefilledBmsAddress: String? = null,
@@ -818,6 +832,30 @@ class DefaultVehicleEditComponent(
                 _state.value = loaded.copy(savedValues = loaded.editableValues)
                 return
             }
+        }
+        if (seed != null) {
+            val firstPack = seed.draft.packs.firstOrNull()
+            val seeded = VehicleEditComponent.State(
+                isEditing = false,
+                name = seed.name,
+                iconKey = seed.iconKey,
+                secondaryGauge = seed.secondaryGauge,
+                topology = seed.topology,
+                bmsType = firstPack?.bmsType ?: BmsType.JK_BMS,
+                bmsAddress = firstPack?.address.orEmpty(),
+                sourceAddress = firstPack?.address ?: seed.draft.controllers.firstOrNull()?.address.orEmpty(),
+                draft = seed.draft,
+                issues = validate(seed.draft),
+                // The rider composed these sources already: both halves are theirs, so the
+                // one-pack "vehicle name renames pack 0" bootstrap rule stands down.
+                packsEdited = true,
+                controllersEdited = true,
+                canScanTarget = canScanTarget(seed.draft, liveAddresses)
+            )
+            // The baseline is the EMPTY form, not the seed: a handed-over draft is unsaved work,
+            // so leaving the editor must ask before throwing it away.
+            _state.value = seeded.copy(savedValues = VehicleEditComponent.State().editableValues)
+            return
         }
         val createName = prefilledName ?: ""
         val createBmsType = prefilledBmsType ?: BmsType.JK_BMS

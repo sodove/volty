@@ -89,7 +89,7 @@ import volty.composeapp.generated.resources.vehicle_source_add_controller
 import volty.composeapp.generated.resources.vehicle_source_add_pack
 import volty.composeapp.generated.resources.vehicle_source_scan
 
-private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "unicycle", "moto", "solar", "ev", "boat", "rv")
+internal val VEHICLE_ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "unicycle", "moto", "solar", "ev", "boat", "rv")
 
 /** One page of the editor: a back row, then that section's controls. All of it edits the shared draft. */
 @Composable
@@ -153,7 +153,7 @@ private fun IdentityPage(state: VehicleEditComponent.State, component: VehicleEd
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-        ICON_KEYS.forEach { key ->
+        VEHICLE_ICON_KEYS.forEach { key ->
             val selected = state.iconKey == key
             Box(
                 modifier = Modifier

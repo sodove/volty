@@ -529,7 +529,10 @@
     <string name="wizard_next">Дальше</string>
     <string name="wizard_controller_title">Контроллер</string>
     <string name="wizard_scanning">ищу рядом · %1$d</string>
-    <string name="wizard_scan_hint">Адрес показан всегда. Тип — догадка, её можно сменить позже.</string>
+    <string name="wizard_scan_hint">Адрес показан всегда. Тип — догадка, её можно сменить на следующем экране.</string>
+    <string name="wizard_scan_empty">Пока никого не видно. Включи питание устройства и поднеси телефон ближе.</string>
+    <string name="wizard_controller_setup_hint">Тип меняется здесь — догадка никогда не запирает.</string>
+    <string name="wizard_battery_from_controller_hint">Вычисленная батарея честнее пустого места, но это не измерение — она будет помечена «≈».</string>
     <string name="wizard_add_controller">Контроллер</string>
     <string name="wizard_add_battery">Батарея</string>
     <string name="wizard_add_wheel">Колесо</string>
@@ -539,10 +542,10 @@
     <string name="wizard_battery_question">Откуда брать батарею?</string>
     <string name="wizard_battery_own_bms">У неё своя BMS</string>
     <string name="wizard_battery_own_bms_caption">отдельная связь</string>
-    <string name="wizard_battery_from_controller">Брать значения с контроллера</string>
-    <string name="wizard_battery_from_controller_caption">Рассчитывается по данным контроллера. После подключения шкала может ненадолго отсутствовать.</string>
+    <string name="wizard_battery_from_controller">Тянуть с контроллера</string>
+    <string name="wizard_battery_from_controller_caption">вычисляется</string>
     <string name="wizard_battery_device_is_both">Это то же устройство</string>
-    <string name="wizard_battery_device_is_both_caption">один адрес с ролями контроллера и батареи</string>
+    <string name="wizard_battery_device_is_both_caption">один адрес, две роли</string>
     <string name="wizard_topology_question">Как соединены батареи?</string>
     <string name="wizard_topology_parallel_caption">Напряжение остаётся тем же, ёмкость складывается.</string>
     <string name="wizard_topology_series_caption">Напряжение складывается, ёмкость общая.</string>

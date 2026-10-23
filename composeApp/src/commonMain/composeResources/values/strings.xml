@@ -531,7 +531,10 @@
     <string name="wizard_next">Next</string>
     <string name="wizard_controller_title">Controller</string>
     <string name="wizard_scanning">looking nearby · %1$d</string>
-    <string name="wizard_scan_hint">The address is always shown. The type is a guess you can change later.</string>
+    <string name="wizard_scan_hint">The address is always shown. The type is a guess you can change on the next screen.</string>
+    <string name="wizard_scan_empty">Nothing in range yet. Power the device on and bring the phone closer.</string>
+    <string name="wizard_controller_setup_hint">The type can be changed here: a guess never locks you in.</string>
+    <string name="wizard_battery_from_controller_hint">A computed battery is more honest than a blank, but it is not a measurement — it will be marked “≈”.</string>
     <string name="wizard_add_controller">Controller</string>
     <string name="wizard_add_battery">Battery</string>
     <string name="wizard_add_wheel">Wheel</string>
@@ -541,10 +544,10 @@
     <string name="wizard_battery_question">Where should battery data come from?</string>
     <string name="wizard_battery_own_bms">It has its own BMS</string>
     <string name="wizard_battery_own_bms_caption">a separate connection</string>
-    <string name="wizard_battery_from_controller">Use values from the controller</string>
-    <string name="wizard_battery_from_controller_caption">Computed from controller values. The gauge can be briefly unavailable after connecting.</string>
-    <string name="wizard_battery_device_is_both">This device is both</string>
-    <string name="wizard_battery_device_is_both_caption">one address with controller and battery roles</string>
+    <string name="wizard_battery_from_controller">Pull it from the controller</string>
+    <string name="wizard_battery_from_controller_caption">computed</string>
+    <string name="wizard_battery_device_is_both">The same device</string>
+    <string name="wizard_battery_device_is_both_caption">one address, two roles</string>
     <string name="wizard_topology_question">How are the packs wired?</string>
     <string name="wizard_topology_parallel_caption">Voltage stays the same; capacity adds up.</string>
     <string name="wizard_topology_series_caption">Voltage adds up; capacity is shared.</string>

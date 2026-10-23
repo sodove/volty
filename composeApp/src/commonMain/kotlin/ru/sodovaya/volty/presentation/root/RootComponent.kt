@@ -56,7 +56,9 @@ import ru.sodovaya.volty.presentation.vehicle.VehicleDraft
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditComponent
 import ru.sodovaya.volty.presentation.vehicle.draftOf
 import ru.sodovaya.volty.presentation.vehicle.liveLinkAddresses
+import ru.sodovaya.volty.presentation.vehicle.VehicleEditSeed
 import ru.sodovaya.volty.presentation.vehicle.wizard.DefaultSetupWizardComponent
+import ru.sodovaya.volty.presentation.vehicle.wizard.WizardHandoff
 import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardComponent
 import ru.sodovaya.volty.presentation.welcome.DefaultWelcomeComponent
 import ru.sodovaya.volty.presentation.welcome.WelcomeComponent
@@ -434,6 +436,15 @@ internal fun leaveSetupWizard(
     navigation.navigate { stack -> stackAfterGoTo(stack, home) }
 }
 
+/**
+ * The stack after the wizard's "Skip": the wizard hands its draft to a new vehicle editor and
+ * is gone, rather than lingering underneath as a second copy of the same draft. Everything else
+ * keeps its place, and any buried create-editor is replaced so its seed is the one handed over.
+ */
+internal fun stackAfterWizardSkip(stack: List<Config>): List<Config> =
+    stack.filterNot { it is Config.SetupWizard || it == Config.VehicleEdit(vehicleId = null) } +
+        Config.VehicleEdit(vehicleId = null)
+
 class DefaultRootComponent(
     componentContext: ComponentContext
 ) : RootComponent, ComponentContext by componentContext, KoinComponent {
@@ -589,6 +600,14 @@ class DefaultRootComponent(
      */
     private fun leaveActiveComposer() {
         leaveVehicleEdit(nav, stack.value.items.size, homeConfig())
+    }
+
+    /** Skip's draft, waiting for the editor it opens; read once by [Config.VehicleEdit]'s factory. */
+    private var pendingEditorSeed: WizardHandoff? = null
+
+    private fun openEditorFromWizard(handoff: WizardHandoff) {
+        pendingEditorSeed = handoff
+        nav.navigate { stack -> stackAfterWizardSkip(stack) }
     }
 
     private fun leaveActiveSetupWizard() {
@@ -799,6 +818,7 @@ class DefaultRootComponent(
                         saveVehicle = vehicleRepository::upsert,
                         rememberDeviceType = vehicleRepository::rememberDeviceType,
                         connectVehicle = bmsRepository::connect,
+                        onSkipToEditor = ::openEditorFromWizard,
                         onCancelled = ::leaveActiveSetupWizard,
                         onShowVehicleList = { replaceAll(Config.Picker(mode = "cold")) },
                         onConnected = { replaceAll(homeConfig()) }
@@ -816,6 +836,9 @@ class DefaultRootComponent(
                 )
                 val prefilledName = prefillVehicle?.name
                     ?.let { if (prefillVehicle.isGuest && it == "Guest BMS") null else it }
+                // The wizard's Skip: take the draft once; a rebuilt editor must not replay it.
+                val seed = if (config.vehicleId == null) pendingEditorSeed else null
+                if (seed != null) pendingEditorSeed = null
                 RootComponent.Child.VehicleEdit(
                     DefaultVehicleEditComponent(
                         componentContext = context,
@@ -833,6 +856,9 @@ class DefaultRootComponent(
                         // Both prefills are already optional, so a source-less
                         // (controller-only) active connection simply prefills
                         // nothing instead of throwing.
+                        seed = seed?.let {
+                            VehicleEditSeed(it.draft, it.name, it.iconKey, it.secondaryGauge, it.topology)
+                        },
                         prefilledBmsType = prefillVehicle?.bmsTypeOrNull,
                         prefilledBmsAddress = prefillVehicle?.bmsAddressOrNull,
                         prefilledName = prefilledName,

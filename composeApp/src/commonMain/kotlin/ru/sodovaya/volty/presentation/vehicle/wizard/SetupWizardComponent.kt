@@ -34,6 +34,8 @@ import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
+import ru.sodovaya.volty.presentation.picker.SourceRole
+import ru.sodovaya.volty.presentation.picker.sourceRole
 import ru.sodovaya.volty.presentation.vehicle.CanCandidate
 import ru.sodovaya.volty.presentation.vehicle.CanCandidateKind
 import ru.sodovaya.volty.presentation.vehicle.CanScanState
@@ -64,6 +66,60 @@ import kotlin.time.Instant
 
 /** Stage-one hint. It chooses defaults and never filters a later action. */
 enum class VehicleArchetype { WHEEL, SCOOTER, BICYCLE, CUSTOM }
+
+/**
+ * The three structurally different answers to "where does the battery come from?"
+ * (Part L, "the three battery exits"). Chosen before any search starts: only the exits that
+ * need a second device search for one.
+ */
+enum class BatteryExit {
+    /** A BMS of its own on a separate BLE link. */
+    OWN_BMS,
+
+    /** Computed from the controller's own telemetry; no second device exists. */
+    FROM_CONTROLLER,
+
+    /** One address that is both the controller and the battery (a wheel). */
+    DEVICE_IS_BOTH;
+
+    /** Whether this exit needs a scan for a second device. */
+    val needsSearch: Boolean get() = this != FROM_CONTROLLER
+}
+
+/**
+ * What "Skip" hands to the vehicle editor: the wizard's draft exactly as it stands. Skip never
+ * writes anything; the editor owns the draft from here and saves it.
+ */
+data class WizardHandoff(
+    val draft: VehicleDraft,
+    val name: String,
+    val iconKey: String,
+    val secondaryGauge: SecondaryGauge,
+    val topology: PackTopology
+)
+
+/** The controller step's rows: warmest (strongest signal) first, one action each. */
+fun controllerScanRows(devices: List<DiscoveredDevice>): List<SetupWizardComponent.ScanRow> =
+    devices.sortedByDescending { it.rssi }
+        .map { SetupWizardComponent.ScanRow(it, listOf(ScannedAdd.CONTROLLER)) }
+
+/**
+ * The battery step's rows for the chosen [exit]: only devices that can fill the role, each with
+ * the single action the exit means. Detection is a hint, so an unrecognised device always stays.
+ * [BatteryExit.FROM_CONTROLLER] searches for nothing and so lists nothing.
+ */
+fun batteryScanRows(
+    rows: List<SetupWizardComponent.ScanRow>,
+    exit: BatteryExit
+): List<SetupWizardComponent.ScanRow> = when (exit) {
+    BatteryExit.OWN_BMS -> rows
+        .filter { it.device.sourceRole() != SourceRole.CONTROLLER }
+        .map { it.copy(additions = listOf(ScannedAdd.BATTERY)) }
+    BatteryExit.DEVICE_IS_BOTH -> rows
+        .filter { it.device.sourceRole().let { role -> role == SourceRole.BOTH || role == SourceRole.UNKNOWN } }
+        .map { it.copy(additions = listOf(ScannedAdd.WHEEL)) }
+    BatteryExit.FROM_CONTROLLER -> emptyList()
+}
 
 interface SetupWizardComponent : DraftExitComponent {
     val stack: Value<ChildStack<*, Child>>
@@ -102,6 +158,7 @@ interface SetupWizardComponent : DraftExitComponent {
         val iconKey: String,
         val secondaryGauge: SecondaryGauge,
         val topology: PackTopology = PackTopology.PARALLEL,
+        val batteryExit: BatteryExit? = null,
         val draft: VehicleDraft,
         val issues: List<ComposerIssue>,
         val savedValues: EditableValues,
@@ -134,6 +191,12 @@ interface SetupWizardComponent : DraftExitComponent {
 
         /** Pack wiring changes aggregation only once a second physical pack exists. */
         val showTopologyChoice: Boolean get() = draft.packs.size >= 2
+
+        /**
+         * The bus block belongs to a link that can be asked about one: a live VESC link, or a
+         * scan already under way. An ordinary controller is never asked about a CAN bus.
+         */
+        val showCanBlock: Boolean get() = canScanTarget != null || canScan != CanScanState.Idle
 
         /** Offers from the bus that actually answered the last successful scan. */
         val canCandidates: List<CanCandidate>
@@ -173,7 +236,6 @@ interface SetupWizardComponent : DraftExitComponent {
 
     interface ControllerStage : SourceStage {
         val scanRows: List<ScanRow>
-        fun onNameChanged(name: String)
         fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd)
         fun onDiscoverCanDevices()
         fun onAddCanCandidate(candidate: CanCandidate, asBattery: Boolean)
@@ -187,6 +249,9 @@ interface SetupWizardComponent : DraftExitComponent {
     interface BatteryStage : SourceStage {
         val scanRows: List<ScanRow>
         val canUseControllerBattery: Boolean
+
+        /** Choose where the battery comes from. Selecting never advances; only searching exits scan. */
+        fun onChooseExit(exit: BatteryExit)
         fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd)
         fun onUseSeparateBms(device: DiscoveredDevice)
         fun onUseControllerBattery()
@@ -199,6 +264,8 @@ interface SetupWizardComponent : DraftExitComponent {
     }
 
     interface ReviewStage : Stage {
+        fun onNameChanged(name: String)
+        fun onIconChanged(iconKey: String)
         fun onSave()
         fun onBack()
         fun onCancel()
@@ -240,6 +307,8 @@ class DefaultSetupWizardComponent(
     private val scanAll: () -> Flow<DiscoveredDevice>,
     private val canDiscovery: CanDiscovery? = null,
     liveAddresses: Flow<Set<String>> = kotlinx.coroutines.flow.flowOf(emptySet()),
+    /** Skip: open the vehicle editor hub on this very draft. Defaulted so tests stay terse. */
+    private val onSkipToEditor: (WizardHandoff) -> Unit = {},
     private val saveVehicle: suspend (Vehicle) -> Unit,
     private val rememberDeviceType: suspend (DeviceTypeMemory) -> Unit = {},
     private val connectVehicle: suspend (Vehicle) -> Result<Unit> = { Result.success(Unit) },
@@ -351,7 +420,41 @@ class DefaultSetupWizardComponent(
     private fun openBattery() {
         if (!_state.value.navigationEnabled) return
         _state.update { it.copy(advanceBlocked = false) }
+        // A fresh Battery step searches for nothing until an exit that needs a second device is
+        // chosen (or was chosen on an earlier visit).
+        syncBatteryScan()
         navigation.push(WizardConfig.Battery)
+    }
+
+    private fun syncBatteryScan() {
+        if (_state.value.batteryExit?.needsSearch == true) sourceScanner.start() else sourceScanner.stop()
+    }
+
+    private fun chooseBatteryExit(exit: BatteryExit) {
+        if (!_state.value.navigationEnabled) return
+        if (exit == BatteryExit.FROM_CONTROLLER && _state.value.draft.controllers.isEmpty()) return
+        _state.update { current ->
+            val controllers = current.draft.controllers.map { controller ->
+                when {
+                    exit == BatteryExit.FROM_CONTROLLER ->
+                        controller.copy(derivedBattery = DerivedBatteryChoice.ON)
+                    // Leaving the derived exit must give the computed pack back, or it would sit
+                    // beside the real BMS as a second battery.
+                    controller.derivedBattery == DerivedBatteryChoice.ON ->
+                        controller.copy(derivedBattery = DerivedBatteryChoice.AUTO)
+                    else -> controller
+                }
+            }
+            val draft = current.draft.copy(controllers = controllers)
+            current.copy(
+                batteryExit = exit,
+                draft = draft,
+                issues = validate(draft),
+                advanceBlocked = false,
+                saveBlocked = false
+            )
+        }
+        syncBatteryScan()
     }
 
     private fun openReview() {
@@ -367,8 +470,8 @@ class DefaultSetupWizardComponent(
 
     private fun backFromReview() {
         if (!_state.value.navigationEnabled) return
-        sourceScanner.start()
         navigation.pop()
+        syncBatteryScan()
     }
 
     private fun backFromControllers() {
@@ -381,6 +484,8 @@ class DefaultSetupWizardComponent(
     private fun backFromStage() {
         if (!_state.value.navigationEnabled) return
         _state.update { it.copy(advanceBlocked = false) }
+        // Back on the controller step, which searches again.
+        sourceScanner.start()
         navigation.pop()
     }
 
@@ -388,10 +493,32 @@ class DefaultSetupWizardComponent(
         _state.update { it.copy(scanning = scan.scanning, scannedDevices = scan.devices) }
     }
 
-    private fun scanRows(): List<SetupWizardComponent.ScanRow> =
-        _state.value.scannedDevices.map { device ->
-            SetupWizardComponent.ScanRow(device, ScannedAdd.entries)
-        }
+    private fun controllerRows(): List<SetupWizardComponent.ScanRow> =
+        controllerScanRows(_state.value.scannedDevices)
+
+    /** Nothing until an exit is chosen; then only the devices that exit can use. */
+    private fun batteryRows(): List<SetupWizardComponent.ScanRow> {
+        val exit = _state.value.batteryExit ?: return emptyList()
+        return batteryScanRows(controllerScanRows(_state.value.scannedDevices), exit)
+    }
+
+    private fun updateName(name: String) {
+        if (_state.value.saving) return
+        _state.update { it.copy(name = name, saveBlocked = false) }
+    }
+
+    private fun updateIcon(iconKey: String) {
+        if (_state.value.saving) return
+        _state.update { it.copy(iconKey = iconKey) }
+    }
+
+    private fun skipToEditor() {
+        if (!_state.value.navigationEnabled) return
+        selectArchetype(VehicleArchetype.CUSTOM)
+        sourceScanner.stop()
+        val s = _state.value
+        onSkipToEditor(WizardHandoff(s.draft, s.name, s.iconKey, s.secondaryGauge, s.topology))
+    }
 
     private fun addScannedDevice(device: DiscoveredDevice, add: ScannedAdd) {
         if (!_state.value.navigationEnabled) return
@@ -461,6 +588,8 @@ class DefaultSetupWizardComponent(
                 }
             )
         }
+        _state.update { it.copy(batteryExit = null) }
+        syncBatteryScan()
         openReview()
     }
 
@@ -507,21 +636,8 @@ class DefaultSetupWizardComponent(
     }
 
     private fun useControllerBattery() {
-        if (!_state.value.navigationEnabled || _state.value.draft.controllers.isEmpty()) return
-        _state.update { current ->
-            val draft = current.draft.copy(
-                controllers = current.draft.controllers.map { controller ->
-                    controller.copy(derivedBattery = DerivedBatteryChoice.ON)
-                }
-            )
-            current.copy(
-                draft = draft,
-                issues = validate(draft),
-                advanceBlocked = false,
-                saveBlocked = false
-            )
-        }
-        openReview()
+        chooseBatteryExit(BatteryExit.FROM_CONTROLLER)
+        if (_state.value.batteryExit == BatteryExit.FROM_CONTROLLER) openReview()
     }
 
     private fun changeTopology(topology: PackTopology) {
@@ -596,10 +712,7 @@ class DefaultSetupWizardComponent(
     private inner class ArchetypeStageComponent : SetupWizardComponent.ArchetypeStage {
         override val state = this@DefaultSetupWizardComponent.state
         override fun onArchetypeSelected(archetype: VehicleArchetype) = selectArchetype(archetype)
-        override fun onSkip() {
-            selectArchetype(VehicleArchetype.CUSTOM)
-            openControllers()
-        }
+        override fun onSkip() = skipToEditor()
         override fun onNext() = openControllers()
         override fun onCancel() = this@DefaultSetupWizardComponent.onCancel()
     }
@@ -626,11 +739,7 @@ class DefaultSetupWizardComponent(
     private inner class ControllerStageComponent :
         SourceStageComponent(), SetupWizardComponent.ControllerStage {
         override val scanRows: List<SetupWizardComponent.ScanRow>
-            get() = this@DefaultSetupWizardComponent.scanRows()
-        override fun onNameChanged(name: String) {
-            if (_state.value.saving) return
-            _state.update { it.copy(name = name, saveBlocked = false) }
-        }
+            get() = controllerRows()
         override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) =
             this@DefaultSetupWizardComponent.addScannedDevice(device, add)
         override fun onDiscoverCanDevices() = this@DefaultSetupWizardComponent.discoverCanDevices()
@@ -646,17 +755,22 @@ class DefaultSetupWizardComponent(
     private inner class BatteryStageComponent :
         SourceStageComponent(), SetupWizardComponent.BatteryStage {
         override val scanRows: List<SetupWizardComponent.ScanRow>
-            get() = this@DefaultSetupWizardComponent.scanRows()
+            get() = batteryRows()
         override val canUseControllerBattery: Boolean
             get() = _state.value.draft.controllers.isNotEmpty()
+        override fun onChooseExit(exit: BatteryExit) = chooseBatteryExit(exit)
         override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) =
             this@DefaultSetupWizardComponent.addScannedDevice(device, add)
-        override fun onUseSeparateBms(device: DiscoveredDevice) =
+        override fun onUseSeparateBms(device: DiscoveredDevice) {
             this@DefaultSetupWizardComponent.addScannedDevice(device, ScannedAdd.BATTERY)
+            _state.update { it.copy(batteryExit = BatteryExit.OWN_BMS) }
+        }
         override fun onUseControllerBattery() =
             this@DefaultSetupWizardComponent.useControllerBattery()
-        override fun onUseDeviceAsBoth(device: DiscoveredDevice) =
+        override fun onUseDeviceAsBoth(device: DiscoveredDevice) {
             this@DefaultSetupWizardComponent.addScannedDevice(device, ScannedAdd.WHEEL)
+            _state.update { it.copy(batteryExit = BatteryExit.DEVICE_IS_BOTH) }
+        }
         override fun onTopologyChanged(topology: PackTopology) =
             this@DefaultSetupWizardComponent.changeTopology(topology)
         override fun onNoBattery() = chooseNoBattery()
@@ -667,6 +781,8 @@ class DefaultSetupWizardComponent(
 
     private inner class ReviewStageComponent : SetupWizardComponent.ReviewStage {
         override val state = this@DefaultSetupWizardComponent.state
+        override fun onNameChanged(name: String) = updateName(name)
+        override fun onIconChanged(iconKey: String) = updateIcon(iconKey)
         override fun onSave() = save()
         override fun onBack() = backFromReview()
         override fun onCancel() = this@DefaultSetupWizardComponent.onCancel()

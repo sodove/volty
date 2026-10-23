@@ -39,6 +39,8 @@ import ru.sodovaya.volty.presentation.root.configForCreateVehicle
 import ru.sodovaya.volty.presentation.root.guardComposerDestruction
 import ru.sodovaya.volty.presentation.root.leaveSetupWizard
 import ru.sodovaya.volty.presentation.root.stackAfterGoTo
+import ru.sodovaya.volty.presentation.root.stackAfterWizardSkip
+import ru.sodovaya.volty.presentation.root.stackAfterWizardSkip
 import ru.sodovaya.volty.presentation.vehicle.CanCandidateKind
 import ru.sodovaya.volty.presentation.vehicle.CanScanState
 import ru.sodovaya.volty.presentation.vehicle.DerivedBatteryChoice
@@ -46,6 +48,8 @@ import ru.sodovaya.volty.presentation.vehicle.VehicleDraft
 import ru.sodovaya.volty.presentation.vehicle.addController
 import ru.sodovaya.volty.presentation.vehicle.addPack
 import ru.sodovaya.volty.presentation.vehicle.updateController
+import ru.sodovaya.volty.presentation.vehicle.persistableValues
+import ru.sodovaya.volty.presentation.vehicle.persistableValues
 import ru.sodovaya.volty.presentation.vehicle.validate
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -66,11 +70,12 @@ class SetupWizardComponentTest {
         address: String,
         name: String,
         bmsType: BmsType? = null,
-        controllerType: ControllerType? = null
+        controllerType: ControllerType? = null,
+        rssi: Int = -54
     ) = DiscoveredDevice(
         address = address,
         name = name,
-        rssi = -54,
+        rssi = rssi,
         bmsType = bmsType,
         controllerType = controllerType
     )
@@ -83,7 +88,8 @@ class SetupWizardComponentTest {
         persist: suspend (Vehicle) -> Unit = { saved += it },
         cancelled: () -> Unit = {},
         canDiscovery: CanDiscovery? = null,
-        liveAddresses: Flow<Set<String>> = flowOf(emptySet())
+        liveAddresses: Flow<Set<String>> = flowOf(emptySet()),
+        skipped: MutableList<WizardHandoff> = mutableListOf()
     ) = DefaultSetupWizardComponent(
         componentContext = DefaultComponentContext(LifecycleRegistry()),
         initialDraft = initialDraft,
@@ -94,6 +100,7 @@ class SetupWizardComponentTest {
         saveVehicle = persist,
         newVehicleId = { "v-new" },
         now = { createdAt },
+        onSkipToEditor = { skipped += it },
         onCancelled = cancelled,
         onShowVehicleList = {},
         onConnected = {}
@@ -122,7 +129,7 @@ class SetupWizardComponentTest {
         assertIs<SetupWizardComponent.Child.WhatAreWeBuilding>(c.stack.value.active.instance)
 
         val what = (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding).component
-        what.onSkip()
+        what.onNext()
         assertIs<SetupWizardComponent.Child.Controllers>(c.stack.value.active.instance)
 
         val controllers = (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
@@ -165,7 +172,7 @@ class SetupWizardComponentTest {
     }
 
     @Test
-    fun `both scan stages expose every addition as an actionable device row`() = runTest {
+    fun `each scan stage offers only the one action its question asks for`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val wheel = device(
             address = "BG:01",
@@ -181,19 +188,18 @@ class SetupWizardComponentTest {
         val controllers =
             (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
         assertEquals(listOf(wheel), controllers.scanRows.map { it.device })
-        assertEquals(ScannedAdd.entries, controllers.scanRows.single().additions)
+        assertEquals(listOf(ScannedAdd.CONTROLLER), controllers.scanRows.single().additions)
 
         controllers.onNoController()
         val batteries =
             (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+        batteries.onChooseExit(BatteryExit.DEVICE_IS_BOTH)
+        advanceUntilIdle()
         assertEquals(listOf(wheel), batteries.scanRows.map { it.device })
-        assertEquals(ScannedAdd.entries, batteries.scanRows.single().additions)
+        assertEquals(listOf(ScannedAdd.WHEEL), batteries.scanRows.single().additions)
 
         val row = batteries.scanRows.single()
-        batteries.onAddScannedDevice(
-            row.device,
-            row.additions.single { it == ScannedAdd.WHEEL }
-        )
+        batteries.onAddScannedDevice(row.device, row.additions.single())
         assertEquals(listOf("BG:01"), c.state.value.draft.controllers.map { it.address })
         assertEquals(listOf("BG:01"), c.state.value.draft.packs.map { it.address })
     }
@@ -450,7 +456,6 @@ class SetupWizardComponentTest {
             .component.onNext()
         val controllers =
             (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
-        controllers.onNameChanged("Series bike")
         controllers.onNoController()
         val battery =
             (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
@@ -458,7 +463,9 @@ class SetupWizardComponentTest {
         battery.onUseSeparateBms(device("AN:02", "Lower", bmsType = BmsType.ANT_BMS))
         battery.onTopologyChanged(PackTopology.SERIES)
         battery.onNext()
-        (c.stack.value.active.instance as SetupWizardComponent.Child.Review).component.onSave()
+        val review = (c.stack.value.active.instance as SetupWizardComponent.Child.Review).component
+        review.onNameChanged("Series bike")
+        review.onSave()
         advanceUntilIdle()
 
         val vehicle = saved.single()
@@ -609,15 +616,18 @@ class SetupWizardComponentTest {
         assertEquals(emptyList(), saved)
 
         val controllers = (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
-        controllers.onNameChanged("Bike")
         controllers.onAddScannedDevice(c.state.value.scannedDevices[0], ScannedAdd.CONTROLLER)
         controllers.onNext()
         val batteries = (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+        batteries.onChooseExit(BatteryExit.OWN_BMS)
+        advanceUntilIdle()
         batteries.onAddScannedDevice(c.state.value.scannedDevices[1], ScannedAdd.BATTERY)
         batteries.onNext()
         assertEquals(emptyList(), saved)
 
-        (c.stack.value.active.instance as SetupWizardComponent.Child.Review).component.onSave()
+        val review = (c.stack.value.active.instance as SetupWizardComponent.Child.Review).component
+        review.onNameChanged("Bike")
+        review.onSave()
         advanceUntilIdle()
 
         assertEquals(1, saved.size)
@@ -645,7 +655,6 @@ class SetupWizardComponentTest {
             .component.onNext()
         val controllers =
             (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
-        controllers.onNameChanged("Bike A")
         controllers.onAddScannedDevice(
             device("VE:01", "VESC", controllerType = ControllerType.VESC),
             ScannedAdd.CONTROLLER
@@ -655,6 +664,7 @@ class SetupWizardComponentTest {
             .component.onNoBattery()
         val review =
             (c.stack.value.active.instance as SetupWizardComponent.Child.Review).component
+        review.onNameChanged("Bike A")
 
         review.onSave()
         runCurrent()
@@ -663,7 +673,7 @@ class SetupWizardComponentTest {
         assertFalse(c.state.value.navigationEnabled)
 
         review.onBack()
-        controllers.onNameChanged("Bike B")
+        review.onNameChanged("Bike B")
         assertIs<SetupWizardComponent.Child.Review>(c.stack.value.active.instance)
         assertEquals("Bike A", c.state.value.name)
 
@@ -768,6 +778,223 @@ class SetupWizardComponentTest {
                 CreateVehicleEntry.SETTINGS to Config.SetupWizard(prefillFromActiveConnection = true)
             ),
             routes
+        )
+    }
+    // ---- Task 5: one decision per step, battery exits first ----
+
+    private val vescScan = device("VE:01", "VESC BLE UART", controllerType = ControllerType.VESC, rssi = -54)
+    private val antScan = device("AN:02", "ANT-BLE", bmsType = BmsType.ANT_BMS, rssi = -67)
+    private val wheelScan = device(
+        "BG:03", "Gotway", bmsType = BmsType.BEGODE, controllerType = ControllerType.BEGODE, rssi = -72
+    )
+    private val mysteryScan = device("XX:04", "", rssi = -80)
+
+    private fun active(c: DefaultSetupWizardComponent) = c.stack.value.active.instance
+
+    @Test
+    fun `aVescScooterWithAnAntBatteryIsBuiltInTheWizard`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = mutableListOf<Vehicle>()
+        val skipped = mutableListOf<WizardHandoff>()
+        val c = component(saved = saved, skipped = skipped, scan = flowOf(vescScan, antScan))
+
+        val what = (active(c) as SetupWizardComponent.Child.WhatAreWeBuilding).component
+        what.onArchetypeSelected(VehicleArchetype.SCOOTER)
+        what.onNext()
+        advanceUntilIdle()
+
+        val controllers = (active(c) as SetupWizardComponent.Child.Controllers).component
+        val vescRow = controllers.scanRows.first { it.device.address == "VE:01" }
+        controllers.onAddScannedDevice(vescRow.device, vescRow.additions.single())
+        controllers.onNext()
+
+        val battery = (active(c) as SetupWizardComponent.Child.Battery).component
+        battery.onChooseExit(BatteryExit.OWN_BMS)
+        advanceUntilIdle()
+        val antRow = battery.scanRows.single()
+        assertEquals("AN:02", antRow.device.address, "the controller itself is not a battery candidate")
+        battery.onAddScannedDevice(antRow.device, antRow.additions.single())
+        battery.onNext()
+
+        val review = (active(c) as SetupWizardComponent.Child.Review).component
+        review.onNameChanged("Scooter")
+        review.onSave()
+        advanceUntilIdle()
+
+        val vehicle = saved.single()
+        assertEquals("Scooter", vehicle.name)
+        assertEquals(listOf("VE:01"), vehicle.controllers.map { it.address })
+        assertEquals(ControllerType.VESC, vehicle.controllers.single().controllerType)
+        assertEquals(listOf("AN:02"), vehicle.packs.map { it.bmsAddress })
+        assertEquals(BmsType.ANT_BMS, vehicle.packs.single().bmsType)
+        assertEquals(emptyList(), skipped, "the editor was never opened")
+    }
+
+    @Test
+    fun `theBatteryScanShowsNothingUntilAnExitIsChosen`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var scanStarts = 0
+        val c = component(scan = kotlinx.coroutines.flow.flow {
+            scanStarts++
+            emit(antScan)
+        })
+        (active(c) as SetupWizardComponent.Child.WhatAreWeBuilding).component.onNext()
+        advanceUntilIdle()
+        assertEquals(1, scanStarts)
+
+        (active(c) as SetupWizardComponent.Child.Controllers).component.onNoController()
+        advanceUntilIdle()
+        val battery = (active(c) as SetupWizardComponent.Child.Battery).component
+
+        assertEquals(null, c.state.value.batteryExit)
+        assertEquals(emptyList(), battery.scanRows)
+        assertFalse(c.state.value.scanning, "no exit chosen: nothing is searching")
+        assertEquals(emptyList(), c.state.value.scannedDevices)
+
+        battery.onChooseExit(BatteryExit.OWN_BMS)
+        advanceUntilIdle()
+        assertEquals(2, scanStarts, "choosing a searching exit starts the search")
+        assertEquals(listOf(antScan), battery.scanRows.map { it.device })
+    }
+
+    @Test
+    fun `ownBmsHidesControllerOnlyDevices`() {
+        val rows = listOf(vescScan, antScan, wheelScan, mysteryScan).map {
+            SetupWizardComponent.ScanRow(it, ScannedAdd.entries)
+        }
+
+        val own = batteryScanRows(rows, BatteryExit.OWN_BMS)
+        assertEquals(listOf("AN:02", "BG:03", "XX:04"), own.map { it.device.address })
+        assertTrue(own.all { it.additions == listOf(ScannedAdd.BATTERY) })
+
+        val both = batteryScanRows(rows, BatteryExit.DEVICE_IS_BOTH)
+        assertEquals(listOf("BG:03", "XX:04"), both.map { it.device.address })
+        assertTrue(both.all { it.additions == listOf(ScannedAdd.WHEEL) })
+
+        assertEquals(emptyList(), batteryScanRows(rows, BatteryExit.FROM_CONTROLLER))
+    }
+
+    @Test
+    fun `fromControllerNeedsNoScan`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var scanStarts = 0
+        val c = component(
+            initialDraft = VehicleDraft().addController(ControllerType.VESC, "VE:01", "VESC"),
+            scan = kotlinx.coroutines.flow.flow {
+                scanStarts++
+                emit(antScan)
+            }
+        )
+        (active(c) as SetupWizardComponent.Child.WhatAreWeBuilding).component.onNext()
+        (active(c) as SetupWizardComponent.Child.Controllers).component.onNext()
+        advanceUntilIdle()
+        val startsBefore = scanStarts
+        val battery = (active(c) as SetupWizardComponent.Child.Battery).component
+
+        battery.onChooseExit(BatteryExit.FROM_CONTROLLER)
+        advanceUntilIdle()
+
+        assertEquals(BatteryExit.FROM_CONTROLLER, c.state.value.batteryExit)
+        assertTrue(c.state.value.draft.toControllers().single().providesDerivedBattery)
+        assertEquals(startsBefore, scanStarts, "the controller's own battery needs no search")
+        assertFalse(c.state.value.scanning)
+        assertEquals(emptyList(), battery.scanRows)
+        assertIs<SetupWizardComponent.Child.Battery>(active(c), "choosing is not advancing")
+
+        // Switching to a searching exit must give the derived pack back: it would duplicate the BMS.
+        battery.onChooseExit(BatteryExit.OWN_BMS)
+        battery.onAddScannedDevice(antScan, ScannedAdd.BATTERY)
+        assertFalse(c.state.value.draft.toControllers().single().providesDerivedBattery)
+    }
+
+    @Test
+    fun `skipOpensTheEditorHubWithTheSameDraft`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = mutableListOf<Vehicle>()
+        val skipped = mutableListOf<WizardHandoff>()
+        val seed = VehicleDraft().addController(ControllerType.VESC, "VE:01", "VESC")
+            .addPack(BmsType.ANT_BMS, "AN:02", "ANT")
+        val c = component(saved = saved, skipped = skipped, initialDraft = seed, initialName = "Bike")
+
+        (active(c) as SetupWizardComponent.Child.WhatAreWeBuilding).component.onSkip()
+
+        val handoff = skipped.single()
+        assertEquals(seed, handoff.draft, "the editor gets the very same draft")
+        assertEquals("Bike", handoff.name)
+        assertEquals("generic", handoff.iconKey, "skip means a custom vehicle")
+        assertEquals(emptyList(), saved, "nothing is written by leaving the wizard")
+        assertIs<SetupWizardComponent.Child.WhatAreWeBuilding>(active(c), "the wizard itself did not walk on")
+    }
+
+    @Test
+    fun `skip replaces the wizard with the editor instead of stacking them`() {
+        val stack = listOf<Config>(Config.Ride, Config.SetupWizard(), Config.Settings)
+        assertEquals(
+            listOf<Config>(Config.Ride, Config.Settings, Config.VehicleEdit(vehicleId = null)),
+            stackAfterWizardSkip(stack)
+        )
+    }
+
+    @Test
+    fun `the review step owns the name and the icon`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = mutableListOf<Vehicle>()
+        val c = component(
+            saved = saved,
+            initialDraft = VehicleDraft().addController(ControllerType.VESC, "VE:01", "VESC")
+        )
+        (active(c) as SetupWizardComponent.Child.WhatAreWeBuilding).component.onNext()
+        (active(c) as SetupWizardComponent.Child.Controllers).component.onNext()
+        (active(c) as SetupWizardComponent.Child.Battery).component.onNoBattery()
+        val review = (active(c) as SetupWizardComponent.Child.Review).component
+
+        assertFalse(c.state.value.canSave, "no name, no Save")
+        review.onNameChanged("Scooter")
+        review.onIconChanged("scooter")
+        assertTrue(c.state.value.canSave)
+        review.onSave()
+        advanceUntilIdle()
+
+        assertEquals("scooter", saved.single().iconKey)
+        assertEquals("Scooter", saved.single().name)
+    }
+
+    @Test
+    fun `the controller list is warmest first`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val far = device("FA:01", "Far", controllerType = ControllerType.VESC, rssi = -90)
+        val near = device("NE:02", "Near", controllerType = ControllerType.VESC, rssi = -40)
+        val mid = device("MI:03", "Mid", controllerType = ControllerType.VESC, rssi = -60)
+        val c = component(scan = flowOf(far, near, mid))
+        (active(c) as SetupWizardComponent.Child.WhatAreWeBuilding).component.onNext()
+        advanceUntilIdle()
+
+        val rows = (active(c) as SetupWizardComponent.Child.Controllers).component.scanRows
+        assertEquals(listOf("NE:02", "MI:03", "FA:01"), rows.map { it.device.address })
+    }
+
+    @Test
+    fun `the CAN block appears only once the link is a live gateway candidate`() {
+        val draft = VehicleDraft().addController(ControllerType.VESC, "VE:01", "VESC")
+        val quiet = stateOf(draft)
+        assertFalse(quiet.showCanBlock, "an ordinary controller is never asked about a bus")
+        assertTrue(quiet.copy(canScanTarget = "VE:01").showCanBlock)
+        assertTrue(quiet.copy(canScan = CanScanState.Found("VE:01", listOf(21))).showCanBlock)
+    }
+
+    private fun stateOf(draft: VehicleDraft): SetupWizardComponent.State {
+        val values = SetupWizardComponent.EditableValues(
+            VehicleArchetype.CUSTOM, "", "generic", SecondaryGauge.DUTY, PackTopology.PARALLEL,
+            draft.persistableValues()
+        )
+        return SetupWizardComponent.State(
+            archetype = VehicleArchetype.CUSTOM,
+            name = "",
+            iconKey = "generic",
+            secondaryGauge = SecondaryGauge.DUTY,
+            draft = draft,
+            issues = validate(draft),
+            savedValues = values
         )
     }
 }

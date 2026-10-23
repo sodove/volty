@@ -17,6 +17,9 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -64,6 +67,8 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
+import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
+import ru.sodovaya.volty.presentation.vehicle.VEHICLE_ICON_KEYS
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.picker.SignalProximity
 import ru.sodovaya.volty.presentation.picker.SourceRole
@@ -174,6 +179,9 @@ private fun ArchetypeScreen(component: SetupWizardComponent.ArchetypeStage) {
 @Composable
 private fun ControllerScreen(component: SetupWizardComponent.ControllerStage) {
     val state by component.state.collectAsStateCompat()
+    // One thought per screen (Part L): first FIND the controller; once one is chosen the screen is
+    // about setting that controller up, and the search list is gone.
+    val hasController = state.draft.controllers.isNotEmpty()
     WizardPage(
         title = stringResource(Res.string.wizard_controller_title),
         progress = 2,
@@ -185,60 +193,37 @@ private fun ControllerScreen(component: SetupWizardComponent.ControllerStage) {
             Button(onClick = component::onNext) { Text(stringResource(Res.string.wizard_next)) }
         }
     ) {
-        ScanHeading(state.scannedDevices.size, state.scanning)
-        ScannedDeviceList(
-            rows = component.scanRows,
-            onAdd = component::onAddScannedDevice
-        )
-        Hint(stringResource(Res.string.wizard_scan_hint))
-        WizardSectionCard {
-            Text(
-                stringResource(Res.string.wizard_vehicle_name),
-                style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+        if (!hasController) {
+            ScanHeading(state.scannedDevices.size, state.scanning)
+            ScannedDeviceList(
+                rows = component.scanRows,
+                addedAddresses = emptySet(),
+                scanning = state.scanning,
+                onAdd = component::onAddScannedDevice
             )
-            OutlinedTextField(
-                value = state.name,
-                onValueChange = component::onNameChanged,
-                placeholder = { Text(stringResource(Res.string.wizard_new_vehicle)) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+            Hint(stringResource(Res.string.wizard_scan_hint))
+        } else {
+            Hint(stringResource(Res.string.wizard_controller_setup_hint))
+            EditableControllerCards(state, component)
+            // The bus block exists only for a link that can be asked about one.
+            if (state.showCanBlock) {
+                CanDiscoveryContent(
+                    canScanTarget = state.canScanTarget,
+                    scan = state.canScan,
+                    candidates = state.canCandidates,
+                    onDiscover = component::onDiscoverCanDevices,
+                    onAddCandidate = component::onAddCanCandidate,
+                    onDismiss = component::onDismissCanScan
+                )
+            }
         }
-        EditableDraftSources(state, component)
-        CanDiscoveryContent(
-            canScanTarget = state.canScanTarget,
-            scan = state.canScan,
-            candidates = state.canCandidates,
-            onDiscover = component::onDiscoverCanDevices,
-            onAddCandidate = component::onAddCanCandidate,
-            onDismiss = component::onDismissCanScan
-        )
     }
 }
 
 @Composable
 private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
     val state by component.state.collectAsStateCompat()
-    val hasBothDevice = state.draft.controllers.any { controller ->
-        state.draft.packs.any { pack ->
-            controller.canId == null &&
-                pack.canId == null &&
-                pack.address == controller.address &&
-                isWheelPair(controller.controllerType, pack.bmsType)
-            }
-    }
-    val hasSeparateBms = state.draft.packs.any { pack ->
-        state.draft.controllers.none { controller ->
-            controller.canId == null &&
-                controller.address == pack.address &&
-                pack.canId == null &&
-                isWheelPair(controller.controllerType, pack.bmsType)
-        }
-    }
-    val hasDerivedBattery = state.draft.controllers.any {
-        state.draft.resolvedDerivedBattery(it)
-    }
+    val exit = state.batteryExit
     WizardPage(
         title = stringResource(Res.string.wizard_battery_title),
         progress = 3,
@@ -256,43 +241,51 @@ private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
             fontWeight = FontWeight.SemiBold
         )
         BatteryChoiceCard(
-            selected = hasSeparateBms,
+            selected = exit == BatteryExit.OWN_BMS,
             title = Res.string.wizard_battery_own_bms,
             caption = Res.string.wizard_battery_own_bms_caption,
             badge = "BMS",
-            onClick = null
+            onClick = { component.onChooseExit(BatteryExit.OWN_BMS) }
         )
         BatteryChoiceCard(
-            selected = hasDerivedBattery,
+            selected = exit == BatteryExit.FROM_CONTROLLER,
             title = Res.string.wizard_battery_from_controller,
             caption = Res.string.wizard_battery_from_controller_caption,
             badge = "≈",
-            onClick = component::onUseControllerBattery,
+            onClick = { component.onChooseExit(BatteryExit.FROM_CONTROLLER) },
             enabled = component.canUseControllerBattery
         )
         BatteryChoiceCard(
-            selected = hasBothDevice,
+            selected = exit == BatteryExit.DEVICE_IS_BOTH,
             title = Res.string.wizard_battery_device_is_both,
             caption = Res.string.wizard_battery_device_is_both_caption,
             badge = "2×",
-            onClick = null
+            onClick = { component.onChooseExit(BatteryExit.DEVICE_IS_BOTH) }
         )
-        ScanHeading(state.scannedDevices.size, state.scanning)
-        ScannedDeviceList(
-            rows = component.scanRows,
-            onAdd = { device, add ->
-                when (add) {
-                    ScannedAdd.CONTROLLER -> component.onAddScannedDevice(device, add)
-                    ScannedAdd.BATTERY -> component.onUseSeparateBms(device)
-                    ScannedAdd.WHEEL -> component.onUseDeviceAsBoth(device)
-                }
+        when (exit) {
+            // Nothing is searched for until an exit that needs a second device is chosen.
+            null -> Unit
+            BatteryExit.FROM_CONTROLLER -> Hint(stringResource(Res.string.wizard_battery_from_controller_hint))
+            BatteryExit.OWN_BMS, BatteryExit.DEVICE_IS_BOTH -> {
+                ScanHeading(state.scannedDevices.size, state.scanning)
+                ScannedDeviceList(
+                    rows = component.scanRows,
+                    addedAddresses = state.draft.packs.map { it.address }.toSet(),
+                    scanning = state.scanning,
+                    onAdd = { device, add ->
+                        when (add) {
+                            ScannedAdd.CONTROLLER -> component.onAddScannedDevice(device, add)
+                            ScannedAdd.BATTERY -> component.onUseSeparateBms(device)
+                            ScannedAdd.WHEEL -> component.onUseDeviceAsBoth(device)
+                        }
+                    }
+                )
             }
-        )
-        Hint(stringResource(Res.string.wizard_scan_hint))
+        }
         if (state.advanceBlocked) {
             ErrorHint(stringResource(Res.string.wizard_empty_draft))
         }
-        EditableDraftSources(state, component)
+        EditablePackCards(state, component)
         if (state.showTopologyChoice) {
             Text(
                 stringResource(Res.string.wizard_topology_question),
@@ -337,11 +330,47 @@ private fun ReviewScreen(component: SetupWizardComponent.ReviewStage) {
             }
         }
     ) {
-        Text(
-            state.name.ifBlank { stringResource(Res.string.wizard_new_vehicle) },
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.SemiBold
+        // The name and the icon live beside the diagram they describe (Part L stage 4).
+        OutlinedTextField(
+            value = state.name,
+            onValueChange = component::onNameChanged,
+            label = { Text(stringResource(Res.string.wizard_vehicle_name)) },
+            placeholder = { Text(stringResource(Res.string.wizard_new_vehicle)) },
+            singleLine = true,
+            enabled = !state.saving,
+            modifier = Modifier.fillMaxWidth()
         )
+        Text(
+            stringResource(Res.string.vehicle_field_icon),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            VEHICLE_ICON_KEYS.forEach { key ->
+                val selected = state.iconKey == key
+                Box(
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        )
+                        .clickable(enabled = !state.saving) { component.onIconChanged(key) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = iconKeyToEmoji(key),
+                        color = if (selected) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 16.sp
+                    )
+                }
+            }
+        }
         Text(
             stringResource(
                 Res.string.wizard_summary,
@@ -608,27 +637,44 @@ private fun ScanHeading(count: Int, scanning: Boolean) {
 @Composable
 private fun ScannedDeviceList(
     rows: List<SetupWizardComponent.ScanRow>,
+    addedAddresses: Set<String>,
+    scanning: Boolean,
     onAdd: (DiscoveredDevice, ScannedAdd) -> Unit
 ) {
+    if (rows.isEmpty()) {
+        // An empty list is an answer, not a blank: say what it means and what to do.
+        Hint(stringResource(Res.string.wizard_scan_empty))
+        return
+    }
     // Scanning is a live stream: every advertisement can add a row or update
     // its identity. Keep the result viewport bounded so fields below it never
-    // move while the rider is typing. The small empty reservation also avoids
-    // a one-frame jump when the first advertisement arrives.
+    // move while the rider is typing.
     LazyColumn(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(min = 72.dp, max = 184.dp),
+            .heightIn(min = 72.dp, max = 240.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        items(rows) { row ->
+        items(rows, key = { it.device.address }) { row ->
             val identity = row.device.scanDeviceLabel()
             val shape = RoundedCornerShape(10.dp)
+            val chosen = row.device.address in addedAddresses
+            val oneAction = row.additions.singleOrNull()
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
+                    .border(
+                        1.dp,
+                        if (chosen) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                        shape
+                    )
+                    .then(
+                        if (oneAction != null) Modifier.clickable { onAdd(row.device, oneAction) }
+                        else Modifier
+                    ),
                 shape = shape,
-                color = MaterialTheme.colorScheme.surface
+                color = if (chosen) MaterialTheme.colorScheme.primaryContainer
+                else MaterialTheme.colorScheme.surface
             ) {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp)) {
                     Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -647,17 +693,19 @@ private fun ScannedDeviceList(
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                    ) {
-                        row.additions.forEach { add ->
-                            TextButton(
-                                onClick = { onAdd(row.device, add) },
-                                modifier = Modifier.weight(1f),
-                                contentPadding = ButtonDefaults.TextButtonContentPadding
-                            ) {
-                                Text(scanAdditionText(add), fontSize = 11.sp)
+                    if (oneAction == null) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            row.additions.forEach { add ->
+                                TextButton(
+                                    onClick = { onAdd(row.device, add) },
+                                    modifier = Modifier.weight(1f),
+                                    contentPadding = ButtonDefaults.TextButtonContentPadding
+                                ) {
+                                    Text(scanAdditionText(add), fontSize = 11.sp)
+                                }
                             }
                         }
                     }
@@ -783,9 +831,8 @@ private fun WizardBadge(text: String, live: Boolean) {
  * Setup's source cards. All mutation stays in [SetupWizardComponent.SourceStage];
  * these controls only expose the corrections the approved flow requires.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun EditableDraftSources(
+private fun EditableControllerCards(
     state: SetupWizardComponent.State,
     component: SetupWizardComponent.SourceStage
 ) {
@@ -832,6 +879,15 @@ private fun EditableDraftSources(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun EditablePackCards(
+    state: SetupWizardComponent.State,
+    component: SetupWizardComponent.SourceStage
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         state.draft.packs.forEachIndexed { index, pack ->
             SourceEditCard(
                 title = "${stringResource(Res.string.vehicle_source_pack)} ${index + 1}",

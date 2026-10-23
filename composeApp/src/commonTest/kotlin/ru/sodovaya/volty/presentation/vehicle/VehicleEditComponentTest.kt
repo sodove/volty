@@ -3746,6 +3746,41 @@ class VehicleEditComponentTest {
         data = BmsData(voltage = volts, cellVoltages = List(20) { volts / 20f }),
         isOnline = true
     )
+
+    @Test
+    fun `a wizard seed becomes the new vehicle's draft and is unsaved work`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val seedDraft = VehicleDraft()
+            .addController(ControllerType.VESC, "VE:01", "VESC")
+            .addPack(BmsType.ANT_BMS, "AN:02", "ANT")
+        val repo = FakeVehicleRepo(emptyList())
+        val c = DefaultVehicleEditComponent(
+            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            vehicleId = null,
+            vehicleRepository = repo,
+            bmsRepository = FakeBmsRepo(),
+            onSaved = {},
+            onCancelled = {},
+            onDeleted = {},
+            seed = VehicleEditSeed(seedDraft, "Bike", "ebike", SecondaryGauge.BATTERY, PackTopology.PARALLEL)
+        )
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertEquals(seedDraft, s.draft, "the editor starts on the wizard's draft, unchanged")
+        assertEquals("Bike", s.name)
+        assertEquals("ebike", s.iconKey)
+        assertEquals(SecondaryGauge.BATTERY, s.secondaryGauge)
+        assertFalse(s.isEditing)
+        assertTrue(c.hasUnsavedDraft, "handed-over sources are unsaved work, so leaving must ask")
+        assertEquals(emptyList(), repo.upserts, "nothing is written until Save")
+
+        c.onSave()
+        advanceUntilIdle()
+        val vehicle = repo.upserts.single()
+        assertEquals(listOf("VE:01"), vehicle.controllers.map { it.address })
+        assertEquals(listOf("AN:02"), vehicle.packs.map { it.bmsAddress })
+    }
 }
 
 // The toString-based field splitter this file's default-guard is built on now
