@@ -3,6 +3,7 @@ package ru.sodovaya.volty.notification
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.media.audiofx.LoudnessEnhancer
 import android.util.Log
 import ru.sodovaya.volty.domain.alert.AlarmTone
 import ru.sodovaya.volty.domain.alert.AlarmToneRenderer
@@ -36,7 +37,9 @@ import kotlin.math.min
  */
 internal class AlarmTonePlayer(
     initialTone: AlarmTone,
-    private val attributes: AudioAttributes
+    private val attributes: AudioAttributes,
+    /** `LoudnessEnhancer` target gain; 0 attaches nothing. */
+    private val loudnessMillibels: Int = 0
 ) : Thread("volty-alarm-tone") {
 
     /** The tone to play from the next burst onward. Written by [retune] from other threads. */
@@ -103,7 +106,17 @@ internal class AlarmTonePlayer(
 
     private fun playLoop() {
         val track = buildTrack() ?: return
+        // Owned by this thread like the track: created after it, released first.
+        var enhancer: LoudnessEnhancer? = null
         try {
+            if (loudnessMillibels > 0) {
+                enhancer = runCatching {
+                    LoudnessEnhancer(track.audioSessionId).apply {
+                        setTargetGain(loudnessMillibels)
+                        enabled = true
+                    }
+                }.onFailure { Log.w(TAG, "could not attach a LoudnessEnhancer", it) }.getOrNull()
+            }
             track.play()
             // Rendered lazily and cached: at step 3 the pattern repeats twice a
             // second, and re-synthesising ~40 kB of PCM each time to play the
@@ -128,6 +141,7 @@ internal class AlarmTonePlayer(
             // pause + flush before stop: stop() lets whatever is already buffered
             // drain, which after a `quit()` is up to a buffer of tone playing
             // after the alarm was supposed to be over.
+            runCatching { enhancer?.release() }
             runCatching { track.pause() }
             runCatching { track.flush() }
             runCatching { track.stop() }

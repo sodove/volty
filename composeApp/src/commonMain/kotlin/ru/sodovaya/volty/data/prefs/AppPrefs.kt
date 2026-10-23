@@ -198,12 +198,13 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
      * briefly muted at start-up by prefs that simply have not loaded yet.
      */
     val alarmModalities: StateFlow<AlarmModalities> =
-        combine(alarmEnabled, alarmToneEnabled, alarmVibrationEnabled, alarmMusicMode) { master, tone, vibration, musicMode ->
+        combine(alarmEnabled, alarmToneEnabled, alarmVibrationEnabled, alarmMusicMode, alertSoundSettings) { master, tone, vibration, musicMode, sound ->
             AlarmModalities(
                 alarmEnabled = master,
                 toneEnabled = tone,
                 vibrationEnabled = vibration,
-                musicMode = musicMode
+                musicMode = musicMode,
+                sound = sound
             )
         }.stateIn(scope, SharingStarted.Eagerly, AlarmModalities.DEFAULT)
 

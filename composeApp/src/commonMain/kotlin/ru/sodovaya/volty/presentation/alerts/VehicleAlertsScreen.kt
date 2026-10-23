@@ -25,6 +25,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -43,6 +44,8 @@ import ru.sodovaya.volty.presentation.common.alertAvailabilityNote
 import ru.sodovaya.volty.presentation.common.motionAlertKindLabel
 import ru.sodovaya.volty.presentation.common.motionAlertUnitLabel
 import ru.sodovaya.volty.domain.alert.AlarmMusicMode
+import ru.sodovaya.volty.domain.audio.AlertSoundKind
+import ru.sodovaya.volty.domain.audio.MAX_ALERT_GAIN_DB
 import ru.sodovaya.volty.presentation.alerts.BatteryAlertDraft
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
@@ -67,7 +70,13 @@ import volty.composeapp.generated.resources.alerts_level
 import volty.composeapp.generated.resources.alerts_level_muted
 import volty.composeapp.generated.resources.alerts_master
 import volty.composeapp.generated.resources.alerts_master_subtitle
+import volty.composeapp.generated.resources.alerts_gain
+import volty.composeapp.generated.resources.alerts_gain_value
 import volty.composeapp.generated.resources.alerts_music_mode
+import volty.composeapp.generated.resources.alerts_sound_kind
+import volty.composeapp.generated.resources.alerts_sound_kind_alarm
+import volty.composeapp.generated.resources.alerts_sound_kind_navigation
+import volty.composeapp.generated.resources.alerts_sound_kind_subtitle
 import volty.composeapp.generated.resources.alerts_music_mode_duck
 import volty.composeapp.generated.resources.alerts_music_mode_overlay
 import volty.composeapp.generated.resources.alerts_music_mode_subtitle
@@ -182,6 +191,38 @@ fun VehicleAlertsScreen(component: VehicleAlertsComponent) {
                         label = { Text(stringResource(Res.string.alerts_music_mode_overlay)) }
                     )
                 }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(Res.string.alerts_sound_kind), fontSize = 14.sp)
+                Caption(stringResource(Res.string.alerts_sound_kind_subtitle))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    FilterChip(
+                        selected = state.alertSound.kind == AlertSoundKind.NAVIGATION,
+                        onClick = { component.onAlertSoundKindChanged(AlertSoundKind.NAVIGATION) },
+                        label = { Text(stringResource(Res.string.alerts_sound_kind_navigation)) }
+                    )
+                    FilterChip(
+                        selected = state.alertSound.kind == AlertSoundKind.ALARM,
+                        onClick = { component.onAlertSoundKindChanged(AlertSoundKind.ALARM) },
+                        label = { Text(stringResource(Res.string.alerts_sound_kind_alarm)) }
+                    )
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(Res.string.alerts_gain) + ": " +
+                        stringResource(Res.string.alerts_gain_value, state.alertSound.gainDb.toInt()),
+                    fontSize = 14.sp
+                )
+                Slider(
+                    value = state.alertSound.gainDb,
+                    onValueChange = { component.onAlertGainChanged(it.toInt().toFloat()) },
+                    valueRange = 0f..MAX_ALERT_GAIN_DB,
+                    steps = MAX_ALERT_GAIN_DB.toInt() - 1
+                )
             }
 
             HorizontalDivider()

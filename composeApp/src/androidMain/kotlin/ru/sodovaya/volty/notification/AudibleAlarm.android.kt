@@ -21,6 +21,10 @@ import ru.sodovaya.volty.domain.alert.AlarmState
 import ru.sodovaya.volty.domain.alert.AlarmTone
 import ru.sodovaya.volty.domain.alert.AlarmTransition
 import ru.sodovaya.volty.domain.alert.AlarmVibration
+import ru.sodovaya.volty.domain.alert.AlertAudioPlan
+import ru.sodovaya.volty.domain.alert.AlertFocus
+import ru.sodovaya.volty.domain.alert.AlertUsage
+import ru.sodovaya.volty.domain.alert.alertAudioPlan
 import ru.sodovaya.volty.domain.alert.alarmPreviewDurationMs
 
 /**
@@ -55,7 +59,10 @@ import ru.sodovaya.volty.domain.alert.alarmPreviewDurationMs
  *
  * ### Focus policy (F §11, §5)
  *
- * `USAGE_ALARM` + `CONTENT_TYPE_SONIFICATION`. In [AlarmMusicMode.DUCK_MEDIA]
+ * `CONTENT_TYPE_SONIFICATION` with `USAGE_ASSISTANCE_NAVIGATION_GUIDANCE` (default)
+ * or `USAGE_ALARM`, chosen by [alertAudioPlan] from the rider's alert-sound kind; the
+ * track and the focus request are built from the same [AlertAudioPlan]. In
+ * [AlarmMusicMode.DUCK_MEDIA]
  * mode focus is requested as `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`; in
  * [AlarmMusicMode.PLAY_OVER_MEDIA] mode no focus is requested, so media keeps
  * playing at its current volume. **Losing focus never stops the alarm** — see
@@ -78,6 +85,7 @@ actual class AudibleAlarm(context: Context) {
 
     private var tonePlayer: AlarmTonePlayer? = null
     private var focusRequest: AudioFocusRequest? = null
+    private var focusUsage: AlertUsage? = null
     private var vibrating = false
     private var released = false
 
@@ -87,10 +95,11 @@ actual class AudibleAlarm(context: Context) {
     /** When the last tone thread was started, for [reviveToneIfDead]'s backoff. */
     private var lastToneStartMs = 0L
 
-    private val attributes: AudioAttributes = AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_ALARM)
-        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-        .build()
+    /** The vibration attributes: always the alarm usage, whatever the tone is played as. */
+    private val vibrationAttributes: AudioAttributes = attributesFor(AlertUsage.ALARM)
+
+    private fun planFor(command: AlarmCommand.Play): AlertAudioPlan =
+        alertAudioPlan(command.sound, command.musicMode)
 
     private val endPreviewTask = Runnable { endPreview() }
 
@@ -102,7 +111,7 @@ actual class AudibleAlarm(context: Context) {
             // holding focus for it would duck music for silence.
             if (released || !isTonePlaying()) return@synchronized
             val command = planner.command as? AlarmCommand.Play ?: return@synchronized
-            if (command.tone == null || command.musicMode != AlarmMusicMode.DUCK_MEDIA) return@synchronized
+            if (command.tone == null || planFor(command).focus != AlertFocus.TRANSIENT_MAY_DUCK) return@synchronized
             val request = focusRequest ?: return@synchronized
             runCatching { audioManager?.requestAudioFocus(request) }
         }
@@ -186,7 +195,7 @@ actual class AudibleAlarm(context: Context) {
         when (val command = planner.command) {
             is AlarmCommand.Silent -> when (transition) {
                 AlarmTransition.STOP -> {
-                    startTone(null)
+                    startTone(null, null)
                     startVibration(null)
                     abandonFocus()
                 }
@@ -207,8 +216,9 @@ actual class AudibleAlarm(context: Context) {
                 AlarmTransition.RESTART -> {
                     // Focus is about the speaker only: a vibration-only alarm has
                     // no reason to duck anybody's music.
-                    if (command.tone != null) requestFocus(command.musicMode) else abandonFocus()
-                    startTone(command.tone)
+                    val plan = planFor(command)
+                    if (command.tone != null) requestFocus(plan) else abandonFocus()
+                    startTone(command.tone, plan)
                     // An unchanged waveform is left running. Toggling the *tone*
                     // switch mid-alarm is a RESTART, and re-issuing an identical
                     // pattern would restart the buzz from its first pulse for no
@@ -244,8 +254,8 @@ actual class AudibleAlarm(context: Context) {
         val now = SystemClock.uptimeMillis()
         if (now - lastToneStartMs < TONE_REVIVE_MIN_INTERVAL_MS) return false
         Log.w(TAG, "alarm tone thread ended while level ${command.level} was still sounding; restarting it")
-        requestFocus(command.musicMode)
-        startTone(tone)
+        requestFocus(planFor(command))
+        startTone(tone, planFor(command))
         return true
     }
 
@@ -253,11 +263,11 @@ actual class AudibleAlarm(context: Context) {
     private fun isTonePlaying(): Boolean = tonePlayer?.finished == false
 
     /** Replace the running tone, or stop it when [tone] is null. */
-    private fun startTone(tone: AlarmTone?) {
+    private fun startTone(tone: AlarmTone?, plan: AlertAudioPlan?) {
         tonePlayer?.quit()
         tonePlayer = null
-        if (tone == null) return
-        val player = AlarmTonePlayer(tone, attributes)
+        if (tone == null || plan == null) return
+        val player = AlarmTonePlayer(tone, attributesFor(plan.usage), plan.loudnessMillibels)
         tonePlayer = player
         lastToneStartMs = SystemClock.uptimeMillis()
         runCatching { player.start() }.onFailure {
@@ -290,20 +300,23 @@ actual class AudibleAlarm(context: Context) {
         runCatching { vibrator?.cancel() }
     }
 
-    private fun requestFocus(mode: AlarmMusicMode) {
-        if (mode == AlarmMusicMode.PLAY_OVER_MEDIA) {
+    private fun requestFocus(plan: AlertAudioPlan) {
+        if (plan.focus == AlertFocus.NONE) {
             abandonFocus()
             return
         }
-        if (focusRequest != null) return
+        // A request built for another usage must not outlive a kind switch.
+        if (focusRequest != null && focusUsage == plan.usage) return
+        if (focusRequest != null) abandonFocus()
         val manager = audioManager ?: return
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-            .setAudioAttributes(attributes)
+            .setAudioAttributes(attributesFor(plan.usage))
             // We will not pause for a ducking request; see onFocusChange.
             .setWillPauseWhenDucked(false)
             .setOnAudioFocusChangeListener(focusListener, handler)
             .build()
         focusRequest = request
+        focusUsage = plan.usage
         // The result is ignored **on purpose** (F §11): whether or not the system
         // grants focus, the alarm plays. USAGE_ALARM is audible regardless, and a
         // denied request is not a reason to leave a rider unwarned.
@@ -340,7 +353,7 @@ actual class AudibleAlarm(context: Context) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             vib.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
         } else {
-            vib.vibrate(effect, attributes)
+            vib.vibrate(effect, vibrationAttributes)
         }
     }
 
@@ -362,6 +375,16 @@ actual class AudibleAlarm(context: Context) {
          * incoming sample, several times a second, for the rest of the ride.
          */
         const val TONE_REVIVE_MIN_INTERVAL_MS = 1_000L
+
+        fun attributesFor(usage: AlertUsage): AudioAttributes = AudioAttributes.Builder()
+            .setUsage(
+                when (usage) {
+                    AlertUsage.NAVIGATION_GUIDANCE -> AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE
+                    AlertUsage.ALARM -> AudioAttributes.USAGE_ALARM
+                }
+            )
+            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+            .build()
 
         @Suppress("DEPRECATION")
         fun resolveVibrator(context: Context): Vibrator? =

@@ -19,6 +19,8 @@ import ru.sodovaya.volty.domain.alert.AlarmModalities
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.alert.alarmPreviewCommand
+import ru.sodovaya.volty.domain.audio.AlertSoundKind
+import ru.sodovaya.volty.domain.audio.AlertSoundSettings
 import ru.sodovaya.volty.domain.alert.availabilityFor
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.ControllerData
@@ -73,6 +75,8 @@ interface VehicleAlertsComponent {
     fun onToneEnabledChanged(enabled: Boolean)
     fun onVibrationEnabledChanged(enabled: Boolean)
     fun onAlarmMusicModeChanged(mode: AlarmMusicMode)
+    fun onAlertSoundKindChanged(kind: AlertSoundKind)
+    fun onAlertGainChanged(db: Float)
 
     /** "Проверить сигнал" — play one step so the tone design can be judged by ear (F §11). */
     fun onPreview(level: Int)
@@ -112,6 +116,7 @@ interface VehicleAlertsComponent {
         val toneEnabled: Boolean = true,
         val vibrationEnabled: Boolean = true,
         val musicMode: AlarmMusicMode = AlarmMusicMode.DUCK_MEDIA,
+        val alertSound: AlertSoundSettings = AlertSoundSettings(),
         val saving: Boolean = false,
         /** True while the "leave without saving?" dialog is up. */
         val discardPrompt: Boolean = false
@@ -158,7 +163,7 @@ interface VehicleAlertsComponent {
 
         /** The three switches as the one value the alarm's gate takes. */
         val modalities: AlarmModalities
-            get() = AlarmModalities(alarmEnabled, toneEnabled, vibrationEnabled, musicMode)
+            get() = AlarmModalities(alarmEnabled, toneEnabled, vibrationEnabled, musicMode, alertSound)
 
         /**
          * Can pressing a preview button produce anything at all?
@@ -267,7 +272,8 @@ class DefaultVehicleAlertsComponent(
             alarmEnabled = appPrefs.alarmEnabled.value,
             toneEnabled = appPrefs.alarmToneEnabled.value,
             vibrationEnabled = appPrefs.alarmVibrationEnabled.value,
-            musicMode = appPrefs.alarmMusicMode.value
+            musicMode = appPrefs.alarmMusicMode.value,
+            alertSound = appPrefs.alertSoundSettings.value
         )
     )
     override val state: StateFlow<VehicleAlertsComponent.State> = _state.asStateFlow()
@@ -351,6 +357,7 @@ class DefaultVehicleAlertsComponent(
         scope.launch { appPrefs.alarmToneEnabled.collect { v -> _state.update { it.copy(toneEnabled = v) } } }
         scope.launch { appPrefs.alarmVibrationEnabled.collect { v -> _state.update { it.copy(vibrationEnabled = v) } } }
         scope.launch { appPrefs.alarmMusicMode.collect { v -> _state.update { it.copy(musicMode = v) } } }
+        scope.launch { appPrefs.alertSoundSettings.collect { v -> _state.update { it.copy(alertSound = v) } } }
     }
 
     /**
@@ -425,6 +432,14 @@ class DefaultVehicleAlertsComponent(
 
     override fun onAlarmMusicModeChanged(mode: AlarmMusicMode) {
         scope.launch { appPrefs.setAlarmMusicMode(mode) }
+    }
+
+    override fun onAlertSoundKindChanged(kind: AlertSoundKind) {
+        scope.launch { appPrefs.setAlertSoundKind(kind) }
+    }
+
+    override fun onAlertGainChanged(db: Float) {
+        scope.launch { appPrefs.setAlertGainDb(db) }
     }
 
     override fun onPreview(level: Int) = alarmPreview.preview(level)

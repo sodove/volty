@@ -473,6 +473,12 @@
     <string name="alerts_music_mode_subtitle">Выберите, что делать с музыкой при звуковом алерте. Настройка применяется сразу.</string>
     <string name="alerts_music_mode_duck">Приглушать музыку</string>
     <string name="alerts_music_mode_overlay">Пищать поверх музыки</string>
+    <string name="alerts_sound_kind">Звук алерта</string>
+    <string name="alerts_sound_kind_subtitle">Каким потоком звучат алерты. Подсказка навигатора приглушает музыку, а не заглушает её. Настройка применяется сразу.</string>
+    <string name="alerts_sound_kind_navigation">Как подсказка навигатора</string>
+    <string name="alerts_sound_kind_alarm">Как будильник</string>
+    <string name="alerts_gain">Громкость алертов</string>
+    <string name="alerts_gain_value">+%1$d дБ</string>
     <string name="alerts_battery_section">Алерты батареи</string>
     <string name="alerts_battery_cell_high">Высокое напряжение ячейки</string>
     <string name="alerts_battery_cell_low">Низкое напряжение ячейки</string>

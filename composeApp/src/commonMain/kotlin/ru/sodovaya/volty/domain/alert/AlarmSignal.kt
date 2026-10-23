@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.domain.alert
 
+import ru.sodovaya.volty.domain.audio.AlertSoundSettings
 import kotlin.math.roundToInt
 
 /**
@@ -95,7 +96,8 @@ data class AlarmModalities(
     val alarmEnabled: Boolean = true,
     val toneEnabled: Boolean = true,
     val vibrationEnabled: Boolean = true,
-    val musicMode: AlarmMusicMode = AlarmMusicMode.DUCK_MEDIA
+    val musicMode: AlarmMusicMode = AlarmMusicMode.DUCK_MEDIA,
+    val sound: AlertSoundSettings = AlertSoundSettings()
 ) {
     companion object {
         /** Everything on — the shipped defaults, and the state before prefs have loaded. */
@@ -131,7 +133,8 @@ sealed interface AlarmCommand {
         val level: Int,
         val tone: AlarmTone?,
         val vibration: AlarmVibration?,
-        val musicMode: AlarmMusicMode = AlarmMusicMode.DUCK_MEDIA
+        val musicMode: AlarmMusicMode = AlarmMusicMode.DUCK_MEDIA,
+        val sound: AlertSoundSettings = AlertSoundSettings()
     ) : AlarmCommand
 }
 
@@ -307,7 +310,8 @@ fun alarmCommandFor(level: Int, urgency: Float, modalities: AlarmModalities): Al
         level = AlarmToneTable.clampLevel(level),
         tone = tone,
         vibration = vibration,
-        musicMode = modalities.musicMode
+        musicMode = modalities.musicMode,
+        sound = modalities.sound
     )
 }
 
@@ -353,6 +357,7 @@ fun alarmTransitionFor(previous: AlarmCommand, next: AlarmCommand): AlarmTransit
         previous.level == next.level &&
         (previous.tone == null) == (next.tone == null) &&
         previous.vibration == next.vibration &&
-        previous.musicMode == next.musicMode -> AlarmTransition.RETUNE
+        previous.musicMode == next.musicMode &&
+        previous.sound == next.sound -> AlarmTransition.RETUNE
     else -> AlarmTransition.RESTART
 }

@@ -475,6 +475,12 @@
     <string name="alerts_music_mode_subtitle">Choose what happens to media during a tone alarm. Applies immediately.</string>
     <string name="alerts_music_mode_duck">Lower media volume</string>
     <string name="alerts_music_mode_overlay">Play over media</string>
+    <string name="alerts_sound_kind">Alert sound</string>
+    <string name="alerts_sound_kind_subtitle">Which audio stream alerts use. Navigation prompts lower the music instead of silencing it. Applies immediately.</string>
+    <string name="alerts_sound_kind_navigation">Like a navigation prompt</string>
+    <string name="alerts_sound_kind_alarm">Like an alarm clock</string>
+    <string name="alerts_gain">Alert volume</string>
+    <string name="alerts_gain_value">+%1$d dB</string>
     <string name="alerts_battery_section">Battery alerts</string>
     <string name="alerts_battery_cell_high">Cell voltage high</string>
     <string name="alerts_battery_cell_low">Cell voltage low</string>
