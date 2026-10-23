@@ -51,6 +51,15 @@ object VoltageSocEstimator {
         return estimateFromAverageCellVoltage(cellVoltages.average().toFloat(), chemistry, alertConfig)
     }
 
+    /**
+     * The same estimate from a whole-pack voltage, or null when nothing honest divides it:
+     * an unknown or non-positive count, or a non-positive voltage.
+     */
+    fun estimateFromPackVoltage(packVoltage: Float, cellCount: Int?, chemistry: Chemistry, alertConfig: AlertConfig): Float? {
+        if (cellCount == null || cellCount <= 0 || !(packVoltage > 0f) || !packVoltage.isFinite()) return null
+        return estimateFromAverageCellVoltage(packVoltage / cellCount, chemistry, alertConfig)
+    }
+
     /** The linear map itself, for callers that already hold an average cell voltage. */
     private fun estimateFromAverageCellVoltage(
         averageCellV: Float,

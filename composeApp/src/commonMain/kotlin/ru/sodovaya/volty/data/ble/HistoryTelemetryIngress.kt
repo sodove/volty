@@ -5,6 +5,7 @@ import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
+import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.history.*
 import ru.sodovaya.volty.domain.history.*
@@ -48,6 +49,8 @@ internal class HistoryTelemetryIngress(
         if (nativeLifecycle?.isAccepting == false) return null
         // Capture before the planner: control may replace this ride while setup runs.
         val recording = controller.captureTelemetryRecording()
+        // Controller kinds have no battery type of their own; toBmsType() refuses them.
+        val linkBatteryType = runCatching { spec.protocolKind.toBmsType() }.getOrNull()
         return try {
             val native = nativeLifecycle?.binding(spec, protocol, ownership::isCurrent)
             if (nativeLifecycle != null && native == null) return null
@@ -62,7 +65,9 @@ internal class HistoryTelemetryIngress(
                 }
             } }
             historySessionTelemetryCapture(protocol, sessionId, controller, readTick, { ownership.isCurrent() && nativeLifecycle?.isAccepting != false },
-                binding, preparation, dispatchObservation = native?.dispatchObservation ?: { action -> action() }) { telemetry ->
+                binding, preparation, dispatchObservation = native?.dispatchObservation ?: { action -> action() },
+                enrich = { observation -> withHistoryEstimatedSoc(observation, vehicle, linkBatteryType) {
+                    (protocol as? BegodeProtocol)?.derivedCellCount() } }) { telemetry ->
                 if (nativeLifecycle != null) {
                     val offered = telemetry.offer(controller, ownership::isCurrent)
                     if (offered != HistoryOffer.ACCEPTED) {

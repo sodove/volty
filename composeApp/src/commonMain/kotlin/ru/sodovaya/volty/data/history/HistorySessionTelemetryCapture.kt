@@ -60,6 +60,7 @@ internal fun historySessionTelemetryCapture(
     sources: Map<HistoryTelemetrySource, HistorySource>,
     prepareRecording: (suspend () -> Unit)?,
     dispatchObservation: (() -> Unit) -> Unit = { action -> action() },
+    enrich: (TelemetryObservation) -> TelemetryObservation = { it },
     onTelemetry: (CapturedHistoryTelemetry) -> Unit,
 ): SessionTelemetryCapture {
     // A caller can rebuild or mutate its map later; one attempt keeps its own plan.
@@ -87,7 +88,13 @@ internal fun historySessionTelemetryCapture(
             if (recording != null && tick != null) {
                 val observation = received.observation
                 val source = binding[observation.historySourceKey()]
-                if (source != null) onTelemetry(CapturedHistoryTelemetry(recording, source, tick, received))
+                if (source != null) {
+                    // The same instance when nothing was added: downstream owners compare receipts by identity.
+                    // An estimate is an extra: a failure in it never costs the measured readings.
+                    val enriched = try { enrich(observation) } catch (_: Exception) { observation }
+                    onTelemetry(CapturedHistoryTelemetry(recording, source, tick,
+                        if (enriched === observation) received else received.copy(observation = enriched)))
+                }
             }
         }
     }, onUnreceiptedObservation = { observation ->

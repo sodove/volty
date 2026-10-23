@@ -392,6 +392,33 @@ class KableBmsRepositoryHistoryFunnelTest {
         } finally { channel.close() }
     }
 
+    @Test fun aBegodeWithoutABmsRecordsTheChargeTheDashboardShows() = kotlinx.coroutines.test.runTest {
+        // The rider's T4: no stored pack, the controller provides the battery, and the wheel never sends a charge.
+        val writer = Writer(); val c = controller(writer)
+        val t4 = wheelVehicle("t4", "T4", "unicycle", "C0:DE:CA:FE:B0:DE", Chemistry.LI_ION_NMC, Instant.fromEpochSeconds(0))
+            .let { it.copy(packs = emptyList(), controllers = it.controllers.map { k -> k.copy(providesDerivedBattery = true) }) }
+        // The shape effectiveLinkSpecs builds: both branch slots synthesised, the wheel's own controller.
+        val spec = planLinks(t4.packs, t4.controllers).single().copy(ownedPacks = listOf(OwnedSource(0), OwnedSource(1)))
+        val plan = nativeHistorySourcesForLink(spec, t4)
+        c.execute(RecordingInput.Connected(t4.id, 7, tick()), plan.values.toList())
+        val channel = Channel<Sample>(1000)
+        try {
+            val capture = assertNotNull(HistoryTelemetryIngress(c, { tick(1) })
+                .capture(BegodeProtocol(), "attempt", spec, t4, SampleSessionOwnership { true }, channel))
+            repeat(2) { BegodeT4Fixture.notifications.forEach { capture.processNotification(it) } }
+            while (true) {
+                val sample = channel.tryReceive().getOrNull() ?: break
+                assertEquals(HistoryOffer.ACCEPTED, assertIs<HistoryTelemetrySample>(sample).telemetry.offer(c) { true })
+            }
+            val recorded = writer.samples.flatMap { it.samples }
+            val charge = recorded.filter { it.key.metricId == "soc_percent" }.mapNotNull { it.value }
+            // 90.7..90.8 V over 24S at the NMC defaults; unknown until the count was proven, never a guess before.
+            assertTrue(charge.isNotEmpty(), "the T4's charge reaches history")
+            charge.forEach { assertEquals(54.0, it, 3.0) }
+            assertTrue(recorded.any { it.key.metricId == "soc_percent" && it.value == null }, "before the count is proven it stays unknown")
+        } finally { channel.close() }
+    }
+
     @Test fun defaultNativePlanFeedsTheExistingOwnedFunnel() = kotlinx.coroutines.test.runTest {
         val writer = Writer(); val c = controller(writer); val v = vehicle()
         val spec = LinkSpec(v.packs.single().bmsAddress, ProtocolKind.JK, listOf(OwnedSource(0)))
