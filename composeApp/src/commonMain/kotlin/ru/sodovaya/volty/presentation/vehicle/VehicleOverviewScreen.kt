@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.presentation.vehicle
 
+import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -76,7 +77,7 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
                 item {
                     ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().clickable { component.onOpenRide(ride.id) }) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (state.lastRoute.size >= 2) RouteSketch(state.lastRoute, Modifier.fillMaxWidth().height(120.dp))
+                            if (state.lastRoute.size >= 2) RouteMapPreview(state.lastRoute, LocalVoltyDarkTheme.current, Modifier.fillMaxWidth().height(160.dp))
                             if (state.lastTotals.isNotEmpty()) TotalsTiles(state.lastTotals)
                         }
                     }
