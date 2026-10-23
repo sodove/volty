@@ -35,7 +35,10 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
     private val lifetime=SupervisorJob(parent.coroutineContext[Job])
     private val scope=CoroutineScope(parent.coroutineContext+lifetime)
     private val form=MutableStateFlow(VoiceSpacesNearbyState())
-    private val output=MutableStateFlow(VoiceSpacesNearbyState())
+    // The first frame already knows the session: starting from the LoggedOut default flashed the sign-in
+    // form for a frame on entering the tab.
+    private val output=MutableStateFlow(VoiceSpacesNearbyState(
+        session=nearbyVisibleSession(repository.session.value,repository.authenticatedAccount.value)))
     val state=output.asStateFlow()
     private val binding=ServerWorkspaceAccountBinding(scope,repository.authenticatedAccount,factory,nextId,connectChannel)
     val servers=binding.state
@@ -66,9 +69,7 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
         }
         scope.launch {
             combine(repository.session,form,friends.state) {session,form,page ->
-                val authority=repository.authenticatedAccount.value
-                val visible=if(session is SocialSession.Authenticated &&
-                    (authority?.job?.isActive!=true || authority.userId!=session.userId)) SocialSession.LoggedOut else session
+                val visible=nearbyVisibleSession(session,repository.authenticatedAccount.value)
                 form.copy(session=visible,friends=page,
                     profile=if(visible is SocialSession.Authenticated) form.profile else NearbyProfileDraft())
             }
@@ -199,6 +200,13 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
     suspend fun close():Unit=withContext(NonCancellable) {
         if(closed) return@withContext
         closed=true;lifetime.cancel();binding.close();friends.bind(null)
-        form.value=VoiceSpacesNearbyState();output.value=VoiceSpacesNearbyState()
+        // Private data is withdrawn, but the session is not a screen's to forget. Retraction: resetting it
+        // to the LoggedOut default made the screen draw the sign-in form through the 300 ms exit fade.
+        form.value=VoiceSpacesNearbyState();output.value=VoiceSpacesNearbyState(session=output.value.session)
     }
 }
+
+/** An Authenticated session counts only while its account is live and is the same user. */
+internal fun nearbyVisibleSession(session: SocialSession,authority: SocialAuthenticatedAccount?): SocialSession =
+    if(session is SocialSession.Authenticated &&
+        (authority?.job?.isActive!=true || authority.userId!=session.userId)) SocialSession.LoggedOut else session

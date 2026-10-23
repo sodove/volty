@@ -236,10 +236,13 @@ class VoiceSpacesNearbyComponentTest {
             assertFalse(f.transport.issued.any {it.startsWith("respond:")})
             f.component.respondToFriend(pending.friendshipId,false);runCurrent()
             assertTrue("respond:pending:false:token-1" in f.transport.issued)
+            val session=f.component.state.value.session
             f.component.close();runCurrent();val issued=f.transport.issued.size
             f.component.refreshFriends();f.component.callFriend(accepted.userId);runCurrent()
             assertEquals(issued,f.transport.issued.size);assertTrue(f.calls.isEmpty())
-            assertEquals(VoiceSpacesNearbyState(),f.component.state.value)
+            // Private data withdrawn; the session stays so the exit fade never shows the sign-in form.
+            assertEquals(VoiceSpacesNearbyState(session=session),f.component.state.value)
+            assertTrue(session is SocialSession.Authenticated)
             assertTrue(account.job.isActive);assertTrue(f.parent.isActive)
         } finally {f.close();runCurrent()}
     }
@@ -272,14 +275,27 @@ class VoiceSpacesNearbyComponentTest {
         } finally {release.complete(Unit);f.close();runCurrent()}
     }
 
+    @Test fun aScreenOpenedWhileSignedInStartsSignedInWithoutASignInFrame()=runTest {
+        val f=Fixture(this)
+        try {
+            f.login();runCurrent()
+            val second=DefaultVoiceSpacesNearbyComponent(DefaultComponentContext(LifecycleRegistry().apply {create()}),f.scope,f.repository,f.factory,
+                {actor},{_,_->error("No channel selected")},{_,_->},{})
+            // Read before any collector ran: the very first frame.
+            assertTrue(second.state.value.session is SocialSession.Authenticated)
+            second.close()
+        } finally {f.close();runCurrent()}
+    }
+
     @Test fun decomposeDestructionWithdrawsPrivateScreenDataAndFencesActionsWithoutLoggingOut()=runTest {
         val f=Fixture(this)
         try {
             f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
             assertNotNull(f.component.state.value.friends.items);assertNotNull(f.component.servers.value.presenter)
+            val session=f.component.state.value.session
             f.lifecycle.destroy();f.component.callFriend(accepted.userId);runCurrent()
             assertEquals(Lifecycle.State.DESTROYED,f.lifecycle.state)
-            assertEquals(VoiceSpacesNearbyState(),f.component.state.value);assertNull(f.component.servers.value.presenter)
+            assertEquals(VoiceSpacesNearbyState(session=session),f.component.state.value);assertNull(f.component.servers.value.presenter)
             assertTrue(f.calls.isEmpty());assertTrue(account.job.isActive);assertTrue(f.parent.isActive)
         } finally {f.close();runCurrent()}
     }
