@@ -101,7 +101,21 @@ internal class VoiceConversationStartup(
         var audienceSession: VoiceSessionTag? = null
         var audience: ChannelSharingAudienceSession? = null
         var audienceWork: Job? = null
+        /** A FAILED end keeps the foreground ticket (the running service) for a pending rejoin. */
+        var retainForeground = false
     }
+    private var retainedTicket: VoiceForegroundTicket? = null
+
+    /** True while a failed conversation's foreground service is still running and a rejoin can reuse it without any UI. */
+    fun hasRetainedForeground(): Boolean = retainedTicket?.let {foreground.current.value === it} == true
+
+    /** Releases the service kept for a rejoin (give-up, user leave, close). No-op when nothing is retained. */
+    fun releaseRetainedForeground() {
+        val ticket = retainedTicket ?: return
+        retainedTicket = null
+        foreground.stop(ticket)
+    }
+
     private var selected: Intent? = null
     private var rootJob: Job? = null
     private val issuedOperations = mutableSetOf<String>()
@@ -129,7 +143,8 @@ internal class VoiceConversationStartup(
 
     suspend fun start(account: SocialAuthenticatedAccount, target: VoiceConversationTarget, operation: VoiceOperationId,
                       replace: Boolean = false, readPreferences: suspend () -> VoiceAudioPreferences,
-                      launch: (VoiceForegroundTicket) -> Boolean) = withContext(queuedDispatcher) {
+                      launch: (VoiceForegroundTicket) -> Boolean,
+                      retainForegroundOnFailure: Boolean = false) = withContext(queuedDispatcher) {
         currentCoroutineContext().ensureActive()
         check(account.job.isActive) { "Authenticated account retired" }
         invitationDraftId(account.userId.value)
@@ -160,6 +175,7 @@ internal class VoiceConversationStartup(
         // Fence the previous intent before cancellation or any asynchronous acquisition.
         selected?.let { finish(it, VoiceConversationPhase.STOPPED) }
         val intent = Intent(account, target, operation, replace, readPreferences, launch)
+        intent.retainForeground = retainForegroundOnFailure
         selected = intent
         mutableState.value = conversationState(intent, VoiceConversationPhase.PREPARING)
         val scope = CoroutineScope(parent.coroutineContext + queuedDispatcher)
@@ -250,13 +266,16 @@ internal class VoiceConversationStartup(
             }
             if (!registered || !isCurrent(intent)) return
             val ticket = foreground.request(runtime)
+            // A ticket kept across a drop is still the running service: no Activity launch is needed to reuse it.
+            val reused = ticket === retainedTicket && foreground.current.value === ticket
+            retainedTicket = null
             intent.ticket = ticket
             intent.foregroundObserver = scope.launch {
                 foreground.current.first {it !== ticket}
                 finish(intent, VoiceConversationPhase.STOPPED)
             }
             // Consume Activity-bound launch before loading preferences or observing a call.
-            if (!launchForeground(intent, ticket) || !foreground.awaitReady(ticket) || !isCurrent(intent)) return
+            if (!(reused || launchForeground(intent, ticket)) || !foreground.awaitReady(ticket) || !isCurrent(intent)) return
             val accepted = runtime.joinWithAudio(intent.channel, intent.operation, intent.replace) {
                 intent.preferences().also { if (isCurrent(intent)) intent.audioPreferences = it }
             }
@@ -454,6 +473,12 @@ internal class VoiceConversationStartup(
         intent.audienceWork?.cancel()
         intent.channelRosterWork?.cancel()
         intent.work?.cancel()
+        if (phase == VoiceConversationPhase.FAILED && intent.retainForeground && intent.ticket != null &&
+            foreground.current.value === intent.ticket) {
+            retainedTicket = intent.ticket
+            intent.runtime?.requestDisconnect()
+            return
+        }
         val stopped = intent.ticket?.let(foreground::stop) == true
         if (!stopped) intent.runtime?.requestDisconnect()
     }

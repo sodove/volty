@@ -542,6 +542,63 @@ class VoiceConversationStartupTest {
         } finally {boundary.close();ui.cancel();root.close();f.close()}
     }
 
+    private fun switchableBoundary(f: Fixture,ui: Job,visible: () -> Boolean)=NearbyVisibleLaunchBoundary(
+        CoroutineScope(f.test.backgroundScope.coroutineContext+ui),visible,f::launch,{ChannelSharingForegroundLaunch.REJECTED})
+
+    @Test fun aRejoinStartsUnderTheRetainedServiceWhenTheScreenIsOffAndTheBoundaryClosed()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(2_000)))
+        var visible=true
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=switchableBoundary(f,ui) {visible}
+        try {
+            val account=f.login();val id=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(id,true,boundary);runCurrent();connect(f)
+            val service=assertNotNull(f.gate.current.value);assertEquals(1,f.launches)
+            drop(f)
+            assertSame(service,f.gate.current.value,"precondition: the drop kept the running service")
+            visible=false;boundary.close()   // screen off, Activity gone
+            assertFalse(boundary.available)
+            advanceTimeBy(2_000);runCurrent()
+            assertEquals(2,f.joins());assertEquals(1,f.launches,"no second foreground launch was needed")
+            assertSame(service,f.gate.current.value)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun leavingDuringARejoinReleasesTheRetainedService()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(2_000)))
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val id=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(id,true,boundary);runCurrent();connect(f)
+            drop(f);assertNotNull(f.gate.current.value,"precondition: service retained while the rejoin is pending")
+            root.disconnect(VoiceOperationId(id));runCurrent()
+            assertNull(f.gate.current.value)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun givingUpReleasesTheRetainedService()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(1_000),2_500))
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val id=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(id,true,boundary);runCurrent();connect(f)
+            repeat(3) {drop(f);assertNotNull(f.gate.current.value);advanceTimeBy(1_000);runCurrent()}
+            drop(f)
+            assertEquals(NearbyVoiceUiPhase.FAILED,root.state.value.phase)
+            assertNull(f.gate.current.value)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun closingTheControllerReleasesTheRetainedService()=runTest {
+        val f=Fixture(this);val root=rejoinController(f,VoiceRejoinPolicy(listOf(2_000)))
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val id=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(id,true,boundary);runCurrent();connect(f)
+            drop(f);assertNotNull(f.gate.current.value)
+            root.close();runCurrent();assertNull(f.gate.current.value)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
     private class Switches: NearbyVoiceSwitchGuard {
         var confirm=false
         val withdrawn=mutableListOf<VoiceOperationId?>()

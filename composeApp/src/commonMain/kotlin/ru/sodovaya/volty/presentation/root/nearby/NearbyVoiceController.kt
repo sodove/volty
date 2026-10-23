@@ -125,8 +125,12 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
     }
     private fun cancelRejoin() {
         rejoinJob?.cancel();rejoinJob=null;rejoining=false;rejoinFailures=0;rejoinHandled=null
+        voice.releaseRetainedForeground()
     }
+    private var restarting=false
     private fun noteVoice(source: VoiceConversationState) {
+        // A failed channel nobody will redial must not keep its microphone service running.
+        if(source.phase==VoiceConversationPhase.FAILED && committed==null && !restarting) voice.releaseRetainedForeground()
         val owner=committed ?: return
         if(source.operationId!=owner.operation) return
         if(source.phase==VoiceConversationPhase.JOIN_SUBMITTED && source.voice?.phase==VoicePhase.CONNECTED) {
@@ -142,7 +146,7 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
         rejoinFailures++
         rejoinHandled=owner.operation
         val wait=rejoin.nextDelay(rejoinFailures,rejoinFirstAt,now)
-        if(wait==null) {rejoining=false;rejoinFailures=0;return}
+        if(wait==null) {rejoining=false;rejoinFailures=0;voice.releaseRetainedForeground();return}
         rejoining=true
         rejoinJob?.cancel()
         rejoinJob=scope.launch {delay(wait);attemptRejoin(owner)}
@@ -153,7 +157,9 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             voice.state.value.phase!=VoiceConversationPhase.FAILED) {rejoining=false;render();return}
         val door=rejoinBoundary
         val id=nextId()
-        if(door==null || !door.available || runCatching {invitationDraftId(id)}.isFailure || !issued.add(id)) {
+        // The service the dropped session held is still running: no visible UI is needed to start under it.
+        val serviceAlive=voice.hasRetainedForeground()
+        if((!serviceAlive && (door==null || !door.available)) || runCatching {invitationDraftId(id)}.isFailure || !issued.add(id)) {
             scheduleRejoin(old);render();return
         }
         val next=old.copy(id=id,original=old.operation)
@@ -162,13 +168,14 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             if(!switches.waitSharingCleanup(old.operation)) {scheduleRejoin(old);render();return}
             if(committed!==old || !current(old.account)) return
             onConversationStarting()
-            committed=next;rejoining=false;rejoinHandled=null
-            voice.start(old.account,old.target,next.operation,readPreferences=readPreferences,launch=door::launchVoice)
+            committed=next;rejoining=false;rejoinHandled=null;restarting=true
+            voice.start(old.account,old.target,next.operation,readPreferences=readPreferences,
+                launch={ticket -> door?.launchVoice(ticket)==true},retainForegroundOnFailure=true)
         } catch(cancelled: CancellationException) {throw cancelled
         } catch(_: Exception) {
             if(committed===next) committed=old
             if(committed===old) scheduleRejoin(old)
-        }
+        } finally {restarting=false}
         render()
     }
     fun requestChannel(account: SocialAuthenticatedAccount,channel: String,label: String):String? {
@@ -247,7 +254,8 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             if(!selected(work) || voice.state.value.operationId!=request.original) return
             if(!boundary.available) {failure=request.account to NearbyVoiceError.NOT_VISIBLE;return}
             onConversationStarting()
-            voice.start(request.account,destination,request.operation,readPreferences=readPreferences,launch=boundary::launchVoice)
+            voice.start(request.account,destination,request.operation,readPreferences=readPreferences,launch=boundary::launchVoice,
+                retainForegroundOnFailure=destination is VoiceConversationTarget.Channel)
             if(!selected(work) || voice.state.value.operationId!=request.operation) return
             committed=request;submitted=true
         } catch(cancelled: CancellationException) {
