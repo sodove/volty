@@ -613,6 +613,8 @@
     <string name="graph_current_ride">Current ride</string>
     <string name="graph_no_history">No completed rides yet</string>
     <string name="tab_nearby">Nearby</string>
+    <string name="tab_settings">Settings</string>
+    <string name="tab_map">Map</string>
     <string name="nearby_title">Nearby</string>
     <string name="nearby_social_optional">Social features are optional</string>
     <string name="nearby_social_description">An account is needed only for friends, groups, the map and voice. BLE monitoring works without registration.</string>

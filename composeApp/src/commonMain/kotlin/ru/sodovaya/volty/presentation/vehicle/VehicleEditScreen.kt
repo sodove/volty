@@ -1,5 +1,12 @@
 package ru.sodovaya.volty.presentation.vehicle
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -43,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -52,11 +60,13 @@ import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.common.secondaryGaugeLabel
+import ru.sodovaya.volty.presentation.common.settings.PageDirection
 import ru.sodovaya.volty.presentation.common.settings.SettingsDangerRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsGroup
 import ru.sodovaya.volty.presentation.common.settings.SettingsNavRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsRowDivider
 import ru.sodovaya.volty.presentation.common.settings.SettingsTint
+import ru.sodovaya.volty.presentation.common.settings.pageDirection
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.action_delete
@@ -98,6 +108,8 @@ import volty.composeapp.generated.resources.vehicle_hub_speed_volume
 import volty.composeapp.generated.resources.vehicle_save
 import volty.composeapp.generated.resources.vehicle_save_blocked
 
+private const val VEHICLE_PAGE_MS = 250
+
 /**
  * The vehicle editor: a hub of sections over ONE draft, and a renderer and nothing more - see
  * `VehicleSourceCards.kt` for what that means and why it has to be true here.
@@ -124,7 +136,6 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
     // One scroll state per page, so a long page does not hand its offset to the next one.
     val hubScroll = remember { ScrollState(0) }
     val pageScrolls = remember { VehicleEditSection.entries.associateWith { ScrollState(0) } }
-    val scroll = section?.let { pageScrolls.getValue(it) } ?: hubScroll
 
     Scaffold(
         topBar = {
@@ -146,11 +157,27 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             )
         }
     ) { padding ->
+        AnimatedContent(
+            targetState = section,
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            transitionSpec = {
+                val back = pageDirection(targetIsHub = targetState == null) == PageDirection.BACK
+                val spec = tween<IntOffset>(VEHICLE_PAGE_MS)
+                val fade = tween<Float>(VEHICLE_PAGE_MS)
+                if (back) {
+                    (slideInHorizontally(spec) { -it / 4 } + fadeIn(fade)) togetherWith
+                        (slideOutHorizontally(spec) { it } + fadeOut(fade))
+                } else {
+                    (slideInHorizontally(spec) { it } + fadeIn(fade)) togetherWith
+                        (slideOutHorizontally(spec) { -it / 4 } + fadeOut(fade))
+                }
+            },
+            label = "vehicle-edit-page",
+        ) { shown ->
         Column(
             modifier = Modifier
-                .padding(padding)
                 .fillMaxSize()
-                .verticalScroll(scroll)
+                .verticalScroll(shown?.let { pageScrolls.getValue(it) } ?: hubScroll)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
@@ -166,11 +193,12 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                         .padding(10.dp)
                 )
             }
-            when (val open = section) {
+            when (val open = shown) {
                 null -> VehicleEditHub(state, component, onDelete = { showDeleteConfirm = true })
                 else -> VehicleEditPage(open, state, component)
             }
             Spacer(Modifier.height(24.dp))
+        }
         }
 
         if (showDeleteConfirm) {

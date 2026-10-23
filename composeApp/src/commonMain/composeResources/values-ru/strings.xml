@@ -611,6 +611,8 @@
     <string name="graph_current_ride">Текущая поездка</string>
     <string name="graph_no_history">Завершённых поездок пока нет</string>
     <string name="tab_nearby">Nearby</string>
+    <string name="tab_settings">Настройки</string>
+    <string name="tab_map">Карта</string>
     <string name="nearby_title">Nearby</string>
     <string name="nearby_social_optional">Социалка — по желанию</string>
     <string name="nearby_social_description">Аккаунт нужен только для друзей, групп, карты и голосовой комнаты. Мониторинг BLE работает без регистрации.</string>

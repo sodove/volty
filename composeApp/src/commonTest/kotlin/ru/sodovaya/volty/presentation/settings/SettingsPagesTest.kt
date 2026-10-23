@@ -73,7 +73,20 @@ class SettingsPagesTest {
 
     @Test
     fun everyPageIsListedOnce() {
-        assertEquals(9, SettingsPage.entries.size)
+        assertEquals(5, SettingsPage.entries.size)
+        assertEquals(
+            setOf("ALERT_SOUND", "VOICE", "MICROPHONE", "OFFLINE_MAPS", "DEVELOPER"),
+            SettingsPage.entries.map { it.name }.toSet(),
+        )
+    }
+
+    @Test
+    fun smallSectionsAreInlineNotPages() {
+        val pages = SettingsPage.entries.map { it.name }.toSet()
+        val inline = SettingsInlineSection.entries.map { it.name }.toSet()
+        assertEquals(setOf("DASHBOARD", "UNITS", "CONNECTION", "THEME"), inline)
+        // Reachable exactly once: no name is both a page and an inline section.
+        assertEquals(emptySet(), pages intersect inline)
     }
 
     private fun region(

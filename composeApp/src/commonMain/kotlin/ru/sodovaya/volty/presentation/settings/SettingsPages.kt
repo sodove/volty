@@ -8,10 +8,20 @@ import ru.sodovaya.volty.domain.audio.VoiceListenSettings
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
 
-/** One settings page opened from the hub. Each existing setting lives on exactly one of these. */
+/**
+ * One settings page opened from the hub. Each existing setting lives on exactly one of these or in
+ * a [SettingsInlineSection].
+ */
 enum class SettingsPage {
-    DASHBOARD, UNITS, CONNECTION, ALERT_SOUND, VOICE, MICROPHONE, OFFLINE_MAPS, THEME, DEVELOPER
+    ALERT_SOUND, VOICE, MICROPHONE, OFFLINE_MAPS, DEVELOPER
 }
+
+/**
+ * The small sections that expand in place on the hub instead of opening a page: two controls at
+ * most (Dashboard 2, Units 1, Connection 2, Theme 2 - counted, not guessed). Open state is held by
+ * the screen through `toggleExpanded`, at most one at a time.
+ */
+enum class SettingsInlineSection { DASHBOARD, UNITS, CONNECTION, THEME }
 
 /**
  * Which page of the settings hub is open. Back closes an open page before it leaves the screen,

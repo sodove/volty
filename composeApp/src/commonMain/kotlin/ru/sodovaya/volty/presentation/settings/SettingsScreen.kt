@@ -1,5 +1,12 @@
 package ru.sodovaya.volty.presentation.settings
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -49,10 +56,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -227,12 +236,18 @@ import ru.sodovaya.volty.domain.audio.AlertSoundKind
 import ru.sodovaya.volty.domain.audio.MAX_ALERT_GAIN_DB
 import ru.sodovaya.volty.domain.audio.VoiceListenSettings
 import ru.sodovaya.volty.presentation.common.settings.SettingsChoiceRow
+import ru.sodovaya.volty.presentation.common.settings.PageDirection
+import ru.sodovaya.volty.presentation.common.settings.SettingsExpandableRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsGroup
+import ru.sodovaya.volty.presentation.common.settings.pageDirection
+import ru.sodovaya.volty.presentation.common.settings.toggleExpanded
 import ru.sodovaya.volty.presentation.common.settings.SettingsNavRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsRowDivider
 import ru.sodovaya.volty.presentation.common.settings.SettingsSliderRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsSwitchRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsTint
+private const val SETTINGS_PAGE_MS = 250
+
 /** The settings slider stops at -10 dB; the per-participant slider alone reaches the -30 dB floor. */
 private const val SETTINGS_VOICE_GAIN_MIN_DB = -10f
 private const val SETTINGS_MIC_CEILING_MIN_DBFS = -12f
@@ -245,6 +260,9 @@ fun SettingsScreen(component: SettingsComponent) {
     val page by component.page.collectAsState()
     var pendingOfflineDelete by remember { mutableStateOf<OfflineRegionPackageState?>(null) }
     var offlineRegionQuery by remember { mutableStateOf("") }
+    var expandedName by rememberSaveable { mutableStateOf<String?>(null) }
+    val expanded = SettingsInlineSection.entries.firstOrNull { it.name == expandedName }
+    val hubScroll = rememberScrollState()
 
     Scaffold(
         topBar = {
@@ -263,19 +281,39 @@ fun SettingsScreen(component: SettingsComponent) {
             )
         }
     ) { padding ->
+        AnimatedContent(
+            targetState = page,
+            modifier = Modifier.padding(padding).fillMaxSize(),
+            transitionSpec = {
+                val back = pageDirection(targetIsHub = targetState == null) == PageDirection.BACK
+                val spec = tween<IntOffset>(SETTINGS_PAGE_MS)
+                val fade = tween<Float>(SETTINGS_PAGE_MS)
+                if (back) {
+                    (slideInHorizontally(spec) { -it / 4 } + fadeIn(fade)) togetherWith
+                        (slideOutHorizontally(spec) { it } + fadeOut(fade))
+                } else {
+                    (slideInHorizontally(spec) { it } + fadeIn(fade)) togetherWith
+                        (slideOutHorizontally(spec) { -it / 4 } + fadeOut(fade))
+                }
+            },
+            label = "settings-page",
+        ) { shown ->
+        // The hub keeps its scroll position while a page is open; a page starts at the top each time.
+        val scroll = if (shown == null) hubScroll else rememberScrollState()
         Column(
             modifier = Modifier
-                .padding(padding)
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
+                .verticalScroll(scroll)
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            when (page) {
-                null -> SettingsHub(state, component)
-                SettingsPage.DASHBOARD -> DashboardPage(state, component)
-                SettingsPage.UNITS -> UnitsPage(state, component)
-                SettingsPage.CONNECTION -> ConnectionPage(state, component)
+            when (shown) {
+                null -> SettingsHub(
+                    state = state,
+                    component = component,
+                    expanded = expanded,
+                    onToggle = { expandedName = toggleExpanded(expanded, it)?.name },
+                )
                 SettingsPage.ALERT_SOUND -> AlertSoundPage(state, component)
                 SettingsPage.VOICE -> VoicePage(state, component)
                 SettingsPage.MICROPHONE -> MicrophonePage(state, component)
@@ -286,10 +324,10 @@ fun SettingsScreen(component: SettingsComponent) {
                     onQueryChange = { offlineRegionQuery = it },
                     onDeleteRequest = { pendingOfflineDelete = it },
                 )
-                SettingsPage.THEME -> ThemePage(state, component)
                 SettingsPage.DEVELOPER -> DeveloperPage(state, component)
             }
             Spacer(Modifier.height(24.dp))
+        }
         }
 
         pendingOfflineDelete?.let { region ->
@@ -321,14 +359,10 @@ fun SettingsScreen(component: SettingsComponent) {
 @Composable
 private fun settingsPageTitle(page: SettingsPage): String = stringResource(
     when (page) {
-        SettingsPage.DASHBOARD -> Res.string.settings_page_dashboard
-        SettingsPage.UNITS -> Res.string.settings_page_units
-        SettingsPage.CONNECTION -> Res.string.settings_page_connection
         SettingsPage.ALERT_SOUND -> Res.string.settings_page_alerts
         SettingsPage.VOICE -> Res.string.settings_page_voice
         SettingsPage.MICROPHONE -> Res.string.settings_page_microphone
         SettingsPage.OFFLINE_MAPS -> Res.string.settings_page_offline_maps
-        SettingsPage.THEME -> Res.string.settings_page_theme
         SettingsPage.DEVELOPER -> Res.string.settings_page_developer
     }
 )
@@ -338,31 +372,45 @@ private fun settingsPageTitle(page: SettingsPage): String = stringResource(
 // ---------------------------------------------------------------------------------------------
 
 @Composable
-private fun SettingsHub(state: SettingsComponent.State, component: SettingsComponent) {
+private fun SettingsHub(
+    state: SettingsComponent.State,
+    component: SettingsComponent,
+    expanded: SettingsInlineSection?,
+    onToggle: (SettingsInlineSection) -> Unit,
+) {
     SettingsGroup(stringResource(Res.string.settings_group_drive)) {
-        SettingsNavRow(
+        SettingsExpandableRow(
             icon = Icons.Filled.Speed,
             tint = SettingsTint.DRIVE,
             title = stringResource(Res.string.settings_page_dashboard),
             summary = dashboardStyleLabel(state.defaultDashboardStyle),
-            onClick = { component.onOpenPage(SettingsPage.DASHBOARD) },
-        )
+            expanded = expanded == SettingsInlineSection.DASHBOARD,
+            onToggle = { onToggle(SettingsInlineSection.DASHBOARD) },
+        ) {
+            DashboardControls(state, component)
+        }
         SettingsRowDivider()
-        SettingsNavRow(
+        SettingsExpandableRow(
             icon = Icons.Filled.Straighten,
             tint = SettingsTint.DRIVE,
             title = stringResource(Res.string.settings_page_units),
             summary = unitSystemLabel(state.unitSystem),
-            onClick = { component.onOpenPage(SettingsPage.UNITS) },
-        )
+            expanded = expanded == SettingsInlineSection.UNITS,
+            onToggle = { onToggle(SettingsInlineSection.UNITS) },
+        ) {
+            UnitsControls(state, component)
+        }
         SettingsRowDivider()
-        SettingsNavRow(
+        SettingsExpandableRow(
             icon = Icons.Filled.Bluetooth,
             tint = SettingsTint.DRIVE,
             title = stringResource(Res.string.settings_page_connection),
             summary = stringResource(Res.string.settings_summary_connection, state.scanTimeoutSec, state.autoConnectCountdownSec),
-            onClick = { component.onOpenPage(SettingsPage.CONNECTION) },
-        )
+            expanded = expanded == SettingsInlineSection.CONNECTION,
+            onToggle = { onToggle(SettingsInlineSection.CONNECTION) },
+        ) {
+            ConnectionControls(state, component)
+        }
     }
     SettingsGroup(stringResource(Res.string.settings_group_sound)) {
         SettingsNavRow(
@@ -408,13 +456,16 @@ private fun SettingsHub(state: SettingsComponent.State, component: SettingsCompo
             onClick = { component.onOpenPage(SettingsPage.OFFLINE_MAPS) },
         )
         SettingsRowDivider()
-        SettingsNavRow(
+        SettingsExpandableRow(
             icon = Icons.Filled.Palette,
             tint = SettingsTint.MAPS,
             title = stringResource(Res.string.settings_page_theme),
             summary = themeSummaryText(state),
-            onClick = { component.onOpenPage(SettingsPage.THEME) },
-        )
+            expanded = expanded == SettingsInlineSection.THEME,
+            onToggle = { onToggle(SettingsInlineSection.THEME) },
+        ) {
+            ThemeControls(state, component)
+        }
     }
     SettingsGroup(stringResource(Res.string.settings_group_vehicles)) {
         state.vehicles.forEach { v ->
@@ -509,8 +560,8 @@ private fun offlineSummaryText(state: SettingsComponent.State): String {
 // ---------------------------------------------------------------------------------------------
 
 @Composable
-private fun ThemePage(state: SettingsComponent.State, component: SettingsComponent) {
-    SettingsGroup(null) {
+private fun ColumnScope.ThemeControls(state: SettingsComponent.State, component: SettingsComponent) {
+    run {
         SettingsChoiceRow(
             title = stringResource(Res.string.settings_theme),
             options = listOf("system", "light", "dark").map { it to themeLabel(it) },
@@ -528,8 +579,8 @@ private fun ThemePage(state: SettingsComponent.State, component: SettingsCompone
 }
 
 @Composable
-private fun ConnectionPage(state: SettingsComponent.State, component: SettingsComponent) {
-    SettingsGroup(null) {
+private fun ColumnScope.ConnectionControls(state: SettingsComponent.State, component: SettingsComponent) {
+    run {
         SettingsSliderRow(
             title = stringResource(Res.string.settings_scan_timeout),
             valueText = stringResource(Res.string.settings_seconds, state.scanTimeoutSec),
@@ -551,8 +602,8 @@ private fun ConnectionPage(state: SettingsComponent.State, component: SettingsCo
 }
 
 @Composable
-private fun UnitsPage(state: SettingsComponent.State, component: SettingsComponent) {
-    SettingsGroup(null) {
+private fun ColumnScope.UnitsControls(state: SettingsComponent.State, component: SettingsComponent) {
+    run {
         SettingsChoiceRow(
             title = stringResource(Res.string.settings_units),
             options = listOf(UnitSystem.METRIC, UnitSystem.IMPERIAL).map { it to unitSystemLabel(it) },
@@ -563,8 +614,8 @@ private fun UnitsPage(state: SettingsComponent.State, component: SettingsCompone
 }
 
 @Composable
-private fun DashboardPage(state: SettingsComponent.State, component: SettingsComponent) {
-    SettingsGroup(null) {
+private fun ColumnScope.DashboardControls(state: SettingsComponent.State, component: SettingsComponent) {
+    run {
         SettingsChoiceRow(
             title = stringResource(Res.string.settings_dashboard_style),
             options = DashboardStyle.entries.map { it to dashboardStyleLabel(it) },
@@ -663,7 +714,8 @@ private fun VoicePage(state: SettingsComponent.State, component: SettingsCompone
 
 @Composable
 private fun MicrophonePage(state: SettingsComponent.State, component: SettingsComponent) {
-    SettingsGroup(stringResource(Res.string.settings_voice_microphone)) {
+    // No group label: the row title below is the same words, and a label above it said them twice.
+    SettingsGroup(null) {
         // Phone vs headset is a latency trade on Bluetooth: the phone mic forces A2DP playback.
         SettingsChoiceRow(
             title = stringResource(Res.string.settings_voice_microphone),

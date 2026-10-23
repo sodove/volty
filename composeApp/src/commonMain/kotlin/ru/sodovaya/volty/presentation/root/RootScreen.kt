@@ -105,8 +105,10 @@ import volty.composeapp.generated.resources.nearby_map_positions
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.tab_battery
 import volty.composeapp.generated.resources.tab_connect
+import volty.composeapp.generated.resources.tab_map
 import volty.composeapp.generated.resources.tab_nearby
 import volty.composeapp.generated.resources.tab_ride
+import volty.composeapp.generated.resources.tab_settings
 import volty.composeapp.generated.resources.settings_offline_download_mobile
 import volty.composeapp.generated.resources.settings_offline_metered_later
 import volty.composeapp.generated.resources.settings_offline_metered_text
@@ -558,9 +560,9 @@ private fun BottomTabBar(
             current == RootComponent.Tab.Nearby
         ) { onTab(RootComponent.Tab.Nearby) }
         if (shouldShowGroupMapTab(destination, groupMapVisible)) {
-            Tab("Карта", groupMapVisible, onGroupMap)
+            Tab(stringResource(Res.string.tab_map), groupMapVisible, onGroupMap)
         }
-        Tab("⚙", current == RootComponent.Tab.Settings) { onTab(RootComponent.Tab.Settings) }
+        Tab(stringResource(Res.string.tab_settings), current == RootComponent.Tab.Settings) { onTab(RootComponent.Tab.Settings) }
     }
 }
 
@@ -584,6 +586,6 @@ private fun RowScope.Tab(label: String, active: Boolean, onClick: () -> Unit) {
             .padding(vertical = 10.dp),
         contentAlignment = Alignment.Center
     ) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = fg)
+        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = fg, maxLines = 1)
     }
 }
