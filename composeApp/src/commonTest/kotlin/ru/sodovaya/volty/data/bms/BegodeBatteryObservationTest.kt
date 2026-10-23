@@ -122,4 +122,32 @@ class BegodeBatteryObservationTest {
         assertTrue(cells.any { it.cellIndex == 39 && it.value != null })
         assertTrue(cells.filter { it.value != null }.all { assertNotNull(it.value) in 3.69..3.73 })
     }
+
+    @Test fun aWheelWithoutCellPagesProvesItsCountFromBranchVersusLiveVoltage() {
+        val protocol = BegodeProtocol(); val events = capture(protocol)
+        // Twice through, as a wheel streams continuously: the count is proven on the 6th 0x01 frame,
+        // and the rail voltage surfaces on the next live frame after it.
+        repeat(2) { BegodeT4Fixture.notifications.forEach { protocol.onNotification(it) } }
+        // 16 x 90.8 / 60.53 = 24.0: the rider's T4 is 24S, and nothing in its profile said so.
+        assertEquals(24, protocol.derivedCellCount())
+        val rail = events.filter { it.origin == TelemetryOrigin.CONTROLLER }
+            .mapNotNull { e -> e.readings.firstOrNull { it.metric == TelemetryMetric.INPUT_VOLTAGE } }
+        assertEquals(90.7, assertNotNull(rail.last().value), 0.15)
+        val branch = events.filter { it.origin == TelemetryOrigin.BATTERY && it.localIndex == 0 }
+            .map { it.read(TelemetryMetric.VOLTAGE) }
+        // Unproven at first (the old rule), then the certified pack voltage itself.
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, branch.first().unknown)
+        assertEquals(90.75, assertNotNull(branch.last().value), 0.1)
+    }
+
+    @Test fun aRatioThatIsNotAWholeSeriesCountProvesNothing() {
+        // Same capture with the 0x01 pack voltage nudged off any whole count (908 -> 935 = 24.7S).
+        val protocol = BegodeProtocol()
+        BegodeT4Fixture.notifications.forEach { frame ->
+            val copy = frame.copyOf()
+            for (k in 0 until copy.size - 1) if (copy[k] == 0x03.toByte() && copy[k + 1] == 0x8C.toByte()) { copy[k + 1] = 0xA7.toByte() }
+            protocol.onNotification(copy)
+        }
+        assertNull(protocol.derivedCellCount())
+    }
 }

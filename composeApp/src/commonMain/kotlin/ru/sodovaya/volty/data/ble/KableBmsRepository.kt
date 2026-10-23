@@ -1513,7 +1513,11 @@ class KableBmsRepository private constructor(
                         // pack; VESC_BMS is the closest honest label. It is
                         // never persisted (see [maybePersistPacks]) so it can
                         // never be fed back into [planLinks].
-                        bmsType = BmsType.VESC_BMS,
+                        // Except behind a Begode: its slots are the wheel's own
+                        // battery branches, which report no charge of their own.
+                        // Labelled VESC_BMS they claimed to, and the voltage
+                        // estimate never ran (a T4's dashboard showed volts, no %).
+                        bmsType = if (linkPacks.spec.protocolKind == ProtocolKind.BEGODE) BmsType.BEGODE else BmsType.VESC_BMS,
                         bmsAddress = linkPacks.spec.address
                     )
                 }
@@ -1612,7 +1616,13 @@ class KableBmsRepository private constructor(
             // mix types): a coulomb-counting BMS's sample passes
             // through untouched, including a genuine 0 % on a flat
             // pack (see VoltageSocEstimator).
-            val enriched = VoltageSocEstimator.withEstimatedSoc(scaled, socVehicle, packIndex)
+            // A Begode that proved its own series count (cells, or branch vs live voltage) lends it to
+            // a pack whose profile names none: that is what turns a T4's volts into a charge.
+            val derivedCount = (protocol as? BegodeProtocol)?.derivedCellCount()
+            val estimatorVehicle = if (derivedCount == null) socVehicle else socVehicle?.let { v ->
+                v.copy(packs = v.packs.map { if (it.index == packIndex && it.cellCount == null) it.copy(cellCount = derivedCount) else it })
+            }
+            val enriched = VoltageSocEstimator.withEstimatedSoc(scaled, estimatorVehicle, packIndex)
             // Enrichment ends the per-link work: it depends on THIS link's
             // protocol state, so it must run here on the session's own
             // coroutine. Everything that mutates shared state crosses the

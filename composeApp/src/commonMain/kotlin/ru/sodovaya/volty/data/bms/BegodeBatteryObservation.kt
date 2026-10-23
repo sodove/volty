@@ -27,16 +27,29 @@ internal fun observedBegodeAssembly(frame: ByteArray, bootPlaceholder: Boolean,
     return listOf(voltage, temperature)
 }
 
-internal fun observedBegodeBranch(frame: ByteArray, bootPlaceholder: Boolean): List<TelemetryReading> = listOf(
-    TelemetryReading.measured(TelemetryMetric.CURRENT, -(frame.i16BE(8) * 0.1).toDouble(), !bootPlaceholder),
+internal fun observedBegodeBranch(frame: ByteArray, bootPlaceholder: Boolean,
+    voltageCertified: Boolean = false): List<TelemetryReading> {
+    val current = -(frame.i16BE(8) * 0.1)
+    val voltage = frame.u16BE(6) * 0.1
+    // Retraction: this frame's whole-pack voltage was never recorded, because nothing certified its
+    // convention. Once the wheel's own live frame has agreed with it on a whole series count, it is
+    // the pack voltage — the only one a wheel without cell pages has. Otherwise the old rule holds.
+    // Not gated on the boot shape: a wheel without a smart BMS (the rider's T4) sends that all-zero
+    // payload forever, with the pack voltage real beside it. The certification is what proves it.
+    val certified = voltageCertified && voltage > 0
+    return listOf(
+    TelemetryReading.measured(TelemetryMetric.CURRENT, current, !bootPlaceholder),
+    if (certified) TelemetryReading.measured(TelemetryMetric.VOLTAGE, voltage)
     // The dashboard can substitute cached cell sums for nominal frame voltage. Neither certifies a fresh calibrated branch voltage here.
-    TelemetryReading(TelemetryMetric.VOLTAGE, null, TelemetryUnknown.PARTIAL_SOURCE),
-    TelemetryReading(TelemetryMetric.POWER, null, TelemetryUnknown.PARTIAL_SOURCE),
+    else TelemetryReading(TelemetryMetric.VOLTAGE, null, TelemetryUnknown.PARTIAL_SOURCE),
+    if (certified && !bootPlaceholder) TelemetryReading.measured(TelemetryMetric.POWER, voltage * current)
+    else TelemetryReading(TelemetryMetric.POWER, null, TelemetryUnknown.PARTIAL_SOURCE),
     TelemetryReading(TelemetryMetric.SOC, null, TelemetryUnknown.UNAVAILABLE),
     // Each frame refreshes only one assembly's two sensors, not the whole branch maximum.
     TelemetryReading(TelemetryMetric.BATTERY_TEMPERATURE, null,
         if (bootPlaceholder) TelemetryUnknown.UNAVAILABLE else TelemetryUnknown.PARTIAL_SOURCE),
-)
+    )
+}
 
 internal fun observedBegodeCells(frame: ByteArray, expectedCount: Int?, previouslySeen: Set<Int>): List<TelemetryReading> {
     val first = frame.u8(19) * 8

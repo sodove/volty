@@ -213,6 +213,18 @@ class BegodeProtocol(
     private var derivedCellCountValue: Int? = null
 
     /**
+     * True once [derivedCellCountValue] was proven from the 0x01 branch voltage against the live frame
+     * (see [updateDerivedCellCountFromBranchVoltage]): that agreement is what certifies the 0x01
+     * whole-pack voltage as real volts on this wheel, so history may record it.
+     */
+    private var branchVoltageCertified = false
+    private var voltageRatioCandidate: Int? = null
+    private var voltageRatioStreak = 0
+    /** Any 0x02/0x03 page this connection: such a wheel proves its count from cells, never from the ratio. */
+    private var cellPagesSeen = false
+    private var branchTelemetryFrames = 0
+
+    /**
      * The synthetic pack of a wheel without a smart BMS, rebuilt from every
      * genuine live frame: board temperature, battery current only after 0x07,
      * no cells — and `voltage = 0`, because the live-frame voltage is on the
@@ -856,6 +868,33 @@ class BegodeProtocol(
      * transient noise to flip it. [reset] clears it for the next connection,
      * which may face a different wheel.
      */
+    /**
+     * The series count of a wheel that sends 0x01 branch frames but no cell pages (a Begode T4 with no
+     * smart-BMS cells, measured 2026-10-23): its 0x01 frame carries the real pack voltage at 0.1 V,
+     * the live frame the same voltage on the 67.2 V reference, so `16 × branch / live` IS the count
+     * (90.8 / 60.53 × 16 = 24.0 on the rider's capture). Accepted only as a whole number within
+     * [BRANCH_RATIO_TOLERANCE], in a plausible range, and on [BRANCH_RATIO_STREAK] agreeing frames in a
+     * row: the two frames are not simultaneous, and under load their voltages can differ. A wheel whose
+     * 0x01 voltage follows some other convention never yields a whole number and stays unproven.
+     */
+    private fun updateDerivedCellCountFromBranchVoltage(branchVoltageV: Float) {
+        if (derivedCellCountValue != null) return
+        // Only a wheel with no cell pages at all: an ET Max sends 0x01 before its first page, and its
+        // count stays the cells' to prove (unchanged behaviour, pinned by its capture).
+        if (cellPagesSeen || branchTelemetryFrames < BRANCH_RATIO_MIN_FRAMES) return
+        if (liveVoltageRaw <= 0 || branchVoltageV <= 0f) return
+        val ratio = 16f * branchVoltageV / (liveVoltageRaw * 0.01f)
+        val count = kotlin.math.round(ratio).toInt()
+        if (abs(ratio - count) > BRANCH_RATIO_TOLERANCE || count !in BRANCH_RATIO_CELLS) {
+            voltageRatioCandidate = null; voltageRatioStreak = 0
+            return
+        }
+        if (count == voltageRatioCandidate) voltageRatioStreak++ else { voltageRatioCandidate = count; voltageRatioStreak = 1 }
+        if (voltageRatioStreak < BRANCH_RATIO_STREAK) return
+        derivedCellCountValue = count
+        branchVoltageCertified = true
+    }
+
     private fun updateDerivedCellCount(cells: List<Float>) {
         if (derivedCellCountValue != null) return
         // Hard-coded to branch 0 regardless of whose cells [cells] holds —
@@ -1077,6 +1116,11 @@ class BegodeProtocol(
         // mis-scale the new wheel's live frame instead of re-deriving it (or
         // honestly reporting no voltage until it proves itself again).
         derivedCellCountValue = null
+        branchVoltageCertified = false
+        voltageRatioCandidate = null
+        voltageRatioStreak = 0
+        cellPagesSeen = false
+        branchTelemetryFrames = 0
         // A reconnect may face a different wheel: a protocol stuck in
         // "smart BMS seen" would leave a dumb wheel dataless again.
         smartBmsSeen = false
@@ -1450,6 +1494,7 @@ class BegodeProtocol(
         val section = bmsnum and 1
 
         branch.sawTelemetry = true
+        if (bmsnum shr 1 == 0) branchTelemetryFrames++
         branch.packVoltageV = frame.u16BE(6) * 0.1f
         // NEGATED, and the negation is the fix from the 2026-08-01 field test:
         // on a physically charging pack this read as discharge and vice versa.
@@ -1485,7 +1530,9 @@ class BegodeProtocol(
         }
 
         rebuild(branch, bmsnum shr 1)
-        observeTelemetry(TelemetryOrigin.BATTERY, bmsnum shr 1) { observedBegodeBranch(frame, isBootPlaceholder) }
+        observeTelemetry(TelemetryOrigin.BATTERY, bmsnum shr 1) {
+            observedBegodeBranch(frame, isBootPlaceholder, voltageCertified = branchVoltageCertified)
+        }
         observeTelemetry(TelemetryOrigin.BATTERY, bmsnum shr 1, TelemetryRole.ASSEMBLY, section) {
             observedBegodeAssembly(frame, isBootPlaceholder, TEMP_SANITY)
         }
@@ -1498,6 +1545,7 @@ class BegodeProtocol(
      */
     private fun parseCells(frame: ByteArray, branch: Int) {
         retireSyntheticPack()
+        cellPagesSeen = true
         val state = branches[branch]
         val packetIndex = frame.u8(19)
         for (i in 0 until 8) {
@@ -1557,7 +1605,10 @@ class BegodeProtocol(
         val cells = contiguousCells(branch.cells)
         val voltage = branchVoltage(branch, cells)
         val current = branch.currentA
-        if (packIndex == 0) updateDerivedCellCount(cells)
+        if (packIndex == 0) {
+            if (cells.isEmpty()) updateDerivedCellCountFromBranchVoltage(branch.packVoltageV)
+            else updateDerivedCellCount(cells)
+        }
         branch.lastData = BmsData(
             voltage = voltage,
             current = current,
@@ -2015,6 +2066,12 @@ class BegodeProtocol(
          * [SECTION_SPLIT_TOLERANCE_V] uses over ITS observed disagreement.
          */
         private const val LIVE_FRAME_CONVENTION_TOLERANCE = 0.05f
+
+        /** A quarter of one series cell: 1 % at 24S, still far from the neighbouring whole counts. */
+        private const val BRANCH_RATIO_TOLERANCE = 0.25f
+        private const val BRANCH_RATIO_STREAK = 3
+        private const val BRANCH_RATIO_MIN_FRAMES = 4
+        private val BRANCH_RATIO_CELLS = 16..48
 
         /**
          * How far a candidate section's cell sum may sit from the assembly

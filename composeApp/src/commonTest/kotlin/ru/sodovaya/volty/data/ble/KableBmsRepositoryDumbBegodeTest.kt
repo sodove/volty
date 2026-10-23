@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.data.bms.BegodeDumpFixture
+import ru.sodovaya.volty.data.bms.BegodeT4Fixture
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -114,6 +115,35 @@ class KableBmsRepositoryDumbBegodeTest {
         assertEquals(1, data.temperatures.size)
         assertEquals(27.5035f, data.temperatures[0], 0.01f)
         assertTrue(data.cellVoltages.isEmpty(), "a dumb wheel has no cells to show")
+    }
+
+    @Test
+    fun `a picked T4 - controller plus Begode pack with a typed cell count - shows voltage and SoC`() = repoTest { repo ->
+        // The shape pickedControllerVehicle builds for a Begode, with the rider's 24S typed in.
+        val t4 = ru.sodovaya.volty.domain.model.wheelVehicle("v1", "T4", "unicycle", ADDRESS, Chemistry.LI_ION_NMC,
+            Instant.fromEpochSeconds(0)).let { it.copy(packs = it.packs.map { p -> p.copy(cellCount = 24) }) }
+        val wire = Wire(repo, t4)
+        // The rider's own capture (tools/begode-emulator): live 0x00 at 0x17A5 = 60.53 V on the 67.2 V
+        // scale, plus 0x04, 0x07 and an all-zero 0x01 branch frame, fragmented as the wheel sends them.
+        BegodeT4Fixture.notifications.forEach { wire.notify(it) }
+        val data = repo.activeData.value
+        assertEquals(90.75f, data.voltage, 0.1f)
+        assertTrue(data.socKnown, "24S is known: 3.78 V/cell is a charge, not a dash")
+    }
+
+    @Test
+    fun `a T4 configured as a controller with its battery from the controller learns its count and shows SoC`() = repoTest { repo ->
+        // The rider's own profile shape: no stored pack, the Begode controller provides the battery.
+        val t4 = ru.sodovaya.volty.domain.model.wheelVehicle("v1", "T4", "unicycle", ADDRESS, Chemistry.LI_ION_NMC,
+            Instant.fromEpochSeconds(0)).let { it.copy(packs = emptyList(),
+                controllers = it.controllers.map { c -> c.copy(providesDerivedBattery = true) }) }
+        val wire = Wire(repo, t4)
+        BegodeT4Fixture.notifications.forEach { wire.notify(it) }
+        val data = repo.activeData.value
+        assertEquals(90.75f, data.voltage, 0.1f)
+        // Retraction: the slot behind a Begode was labelled VESC_BMS, which claims its own fuel gauge,
+        // so the voltage estimate never ran and the dashboard showed volts without a charge.
+        assertTrue(data.socKnown, "the count proven from the wheel's own frames turns volts into a charge")
     }
 
     @Test
