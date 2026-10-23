@@ -260,6 +260,27 @@ class DefaultSocialRepositoryTest {
     }
 
     @Test
+    fun aRotatedTokenIsKeptWhenTheNetworkDropsBeforeTheProfile() = runTest {
+        // The server revoked "refresh" when it answered. Losing the profile request afterwards
+        // must not leave "refresh" on disk: the next start would replay it and lose the account.
+        val transport = FakeTransport(
+            refreshedProfile = SocialResult.Failure(SocialFailure.Network("doze")),
+            refreshedCredentials = SessionCredentials("fresh", "fresh-refresh", Long.MAX_VALUE),
+        )
+        val credentials = FakeCredentials(SocialCredentials("expired", "refresh", 0L))
+        val repositoryJob = SupervisorJob()
+        val repository = DefaultSocialRepository(transport, credentials,
+            CoroutineScope(StandardTestDispatcher(testScheduler) + repositoryJob))
+        try {
+            runCurrent()
+            assertEquals(1, transport.refreshCalls)
+            assertEquals(SocialCredentials("fresh", "fresh-refresh", Long.MAX_VALUE), credentials.value)
+        } finally {
+            repositoryJob.cancel()
+        }
+    }
+
+    @Test
     fun logoutRevokesLocalSessionEvenWhenServerLogoutFails() = runTest {
         val transport = FakeTransport(logout = SocialResult.Failure(SocialFailure.Network("offline")))
         val credentials = FakeCredentials(SocialCredentials("access", "refresh", Long.MAX_VALUE))

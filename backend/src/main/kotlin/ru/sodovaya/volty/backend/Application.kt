@@ -384,10 +384,17 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
                 val row = if (revokedAt == null) presented else {
                     // A response lost on a mobile link makes the client retry with the token
                     // the server already rotated. Treating that as theft revoked every session
-                    // of the account and logged a rider out mid-ride. Within the grace window an
-                    // unused successor marks it as that retry: rotate the successor instead.
+                    // of the account and logged a rider out mid-ride. An unused successor marks
+                    // it as that retry: rotate the successor instead.
+                    //
+                    // Retraction: this was bounded to a 5-minute window, which did not hold. Doze
+                    // grants a backgrounded app short network windows; a refresh answered as one
+                    // closed lost its response, and the retry came at the next window, two hours
+                    // later — the account was revoked with the app never opened (2026-10-23).
+                    // What separates a lost response from theft is whether the successor was ever
+                    // used, not how long ago: once it rotates, any replay is reuse, and an account
+                    // revocation revokes the successor too.
                     val successor = presented.replacedByHash
-                        ?.takeIf { now - revokedAt <= REFRESH_RETRY_GRACE_SECONDS }
                         ?.let { dependencies.store.findRefreshToken(it) }
                         ?.takeIf { it.revokedAtEpochSeconds == null && it.userId == presented.userId }
                     if (successor == null) {

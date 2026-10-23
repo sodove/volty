@@ -169,9 +169,6 @@ data class RefreshRow(
     val replacedByHash: String? = null,
 )
 
-/** How long a rotated refresh token may be retried before reuse counts as theft. */
-internal const val REFRESH_RETRY_GRACE_SECONDS = 300L
-
 data class FriendshipRow(
     val id: String,
     val requesterId: String,

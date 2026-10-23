@@ -446,6 +446,21 @@ class DefaultSocialRepository(
         }
     }
 
+    /**
+     * The server revoked the presented refresh token the moment it answered, so the rotated one is
+     * the only one left: keep it on disk even if nothing after this succeeds. Retraction: restore
+     * used to persist it only together with the profile, so a network cut between the two left a
+     * revoked token stored, and the next start replayed it as reuse and lost the account.
+     */
+    private suspend fun persistRotated(generation: AuthenticationGeneration, rotated: SocialResult<SessionCredentials>) {
+        if (rotated !is SocialResult.Success) return
+        credentialMutex.withLock {
+            if (!ownsAuthentication(generation)) return@withLock
+            try { withContext(NonCancellable) { credentials.write(rotated.value.toStored()) } }
+            catch (_: Exception) { }
+        }
+    }
+
     private suspend fun restoreSession(generation: AuthenticationGeneration) {
         val saved = credentialMutex.withLock {
             if (!ownsAuthentication(generation)) return@withLock null
@@ -453,7 +468,7 @@ class DefaultSocialRepository(
         } ?: return
         if (!ownsAuthentication(generation)) return
         val session = if (saved.expiresAtEpochMillis <= epochMillis()) {
-            transport.refreshSession(saved.refreshToken)
+            transport.refreshSession(saved.refreshToken).also { persistRotated(generation, it) }
         } else {
             SocialResult.Success(saved.toSessionCredentials())
         }
@@ -465,7 +480,7 @@ class DefaultSocialRepository(
                     is SocialResult.Success -> commitCredentials(generation, refreshed, profile.value)
                     is SocialResult.Failure -> if (profile.error is SocialFailure.Unauthorized) {
                         if (!ownsAuthentication(generation)) return
-                        when (val retry = transport.refreshSession(refreshed.refreshToken)) {
+                        when (val retry = transport.refreshSession(refreshed.refreshToken).also { persistRotated(generation, it) }) {
                             is SocialResult.Success -> {
                                 if (!ownsAuthentication(generation)) return
                                 val retryCredentials = retry.value.toStored()

@@ -101,7 +101,10 @@ class ApiContractTest {
     }
 
     @Test
-    fun replayOfARotatedTokenAfterTheGraceWindowRevokesTheAccount() = testApplication {
+    fun aRetryHoursLaterIsStillALostResponseWhileItsSuccessorIsUnused() = testApplication {
+        // Retraction: this test required a replay after a 5-minute window to revoke the account.
+        // A backgrounded phone under Doze retried a lost rotation two hours later and was logged
+        // out without the app being opened. Elapsed time does not separate a retry from theft.
         val store = FakeStore()
         application { module(AppDependencies(AppConfig.forTests(), store)) }
         val json = Json { ignoreUnknownKeys = true }
@@ -111,16 +114,20 @@ class ApiContractTest {
             setBody("""{"email":"rider@example.com","password":"correct horse battery staple","displayName":"Rider"}""")
         }
         val session = json.decodeFromString<SessionResponse>(registered.bodyAsText())
-        val refreshed = jsonClient.post("/v1/auth/refresh") {
+        suspend fun refresh(token: String) = jsonClient.post("/v1/auth/refresh") {
             header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-            setBody(json.encodeToString(RefreshRequest(session.refreshToken)))
+            setBody(json.encodeToString(RefreshRequest(token)))
         }
-        assertEquals(HttpStatusCode.OK, refreshed.status)
-        store.ageRevocations(REFRESH_RETRY_GRACE_SECONDS + 1)
-        val replay = jsonClient.post("/v1/auth/refresh") {
-            header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
-            setBody(json.encodeToString(RefreshRequest(session.refreshToken)))
-        }
+        assertEquals(HttpStatusCode.OK, refresh(session.refreshToken).status)
+        store.ageRevocations(2 * 60 * 60)
+        val retried = refresh(session.refreshToken)
+        assertEquals(HttpStatusCode.OK, retried.status)
+        // The retry's token is live; the lost one's successor is now used, so any later replay
+        // of the original is reuse, however long ago it was rotated.
+        val live = json.decodeFromString<SessionResponse>(retried.bodyAsText())
+        assertEquals(HttpStatusCode.OK, refresh(live.refreshToken).status)
+        store.ageRevocations(2 * 60 * 60)
+        val replay = refresh(session.refreshToken)
         assertEquals(HttpStatusCode.Unauthorized, replay.status)
         assertTrue(replay.bodyAsText().contains("refresh_reuse"))
     }
