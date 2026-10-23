@@ -42,6 +42,7 @@ internal class VoiceAudioRouteMonitor(
     @Volatile private var desiredOutput = preferences.output
     private var phoneCapture = preferences.input == VoiceInputPreference.PHONE
     private var mediaFocus: AudioFocusRequest? = null
+    private var duckFocus: AudioFocusRequest? = null
     private var savedMode: Int? = null
     private var mediaReady = false
     private val deviceCallback = object : AudioDeviceCallback() {
@@ -189,6 +190,32 @@ internal class VoiceAudioRouteMonitor(
         return withContext(NonCancellable) { completion.await() }
     }
 
+    /**
+     * Separate transient-may-duck focus held while a remote participant speaks, so music
+     * (which the voice path never takes focus from) gets quieter. Independent of [mediaFocus]
+     * and of AudioSwitch's own focus; losing it is harmless.
+     */
+    fun setDuck(active: Boolean) {
+        handler.post {
+            if (closed) return@post
+            try {
+                if (active && duckFocus == null) {
+                    val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                        .setAudioAttributes(AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_ASSISTANCE_NAVIGATION_GUIDANCE)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
+                        .setOnAudioFocusChangeListener({ }, handler).build()
+                    if (manager.requestAudioFocus(request) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) duckFocus = request
+                } else if (!active) releaseDuck()
+            } catch (_: Exception) { record(VoiceDiagnosticCode.AUDIO_FOCUS) }
+        }
+    }
+
+    private fun releaseDuck() {
+        duckFocus?.let { manager.abandonAudioFocusRequest(it) }
+        duckFocus = null
+    }
+
     override fun stop() { handler.post {
         try { stopOwned() } catch (_: Exception) { record(VoiceDiagnosticCode.CLEANUP_ERROR) }
     } }
@@ -214,6 +241,7 @@ internal class VoiceAudioRouteMonitor(
     }
 
     private fun stopOwned() {
+        releaseDuck()
         keeper.stop()
         if (deviceRegistered) {
             manager.unregisterAudioDeviceCallback(deviceCallback)

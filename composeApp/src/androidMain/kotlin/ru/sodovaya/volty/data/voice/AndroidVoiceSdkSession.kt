@@ -13,6 +13,8 @@ import io.livekit.android.room.track.LocalAudioTrack
 import io.livekit.android.room.track.LocalTrackPublication
 import io.livekit.android.room.track.Track
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.StateFlow
+import ru.sodovaya.volty.domain.audio.VoiceListenSettings
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import livekit.org.webrtc.RTCStatsReport
@@ -21,11 +23,12 @@ import ru.sodovaya.volty.domain.voice.*
 class AndroidVoiceSdkSessionFactory(
     context: Context,
     private val preferences: VoiceAudioPreferences,
+    private val listen: StateFlow<VoiceListenSettings>,
     private val diagnostics: VoiceDiagnostics,
 ) : VoiceSdkSessionFactory {
     private val application = context.applicationContext
     override fun create(tag: VoiceSessionTag, emit: (VoiceSessionEvent) -> Unit): VoiceSdkSession {
-        return AndroidVoiceSdkSession(application, tag, preferences, diagnostics, emit)
+        return AndroidVoiceSdkSession(application, tag, preferences, listen, diagnostics, emit)
     }
 }
 
@@ -34,6 +37,7 @@ internal class AndroidVoiceSdkSession(
     private val context: Context,
     private val tag: VoiceSessionTag,
     private val preferences: VoiceAudioPreferences,
+    private val listen: StateFlow<VoiceListenSettings>,
     private val diagnostics: VoiceDiagnostics,
     private val emit: (VoiceSessionEvent) -> Unit,
 ) : VoiceSdkSession {
@@ -50,6 +54,8 @@ internal class AndroidVoiceSdkSession(
     @Volatile private var deafened = false
     @Volatile private var outputAvailable = preferences.output == VoiceOutputPreference.AUTO
     @Volatile private var routingTransition = false
+    private val duckGate = MusicDuckGate()
+    private var ducking = false
     private val remoteEvidence = VoiceRemoteAudioEvidence(tag)
     private val publicationRecovery = VoicePublicationRecovery(scope, object : VoicePublicationRecoveryPort {
         override suspend fun restoreClosed(): Boolean = withContext(Dispatchers.Main.immediate) {
@@ -125,6 +131,12 @@ internal class AndroidVoiceSdkSession(
             disableAudioPrewarming = true, disableCommunicationModeWorkaround = true,
         ))).also { room = it }
         scope.launch { ownedRoom.events.collect { onRoomEvent(it, ownedRoom) } }
+        scope.launch {
+            while (isActive) {
+                delay(DUCK_TICK_MILLIS)
+                applyDuck(duckGate.onTick(SystemClock.elapsedRealtime()))
+            }
+        }
         return ownedRoom
     }
 
@@ -216,6 +228,9 @@ internal class AndroidVoiceSdkSession(
         closing = true
         remoteEvidence.close()
         publicationRecovery.close()
+        duckGate.release()
+        ducking = false
+        routes?.setDuck(false)
         scope.coroutineContext.cancelChildren()
         // Each reference clears only after successful release, preserving failed cleanup for retry.
         resources.withLock {
@@ -295,8 +310,22 @@ internal class AndroidVoiceSdkSession(
             is RoomEvent.TrackUnsubscribed -> if (event.track.kind == Track.Kind.AUDIO) {
                 reconcileRemoteAudio(ownedRoom)
             }
+            is RoomEvent.ActiveSpeakersChanged -> {
+                val remote = event.speakers.any { it.identity != ownedRoom.localParticipant.identity }
+                applyDuck(if (listen.value.duckMusicWhileSpeaking)
+                    duckGate.onSpeakers(remote, SystemClock.elapsedRealtime()) else duckGate.release())
+            }
             else -> Unit
         }
+    }
+
+    /** Focus is requested only on the false->true edge and abandoned on true->false. */
+    private fun applyDuck(wanted: Boolean) {
+        val want = wanted && !closing && listen.value.duckMusicWhileSpeaking
+        if (wanted && !want) duckGate.release()
+        if (want == ducking) return
+        ducking = want
+        routes?.setDuck(want)
     }
 
     private fun reconcileRemoteAudio(ownedRoom: Room) {
@@ -369,3 +398,5 @@ internal class AndroidVoiceSdkSession(
     private fun event(event: VoiceSessionEvent) { if (!closing) emit(event) }
     private fun record(code: VoiceDiagnosticCode) = diagnostics.record(SystemClock.elapsedRealtime(), code)
 }
+
+private const val DUCK_TICK_MILLIS = 250L

@@ -252,7 +252,7 @@ val androidModule = module {
         )
     }
     single<LocationProvider> { AndroidLocationProvider(get()) }
-    single { AndroidVoiceAudioFactory(androidContext()) }
+    single { AndroidVoiceAudioFactory(androidContext(), get<AppPrefs>().voiceListenSettings) }
     single { AndroidVoiceForegroundController(androidContext(), get()) }
     single<ru.sodovaya.volty.data.voice.VoiceConversationChannelAudienceFactory> {
         ru.sodovaya.volty.di.nearby.ChannelSharingAudienceAccountFactory(
@@ -559,7 +559,7 @@ val androidModule = module {
     }
     single { LogExporter(androidContext()) }
     single { ru.sodovaya.volty.diagnostics.VoiceDiagnosticLauncher(androidContext()) }
-    single { ru.sodovaya.volty.diagnostics.voice.AndroidVoiceDiagnosticRuntime(androidContext(), get(), get()) }
+    single { ru.sodovaya.volty.diagnostics.voice.AndroidVoiceDiagnosticRuntime(androidContext(), get(), get(), get<AppPrefs>().voiceListenSettings) }
 }
 
 private const val HISTORY_LOCATION_DEMAND = "history-location-demand"
