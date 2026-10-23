@@ -856,7 +856,8 @@ class DefaultRootComponent(
                         // binds KableBmsRepository to both interfaces, because a
                         // second one would have no live links to scan (G2 Task 5).
                         canDiscovery = get<CanDiscovery>(),
-                        controllerConfigSource = get<ControllerConfigSource>()
+                        controllerConfigSource = get<ControllerConfigSource>(),
+                        learnedCellCountSource = get<ru.sodovaya.volty.data.bms.LearnedCellCountSource>()
                     )
                 )
             }
