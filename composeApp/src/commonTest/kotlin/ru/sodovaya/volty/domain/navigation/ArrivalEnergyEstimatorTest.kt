@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.domain.navigation
 
+import ru.sodovaya.volty.domain.energy.CapacitySource
+import ru.sodovaya.volty.domain.energy.EnergyState
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ControllerData
@@ -71,18 +73,38 @@ class ArrivalEnergyEstimatorTest {
     }
 
     @Test
-    fun every_capacity_contributor_must_be_positive() {
-        val evidence = knownEvidence(
-            vehicleData = PackAggregator.build(
-                listOf(pack(0, online = true, soc = 80f, capacity = 0f)),
-                PackTopology.PARALLEL,
-            ),
+    fun capacity_is_unearned_without_the_models_usable_ah() {
+        // Incoherent on purpose: the live aggregate looks like a full capacity x voltage, but the
+        // model has no usable capacity. Arrival must not fall back to the aggregate.
+        val packs = PackAggregator.build(
+            listOf(pack(0, online = true, soc = 80f, capacity = 20f, voltage = 50f)),
+            PackTopology.PARALLEL,
         )
+        listOf(null, energy(usableAh = null, remainingWh = null), energy(nominalV = null, remainingWh = null)).forEach { e ->
+            val evidence = knownEvidence(vehicleData = packs.copy(energy = e))
+            assertEquals(
+                ArrivalSocUnknownReason.CAPACITY_UNEARNED,
+                assertIs<ArrivalSocEstimate.Unknown>(ArrivalEnergyEstimator.estimate(evidence, 1_000.0, nowMillis)).reason,
+            )
+        }
+    }
 
-        assertEquals(
-            ArrivalSocUnknownReason.CAPACITY_UNEARNED,
-            assertIs<ArrivalSocEstimate.Unknown>(ArrivalEnergyEstimator.estimate(evidence, 1_000.0, nowMillis)).reason,
-        )
+    @Test
+    fun arrivalUsesNominalEnergy() {
+        fun arrival(liveVoltage: Float) = assertIs<ArrivalSocEstimate.Known>(
+            ArrivalEnergyEstimator.estimate(
+                knownEvidence(
+                    vehicleData = PackAggregator.build(
+                        listOf(pack(0, online = true, soc = 80f, capacity = 20f, voltage = liveVoltage)),
+                        PackTopology.PARALLEL,
+                    ).copy(energy = energy(usableAh = 20f, nominalV = 50f)),
+                ),
+                10_000.0,
+                nowMillis,
+            ),
+        ).percent
+        assertEquals(55, arrival(liveVoltage = 50f))
+        assertEquals(55, arrival(liveVoltage = 30f)) // sagged under load: nothing changes
     }
 
     @Test
@@ -91,7 +113,7 @@ class ArrivalEnergyEstimatorTest {
             vehicleData = PackAggregator.build(
                 listOf(pack(0, online = true, soc = 80f, capacity = 20f, timestamp = sampleTime)),
                 PackTopology.PARALLEL,
-            ),
+            ).copy(energy = energy()),
         )
         val staleResult = ArrivalEnergyEstimator.estimate(
             stale,
@@ -137,7 +159,7 @@ class ArrivalEnergyEstimatorTest {
     }
 
     @Test
-    fun parallel_and_series_use_topology_aware_capacity_times_voltage() {
+    fun parallel_and_series_use_the_models_usable_ah_times_nominal_voltage() {
         val parallel = knownEvidence(
             vehicleData = PackAggregator.build(
                 listOf(
@@ -145,7 +167,7 @@ class ArrivalEnergyEstimatorTest {
                     pack(1, online = true, soc = 80f, capacity = 20f, voltage = 50f),
                 ),
                 PackTopology.PARALLEL,
-            ),
+            ).copy(energy = energy(usableAh = 40f, nominalV = 50f)),
         )
         val series = knownEvidence(
             vehicleData = PackAggregator.build(
@@ -154,7 +176,7 @@ class ArrivalEnergyEstimatorTest {
                     pack(1, online = true, soc = 80f, capacity = 20f, voltage = 25f),
                 ),
                 PackTopology.SERIES,
-            ),
+            ).copy(energy = energy(usableAh = 20f, nominalV = 50f)),
         )
 
         val parallelResult = assertIs<ArrivalSocEstimate.Known>(
@@ -185,12 +207,28 @@ class ArrivalEnergyEstimatorTest {
         vehicleData: VehicleData = PackAggregator.build(
             listOf(pack(0, online = true, soc = 80f, capacity = 20f)),
             PackTopology.PARALLEL,
-        ),
+        ).copy(energy = energy()),
         consumption: ConsumptionEvidence? = earnedConsumption(),
     ) = NavigationEnergyEvidence(
         vehicleData = vehicleData,
         motion = ControllerData(isConnected = true),
         consumption = consumption,
+    )
+
+    private fun energy(
+        usableAh: Float? = 20f,
+        nominalV: Float? = 50f,
+        soc: Float = 80f,
+        remainingWh: Float? = if (usableAh != null && nominalV != null) soc / 100f * usableAh * nominalV else null,
+    ) = EnergyState(
+        socPercent = soc,
+        usableAh = usableAh,
+        nominalPackV = nominalV,
+        remainingWh = remainingWh,
+        capacitySource = CapacitySource.ENTERED,
+        learned = null,
+        resistanceOhm = null,
+        modelled = false,
     )
 
     private fun earnedConsumption(

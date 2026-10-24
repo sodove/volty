@@ -82,15 +82,16 @@ object ArrivalEnergyEstimator {
             return ArrivalSocEstimate.Unknown(ArrivalSocUnknownReason.SOC_UNEARNED)
         }
 
-        if (packs.any { pack ->
-                val data = pack.data
-                !data.capacity.isFinite() || data.capacity <= 0f ||
-                    !data.voltage.isFinite() || data.voltage <= 0f
-            } ||
-            !vehicleData.aggregate.capacity.isFinite() ||
-            vehicleData.aggregate.capacity <= 0f ||
-            !vehicleData.aggregate.voltage.isFinite() ||
-            vehicleData.aggregate.voltage <= 0f
+        // Energy comes from the energy model: SoC x usable Ah x NOMINAL pack voltage. An earlier
+        // revision multiplied the aggregate's reported capacity by its LIVE voltage; wrong, because
+        // voltage sags under load and the arrival percentage sagged with it.
+        val energy = vehicleData.energy
+        val usableAh = energy?.usableAh
+        val nominalV = energy?.nominalPackV
+        val remainingWh = energy?.remainingWh
+        if (usableAh == null || !usableAh.isFinite() || usableAh <= 0f ||
+            nominalV == null || !nominalV.isFinite() || nominalV <= 0f ||
+            remainingWh == null || !remainingWh.isFinite()
         ) {
             return ArrivalSocEstimate.Unknown(ArrivalSocUnknownReason.CAPACITY_UNEARNED)
         }
@@ -111,16 +112,10 @@ object ArrivalEnergyEstimator {
             return ArrivalSocEstimate.Unknown(ArrivalSocUnknownReason.CONSUMPTION_UNEARNED)
         }
 
-        val capacityEnergyWh = vehicleData.aggregate.capacity.toDouble() *
-            vehicleData.aggregate.voltage.toDouble()
-        if (!capacityEnergyWh.isFinite() || capacityEnergyWh <= 0.0) {
-            return ArrivalSocEstimate.Unknown(ArrivalSocUnknownReason.CAPACITY_UNEARNED)
-        }
+        val capacityEnergyWh = usableAh.toDouble() * nominalV.toDouble()
 
         val consumedEnergyWh = remainingDistanceMeters / 1_000.0 * consumption.whPerKm
-        val arrivalPercent = (
-            vehicleData.aggregate.soc.toDouble() / 100.0 * capacityEnergyWh - consumedEnergyWh
-            ) / capacityEnergyWh * 100.0
+        val arrivalPercent = (remainingWh.toDouble() - consumedEnergyWh) / capacityEnergyWh * 100.0
         return ArrivalSocEstimate.Known(
             percent = arrivalPercent.coerceIn(0.0, 100.0).roundToInt(),
             approximate = true,

@@ -21,6 +21,8 @@ import ru.sodovaya.volty.data.social.BmsSocialTelemetrySource
 import ru.sodovaya.volty.data.social.DefaultSocialRideRuntime
 import ru.sodovaya.volty.data.navigation.OsmNavigationRepository
 import ru.sodovaya.volty.data.navigation.BmsNavigationEnergySource
+import ru.sodovaya.volty.data.energy.BmsRangeSource
+import ru.sodovaya.volty.data.energy.RangeSource
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.BleDiagnosticsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
@@ -79,6 +81,7 @@ val appModule = module {
     // available for it without defining the interface twice in Koin.
     single { OsmNavigationRepository() }
     single<NavigationEnergySource> { BmsNavigationEnergySource(get()) }
+    single<RangeSource> { BmsRangeSource(get()) }
     single {
         DefaultSocialRepository(
             get(), get(),
