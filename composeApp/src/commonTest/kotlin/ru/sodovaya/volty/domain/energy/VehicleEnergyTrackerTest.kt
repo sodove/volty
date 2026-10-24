@@ -375,4 +375,61 @@ class VehicleEnergyTrackerTest {
         assertEquals(learned.usableAh, e.usableAh)
         assertEquals(learned, rig.tracker.memory().learned, "and it is what gets saved")
     }
+
+    /** Pack volts (24S) whose stretched OCV SoC is [soc]; bisection, the curve is monotonic. */
+    private fun packVoltsAt(soc: Float): Float {
+        val (low, high) = VoltageSocEstimator.boundsFor(chem, AlertConfig())
+        var lo = 2.0f
+        var hi = 4.5f
+        repeat(60) {
+            val mid = (lo + hi) / 2
+            if (OcvCurve.stretchedSocPercent(chem, mid, low, high) < soc) lo = mid else hi = mid
+        }
+        return (lo + hi) / 2 * 24
+    }
+
+    /** Ride 40 A down from [fromSoc] to [toSoc] on a 30 Ah pack (1 % = 108 steps), then rest ~10 s there. */
+    private fun Rig.rideBetweenStops(fromSoc: Float, toSoc: Float) {
+        val steps = ((fromSoc - toSoc) * 108f).toInt()
+        run(steps, packVoltsAt((fromSoc + toSoc) / 2) - 2f, 40f)
+        run(40, packVoltsAt(toSoc), 0f)
+    }
+
+    @Test
+    fun aCityRideWithManyShortStopsStillLearnsOnceTheCumulativeDropIsLargeEnough() {
+        val rig = Rig(wheel())
+        rig.run(40, packVoltsAt(96f), 0f)
+        var soc = 96f
+        for (next in listOf(90f, 84f, 78f, 72f, 66f)) {
+            rig.rideBetweenStops(soc, next)
+            soc = next
+            rig.run(1, packVoltsAt(soc) - 2f, 30f) // leaving the stop closes the episode
+        }
+        val learned = assertNotNull(rig.last.energy!!.learned, "five 6 % stops add up to a learnable drop")
+        assertEquals(1, learned.rides, "exactly one learn: 96 -> 72 (24 %), then 72 -> 66 is too small again")
+        assertEquals(30f, learned.usableAh, 3f)
+    }
+
+    @Test
+    fun aChargeBetweenStopsResetsTheLearningAnchor() {
+        val rig = Rig(wheel())
+        rig.run(40, packVoltsAt(96f), 0f)
+        rig.rideBetweenStops(96f, 90f)
+        rig.run(1, packVoltsAt(90f) - 2f, 30f)
+        rig.rideBetweenStops(90f, 84f)
+        rig.run(1, packVoltsAt(84f) - 2f, 30f)
+        rig.run(40, packVoltsAt(98f), 0f) // plugged in: SoC rose above the old anchor (96) while parked
+        rig.run(1, packVoltsAt(98f) - 2f, 30f)
+        var soc = 98f
+        for (next in listOf(92f, 86f, 80f, 74f)) {
+            rig.rideBetweenStops(soc, next)
+            soc = next
+            rig.run(1, packVoltsAt(soc) - 2f, 30f)
+        }
+        // A stale anchor at 96 would learn at 74 from 12 % of pre-charge draw plus 24 % after it (~49 Ah, and
+        // earlier). The anchor moved to 98 at the charge, so the single learn is 98 -> 74 on 7.2 Ah = 30 Ah.
+        val learned = assertNotNull(rig.last.energy!!.learned)
+        assertEquals(1, learned.rides)
+        assertEquals(30f, learned.usableAh, 3f, "no draw from before the charge is counted")
+    }
 }

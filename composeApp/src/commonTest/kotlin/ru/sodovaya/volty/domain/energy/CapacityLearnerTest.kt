@@ -72,4 +72,27 @@ class CapacityLearnerTest {
         val current = LearnedCapacity(30f, 40f, 1)
         assertSame(current, CapacityLearner.merge(current, segment(start = 60f, end = 45f)))
     }
+
+    @Test
+    fun nonFiniteOrImpossibleInputsAreNotEvidence() {
+        assertNull(CapacityLearner.accept(segment(start = Float.NaN)))
+        assertNull(CapacityLearner.accept(segment(end = Float.NaN)))
+        assertNull(CapacityLearner.accept(segment(end = Float.NEGATIVE_INFINITY)))
+        assertNull(CapacityLearner.accept(segment(ah = Double.NaN)))
+        assertNull(CapacityLearner.accept(segment(ah = Double.POSITIVE_INFINITY)))
+        assertNull(CapacityLearner.accept(segment(start = 100f, end = -5f)), "a drop of 105 % cannot happen")
+        assertNull(CapacityLearner.merge(null, segment(start = Float.NaN)))
+        val current = LearnedCapacity(30f, 40f, 1)
+        assertSame(current, CapacityLearner.merge(current, segment(ah = Double.NaN)))
+    }
+
+    @Test
+    fun onlyAStillTooSmallDropKeepsGrowing() {
+        assertEquals(true, CapacityLearner.isStillGrowing(segment(start = 60f, end = 54f, ah = 1.8)))
+        assertEquals(false, CapacityLearner.isStillGrowing(segment(start = 60f, end = 20f)), "accepted: restart")
+        assertEquals(false, CapacityLearner.isStillGrowing(segment(start = 60f, end = 70f)), "a rise: restart")
+        assertEquals(false, CapacityLearner.isStillGrowing(segment(start = 60f, end = 60f)), "no fall: restart")
+        assertEquals(false, CapacityLearner.isStillGrowing(segment(start = 60f, end = 54f, duration = 1_000_000L, gap = 100_000L)), "too gappy ever to be valid")
+        assertEquals(false, CapacityLearner.isStillGrowing(segment(start = 60f, end = Float.NaN)))
+    }
 }

@@ -162,20 +162,25 @@ open class VehicleEnergyTracker(
             if (end == null) return
             val start = anchor
             if (start != null) {
-                val merged = CapacityLearner.merge(
-                    learned,
-                    LearnSegment(
-                        restSocStart = start.soc,
-                        restSocEnd = end.soc,
-                        dischargedAh = end.ah - start.ah,
-                        durationMillis = end.at - start.at,
-                        gapMillis = end.gap - start.gap,
-                    )
+                val segment = LearnSegment(
+                    restSocStart = start.soc,
+                    restSocEnd = end.soc,
+                    dischargedAh = end.ah - start.ah,
+                    durationMillis = end.at - start.at,
+                    gapMillis = end.gap - start.gap,
                 )
+                val merged = CapacityLearner.merge(learned, segment)
                 if (merged !== learned) {
                     learned = merged
                     refreshCapacity()
                 }
+                // Keep the segment start while the segment is rejected ONLY because the SoC drop is still
+                // too small: a city ride with a stop every few minutes never reaches the minimum drop
+                // between two consecutive stops, so moving the anchor to every stop (an earlier revision
+                // did) meant such a ride never learned anything. Everything else restarts from here: an
+                // accepted learn, a rise or no fall (a charge, or noise), a segment already too gappy to
+                // ever become valid, or a non-finite reading.
+                if (CapacityLearner.isStillGrowing(segment)) return
             }
             anchor = end
         }
