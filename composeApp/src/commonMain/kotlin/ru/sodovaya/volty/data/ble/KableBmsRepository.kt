@@ -43,6 +43,9 @@ import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
+import ru.sodovaya.volty.domain.energy.EnergyMemory
+import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
+import ru.sodovaya.volty.domain.energy.VehicleEnergyTracker
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
@@ -152,6 +155,12 @@ class KableBmsRepository private constructor(
     private val bleAdapterStateProvider: BleAdapterStateProvider,
     private val historyStartup: (suspend () -> HistoryTelemetryIngress)? = null,
     private val historyShutdown: (suspend () -> Unit)? = null,
+    /**
+     * Where the energy model keeps what it learns per vehicle. **Null = the energy model is off**: no
+     * tracker is built and snapshots are published exactly as aggregated (the default, so every existing
+     * construction site and test keeps its behaviour). Koin binds the SQLDelight store.
+     */
+    private val energyStore: VehicleEnergyStore? = null,
 ) : BmsRepository, CanDiscovery, ControllerConfigSource, LearnedCellCountSource, BleDiagnosticsRepository {
 
     private val diagnosticBuffer = BleDiagnosticBuffer()
@@ -275,9 +284,11 @@ class KableBmsRepository private constructor(
         rideHistoryRepository: RideHistoryRepository,
         bleAdapterStateProvider: BleAdapterStateProvider,
         historyRuntime: ru.sodovaya.volty.data.history.HistoryRecordingRuntime,
+        energyStore: VehicleEnergyStore? = null,
     ) : this(vehicleRepository, { serviceController.start() }, { serviceController.stop() },
         Dispatchers.Default, rideHistoryRepository, bleAdapterStateProvider,
-        historyStartup = { historyRuntime.prepare().ingress }, historyShutdown = historyRuntime::close)
+        historyStartup = { historyRuntime.prepare().ingress }, historyShutdown = historyRuntime::close,
+        energyStore = energyStore)
 
     internal companion object {
         /**
@@ -291,6 +302,9 @@ class KableBmsRepository private constructor(
          * draining, and the drop is logged either way, never silent.
          */
         const val SAMPLE_FUNNEL_CAPACITY = 64
+
+        /** The energy memory is written at most this often while connected (and once more on disconnect). */
+        const val ENERGY_SAVE_INTERVAL_MS = 30_000L
 
         /**
          * Reason stamped on a link re-raised after the head unit it was
@@ -454,6 +468,7 @@ class KableBmsRepository private constructor(
             bleAdapterStateProvider: BleAdapterStateProvider = BleAdapterStateProvider { true },
             historyStartup: (suspend () -> HistoryTelemetryIngress)? = null,
             historyShutdown: (suspend () -> Unit)? = null,
+            energyStore: VehicleEnergyStore? = null,
         ): KableBmsRepository = KableBmsRepository(
             vehicleRepository = vehicleRepository,
             serviceStart = serviceStart,
@@ -463,6 +478,7 @@ class KableBmsRepository private constructor(
             bleAdapterStateProvider = bleAdapterStateProvider,
             historyStartup = historyStartup,
             historyShutdown = historyShutdown,
+            energyStore = energyStore,
         )
     }
 
@@ -1556,6 +1572,7 @@ class KableBmsRepository private constructor(
         val stored = storedPacks(vehicle, address, type)
         val expanded = expandedVehiclePacks(vehicle, address, type)
         lateinit var orchestrator: VehicleConnection
+        val energy = buildEnergyTracker(vehicle, address, type) { orchestrator }
         orchestrator = VehicleConnection(
             packs = stored,
             // Protocol-synthesised slots stay invisible until they report:
@@ -1580,10 +1597,94 @@ class KableBmsRepository private constructor(
                 // the motion StateFlow beside the vehicle-level one.
                 _activeMotion.value = vd.motion
                 vehicleDataTapForTest?.invoke(vd)
+                maybeSaveEnergy(orchestrator)
             },
-            clock = orchestratorClockForTest ?: { Clock.System.now() }
+            clock = orchestratorClockForTest ?: { Clock.System.now() },
+            energy = energy
         )
+        energyOwner = if (energy != null && vehicle != null) {
+            EnergyOwner(orchestrator, energy, vehicle.id, vehicle.chemistry, nowMs())
+        } else null
         return orchestrator
+    }
+
+    /** One connection's energy tracker with what is needed to persist it. */
+    private class EnergyOwner(
+        val orchestrator: VehicleConnection,
+        val tracker: VehicleEnergyTracker,
+        val vehicleId: String,
+        val chemistry: Chemistry,
+        var lastSaveAtMs: Long,
+    )
+
+    /** The latest-built connection's tracker; only honoured while that connection is the active pipeline. */
+    private var energyOwner: EnergyOwner? = null
+
+    /**
+     * The energy model for one connection, or null when it is off: no [energyStore] injected, or no
+     * vehicle. It runs against the SAME expanded pack list the SoC estimator sees ([socVehicleFor]) and
+     * the Begode decoder's proven cell count ([BegodeProtocol.derivedCellCount], read live through
+     * [primaryPackProtocol]) - one rule for "how many series cells", not a second.
+     *
+     * Memory is loaded off the funnel: the tracker reports the series count the moment it resolves one
+     * ([VehicleEnergyTracker.onSeriesCells]) and this launches the (suspend) load and installs the result
+     * under [sessionLock], i.e. between two sample transactions, never inside one. The counter needs
+     * seconds of stable voltage before it seeds, so the load lands first; if it ever did not, the install
+     * is simply refused once the counter has seeded. Guests and demos are not persisted: they run the
+     * model with empty memory and save nothing.
+     */
+    private fun buildEnergyTracker(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType?,
+        orchestrator: () -> VehicleConnection,
+    ): VehicleEnergyTracker? {
+        val store = energyStore ?: return null
+        val socVehicle = socVehicleFor(vehicle, address, type) ?: return null
+        val persisted = !socVehicle.isGuest && !socVehicle.isDemo
+        lateinit var tracker: VehicleEnergyTracker
+        tracker = VehicleEnergyTracker(
+            vehicle = socVehicle,
+            memory = EnergyMemory.EMPTY,
+            seriesCellsHint = { (primaryPackProtocol as? BegodeProtocol)?.derivedCellCount() },
+            onSeriesCells = { cells ->
+                if (persisted) {
+                    val owner = orchestrator()
+                    scope.launch {
+                        val loaded = runCatching { store.load(socVehicle.id, cells, socVehicle.chemistry) }
+                            .getOrElse { EnergyMemory.EMPTY }
+                        sessionLock.withLock {
+                            if (ownsActivePipeline(owner) && tracker.seriesCells == cells) tracker.installMemory(loaded)
+                        }
+                    }
+                } else tracker.installMemory(EnergyMemory.EMPTY)
+            },
+            awaitMemory = persisted,
+        )
+        return tracker
+    }
+
+    /** Persist the active tracker's memory at most every [ENERGY_SAVE_INTERVAL_MS]. Called on the funnel, under sessionLock. */
+    private fun maybeSaveEnergy(orchestrator: VehicleConnection) {
+        val store = energyStore ?: return
+        val owner = energyOwner?.takeIf { it.orchestrator === orchestrator } ?: return
+        val now = nowMs()
+        if (now - owner.lastSaveAtMs < ENERGY_SAVE_INTERVAL_MS) return
+        val save = energySaveOf(owner) ?: return
+        owner.lastSaveAtMs = now
+        scope.launch { runCatching { save(store) } }
+    }
+
+    /** A snapshot of what to save for [owner] now, or null when nothing may be saved yet (no count, memory not loaded, guest/demo). */
+    private fun energySaveOf(owner: EnergyOwner): (suspend (VehicleEnergyStore) -> Unit)? {
+        if (owner.vehicleId.startsWith(GUEST_VEHICLE_ID_PREFIX) || owner.vehicleId == DEMO_VEHICLE_ID ||
+            owner.vehicleId == DEMO_WHEEL_VEHICLE_ID
+        ) return null
+        val tracker = owner.tracker
+        val cells = tracker.seriesCells ?: return null
+        if (!tracker.memoryReady) return null
+        val memory = tracker.memory()
+        return { store -> store.save(owner.vehicleId, cells, owner.chemistry, memory) }
     }
 
     /**
@@ -3029,11 +3130,18 @@ class KableBmsRepository private constructor(
         // Admission and terminal-shutdown delegation share the same mutex: a
         // negative is either already accepted with its original resources, or
         // joins shutdown without independently releasing its BLE service early.
+        var energySave: (suspend (VehicleEnergyStore) -> Unit)? = null
         val accepted = sessionLock.withLock {
             if (recordingShutdownRequested && !allowDuringShutdown) return@withLock null
             val disconnectIntent = Any()
             connectionIntent = disconnectIntent
             userInitiatedDisconnect = true
+            // Capture what the energy model learned while the pipeline is still current; written below,
+            // outside the lock, before the native release.
+            energySave = energyOwner?.takeIf { it.orchestrator === vehicleConnection }?.let { owner ->
+                owner.tracker.finish()
+                energySaveOf(owner)
+            }
             val current = links
             val sessionsToTear = current.mapNotNull { it.session }
             val reconnectsToCancel = current.mapNotNull { it.reconnectJob }
@@ -3064,6 +3172,9 @@ class KableBmsRepository private constructor(
             // The caller's cancellation is not a failed native cleanup ACK. Keep
             // this original capability (including detached sessions) until success.
             withContext(kotlinx.coroutines.NonCancellable) {
+                val store = energyStore
+                val save = energySave
+                if (store != null && save != null) runCatching { save(store) }
                 val outcome = runCatching { releaseAcceptedDisconnect(accepted) }
                 accepted.receipt.complete(outcome) // Outside sessionLock.
                 outcome.getOrThrow()

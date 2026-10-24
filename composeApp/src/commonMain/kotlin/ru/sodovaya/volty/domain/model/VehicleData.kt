@@ -16,5 +16,10 @@ data class VehicleData(
     val controllers: List<ControllerState> = emptyList(),
     val motion: ControllerData = ControllerData(),
     /** true when some controllers are offline and [motion] covers only the rest. */
-    val motionPartial: Boolean = false
+    val motionPartial: Boolean = false,
+    /**
+     * The energy model's view of the vehicle (modelled SoC, capacity, remaining Wh), or null when the
+     * tracker is off or has nothing earned yet. Filled by `VehicleEnergyTracker`, once per published snapshot.
+     */
+    val energy: ru.sodovaya.volty.domain.energy.EnergyState? = null
 )

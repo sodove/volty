@@ -65,7 +65,7 @@ val appModule = module {
     // `binds` rather than a second `single { get<BmsRepository>() as … }` so the
     // cast cannot go stale if the implementation ever moves.
     single { KableBmsRepository(get(), get(), get(), get<BleAdapterStateProvider>(),
-        get<ru.sodovaya.volty.data.history.HistoryRecordingRuntime>()) } binds arrayOf(
+        get<ru.sodovaya.volty.data.history.HistoryRecordingRuntime>(), get<ru.sodovaya.volty.domain.energy.VehicleEnergyStore>()) } binds arrayOf(
         BmsRepository::class,
         CanDiscovery::class,
         ControllerConfigSource::class,

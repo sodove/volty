@@ -3,6 +3,13 @@ package ru.sodovaya.volty.data.ble
 import ru.sodovaya.volty.data.bms.BegodeDumpFixture
 import ru.sodovaya.volty.data.bms.BegodeT4Fixture
 import ru.sodovaya.volty.data.bms.MotionSource
+import ru.sodovaya.volty.domain.energy.CapacitySource
+import ru.sodovaya.volty.domain.energy.EnergyMemory
+import ru.sodovaya.volty.domain.energy.LearnedCapacity
+import ru.sodovaya.volty.domain.energy.PersistedCharge
+import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
+import ru.sodovaya.volty.domain.model.AlertConfig
+import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -19,6 +26,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -333,6 +341,120 @@ class KableBmsRepositoryDumbBegodeTest {
         val battery = assertNotNull(protocol.latestData(0))
         assertEquals(0f, battery.current, 1e-3f, "phase current is not battery current")
         assertFalse(battery.hasCurrent, "the live frame has no battery-current field")
+    }
+
+    // --- Energy model through the production pipeline ---
+
+    private class FakeEnergyStore(
+        private val seeded: Map<String, EnergyMemory> = emptyMap(),
+    ) : VehicleEnergyStore {
+        data class Saved(val id: String, val cells: Int, val chemistry: Chemistry, val memory: EnergyMemory)
+        val loads = mutableListOf<Triple<String, Int, Chemistry>>()
+        val saves = mutableListOf<Saved>()
+        override suspend fun load(vehicleId: String, seriesCells: Int, chemistry: Chemistry): EnergyMemory {
+            loads += Triple(vehicleId, seriesCells, chemistry)
+            return seeded[vehicleId] ?: EnergyMemory.EMPTY
+        }
+        override suspend fun save(vehicleId: String, seriesCells: Int, chemistry: Chemistry, memory: EnergyMemory) {
+            saves += Saved(vehicleId, seriesCells, chemistry, memory)
+        }
+        override suspend fun reset(vehicleId: String) {}
+    }
+
+    private fun energyRepoTest(store: FakeEnergyStore, body: suspend TestScope.(KableBmsRepository) -> Unit) =
+        bleRepositoryTest(vehicleRepository = NoopVehicleRepository(), energyStore = store, body = body)
+
+    /** A 24S dumb wheel at ~3.78 V/cell, fed one live frame every 250 ms of the repository's injected clock. */
+    private inner class EnergyRide(val repo: KableBmsRepository, vehicle: Vehicle) {
+        var nowMs = 50_000_000L
+        val startMs = nowMs
+        private var tick = 0
+        private val wire: Wire
+        init {
+            repo.orchestratorClockForTest = { Instant.fromEpochMilliseconds(nowMs) }
+            wire = Wire(repo, vehicle)
+        }
+        fun feed(millis: Long) {
+            val until = nowMs + millis
+            while (nowMs < until) {
+                nowMs += 250
+                // Alternate by one raw unit so every frame is NEW data to the sample gate.
+                wire.notify(liveFrame(voltageRaw = 6053 + (tick++ % 2), currentRaw = 0, tempRaw = 0))
+            }
+        }
+    }
+
+    @Test
+    fun `the published charge is the tracker's, end to end, and memory is saved on disconnect`() = FakeEnergyStore().let { store -> energyRepoTest(store) { repo ->
+            val ride = EnergyRide(repo, vehicle(cellCount = 24))
+            ride.feed(1_000)
+            assertFalse(repo.activeData.value.socKnown, "not seeded yet: unknown, not the sample's voltage estimate")
+            advanceUntilIdle() // the memory load lands
+            ride.feed(8_000)
+
+            val vd = repo.activeVehicleData.value
+            val energy = assertNotNull(vd.energy)
+            assertTrue(energy.modelled)
+            assertTrue(repo.activeData.value.socKnown)
+            // activeData is what AlertEngine reads: it must be the tracker's number.
+            assertEquals(assertNotNull(energy.socPercent), repo.activeData.value.soc, 0f)
+            assertEquals(energy.socPercent!!, vd.packs[0].data.soc, 0f)
+
+            assertTrue(store.saves.isEmpty(), "nothing is written before the interval or a disconnect")
+            repo.disconnect()
+            advanceUntilIdle()
+            val saved = store.saves.single()
+            assertEquals("v1", saved.id)
+            assertEquals(24, saved.cells)
+            assertEquals(Chemistry.LI_ION_NMC, saved.chemistry)
+            assertNotNull(saved.memory.counter, "the live counter is what is persisted")
+        } }
+
+    @Test
+    fun `memory is saved at most every 30 seconds while connected`() = FakeEnergyStore().let { store -> energyRepoTest(store) { repo ->
+        val ride = EnergyRide(repo, vehicle(cellCount = 24))
+        ride.feed(1_000); advanceUntilIdle()
+        ride.feed(28_000); advanceUntilIdle()
+        assertTrue(store.saves.isEmpty(), "29 s in: still inside the interval")
+        ride.feed(2_500); advanceUntilIdle()
+        assertEquals(1, store.saves.size, "past 30 s: one write")
+        ride.feed(20_000); advanceUntilIdle()
+        assertEquals(1, store.saves.size, "20 s later: still one")
+        ride.feed(12_000); advanceUntilIdle()
+        assertEquals(2, store.saves.size, "past the next interval: the second")
+    } }
+
+    @Test
+    fun `state is per vehicle id and a stored counter and learned capacity reach the tracker`() {
+        val vSoc = VoltageSocEstimator.estimateFromPackVoltage(90.8f, 24, Chemistry.LI_ION_NMC, AlertConfig())!!
+        val persisted = vSoc + 6f
+        val store = FakeEnergyStore(
+            mapOf("v1" to EnergyMemory(LearnedCapacity(41f, 40f, 2), null, PersistedCharge(persisted, 1L)))
+        )
+        energyRepoTest(store) { repo ->
+            val a = EnergyRide(repo, vehicle(cellCount = 24))
+            a.feed(1_000); advanceUntilIdle()
+            a.feed(8_000)
+            val ea = assertNotNull(repo.activeVehicleData.value.energy)
+            assertEquals(persisted, ea.socPercent!!, 2f, "the stored counter (6 points above the voltage) wins inside the seed tolerance")
+            assertEquals(41f, ea.learned?.usableAh)
+            assertEquals(CapacitySource.LEARNED, ea.capacitySource)
+            repo.disconnect(); advanceUntilIdle()
+
+            val b = EnergyRide(repo, vehicle(cellCount = 24).copy(id = "v2"))
+            b.feed(1_000); advanceUntilIdle()
+            b.feed(8_000)
+            val eb = assertNotNull(repo.activeVehicleData.value.energy)
+            assertNull(eb.learned, "another vehicle does not inherit v1's learned capacity")
+            assertEquals(CapacitySource.NONE, eb.capacitySource)
+            assertEquals(vSoc, eb.socPercent!!, 0.7f, "and seeds from its own voltage")
+            assertEquals(
+                listOf("v1", "v2"),
+                store.loads.map { it.first },
+                "each vehicle's memory is loaded under its own id"
+            )
+            assertEquals(24, store.loads.first().second)
+        }
     }
 
     // --- Synthetic frame builders (24 bytes, layout as BegodeNoBmsProtocolTest) ---

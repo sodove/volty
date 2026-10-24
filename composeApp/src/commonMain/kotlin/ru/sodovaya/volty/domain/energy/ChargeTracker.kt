@@ -41,9 +41,15 @@ data class PersistedCharge(val percent: Float, val atMillis: Long)
  * Pure: time comes only from [ChargeInput.atMillis]; no coroutines, no I/O.
  */
 class ChargeTracker(
-    private val config: ChargeConfig,
+    config: ChargeConfig,
     private val persisted: PersistedCharge? = null,
 ) {
+    /**
+     * The settings in force. Replaceable while running so a capacity learned mid-ride (or typed by the
+     * rider) takes effect without discarding the counter; the next step simply divides by the new value.
+     */
+    var config: ChargeConfig = config
+
     /** Counter in percent (in fallback, the low-passed voltage SoC); null until seeded. */
     var counterPercent: Float? = null
         private set

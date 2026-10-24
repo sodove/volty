@@ -65,7 +65,14 @@ internal class VehicleConnection(
      * Injected so tests can drive staleness with a controllable time source
      * (same pattern as [ru.sodovaya.volty.domain.usecase.AlertEngine]).
      */
-    private val clock: () -> Instant = { Clock.System.now() }
+    private val clock: () -> Instant = { Clock.System.now() },
+    /**
+     * The energy model, or null (the default: no model, snapshots are published as built). When set it is
+     * applied EXACTLY ONCE per published snapshot, inside [publish] — the single funnel of [submit],
+     * [submitMotion] and [emit] — against this connection's own [clock]. Applying it anywhere else would
+     * integrate a step twice. [snapshot] stays the raw, unmodelled view.
+     */
+    val energy: ru.sodovaya.volty.domain.energy.VehicleEnergyTracker? = null
 ) {
 
     private val states: MutableList<PackState> = packs
@@ -157,9 +164,7 @@ internal class VehicleConnection(
                 states[i] = other.copy(isOnline = false)
             }
         }
-        val snap = snapshot()
-        onVehicleData(snap)
-        return snap
+        return publish()
     }
 
     /**
@@ -208,9 +213,7 @@ internal class VehicleConnection(
                 ctrlStates[i] = other.copy(isOnline = false)
             }
         }
-        val snap = snapshot()
-        onVehicleData(snap)
-        return snap
+        return publish()
     }
 
     /**
@@ -310,5 +313,13 @@ internal class VehicleConnection(
         )
     }
 
-    private fun emit() = onVehicleData(snapshot())
+    /** Build, model (once) and publish one snapshot; returns the very instance that was published. */
+    private fun publish(): VehicleData {
+        val raw = snapshot()
+        val snap = energy?.apply(raw, clock()) ?: raw
+        onVehicleData(snap)
+        return snap
+    }
+
+    private fun emit() { publish() }
 }
