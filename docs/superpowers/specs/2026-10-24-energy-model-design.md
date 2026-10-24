@@ -11,7 +11,8 @@ The reason is `VoltageSocEstimator`: for any pack whose BMS reports no SoC
 wheel sags ~10 V, which is ~45 % of that window, so the number on the dashboard — and every SoC alert
 — follows the sag. The rider's scooter (VESC + ANT BMS) does not have this problem: the ANT
 coulomb-counts, so its percentage creeps down one point at a time under any load. **That behaviour is
-the target.**
+the target.** The alerts already pay for it: on the T4 the low-charge alert fired repeatedly at about
+a third of real charge, while the wheel's own low-battery warning stayed silent (rider, 2026-10-24).
 
 Second, the rider's own head unit (`E:\sodovaya\nyxdash\firmware`,
 `targets/p4_43inch/main/screens/scr_dashboard.c`, the "Range estimate" block, ~line 498) shows a range
