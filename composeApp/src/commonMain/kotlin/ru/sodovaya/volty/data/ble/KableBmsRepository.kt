@@ -1636,9 +1636,13 @@ class KableBmsRepository private constructor(
             onSeriesCells = { cells ->
                 if (persisted) {
                     val owner = orchestrator()
+                    // Captured NOW (on the funnel, under the lock) together with the cell count: the memory is
+                    // keyed by (vehicle, cells, chemistry), and reading the chemistry later - in the launched
+                    // load, or at install - could pair the old battery's row with the new battery's engine.
+                    val chemistry = tracker.chemistry
                     scope.launch {
                         val loaded = try {
-                            store.load(socVehicle.id, cells, tracker.chemistry)
+                            store.load(socVehicle.id, cells, chemistry)
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -1649,7 +1653,9 @@ class KableBmsRepository private constructor(
                             return@launch
                         }
                         sessionLock.withLock {
-                            if (ownsActivePipeline(owner) && tracker.seriesCells == cells) tracker.installMemory(loaded)
+                            if (ownsActivePipeline(owner) && tracker.seriesCells == cells && tracker.chemistry == chemistry) {
+                                tracker.installMemory(loaded)
+                            }
                         }
                     }
                 } else tracker.installMemory(EnergyMemory.EMPTY)
@@ -1701,7 +1707,10 @@ class KableBmsRepository private constructor(
         val cells = tracker.seriesCells ?: return null
         if (!tracker.memoryReady) return null
         val memory = tracker.memory()
-        return { store -> store.save(vehicleId, cells, tracker.chemistry, memory) }
+        // Chemistry is captured with the cells and the memory, under the same lock: a chemistry edit between
+        // here and the write must not store this battery's learning under the next battery's key.
+        val chemistry = tracker.chemistry
+        return { store -> store.save(vehicleId, cells, chemistry, memory) }
     }
 
     /** A failed write is logged and dropped (the next interval retries); cancellation is never swallowed. */

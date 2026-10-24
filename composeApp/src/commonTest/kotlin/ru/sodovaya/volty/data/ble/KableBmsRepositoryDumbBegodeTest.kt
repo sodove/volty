@@ -19,6 +19,7 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -353,6 +354,9 @@ class KableBmsRepositoryDumbBegodeTest {
     private class FakeEnergyStore(
         private val seeded: Map<String, EnergyMemory> = emptyMap(),
         private val failLoad: Boolean = false,
+        /** When set, a load suspends until this completes, then answers per CHEMISTRY asked (not per vehicle). */
+        val loadGate: CompletableDeferred<Unit>? = null,
+        private val seededByChemistry: Map<Chemistry, EnergyMemory> = emptyMap(),
     ) : VehicleEnergyStore {
         data class Saved(val id: String, val cells: Int, val chemistry: Chemistry, val memory: EnergyMemory)
         val loads = mutableListOf<Triple<String, Int, Chemistry>>()
@@ -360,6 +364,10 @@ class KableBmsRepositoryDumbBegodeTest {
         override suspend fun load(vehicleId: String, seriesCells: Int, chemistry: Chemistry): EnergyMemory {
             loads += Triple(vehicleId, seriesCells, chemistry)
             if (failLoad) throw IllegalStateException("disk error")
+            if (loadGate != null) {
+                loadGate.await()
+                return seededByChemistry[chemistry] ?: EnergyMemory.EMPTY
+            }
             return seeded[vehicleId] ?: EnergyMemory.EMPTY
         }
         override suspend fun save(vehicleId: String, seriesCells: Int, chemistry: Chemistry, memory: EnergyMemory) {
@@ -594,6 +602,47 @@ class KableBmsRepositoryDumbBegodeTest {
             assertEquals(listOf(Chemistry.LI_ION_NMC, Chemistry.LIFEPO4), store.loads.map { it.third })
             repo.disconnect(); advanceUntilIdle()
             assertEquals(Chemistry.LIFEPO4, store.saves.last().chemistry)
+        }
+    }
+
+    @Test
+    fun `a chemistry edit between capturing a save and writing it cannot relabel the old battery's memory`() {
+        val base = vehicle(cellCount = 24)
+        val vehicles = MutableStateFlow(listOf(base))
+        val store = FakeEnergyStore()
+        energyRepoTest(store, vehicles) { repo ->
+            val ride = EnergyRide(repo, base)
+            ride.feed(1_000); advanceUntilIdle(); ride.feed(8_000)
+            // The disconnect captures the save under the lock, then runs this hook BEFORE writing it.
+            repo.beforeHistoryDisconnectForTest = {
+                vehicles.value = listOf(base.copy(chemistry = Chemistry.LIFEPO4))
+                advanceUntilIdle()
+            }
+            repo.disconnect(); advanceUntilIdle()
+            assertEquals(Chemistry.LI_ION_NMC, store.saves.single().chemistry, "the memory was earned on the NMC pack")
+        }
+    }
+
+    @Test
+    fun `a memory load that was started for the old chemistry is not installed after a chemistry edit`() {
+        val base = vehicle(cellCount = 24)
+        val vehicles = MutableStateFlow(listOf(base))
+        val gate = CompletableDeferred<Unit>()
+        val nmcMemory = EnergyMemory(LearnedCapacity(41f, 40f, 2), null, null)
+        val store = FakeEnergyStore(loadGate = gate, seededByChemistry = mapOf(Chemistry.LI_ION_NMC to nmcMemory))
+        energyRepoTest(store, vehicles) { repo ->
+            val ride = EnergyRide(repo, base)
+            ride.feed(1_000); advanceUntilIdle() // the NMC load is now suspended on the gate
+            vehicles.value = listOf(base.copy(chemistry = Chemistry.LIFEPO4))
+            advanceUntilIdle()
+            ride.feed(1_000); advanceUntilIdle() // a fresh engine under LiFePO4; its own load is suspended too
+            assertEquals(listOf(Chemistry.LI_ION_NMC, Chemistry.LIFEPO4), store.loads.map { it.third })
+            gate.complete(Unit); advanceUntilIdle()
+            ride.feed(1_000)
+            assertNull(
+                repo.activeVehicleData.value.energy?.learned,
+                "the NMC pack's learned capacity must not land on the LiFePO4 pack"
+            )
         }
     }
 
