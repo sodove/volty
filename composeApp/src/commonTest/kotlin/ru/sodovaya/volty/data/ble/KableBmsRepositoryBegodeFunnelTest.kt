@@ -416,7 +416,7 @@ class KableBmsRepositoryBegodeFunnelTest {
         assertEquals(80, data.cellVoltages.size, "40 cells per branch, both branches")
         assertTrue(data.voltage in 148.1f..148.7f, "parallel mean of the two branch cell sums, was ${data.voltage}")
         assertTrue(data.socKnown)
-        assertEquals(45.6f, data.soc, 0.3f, "estimated from the cells")
+        assertEquals(41.24f, data.soc, 0.3f, "estimated from the cells")
         val vd = repo.activeVehicleData.value
         vd.packs.forEachIndexed { i, p ->
             assertEquals(40, p.data.cellVoltages.size, "branch $i cells")

@@ -48,9 +48,10 @@ class VoltageSocEstimatorTest {
     }
 
     @Test
-    fun midpointGives50() {
-        // (3.30 + 4.20) / 2 = 3.75 V.
-        assertEquals(50f, estimate(List(16) { 3.75f }), 0.01f)
+    fun midVoltageFollowsTheOcvCurveNotALine() {
+        // (3.30 + 4.20) / 2 = 3.75 V. Retracted: this once asserted the linear 50 %. The
+        // OCV table puts 3.75 V at ~47.8 % between the 3.30/4.20 bounds.
+        assertEquals(47.77f, estimate(List(16) { 3.75f }), 0.05f)
     }
 
     @Test
@@ -69,20 +70,22 @@ class VoltageSocEstimatorTest {
     @Test
     fun configuredBoundsOverrideChemistryDefaults() {
         // User narrowed the window to 3.00..4.10 V: a 4.10 V cell is now full
-        // and 3.55 V is the midpoint, regardless of the NMC 3.30/4.20 defaults.
+        // regardless of the NMC 3.30/4.20 defaults. 3.55 V is a table knot (20 % of
+        // nameplate) -> 0.20 / 0.9167 = 21.8 %; it was the linear 50 % before the OCV curve.
         // A user-configured cellLowV wins over emptyCellV — the bounds the
         // user configured ARE their 0 % and 100 %.
         val config = AlertConfig(cellHighV = 4.10f, cellLowV = 3.00f)
         assertEquals(100f, estimate(List(20) { 4.10f }, config = config), 0.01f)
         assertEquals(0f, estimate(List(20) { 3.00f }, config = config), 0.01f)
-        assertEquals(50f, estimate(List(20) { 3.55f }, config = config), 0.01f)
+        assertEquals(21.82f, estimate(List(20) { 3.55f }, config = config), 0.05f)
     }
 
     @Test
     fun lifepo4DefaultsAreHonoured() {
         // LiFePO4 usable range: emptyCellV 3.00 .. defaultHighV 3.65 V.
-        // Midpoint 3.325 V -> 50 %.
-        assertEquals(50f, estimate(List(4) { 3.325f }, chemistry = Chemistry.LIFEPO4), 0.01f)
+        // 3.325 V sits high on the plateau's upper knee: table fraction 0.8167 between
+        // 0.10 (3.00 V) and 1.0 -> 79.6 %, not the linear 50 %.
+        assertEquals(79.63f, estimate(List(4) { 3.325f }, chemistry = Chemistry.LIFEPO4), 0.01f)
     }
 
     @Test
@@ -113,18 +116,17 @@ class VoltageSocEstimatorTest {
     @Test
     fun fieldReadingEtMax40CellsAt409() {
         // Real field reading: Begode ET Max, 40 cells at 4.09 V, Li-ion NMC
-        // defaults. (4.09 - 3.30) / (4.20 - 3.30) = 87.78 % — about 88 %,
-        // down from 92 % under the old 2.80 V damage-threshold floor.
-        assertEquals(87.78f, estimate(List(40) { 4.09f }), 0.05f)
+        // defaults. OCV table, stretched between 3.30 and 4.20 V: 90.18 %
+        // (the linear map gave 87.78 %).
+        assertEquals(90.18f, estimate(List(40) { 4.09f }), 0.05f)
     }
 
     @Test
     fun fieldReadingEtMaxAt38825() {
         // Second reading from the same wheel: 3.8825 V per cell.
-        // (3.8825 - 3.30) / 0.90 = 64.72 % — within a few points of the 68 %
-        // another app showed at this exact voltage. The old 2.80 V floor gave
-        // an inflated 77 %.
-        assertEquals(64.72f, estimate(List(40) { 3.8825f }), 0.05f)
+        // OCV table, stretched between 3.30 and 4.20 V: 65.51 % — closer to
+        // the 68 % another app showed at this exact voltage than the linear 64.72 %.
+        assertEquals(65.51f, estimate(List(40) { 3.8825f }), 0.05f)
     }
 
     // --- The guarded application to a sample ---
@@ -148,7 +150,7 @@ class VoltageSocEstimatorTest {
     fun zeroSocSampleWithCellsGetsEstimated() {
         val sample = BmsData(voltage = 163.6f, cellVoltages = List(40) { 4.09f }, isConnected = true)
         val enriched = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(), packIndex = 0)
-        assertEquals(87.78f, enriched.soc, 0.05f)
+        assertEquals(90.18f, enriched.soc, 0.05f)
         // Everything else passes through untouched.
         assertEquals(sample.voltage, enriched.voltage, 0f)
         assertEquals(sample.cellVoltages, enriched.cellVoltages)
@@ -214,6 +216,20 @@ class VoltageSocEstimatorTest {
     fun estimatorHonoursVehicleConfiguredBounds() {
         val sample = BmsData(cellVoltages = List(20) { 3.55f }, isConnected = true)
         val v = vehicle(AlertConfig(cellHighV = 4.10f, cellLowV = 3.00f))
-        assertEquals(50f, VoltageSocEstimator.withEstimatedSoc(sample, v, packIndex = 0).soc, 0.01f)
+        assertEquals(21.82f, VoltageSocEstimator.withEstimatedSoc(sample, v, packIndex = 0).soc, 0.05f)
+    }
+
+    @Test
+    fun boundsForPrefersConfiguredThenChemistryDefaults() {
+        assertEquals(3.30f to 4.20f, VoltageSocEstimator.boundsFor(Chemistry.LI_ION_NMC, AlertConfig()))
+        assertEquals(
+            3.00f to 4.10f,
+            VoltageSocEstimator.boundsFor(Chemistry.LI_ION_NMC, AlertConfig(cellHighV = 4.10f, cellLowV = 3.00f))
+        )
+        // Each bound falls back independently.
+        assertEquals(
+            3.30f to 4.10f,
+            VoltageSocEstimator.boundsFor(Chemistry.LI_ION_NMC, AlertConfig(cellHighV = 4.10f))
+        )
     }
 }

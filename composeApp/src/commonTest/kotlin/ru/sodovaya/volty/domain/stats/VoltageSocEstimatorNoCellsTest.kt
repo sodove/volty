@@ -39,10 +39,10 @@ class VoltageSocEstimatorNoCellsTest {
     @Test
     fun packVoltageDividedByTheKnownCellCountDrivesTheEstimate() {
         // A dumb 40S Begode at 147.3 V (the scaled ET Max live reading):
-        // 147.3 / 40 = 3.6825 V/cell -> (3.6825 - 3.30) / 0.90 = 42.5 %.
+        // 147.3 / 40 = 3.6825 V/cell -> OCV curve, 36.2 % (the linear map gave 42.5 %).
         val sample = BmsData(voltage = 147.3f, isConnected = true)
         val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
-        assertEquals(42.5f, out.soc, 0.05f)
+        assertEquals(36.16f, out.soc, 0.05f)
         assertEquals(sample.voltage, out.voltage, 0f, "only soc may change")
     }
 
@@ -58,17 +58,17 @@ class VoltageSocEstimatorNoCellsTest {
 
         val out = VoltageSocEstimator.withEstimatedSoc(sample, wheel, packIndex = 1)
 
-        assertEquals(42.5f, out.soc, 0.05f)
+        assertEquals(36.16f, out.soc, 0.05f)
         assertTrue(out.socKnown, "the voltage estimate makes this branch's SoC known")
     }
 
     @Test
     fun aT4SizedPackEstimatesFromItsOwnCellCount() {
-        // 24S at 88.38 V -> 3.6825 V/cell, the same 42.5 % — the estimate
+        // 24S at 88.38 V -> 3.6825 V/cell, the same 36.2 % — the estimate
         // follows the profile's cell count, not any hard-coded pack size.
         val sample = BmsData(voltage = 88.38f, isConnected = true)
         val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 24), packIndex = 0)
-        assertEquals(42.5f, out.soc, 0.05f)
+        assertEquals(36.16f, out.soc, 0.05f)
     }
 
     @Test
@@ -96,7 +96,7 @@ class VoltageSocEstimatorNoCellsTest {
         // estimate is the fuel gauge — and SoC alerts must work off it.
         val sample = BmsData(voltage = 147.3f, socKnown = false, isConnected = true)
         val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
-        assertEquals(42.5f, out.soc, 0.05f)
+        assertEquals(36.16f, out.soc, 0.05f)
         assertTrue(out.socKnown, "an estimated SoC is a known SoC")
     }
 
@@ -117,7 +117,7 @@ class VoltageSocEstimatorNoCellsTest {
         // known again.
         val sample = BmsData(cellVoltages = List(40) { 4.09f }, socKnown = false, isConnected = true)
         val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
-        assertEquals(87.78f, out.soc, 0.05f)
+        assertEquals(90.18f, out.soc, 0.05f)
         assertTrue(out.socKnown)
     }
 
@@ -149,11 +149,11 @@ class VoltageSocEstimatorNoCellsTest {
     fun presentCellsStillWinOverTheVoltageDerivedPath() {
         // Cells are the better evidence and must keep driving the estimate
         // exactly as before this fallback existed: 40 cells at 4.09 V give
-        // 87.78 %, not the 76.9 % the (deliberately inconsistent) pack
+        // 90.18 %, not the 76.9 % the (deliberately inconsistent) pack
         // voltage field would suggest.
         val sample = BmsData(voltage = 160.0f, cellVoltages = List(40) { 4.09f }, isConnected = true)
         val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
-        assertEquals(87.78f, out.soc, 0.05f)
+        assertEquals(90.18f, out.soc, 0.05f)
     }
 
     @Test

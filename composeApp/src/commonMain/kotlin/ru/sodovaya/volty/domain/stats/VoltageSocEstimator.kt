@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.domain.stats
 
+import ru.sodovaya.volty.domain.energy.OcvCurve
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -11,7 +12,7 @@ import ru.sodovaya.volty.domain.model.Vehicle
  * Smart BMS units (JK, JBD, ANT, Daly) coulomb-count and report a real SoC.
  * A Begode wheel reports voltage, current, cells and temperatures — nothing
  * else — so its samples arrive with `soc = 0` and the dashboard showed "0 %"
- * on a nearly full wheel. This maps the average cell voltage linearly onto
+ * on a nearly full wheel. This maps the average cell voltage onto
  * 0..100 % between the vehicle's configured cell-voltage bounds: the user's
  * alert thresholds when set, otherwise the chemistry's usable range
  * ([Chemistry.emptyCellV]..[Chemistry.defaultHighV]).
@@ -22,14 +23,20 @@ import ru.sodovaya.volty.domain.model.Vehicle
  * KableBmsRepository's onSample callback, the one place where both a sample
  * and its vehicle are in scope.
  *
- * A linear voltage-to-percent map is an approximation (real discharge curves
- * sag in the middle, and voltage dips under load), but it follows the user's
- * own mental model: the bounds they configured ARE their 0 % and 100 %.
+ * The bounds the rider configured ARE their 0 % and 100 % (exactly), and the
+ * shape between them follows [OcvCurve], the chemistry's open-circuit curve.
+ * Voltage still dips under load, which this does not model.
+ *
+ * RETRACTION (T4 field report, 2026-10-24): an earlier revision mapped the
+ * voltage LINEARLY between the bounds and claimed that "follows the rider's
+ * mental model". That held for the two endpoints only; the shape between them
+ * was wrong (a Li-ion cell at 3.60 V is ~22 % charged, not the 33 % a linear
+ * map gives, and the plateau made the readout collapse under load).
  */
 object VoltageSocEstimator {
 
     /**
-     * Average cell voltage mapped linearly onto 0..100 % between
+     * Average cell voltage mapped onto 0..100 % (shaped by [OcvCurve]) between
      * [AlertConfig.cellLowV]..[AlertConfig.cellHighV], falling back to
      * [Chemistry.emptyCellV]..[Chemistry.defaultHighV]. Clamped to 0..100.
      * An empty cell list (or a degenerate bounds window) yields 0, never NaN.
@@ -60,17 +67,22 @@ object VoltageSocEstimator {
         return estimateFromAverageCellVoltage(packVoltage / cellCount, chemistry, alertConfig)
     }
 
-    /** The linear map itself, for callers that already hold an average cell voltage. */
+    /**
+     * The one place cell-voltage bounds are resolved: the rider's alert thresholds when set,
+     * else the chemistry's usable range ([Chemistry.emptyCellV]..[Chemistry.defaultHighV]).
+     * Returns (low, high).
+     */
+    fun boundsFor(chemistry: Chemistry, alert: AlertConfig): Pair<Float, Float> =
+        (alert.cellLowV ?: chemistry.emptyCellV) to (alert.cellHighV ?: chemistry.defaultHighV)
+
+    /** The OCV-shaped map itself, for callers that already hold an average cell voltage. */
     private fun estimateFromAverageCellVoltage(
         averageCellV: Float,
         chemistry: Chemistry,
         alertConfig: AlertConfig
     ): Float {
-        val highV = alertConfig.cellHighV ?: chemistry.defaultHighV
-        val lowV = alertConfig.cellLowV ?: chemistry.emptyCellV
-        val span = highV - lowV
-        if (span <= 0f) return 0f
-        return ((averageCellV - lowV) / span * 100f).coerceIn(0f, 100f)
+        val (lowV, highV) = boundsFor(chemistry, alertConfig)
+        return OcvCurve.stretchedSocPercent(chemistry, averageCellV, lowV, highV)
     }
 
     /**

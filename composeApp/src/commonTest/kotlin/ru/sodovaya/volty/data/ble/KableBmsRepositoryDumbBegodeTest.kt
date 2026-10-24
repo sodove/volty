@@ -110,8 +110,8 @@ class KableBmsRepositoryDumbBegodeTest {
         assertFalse(data.hasCurrent, "the live frame exposes phase current only")
         assertEquals(0f, data.power, 0.5f)
         assertFalse(data.hasPower, "battery power is unknown without battery current")
-        // SoC from the scaled voltage: 147.3 / 40 = 3.6825 V/cell -> 42.5 %.
-        assertEquals(42.5f, data.soc, 0.1f)
+        // SoC from the scaled voltage: 147.3 / 40 = 3.6825 V/cell -> 36.2 % (OCV curve; linear gave 42.5 %).
+        assertEquals(36.16f, data.soc, 0.1f)
         assertEquals(1, data.temperatures.size)
         assertEquals(27.5035f, data.temperatures[0], 0.01f)
         assertTrue(data.cellVoltages.isEmpty(), "a dumb wheel has no cells to show")
@@ -246,7 +246,7 @@ class KableBmsRepositoryDumbBegodeTest {
         wire.notify(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
 
         val data = repo.activeData.value
-        assertEquals(42.5f, data.soc, 0.1f)
+        assertEquals(36.16f, data.soc, 0.1f)
         assertTrue(data.socKnown, "the voltage estimate is a real fuel gauge — SoC alerts must work")
     }
 
@@ -257,7 +257,7 @@ class KableBmsRepositoryDumbBegodeTest {
         BegodeDumpFixture.chunks().forEach { wire.notify(it) }
 
         val data = repo.activeData.value
-        assertEquals(45.6f, data.soc, 0.3f)
+        assertEquals(41.24f, data.soc, 0.3f)
         assertTrue(data.socKnown, "a cell-estimated SoC on the smart path stays known")
     }
 
@@ -286,9 +286,9 @@ class KableBmsRepositoryDumbBegodeTest {
         assertEquals(80, data.cellVoltages.size, "the aggregate unions both branches")
         assertTrue(data.voltage in 148.1f..148.7f, "parallel mean of the two branch sums")
         assertEquals(0f, data.current, 0.01f, "the captured wheel was stationary")
-        // SoC estimated from the CELLS (avg ~3.711 V -> ~45.6 %), not from
+        // SoC estimated from the CELLS (avg ~3.711 V -> ~41.2 % (OCV curve; linear gave 45.6 %)), not from
         // the voltage/cellCount fallback.
-        assertEquals(45.6f, data.soc, 0.3f)
+        assertEquals(41.24f, data.soc, 0.3f)
     }
 
     @Test

@@ -240,11 +240,11 @@ class SampleRoutingTest {
         )
         funnel(0, branch, emptyList())
 
-        assertEquals(50.0f, repo.activeData.value.soc, absoluteTolerance = 0.1f)
+        assertEquals(47.77f, repo.activeData.value.soc, absoluteTolerance = 0.1f)
         assertEquals(150.0f, repo.activeData.value.voltage, absoluteTolerance = 0.01f)
         val pack = repo.activeVehicleData.value.packs.first()
         assertTrue(pack.isOnline, "the enriched sample must bring the pack online")
-        assertEquals(50.0f, pack.data.soc, absoluteTolerance = 0.1f)
+        assertEquals(47.77f, pack.data.soc, absoluteTolerance = 0.1f)
     }
 
     @Test

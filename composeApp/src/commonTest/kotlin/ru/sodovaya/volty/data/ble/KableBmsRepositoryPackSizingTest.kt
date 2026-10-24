@@ -159,8 +159,8 @@ class KableBmsRepositoryPackSizingTest {
         val funnel = repo.installSampleFunnelForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         // A Begode reports no SoC (soc = 0 on every sample). 40 cells at
-        // 3.93 V map linearly between LI_ION_NMC's emptyCellV = 3.30 and
-        // defaultHighV = 4.20: (3.93 - 3.30) / 0.90 = 70 %.
+        // 3.93 V map (OCV curve) between LI_ION_NMC's emptyCellV = 3.30 and
+        // defaultHighV = 4.20: OCV table = 71.9 % (the linear map gave 70 %).
         val branch = BmsData(
             voltage = 40 * 3.93f,
             current = 8.85f,
@@ -175,12 +175,12 @@ class KableBmsRepositoryPackSizingTest {
         assertTrue(snap.packs.all { it.isOnline }, "precondition: both branches online")
         // The regression: the estimator was handed the STORED one-pack vehicle,
         // so branch 1 kept soc = 0 and the parallel mean showed HALF (35 %).
-        assertEquals(70.0f, repo.activeData.value.soc, absoluteTolerance = 0.1f)
+        assertEquals(71.88f, repo.activeData.value.soc, absoluteTolerance = 0.1f)
         // Both per-pack values must carry the estimate — the aggregate being
         // right for the wrong reason (e.g. one branch at 140 %) would slip by
         // an aggregate-only assertion.
         snap.packs.forEach { p ->
-            assertEquals(70.0f, p.data.soc, absoluteTolerance = 0.1f)
+            assertEquals(71.88f, p.data.soc, absoluteTolerance = 0.1f)
         }
     }
 
