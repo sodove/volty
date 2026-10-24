@@ -92,6 +92,13 @@ open class VehicleEnergyTracker(
 
     private var lastAtMillis: Long? = null
 
+    /** For the persistence owner: the vehicle this tracker belongs to. */
+    val vehicleId: String get() = vehicle.id
+    val chemistry: ru.sodovaya.volty.domain.model.Chemistry get() = vehicle.chemistry
+
+    /** Owner bookkeeping for the 30 s save interval; Long.MIN_VALUE = not started. */
+    var lastSaveAtMs: Long = Long.MIN_VALUE
+
     private inner class Engine(val cells: Int, mem: EnergyMemory) {
         val bounds = VoltageSocEstimator.boundsFor(vehicle.chemistry, vehicle.alertConfig)
         val resistance = PackResistanceEstimator(

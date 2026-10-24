@@ -347,12 +347,14 @@ class KableBmsRepositoryDumbBegodeTest {
 
     private class FakeEnergyStore(
         private val seeded: Map<String, EnergyMemory> = emptyMap(),
+        private val failLoad: Boolean = false,
     ) : VehicleEnergyStore {
         data class Saved(val id: String, val cells: Int, val chemistry: Chemistry, val memory: EnergyMemory)
         val loads = mutableListOf<Triple<String, Int, Chemistry>>()
         val saves = mutableListOf<Saved>()
         override suspend fun load(vehicleId: String, seriesCells: Int, chemistry: Chemistry): EnergyMemory {
             loads += Triple(vehicleId, seriesCells, chemistry)
+            if (failLoad) throw IllegalStateException("disk error")
             return seeded[vehicleId] ?: EnergyMemory.EMPTY
         }
         override suspend fun save(vehicleId: String, seriesCells: Int, chemistry: Chemistry, memory: EnergyMemory) {
@@ -454,6 +456,36 @@ class KableBmsRepositoryDumbBegodeTest {
                 "each vehicle's memory is loaded under its own id"
             )
             assertEquals(24, store.loads.first().second)
+        }
+    }
+
+    @Test
+    fun `a store whose load throws never has its row overwritten`() {
+        val store = FakeEnergyStore(mapOf("v1" to EnergyMemory(LearnedCapacity(41f, 40f, 2), null, null)), failLoad = true)
+        energyRepoTest(store) { repo ->
+            val ride = EnergyRide(repo, vehicle(cellCount = 24))
+            ride.feed(1_000); advanceUntilIdle()
+            ride.feed(70_000); advanceUntilIdle() // well past two save intervals
+            assertTrue(repo.activeData.value.socKnown, "the model still runs, from empty memory")
+            assertEquals(1, store.loads.size, "the load was attempted")
+            assertTrue(store.saves.isEmpty(), "no periodic save may replace the stored row after a failed load")
+            repo.disconnect(); advanceUntilIdle()
+            assertTrue(store.saves.isEmpty(), "nor the disconnect save")
+        }
+    }
+
+    @Test
+    fun `only the winning connection's tracker is saved when a second one was built after it`() {
+        val store = FakeEnergyStore()
+        energyRepoTest(store) { repo ->
+            val ride = EnergyRide(repo, vehicle(cellCount = 24)) // installs the winner
+            // The superseded attempt finishes building AFTER the winner (never installed).
+            repo.buildOrchestratorForTest(vehicle(cellCount = 24), ADDRESS, BmsType.BEGODE)
+            ride.feed(1_000); advanceUntilIdle()
+            ride.feed(32_000); advanceUntilIdle()
+            assertEquals(1, store.saves.size, "the winner saved on its interval")
+            repo.disconnect(); advanceUntilIdle()
+            assertEquals(2, store.saves.size, "and on disconnect")
         }
     }
 

@@ -1602,23 +1602,8 @@ class KableBmsRepository private constructor(
             clock = orchestratorClockForTest ?: { Clock.System.now() },
             energy = energy
         )
-        energyOwner = if (energy != null && vehicle != null) {
-            EnergyOwner(orchestrator, energy, vehicle.id, vehicle.chemistry, nowMs())
-        } else null
         return orchestrator
     }
-
-    /** One connection's energy tracker with what is needed to persist it. */
-    private class EnergyOwner(
-        val orchestrator: VehicleConnection,
-        val tracker: VehicleEnergyTracker,
-        val vehicleId: String,
-        val chemistry: Chemistry,
-        var lastSaveAtMs: Long,
-    )
-
-    /** The latest-built connection's tracker; only honoured while that connection is the active pipeline. */
-    private var energyOwner: EnergyOwner? = null
 
     /**
      * The energy model for one connection, or null when it is off: no [energyStore] injected, or no
@@ -1651,8 +1636,17 @@ class KableBmsRepository private constructor(
                 if (persisted) {
                     val owner = orchestrator()
                     scope.launch {
-                        val loaded = runCatching { store.load(socVehicle.id, cells, socVehicle.chemistry) }
-                            .getOrElse { EnergyMemory.EMPTY }
+                        val loaded = try {
+                            store.load(socVehicle.id, cells, socVehicle.chemistry)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // A failed load must NEVER become "empty memory": installing EMPTY would mark the
+                            // memory ready and the next save would overwrite the stored row with nothing. The
+                            // tracker keeps running from empty memory but, never being ready, saves nothing.
+                            println("[VOLTY-BLE] energy memory load failed for ${socVehicle.id}: $e")
+                            return@launch
+                        }
                         sessionLock.withLock {
                             if (ownsActivePipeline(owner) && tracker.seriesCells == cells) tracker.installMemory(loaded)
                         }
@@ -1667,24 +1661,38 @@ class KableBmsRepository private constructor(
     /** Persist the active tracker's memory at most every [ENERGY_SAVE_INTERVAL_MS]. Called on the funnel, under sessionLock. */
     private fun maybeSaveEnergy(orchestrator: VehicleConnection) {
         val store = energyStore ?: return
-        val owner = energyOwner?.takeIf { it.orchestrator === orchestrator } ?: return
+        // Derived from the pipeline being published, never from a separate slot: only the connection that
+        // owns the active pipeline (checked by the caller) can save, so a superseded connect cannot steal it.
+        val tracker = orchestrator.energy ?: return
         val now = nowMs()
-        if (now - owner.lastSaveAtMs < ENERGY_SAVE_INTERVAL_MS) return
-        val save = energySaveOf(owner) ?: return
-        owner.lastSaveAtMs = now
-        scope.launch { runCatching { save(store) } }
+        if (tracker.lastSaveAtMs == Long.MIN_VALUE) tracker.lastSaveAtMs = now
+        if (now - tracker.lastSaveAtMs < ENERGY_SAVE_INTERVAL_MS) return
+        val save = energySaveOf(tracker) ?: return
+        tracker.lastSaveAtMs = now
+        scope.launch { saveEnergyLogged(store, save) }
     }
 
     /** A snapshot of what to save for [owner] now, or null when nothing may be saved yet (no count, memory not loaded, guest/demo). */
-    private fun energySaveOf(owner: EnergyOwner): (suspend (VehicleEnergyStore) -> Unit)? {
-        if (owner.vehicleId.startsWith(GUEST_VEHICLE_ID_PREFIX) || owner.vehicleId == DEMO_VEHICLE_ID ||
-            owner.vehicleId == DEMO_WHEEL_VEHICLE_ID
+    private fun energySaveOf(tracker: VehicleEnergyTracker): (suspend (VehicleEnergyStore) -> Unit)? {
+        val vehicleId = tracker.vehicleId
+        if (vehicleId.startsWith(GUEST_VEHICLE_ID_PREFIX) || vehicleId == DEMO_VEHICLE_ID ||
+            vehicleId == DEMO_WHEEL_VEHICLE_ID
         ) return null
-        val tracker = owner.tracker
         val cells = tracker.seriesCells ?: return null
         if (!tracker.memoryReady) return null
         val memory = tracker.memory()
-        return { store -> store.save(owner.vehicleId, cells, owner.chemistry, memory) }
+        return { store -> store.save(vehicleId, cells, tracker.chemistry, memory) }
+    }
+
+    /** A failed write is logged and dropped (the next interval retries); cancellation is never swallowed. */
+    private suspend fun saveEnergyLogged(store: VehicleEnergyStore, save: suspend (VehicleEnergyStore) -> Unit) {
+        try {
+            save(store)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("[VOLTY-BLE] energy memory save failed: $e")
+        }
     }
 
     /**
@@ -3138,9 +3146,9 @@ class KableBmsRepository private constructor(
             userInitiatedDisconnect = true
             // Capture what the energy model learned while the pipeline is still current; written below,
             // outside the lock, before the native release.
-            energySave = energyOwner?.takeIf { it.orchestrator === vehicleConnection }?.let { owner ->
-                owner.tracker.finish()
-                energySaveOf(owner)
+            energySave = vehicleConnection?.energy?.let { tracker ->
+                tracker.finish()
+                energySaveOf(tracker)
             }
             val current = links
             val sessionsToTear = current.mapNotNull { it.session }
@@ -3174,7 +3182,7 @@ class KableBmsRepository private constructor(
             withContext(kotlinx.coroutines.NonCancellable) {
                 val store = energyStore
                 val save = energySave
-                if (store != null && save != null) runCatching { save(store) }
+                if (store != null && save != null) saveEnergyLogged(store, save)
                 val outcome = runCatching { releaseAcceptedDisconnect(accepted) }
                 accepted.receipt.complete(outcome) // Outside sessionLock.
                 outcome.getOrThrow()
@@ -3758,6 +3766,10 @@ class KableBmsRepository private constructor(
      * exercise the Begode live-voltage scaling: it reads the protocol's own
      * state, so a hand-built sample cannot reach it.
      */
+    /** Builds an orchestrator (and its energy tracker) WITHOUT installing it: the loser of two overlapping connects. */
+    internal fun buildOrchestratorForTest(vehicle: Vehicle?, address: String, type: BmsType?): VehicleConnection =
+        buildOrchestrator(vehicle, address, type)
+
     internal fun installProtocolPipelineForTest(
         vehicle: Vehicle?,
         address: String,
