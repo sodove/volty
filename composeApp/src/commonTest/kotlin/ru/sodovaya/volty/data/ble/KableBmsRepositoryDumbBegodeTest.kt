@@ -6,11 +6,14 @@ import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.domain.energy.CapacitySource
 import ru.sodovaya.volty.domain.energy.EnergyMemory
 import ru.sodovaya.volty.domain.energy.LearnedCapacity
+import ru.sodovaya.volty.domain.energy.OcvCurve
 import ru.sodovaya.volty.domain.energy.PersistedCharge
 import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.BatteryCapacity
+import ru.sodovaya.volty.domain.model.CapacityUnit
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.singlePackVehicle
@@ -18,6 +21,7 @@ import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -45,8 +49,9 @@ import kotlin.time.Instant
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 class KableBmsRepositoryDumbBegodeTest {
 
-    private class NoopVehicleRepository : VehicleRepository {
+    private class NoopVehicleRepository(
         override val vehicles: Flow<List<Vehicle>> = flowOf(emptyList())
+    ) : VehicleRepository {
         override suspend fun get(id: String): Vehicle? = null
         override suspend fun upsert(vehicle: Vehicle) {}
         override suspend fun delete(id: String) {}
@@ -361,11 +366,15 @@ class KableBmsRepositoryDumbBegodeTest {
             saves += Saved(vehicleId, seriesCells, chemistry, memory)
         }
         override suspend fun peek(vehicleId: String): ru.sodovaya.volty.domain.energy.EnergyRecord? = null
-        override suspend fun reset(vehicleId: String) {}
+        val resets = mutableListOf<String>()
+        override suspend fun reset(vehicleId: String) { resets += vehicleId }
     }
 
-    private fun energyRepoTest(store: FakeEnergyStore, body: suspend TestScope.(KableBmsRepository) -> Unit) =
-        bleRepositoryTest(vehicleRepository = NoopVehicleRepository(), energyStore = store, body = body)
+    private fun energyRepoTest(
+        store: FakeEnergyStore,
+        vehicles: Flow<List<Vehicle>> = flowOf(emptyList()),
+        body: suspend TestScope.(KableBmsRepository) -> Unit
+    ) = bleRepositoryTest(vehicleRepository = NoopVehicleRepository(vehicles), energyStore = store, body = body)
 
     /** A 24S dumb wheel at ~3.78 V/cell, fed one live frame every 250 ms of the repository's injected clock. */
     private inner class EnergyRide(val repo: KableBmsRepository, vehicle: Vehicle) {
@@ -487,6 +496,104 @@ class KableBmsRepositoryDumbBegodeTest {
             assertEquals(1, store.saves.size, "the winner saved on its interval")
             repo.disconnect(); advanceUntilIdle()
             assertEquals(2, store.saves.size, "and on disconnect")
+        }
+    }
+
+    @Test
+    fun `a reset while connected is not undone by the next periodic or disconnect save`() {
+        val learned = LearnedCapacity(41f, 40f, 2)
+        val store = FakeEnergyStore(mapOf("v1" to EnergyMemory(learned, 0.05f, null)))
+        energyRepoTest(store) { repo ->
+            val ride = EnergyRide(repo, vehicle(cellCount = 24))
+            ride.feed(1_000); advanceUntilIdle()
+            ride.feed(8_000)
+            assertEquals(learned, repo.activeVehicleData.value.energy?.learned, "precondition: the tracker holds it")
+
+            repo.resetLearnedEnergy("v1"); advanceUntilIdle()
+            assertEquals(listOf("v1"), store.resets, "the stored row is reset too")
+            ride.feed(32_000); advanceUntilIdle() // past the 30 s interval
+            assertTrue(store.saves.isNotEmpty(), "a periodic save happened, so the test can see what it wrote")
+            assertTrue(
+                store.saves.all { it.memory.learned == null && it.memory.resistanceOhm == null },
+                "the periodic save must not restore the reset values: ${store.saves}"
+            )
+            assertNull(repo.activeVehicleData.value.energy?.learned)
+            assertEquals(CapacitySource.NONE, repo.activeVehicleData.value.energy?.capacitySource)
+            repo.disconnect(); advanceUntilIdle()
+            assertNull(store.saves.last().memory.learned, "nor the disconnect save")
+            assertNull(store.saves.last().memory.resistanceOhm)
+        }
+    }
+
+    @Test
+    fun `resetting another vehicle leaves the connected trackers learning alone`() {
+        val learned = LearnedCapacity(41f, 40f, 2)
+        val store = FakeEnergyStore(mapOf("v1" to EnergyMemory(learned, null, null)))
+        energyRepoTest(store) { repo ->
+            val ride = EnergyRide(repo, vehicle(cellCount = 24))
+            ride.feed(1_000); advanceUntilIdle(); ride.feed(8_000)
+            repo.resetLearnedEnergy("someone-else"); advanceUntilIdle()
+            ride.feed(1_000)
+            assertEquals(learned, repo.activeVehicleData.value.energy?.learned)
+        }
+    }
+
+    @Test
+    fun `a capacity saved while connected reaches the live tracker without a reconnect`() {
+        val base = vehicle(cellCount = 24)
+        val vehicles = MutableStateFlow(listOf(base))
+        energyRepoTest(FakeEnergyStore(), vehicles) { repo ->
+            val ride = EnergyRide(repo, base)
+            ride.feed(1_000); advanceUntilIdle(); ride.feed(8_000)
+            assertEquals(CapacitySource.NONE, repo.activeVehicleData.value.energy?.capacitySource)
+
+            vehicles.value = listOf(base.copy(batteryCapacity = BatteryCapacity(20f, CapacityUnit.AH)))
+            advanceUntilIdle()
+            ride.feed(1_000)
+            val e = assertNotNull(repo.activeVehicleData.value.energy)
+            val (low, high) = VoltageSocEstimator.boundsFor(Chemistry.LI_ION_NMC, AlertConfig())
+            assertEquals(CapacitySource.ENTERED, e.capacitySource)
+            assertEquals(20f * OcvCurve.usableFraction(Chemistry.LI_ION_NMC, low, high), assertNotNull(e.usableAh), 1e-3f)
+
+            // Cleared again: back to nothing, still without a reconnect.
+            vehicles.value = listOf(base)
+            advanceUntilIdle(); ride.feed(1_000)
+            assertEquals(CapacitySource.NONE, repo.activeVehicleData.value.energy?.capacitySource)
+        }
+    }
+
+    @Test
+    fun `cell bounds edited while connected change the usable share but keep the learned capacity`() {
+        val learned = LearnedCapacity(41f, 40f, 2)
+        val base = vehicle(cellCount = 24).copy(batteryCapacity = BatteryCapacity(20f, CapacityUnit.AH))
+        val vehicles = MutableStateFlow(listOf(base))
+        energyRepoTest(FakeEnergyStore(mapOf("v1" to EnergyMemory(learned, null, null))), vehicles) { repo ->
+            val ride = EnergyRide(repo, base)
+            ride.feed(1_000); advanceUntilIdle(); ride.feed(8_000)
+            val before = assertNotNull(repo.activeVehicleData.value.energy?.usableAh)
+            vehicles.value = listOf(base.copy(alertConfig = AlertConfig(cellHighV = 4.1f, cellLowV = 3.4f)))
+            advanceUntilIdle(); ride.feed(1_000)
+            val e = assertNotNull(repo.activeVehicleData.value.energy)
+            assertEquals(20f * OcvCurve.usableFraction(Chemistry.LI_ION_NMC, 3.4f, 4.1f), assertNotNull(e.usableAh), 1e-3f)
+            assertTrue(e.usableAh != before)
+            assertEquals(learned, e.learned, "a bounds change does not unlearn a pack")
+        }
+    }
+
+    @Test
+    fun `a chemistry change while connected drops the engine and loads under the new key`() {
+        val base = vehicle(cellCount = 24)
+        val vehicles = MutableStateFlow(listOf(base))
+        val store = FakeEnergyStore()
+        energyRepoTest(store, vehicles) { repo ->
+            val ride = EnergyRide(repo, base)
+            ride.feed(1_000); advanceUntilIdle(); ride.feed(8_000)
+            assertEquals(listOf(Chemistry.LI_ION_NMC), store.loads.map { it.third })
+            vehicles.value = listOf(base.copy(chemistry = Chemistry.LIFEPO4))
+            advanceUntilIdle(); ride.feed(1_000); advanceUntilIdle()
+            assertEquals(listOf(Chemistry.LI_ION_NMC, Chemistry.LIFEPO4), store.loads.map { it.third })
+            repo.disconnect(); advanceUntilIdle()
+            assertEquals(Chemistry.LIFEPO4, store.saves.last().chemistry)
         }
     }
 

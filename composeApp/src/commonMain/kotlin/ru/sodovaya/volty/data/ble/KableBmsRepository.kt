@@ -801,11 +801,12 @@ class KableBmsRepository private constructor(
     init {
         scope.launch {
             vehicleRepository.vehicles.collect { list ->
-                val current = _activeVehicle.value ?: return@collect
-                val updated = list.firstOrNull { it.id == current.id }
-                if (updated != null && updated != current) {
+                val current = _activeVehicle.value
+                val updated = current?.let { c -> list.firstOrNull { it.id == c.id } }
+                if (current != null && updated != null && updated != current) {
                     _activeVehicle.value = updated
                 }
+                refreshEnergyVehicle(list)
             }
         }
         scope.launch {
@@ -1637,7 +1638,7 @@ class KableBmsRepository private constructor(
                     val owner = orchestrator()
                     scope.launch {
                         val loaded = try {
-                            store.load(socVehicle.id, cells, socVehicle.chemistry)
+                            store.load(socVehicle.id, cells, tracker.chemistry)
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -1656,6 +1657,25 @@ class KableBmsRepository private constructor(
             awaitMemory = persisted,
         )
         return tracker
+    }
+
+    /**
+     * Hand the live tracker the edited profile, so a capacity typed in the editor takes effect now and
+     * not at the next connect. Under [sessionLock]: the tracker is single-threaded and its owner is the
+     * sample funnel, which holds that lock for each transaction.
+     */
+    private suspend fun refreshEnergyVehicle(list: List<Vehicle>) = sessionLock.withLock {
+        val tracker = vehicleConnection?.energy ?: return@withLock
+        val updated = list.firstOrNull { it.id == tracker.vehicleId } ?: return@withLock
+        tracker.updateVehicle(updated)
+    }
+
+    override suspend fun resetLearnedEnergy(vehicleId: String) {
+        sessionLock.withLock {
+            val tracker = vehicleConnection?.energy
+            if (tracker != null && tracker.vehicleId == vehicleId) tracker.resetLearned()
+        }
+        energyStore?.reset(vehicleId)
     }
 
     /** Persist the active tracker's memory at most every [ENERGY_SAVE_INTERVAL_MS]. Called on the funnel, under sessionLock. */

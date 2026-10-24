@@ -73,13 +73,15 @@ data class EnergyState(
  */
 @OptIn(ExperimentalTime::class)
 open class VehicleEnergyTracker(
-    private val vehicle: Vehicle,
+    vehicle: Vehicle,
     memory: EnergyMemory,
     private val seriesCellsHint: () -> Int? = { null },
     /** Called when a series count is resolved that no engine has been built for. */
     private val onSeriesCells: (Int) -> Unit = {},
     awaitMemory: Boolean = false,
 ) {
+    /** The profile as of connect, refreshed by [updateVehicle] when the rider edits it mid-connection. */
+    private var vehicle: Vehicle = vehicle
     private var memory: EnergyMemory = memory
     private var engine: Engine? = null
 
@@ -100,8 +102,8 @@ open class VehicleEnergyTracker(
     var lastSaveAtMs: Long = Long.MIN_VALUE
 
     private inner class Engine(val cells: Int, mem: EnergyMemory) {
-        val bounds = VoltageSocEstimator.boundsFor(vehicle.chemistry, vehicle.alertConfig)
-        val resistance = PackResistanceEstimator(
+        var bounds = VoltageSocEstimator.boundsFor(vehicle.chemistry, vehicle.alertConfig)
+        var resistance = PackResistanceEstimator(
             mem.resistanceOhm?.takeIf {
                 it.isFinite() && it >= PackResistanceEstimator.MIN_OHM && it <= PackResistanceEstimator.MAX_OHM
             }
@@ -135,7 +137,7 @@ open class VehicleEnergyTracker(
             }
 
         fun refreshCapacity() {
-            charge.config = charge.config.copy(usableAh = usableAh)
+            charge.config = charge.config.copy(lowV = bounds.first, highV = bounds.second, usableAh = usableAh)
         }
 
         fun abandonSegment() {
@@ -204,6 +206,64 @@ open class VehicleEnergyTracker(
         } else if (e.learned == null && loaded.learned != null) {
             e.learned = loaded.learned
             e.refreshCapacity()
+        }
+    }
+
+    /**
+     * The rider edited this vehicle while it is connected (same id): take the new profile now rather
+     * than at the next connect. Entered capacity and cell bounds take effect immediately
+     * ([Engine.refreshCapacity]); learned capacity is NOT touched by a bounds change.
+     *
+     * A chemistry change is a different battery and follows the same rule as a changed series count
+     * ([ensureEngine]): the engine and the memory are dropped, and the next sample builds a fresh
+     * engine and asks the owner to load under the new key (the store deletes the old row). A changed
+     * series count arrives through the pack/controller cell counts merged below and hits
+     * [ensureEngine] on the next sample.
+     *
+     * Only the fields the rider can edit are merged: the expanded pack list the owner built at connect
+     * (protocol-synthesised slots) stays, with the stored cell counts updated by index.
+     */
+    fun updateVehicle(updated: Vehicle) {
+        if (updated.id != vehicle.id) return
+        val merged = vehicle.copy(
+            chemistry = updated.chemistry,
+            alertConfig = updated.alertConfig,
+            batteryCapacity = updated.batteryCapacity,
+            packs = vehicle.packs.map { p ->
+                updated.packs.firstOrNull { it.index == p.index }?.let { p.copy(cellCount = it.cellCount) } ?: p
+            },
+            controllers = vehicle.controllers.map { c ->
+                updated.controllers.firstOrNull { it.index == c.index }
+                    ?.let { c.copy(derivedCellCount = it.derivedCellCount) } ?: c
+            },
+        )
+        if (merged == vehicle) return
+        val chemistryChanged = merged.chemistry != vehicle.chemistry
+        vehicle = merged
+        if (chemistryChanged) {
+            engine = null
+            memory = EnergyMemory.EMPTY
+            return
+        }
+        engine?.let {
+            it.bounds = VoltageSocEstimator.boundsFor(vehicle.chemistry, vehicle.alertConfig)
+            it.refreshCapacity()
+        }
+    }
+
+    /**
+     * "Start over": forgets the learned capacity, the fitted resistance and the open learning segment,
+     * in the live engine and in the memory it would fall back to. The charge counter is kept - it is
+     * the live state of charge, not a learned value. Without this a reset made in the editor was
+     * undone by the next periodic or disconnect save, which re-upserts [memory].
+     */
+    fun resetLearned() {
+        memory = memory.copy(learned = null, resistanceOhm = null)
+        engine?.let {
+            it.learned = null
+            it.resistance = PackResistanceEstimator(null)
+            it.abandonSegment()
+            it.refreshCapacity()
         }
     }
 

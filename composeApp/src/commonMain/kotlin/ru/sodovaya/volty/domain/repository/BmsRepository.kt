@@ -133,6 +133,13 @@ interface BmsRepository {
     suspend fun onAppResumed()
 
     /**
+     * Forget what the energy model learned about [vehicleId] (capacity, resistance): in the live
+     * tracker when that vehicle is connected, and in the store. A store-only reset would be undone
+     * by the tracker's next save. Default no-op for repositories without an energy model.
+     */
+    suspend fun resetLearnedEnergy(vehicleId: String) {}
+
+    /**
      * Called when the dashboard leaves the foreground. Implementations may
      * lower transport costs while retaining the live link; the default keeps
      * older test and platform implementations source-compatible.

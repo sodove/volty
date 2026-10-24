@@ -139,6 +139,8 @@ class VehicleEditComponentTest {
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> = Result.success(Unit)
         override suspend fun connectDemo(profile: DemoProfile): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() {}
+        val learnedResets = mutableListOf<String>()
+        override suspend fun resetLearnedEnergy(vehicleId: String) { learnedResets += vehicleId }
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())
         override fun motionSamples(window: Duration): Flow<List<ControllerData>> = flowOf(emptyList())
@@ -4045,6 +4047,38 @@ class VehicleEditComponentTest {
         advanceUntilIdle()
         assertNull(live.state.value.energy?.avgWhPerKm, "range not earned: no consumption shown")
         assertFalse(live.state.value.isDirty)
+    }
+
+    @Test
+    fun `an unreadable capacity refuses the save and never erases the stored one`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        c.onCapacityChanged("18OO")
+        c.onSave()
+        advanceUntilIdle()
+        assertTrue(repo.upserts.isEmpty(), "nothing is written while the capacity field is in error")
+        assertEquals(VehicleEditSection.BATTERY, c.section.value, "the rider is taken to the field with the error")
+        c.onCapacityChanged("1800")
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(BatteryCapacity(1800f, CapacityUnit.WH), repo.upserts.single().batteryCapacity)
+    }
+
+    @Test
+    fun `reset reaches the live repository as well as the store`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = FakeEnergyStore(
+            EnergyRecord(EnergyMemory(LearnedCapacity(10f, 50f, 2), 0.05f, null), 20, Chemistry.LI_ION_NMC)
+        )
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms, energyStore = store)
+        advanceUntilIdle()
+        c.onResetLearnedEnergy()
+        advanceUntilIdle()
+        assertEquals(listOf("v1"), bms.learnedResets, "the live tracker would re-save its RAM copy otherwise")
+        assertEquals(listOf("v1"), store.resets)
     }
 }
 

@@ -1080,6 +1080,8 @@ class DefaultVehicleEditComponent(
         val id = vehicleId ?: return
         val store = energyStore ?: return
         scope.launch {
+            // The live tracker first (it would re-save its RAM copy), then the store.
+            bmsRepository.resetLearnedEnergy(id)
             store.reset(id)
             storedRecord = null
             publishEnergy()
@@ -1399,6 +1401,14 @@ class DefaultVehicleEditComponent(
             // The error renders only on the hub header and the name page; from any other page the
             // refused Save would look dead, so take the rider to where the message is.
             onOpenSection(VehicleEditSection.IDENTITY)
+            return
+        }
+        // An unreadable capacity ("18OO") is flagged on the field but would resolve to NO capacity,
+        // and saving that would silently erase the stored one. Refuse instead, and take the rider to
+        // the field that shows the error (the same treatment as a blank name). Blank is a clear and
+        // saves; only non-blank junk is refused.
+        if (s.capacityError) {
+            onOpenSection(VehicleEditSection.BATTERY)
             return
         }
         // A blocking issue is a self-contradictory config: conflicting protocol
