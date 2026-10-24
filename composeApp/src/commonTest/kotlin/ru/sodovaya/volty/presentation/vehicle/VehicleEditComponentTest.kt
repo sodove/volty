@@ -44,6 +44,13 @@ import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.data.ble.isGatewayLink
 import ru.sodovaya.volty.data.ble.planAliasHandoffs
 import ru.sodovaya.volty.data.ble.planLinks
+import ru.sodovaya.volty.data.energy.RangeSource
+import ru.sodovaya.volty.domain.energy.EnergyMemory
+import ru.sodovaya.volty.domain.energy.EnergyRecord
+import ru.sodovaya.volty.domain.energy.LearnedCapacity
+import ru.sodovaya.volty.domain.energy.OcvCurve
+import ru.sodovaya.volty.domain.energy.RangeEstimate
+import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.CanScanRefusal
@@ -379,6 +386,8 @@ class VehicleEditComponentTest {
         canDiscovery: CanDiscovery? = null,
         controllerConfigSource: ControllerConfigSource? = null,
         learnedCellCountSource: LearnedCellCountSource? = null,
+        energyStore: VehicleEnergyStore? = null,
+        rangeSource: RangeSource? = null,
         onSaved: () -> Unit = {},
         onCancelled: () -> Unit = {},
         backDispatcher: BackDispatcher? = null
@@ -395,6 +404,8 @@ class VehicleEditComponentTest {
             canDiscovery = canDiscovery,
             controllerConfigSource = controllerConfigSource,
             learnedCellCountSource = learnedCellCountSource,
+            energyStore = energyStore,
+            rangeSource = rangeSource,
             prefilledBmsType = prefilledBmsType,
             prefilledBmsAddress = prefilledBmsAddress
         )
@@ -3784,6 +3795,256 @@ class VehicleEditComponentTest {
         val vehicle = repo.upserts.single()
         assertEquals(listOf("VE:01"), vehicle.controllers.map { it.address })
         assertEquals(listOf("AN:02"), vehicle.packs.map { it.bmsAddress })
+    }
+
+    // ------------------------------------------------------- the Energy block (Task 8)
+
+    /** A store that remembers every call, so a test can assert what was ISSUED. */
+    private class FakeEnergyStore(var record: EnergyRecord? = null) : VehicleEnergyStore {
+        val loads = mutableListOf<Triple<String, Int, Chemistry>>()
+        val peeks = mutableListOf<String>()
+        val resets = mutableListOf<String>()
+        override suspend fun load(vehicleId: String, seriesCells: Int, chemistry: Chemistry): EnergyMemory {
+            loads += Triple(vehicleId, seriesCells, chemistry)
+            return EnergyMemory.EMPTY
+        }
+        override suspend fun peek(vehicleId: String): EnergyRecord? { peeks += vehicleId; return record }
+        override suspend fun save(vehicleId: String, seriesCells: Int, chemistry: Chemistry, memory: EnergyMemory) {}
+        override suspend fun reset(vehicleId: String) { resets += vehicleId; record = null }
+    }
+
+    private class FakeRangeSource(initial: RangeEstimate? = null) : RangeSource {
+        override val range = MutableStateFlow(initial)
+    }
+
+    @Test
+    fun `the capacity text parses comma and dot decimals and blank clears it`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        // Seeded from the stored 1800 Wh, shown without a trailing ".0".
+        assertEquals("1800", c.state.value.capacityText)
+        assertEquals(CapacityUnit.WH, c.state.value.capacityUnit)
+
+        c.onCapacityChanged("12,5")
+        assertEquals(BatteryCapacity(12.5f, CapacityUnit.WH), c.state.value.batteryCapacity)
+        c.onCapacityChanged("12.5")
+        assertEquals(BatteryCapacity(12.5f, CapacityUnit.WH), c.state.value.batteryCapacity)
+        assertEquals("12.5", c.state.value.capacityText, "what the rider typed stays on screen")
+        c.onCapacityChanged("  ")
+        assertNull(c.state.value.batteryCapacity)
+        assertFalse(c.state.value.capacityError, "blank is a clear, not a mistake")
+    }
+
+    @Test
+    fun `a non positive or unreadable capacity is rejected as no capacity and flagged`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        for (bad in listOf("0", "-5", "-0,5", "abc", "NaN", "Infinity")) {
+            c.onCapacityChanged(bad)
+            assertNull(c.state.value.batteryCapacity, "'$bad' must not become a capacity")
+            assertTrue(c.state.value.capacityError, "'$bad' is flagged")
+        }
+        c.onCapacityChanged("20")
+        assertFalse(c.state.value.capacityError)
+    }
+
+    @Test
+    fun `switching the unit keeps the typed number and changes only the unit`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        c.onCapacityChanged("20")
+        c.onCapacityUnitChanged(CapacityUnit.AH)
+        assertEquals("20", c.state.value.capacityText)
+        assertEquals(BatteryCapacity(20f, CapacityUnit.AH), c.state.value.batteryCapacity)
+    }
+
+    @Test
+    fun `a capacity edit makes the form dirty and reverting it makes it clean`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        assertFalse(c.state.value.isDirty)
+        c.onCapacityChanged("1900")
+        assertTrue(c.state.value.isDirty)
+        c.onCapacityChanged("1800")
+        assertFalse(c.state.value.isDirty)
+        c.onCapacityUnitChanged(CapacityUnit.AH)
+        assertTrue(c.state.value.isDirty, "same number, other unit, is a different capacity")
+    }
+
+    @Test
+    fun `save persists the typed capacity and a cleared one`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        c.onCapacityChanged("21,5")
+        c.onCapacityUnitChanged(CapacityUnit.AH)
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(BatteryCapacity(21.5f, CapacityUnit.AH), repo.upserts.last().batteryCapacity)
+
+        c.onCapacityChanged("")
+        c.onSave()
+        advanceUntilIdle()
+        assertNull(repo.upserts.last().batteryCapacity, "a blank field saves as no capacity")
+    }
+
+    @Test
+    fun `an untouched capacity round trips through save`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        c.onNameChanged("Renamed")
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(BatteryCapacity(1800f, CapacityUnit.WH), repo.upserts.single().batteryCapacity)
+    }
+
+    @Test
+    fun `a new vehicle saves the capacity typed while creating it`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(emptyList())
+        val c = component(
+            repo, vehicleId = null,
+            prefilledBmsType = BmsType.JK_BMS, prefilledBmsAddress = "AA:BB:CC:DD:EE:FF"
+        )
+        advanceUntilIdle()
+        c.onNameChanged("Bike")
+        c.onCapacityChanged("900")
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(BatteryCapacity(900f, CapacityUnit.WH), repo.upserts.single().batteryCapacity)
+        assertNull(c.state.value.energy, "nothing to learn about a vehicle that does not exist yet")
+    }
+
+    /**
+     * The record is deliberately NOT the vehicle's own shape: 24 series cells on LiFePO4 where the
+     * edited vehicle is a 20S NMC. A summary built from the draft would give a different number;
+     * only the record's own cells and chemistry produce 24 x 3.2 V.
+     */
+    @Test
+    fun `learned usable Ah is shown as nameplate Wh using the records own cells and chemistry`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vehicle = existingVehicle() // 20S NMC, bounds 3.1..4.1 V
+        val fraction = OcvCurve.usableFraction(Chemistry.LIFEPO4, 3.1f, 4.1f)
+        val nameplateAh = 20f
+        val store = FakeEnergyStore(
+            EnergyRecord(
+                EnergyMemory(LearnedCapacity(usableAh = nameplateAh * fraction, weight = 90f, rides = 4), 0.0452f, null),
+                seriesCells = 24, chemistry = Chemistry.LIFEPO4
+            )
+        )
+        val c = component(FakeVehicleRepo(listOf(vehicle)), energyStore = store)
+        advanceUntilIdle()
+        val e = assertNotNull(c.state.value.energy)
+        assertEquals(20f * 24 * 3.2f, assertNotNull(e.learnedNameplateWh), 0.5f)
+        assertEquals(4, e.learnRides)
+        assertEquals(45, e.resistanceMilliOhm)
+        assertNull(e.avgWhPerKm)
+        assertFalse(c.state.value.isDirty, "learned values are evidence, not an edit")
+    }
+
+    @Test
+    fun `opening the editor never calls load and never wipes the learned row`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        // The record's cells (24) differ from the draft's (20): exactly the case load() would delete.
+        val record = EnergyRecord(
+            EnergyMemory(LearnedCapacity(10f, 50f, 2), 0.05f, null), 24, Chemistry.LI_ION_NMC
+        )
+        val store = FakeEnergyStore(record)
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), energyStore = store)
+        advanceUntilIdle()
+        c.onCapacityChanged("2000")
+        c.onChemistryChanged(Chemistry.LIFEPO4)
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(emptyList(), store.loads, "load() deletes a mismatched row; the editor must not call it")
+        assertEquals(emptyList(), store.resets, "nothing resets unless the rider asks")
+        assertEquals(record, store.record)
+        assertEquals(listOf("v1"), store.peeks.distinct())
+    }
+
+    @Test
+    fun `the caption says learning only when a capacity is missing and nothing is learned`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val noCapacity = existingVehicle().copy(batteryCapacity = null)
+        val c = component(FakeVehicleRepo(listOf(noCapacity)), energyStore = FakeEnergyStore())
+        advanceUntilIdle()
+        assertEquals(LearnedCaption.LEARNING, c.state.value.learnedCaption)
+        c.onCapacityChanged("1800")
+        assertEquals(LearnedCaption.HIDDEN, c.state.value.learnedCaption, "entered and nothing learned: say nothing")
+
+        val learned = FakeEnergyStore(
+            EnergyRecord(EnergyMemory(LearnedCapacity(10f, 50f, 2), null, null), 20, Chemistry.LI_ION_NMC)
+        )
+        val l = component(FakeVehicleRepo(listOf(existingVehicle())), energyStore = learned)
+        advanceUntilIdle()
+        assertEquals(LearnedCaption.LEARNED, l.state.value.learnedCaption)
+    }
+
+    @Test
+    fun `a record with no learned capacity gives no nameplate figure`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = FakeEnergyStore(
+            EnergyRecord(EnergyMemory(null, 0.03f, null), 20, Chemistry.LI_ION_NMC)
+        )
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), energyStore = store)
+        advanceUntilIdle()
+        val e = assertNotNull(c.state.value.energy)
+        assertNull(e.learnedNameplateWh)
+        assertEquals(0, e.learnRides)
+        assertEquals(30, e.resistanceMilliOhm)
+    }
+
+    @Test
+    fun `reset calls the store and clears what was learned`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val store = FakeEnergyStore(
+            EnergyRecord(EnergyMemory(LearnedCapacity(10f, 50f, 2), 0.05f, null), 20, Chemistry.LI_ION_NMC)
+        )
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), energyStore = store)
+        advanceUntilIdle()
+        assertNotNull(c.state.value.energy?.learnedNameplateWh)
+        c.onResetLearnedEnergy()
+        advanceUntilIdle()
+        assertEquals(listOf("v1"), store.resets)
+        val e = assertNotNull(c.state.value.energy)
+        assertNull(e.learnedNameplateWh)
+        assertEquals(0, e.learnRides)
+        assertNull(e.resistanceMilliOhm)
+    }
+
+    @Test
+    fun `average consumption comes from the range source only for the connected vehicle`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vehicle = existingVehicle()
+        val range = FakeRangeSource(RangeEstimate(km = 30f, whPerKm = 21.5))
+        val store = FakeEnergyStore()
+
+        val idle = component(FakeVehicleRepo(listOf(vehicle)), energyStore = store, rangeSource = range)
+        advanceUntilIdle()
+        assertNull(idle.state.value.energy?.avgWhPerKm, "nothing connected: another vehicle's rate is not ours")
+
+        val other = FakeBmsRepo().also { it.activeVehicle.value = vehicle.copy(id = "someone-else") }
+        val foreign = component(
+            FakeVehicleRepo(listOf(vehicle)), bmsRepo = other, energyStore = store, rangeSource = range
+        )
+        advanceUntilIdle()
+        assertNull(foreign.state.value.energy?.avgWhPerKm)
+
+        val bms = FakeBmsRepo().also { it.goLive(vehicle) }
+        val live = component(FakeVehicleRepo(listOf(vehicle)), bmsRepo = bms, energyStore = store, rangeSource = range)
+        advanceUntilIdle()
+        assertEquals(21.5f, assertNotNull(live.state.value.energy?.avgWhPerKm), 1e-3f)
+        range.range.value = null
+        advanceUntilIdle()
+        assertNull(live.state.value.energy?.avgWhPerKm, "range not earned: no consumption shown")
+        assertFalse(live.state.value.isDirty)
     }
 }
 

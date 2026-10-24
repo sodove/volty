@@ -897,7 +897,9 @@ class DefaultRootComponent(
                         // second one would have no live links to scan (G2 Task 5).
                         canDiscovery = get<CanDiscovery>(),
                         controllerConfigSource = get<ControllerConfigSource>(),
-                        learnedCellCountSource = get<ru.sodovaya.volty.data.bms.LearnedCellCountSource>()
+                        learnedCellCountSource = get<ru.sodovaya.volty.data.bms.LearnedCellCountSource>(),
+                        energyStore = get<ru.sodovaya.volty.domain.energy.VehicleEnergyStore>(),
+                        rangeSource = get<ru.sodovaya.volty.data.energy.RangeSource>()
                     )
                 )
             }

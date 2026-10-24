@@ -360,6 +360,7 @@ class KableBmsRepositoryDumbBegodeTest {
         override suspend fun save(vehicleId: String, seriesCells: Int, chemistry: Chemistry, memory: EnergyMemory) {
             saves += Saved(vehicleId, seriesCells, chemistry, memory)
         }
+        override suspend fun peek(vehicleId: String): ru.sodovaya.volty.domain.energy.EnergyRecord? = null
         override suspend fun reset(vehicleId: String) {}
     }
 

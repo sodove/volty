@@ -15,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -22,8 +23,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -31,7 +39,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.stringResource
+import kotlin.math.roundToInt
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.CapacityUnit
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
@@ -42,11 +52,13 @@ import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.common.secondaryGaugeLabel
 import ru.sodovaya.volty.presentation.common.settings.SettingsChoiceRow
+import ru.sodovaya.volty.presentation.common.settings.SettingsDangerRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsGroup
 import ru.sodovaya.volty.presentation.common.settings.SettingsRowDivider
 import ru.sodovaya.volty.presentation.common.settings.SettingsSliderRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsSwitchRow
 import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.dashboard_style_default
 import volty.composeapp.generated.resources.topology_parallel
 import volty.composeapp.generated.resources.topology_series
@@ -88,6 +100,22 @@ import volty.composeapp.generated.resources.vehicle_section_sources
 import volty.composeapp.generated.resources.vehicle_source_add_controller
 import volty.composeapp.generated.resources.vehicle_source_add_pack
 import volty.composeapp.generated.resources.vehicle_source_scan
+import volty.composeapp.generated.resources.vehicle_energy_title
+import volty.composeapp.generated.resources.vehicle_energy_unit
+import volty.composeapp.generated.resources.vehicle_energy_capacity
+import volty.composeapp.generated.resources.vehicle_energy_capacity_invalid
+import volty.composeapp.generated.resources.vehicle_energy_unit_wh
+import volty.composeapp.generated.resources.vehicle_energy_unit_ah
+import volty.composeapp.generated.resources.vehicle_energy_learned
+import volty.composeapp.generated.resources.vehicle_energy_learning
+import volty.composeapp.generated.resources.vehicle_energy_resistance
+import volty.composeapp.generated.resources.vehicle_energy_resistance_value
+import volty.composeapp.generated.resources.vehicle_energy_consumption
+import volty.composeapp.generated.resources.vehicle_energy_consumption_value
+import volty.composeapp.generated.resources.vehicle_energy_reset
+import volty.composeapp.generated.resources.vehicle_energy_reset_title
+import volty.composeapp.generated.resources.vehicle_energy_reset_text
+import volty.composeapp.generated.resources.vehicle_energy_reset_confirm
 
 internal val VEHICLE_ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "unicycle", "moto", "solar", "ev", "boat", "rv")
 
@@ -288,6 +316,112 @@ private fun BatteryPage(state: VehicleEditComponent.State, component: VehicleEdi
             selected = state.averagingWindowMin,
             onSelect = component::onAveragingWindowChanged
         )
+    }
+
+    // A block of its own, below the pack cards and never inside one: capacity and what was
+    // learned belong to the vehicle's pack as a whole, not to any one source. Nothing for a
+    // vehicle that does not exist yet (state.energy is null while creating).
+    EnergyBlock(state, component)
+}
+
+// ---------------------------------------------------------------------------------------------
+// ENERGY: nameplate capacity, what the app learned, reset
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Renders [VehicleEditComponent.State.capacityText] / [energy][VehicleEditComponent.State.energy] as
+ * handed over. Every decision (parsing, which caption, the Wh conversion) is in the component and
+ * tested there; the layout below is NOT verified on a device.
+ */
+@Composable
+private fun EnergyBlock(state: VehicleEditComponent.State, component: VehicleEditComponent) {
+    var confirmReset by remember { mutableStateOf(false) }
+    val energy = state.energy
+    SectionLabel(stringResource(Res.string.vehicle_energy_title))
+    SettingsGroup(null) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            OutlinedTextField(
+                value = state.capacityText,
+                onValueChange = component::onCapacityChanged,
+                label = { Text(stringResource(Res.string.vehicle_energy_capacity)) },
+                isError = state.capacityError,
+                supportingText = {
+                    if (state.capacityError) Text(stringResource(Res.string.vehicle_energy_capacity_invalid))
+                },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                modifier = Modifier.fillMaxWidth()
+            )
+            // Switching the unit keeps the typed number: 20 Wh and 20 Ah are different packs.
+            SettingsChoiceRow(
+                title = stringResource(Res.string.vehicle_energy_unit),
+                options = listOf(
+                    CapacityUnit.WH to stringResource(Res.string.vehicle_energy_unit_wh),
+                    CapacityUnit.AH to stringResource(Res.string.vehicle_energy_unit_ah)
+                ),
+                selected = state.capacityUnit,
+                onSelect = component::onCapacityUnitChanged
+            )
+            when (state.learnedCaption) {
+                LearnedCaption.LEARNED -> Caption(
+                    stringResource(
+                        Res.string.vehicle_energy_learned,
+                        (energy?.learnedNameplateWh ?: 0f).roundToInt(),
+                        energy?.learnRides ?: 0
+                    )
+                )
+                LearnedCaption.LEARNING -> Caption(stringResource(Res.string.vehicle_energy_learning))
+                LearnedCaption.HIDDEN -> Unit
+            }
+        }
+        if (energy != null) {
+            energy.resistanceMilliOhm?.let { mohm ->
+                SettingsRowDivider()
+                EnergyValueRow(
+                    stringResource(Res.string.vehicle_energy_resistance),
+                    stringResource(Res.string.vehicle_energy_resistance_value, mohm)
+                )
+            }
+            energy.avgWhPerKm?.let { wh ->
+                SettingsRowDivider()
+                EnergyValueRow(
+                    stringResource(Res.string.vehicle_energy_consumption),
+                    stringResource(Res.string.vehicle_energy_consumption_value, wh.roundToInt())
+                )
+            }
+            SettingsRowDivider()
+            SettingsDangerRow(stringResource(Res.string.vehicle_energy_reset), onClick = { confirmReset = true })
+        }
+    }
+    if (confirmReset) {
+        AlertDialog(
+            onDismissRequest = { confirmReset = false },
+            confirmButton = {
+                TextButton(onClick = { confirmReset = false; component.onResetLearnedEnergy() }) {
+                    Text(stringResource(Res.string.vehicle_energy_reset_confirm), color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmReset = false }) { Text(stringResource(Res.string.action_cancel)) }
+            },
+            title = { Text(stringResource(Res.string.vehicle_energy_reset_title)) },
+            text = { Text(stringResource(Res.string.vehicle_energy_reset_text)) }
+        )
+    }
+}
+
+@Composable
+private fun EnergyValueRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, fontSize = 15.sp, fontWeight = FontWeight.Medium)
+        Text(value, fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

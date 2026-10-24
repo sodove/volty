@@ -1336,4 +1336,20 @@
     <string name="vehicle_battery_series">Банок последовательно (S)</string>
     <string name="vehicle_battery_series_learned">%1$d: определено по колесу</string>
     <string name="vehicle_controller_none">Контроллер не добавлен</string>
+    <string name="vehicle_energy_title">Энергия</string>
+    <string name="vehicle_energy_capacity">Ёмкость батареи (по шильдику)</string>
+    <string name="vehicle_energy_capacity_invalid">Введите число больше нуля</string>
+    <string name="vehicle_energy_unit">Единица</string>
+    <string name="vehicle_energy_unit_wh">Втч</string>
+    <string name="vehicle_energy_unit_ah">А·ч</string>
+    <string name="vehicle_energy_learned">выучено: ~%1$d Втч, поездок: %2$d</string>
+    <string name="vehicle_energy_learning">учусь…</string>
+    <string name="vehicle_energy_resistance">Сопротивление</string>
+    <string name="vehicle_energy_resistance_value">~%1$d мОм</string>
+    <string name="vehicle_energy_consumption">Средний расход</string>
+    <string name="vehicle_energy_consumption_value">~%1$d Втч/км</string>
+    <string name="vehicle_energy_reset">Сбросить выученное</string>
+    <string name="vehicle_energy_reset_title">Сбросить выученное?</string>
+    <string name="vehicle_energy_reset_text">Выученные ёмкость и сопротивление забудутся, обучение начнётся заново. Введённая вами ёмкость останется.</string>
+    <string name="vehicle_energy_reset_confirm">Сбросить</string>
 </resources>

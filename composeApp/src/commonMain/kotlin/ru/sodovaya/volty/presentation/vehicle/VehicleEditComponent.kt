@@ -5,7 +5,9 @@ import com.arkivanov.essenty.backhandler.BackCallback
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.AutoVolumeSettings
+import ru.sodovaya.volty.domain.model.BatteryCapacity
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.CapacityUnit
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
@@ -32,6 +34,11 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.data.bms.LearnedCellCountSource
+import ru.sodovaya.volty.data.energy.RangeSource
+import ru.sodovaya.volty.domain.energy.EnergyRecord
+import ru.sodovaya.volty.domain.energy.OcvCurve
+import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
+import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.picker.addBmsType
 import ru.sodovaya.volty.presentation.picker.addControllerType
@@ -46,6 +53,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 import kotlin.random.Random
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -79,6 +87,18 @@ interface VehicleEditComponent : DraftExitComponent {
     fun onTemperatureHighChanged(v: Float?)
     fun onSocLowChanged(v: Int?)
     fun onSocCutoffChanged(v: Int?)
+    /**
+     * The nameplate capacity the rider reads off the pack, as typed. Comma and dot decimals both
+     * parse; blank clears it; anything else that is not a positive number is flagged
+     * ([State.capacityError]) and counts as no capacity ([State.batteryCapacity] is null).
+     */
+    fun onCapacityChanged(text: String)
+
+    /** Changes the unit only. The typed number is kept as it is - a Wh figure is not an Ah figure. */
+    fun onCapacityUnitChanged(unit: CapacityUnit)
+
+    /** Forget what the app learned about this pack (capacity, resistance). Entered capacity stays. */
+    fun onResetLearnedEnergy()
     fun onDisconnectNotifyChanged(enabled: Boolean)
     fun onChargeCompleteNotifyChanged(enabled: Boolean)
     fun onDashboardStyleChanged(style: DashboardStyle?)
@@ -319,8 +339,10 @@ interface VehicleEditComponent : DraftExitComponent {
         val autoVolume: AutoVolumeSettings,
         val topology: PackTopology,
         val yieldBmsToHeadUnit: Boolean?,
+        val batteryCapacity: BatteryCapacity?,
         val draft: PersistableVehicleDraft
     )
+
 
     data class State(
         val isEditing: Boolean = false,
@@ -455,8 +477,32 @@ interface VehicleEditComponent : DraftExitComponent {
          */
         val learnedCellCount: Int? = null,
         /** Where a `PING_CAN` stands — see [CanScanState]. */
-        val canScan: CanScanState = CanScanState.Idle
+        val canScan: CanScanState = CanScanState.Idle,
+        /** The capacity field as typed (Energy block). Seeded from the stored capacity. */
+        val capacityText: String = "",
+        val capacityUnit: CapacityUnit = CapacityUnit.WH,
+        /** Null while creating: a vehicle that does not exist yet has learned nothing. */
+        val energy: EnergySummary? = null
     ) {
+        /** The typed capacity, or null for blank and for anything that is not a positive number. */
+        val batteryCapacity: BatteryCapacity?
+            get() = parseCapacity(capacityText, capacityUnit)
+
+        /** Non-blank text that is not a positive number. Blank is a clear, not a mistake. */
+        val capacityError: Boolean get() = capacityText.isNotBlank() && batteryCapacity == null
+
+        /**
+         * LEARNED when a learned figure exists; LEARNING when nothing is learned AND no capacity is
+         * entered (the app is the only source of one); HIDDEN when a capacity is entered and nothing
+         * is learned yet - there is nothing honest to add.
+         */
+        val learnedCaption: LearnedCaption
+            get() = when {
+                energy?.learnedNameplateWh != null -> LearnedCaption.LEARNED
+                batteryCapacity == null -> LearnedCaption.LEARNING
+                else -> LearnedCaption.HIDDEN
+            }
+
         val editableValues: EditableValues
             get() = EditableValues(
                 name = name,
@@ -486,6 +532,7 @@ interface VehicleEditComponent : DraftExitComponent {
                 autoVolume = autoVolume,
                 topology = topology,
                 yieldBmsToHeadUnit = yieldBmsToHeadUnit,
+                batteryCapacity = batteryCapacity,
                 draft = draft.persistableValues()
             )
 
@@ -590,6 +637,70 @@ data class VehicleEditSeed(
     val topology: PackTopology
 )
 
+/**
+ * What the app has learned about this vehicle's pack, for the Energy block. Every field is null
+ * (or 0 rides) until earned. Never part of [EditableValues]: it is evidence, not an edit.
+ *
+ * [learnedNameplateWh] is the learned USABLE Ah converted back to the nameplate figure the rider
+ * types, with the stored record's own cell count and chemistry (see [DefaultVehicleEditComponent]).
+ * [avgWhPerKm] is live and not persisted: set only while this vehicle is the connected one.
+ */
+data class EnergySummary(
+    val learnedNameplateWh: Float?,
+    val learnRides: Int,
+    val resistanceMilliOhm: Int?,
+    val avgWhPerKm: Float?
+)
+
+/** What the line under the capacity field says. */
+enum class LearnedCaption { LEARNED, LEARNING, HIDDEN }
+
+/**
+ * The Energy block's capacity field. Comma or dot; positive and finite only. `"NaN"` and
+ * `"Infinity"` parse as floats, so finiteness is checked rather than assumed.
+ */
+internal fun parseCapacity(text: String, unit: CapacityUnit): BatteryCapacity? {
+    val v = text.trim().replace(',', '.').toFloatOrNull() ?: return null
+    return if (v.isFinite() && v > 0f) BatteryCapacity(v, unit) else null
+}
+
+/** A stored 1800.0 reads back as "1800", a stored 12.5 as "12.5". */
+internal fun capacityText(capacity: BatteryCapacity?): String {
+    val v = capacity?.value ?: return ""
+    return if (v == v.toInt().toFloat()) v.toInt().toString() else v.toString()
+}
+
+/**
+ * The learned pack as the Energy block shows it. Uses the RECORD's own series count and chemistry:
+ * the record is what the tracker saved under, and the editor's draft may differ from it or not know
+ * a runtime-derived Begode cell count at all (an earlier design called `VehicleEnergyStore.load`
+ * with the draft's values; wrong, because `load` deletes a row whose key differs - merely opening
+ * the editor would have wiped the learning).
+ *
+ * usable Ah / usable fraction = nameplate Ah; x series cells x nominal cell voltage = nameplate Wh.
+ */
+internal fun energySummaryOf(
+    record: EnergyRecord?,
+    alert: AlertConfig,
+    avgWhPerKm: Float?
+): EnergySummary {
+    val learned = record?.memory?.learned
+    val wh = if (record != null && learned != null && record.seriesCells > 0) {
+        val (low, high) = VoltageSocEstimator.boundsFor(record.chemistry, alert)
+        val fraction = OcvCurve.usableFraction(record.chemistry, low, high)
+        (learned.usableAh / fraction * record.seriesCells * record.chemistry.nominalCellV)
+            .takeIf { fraction > 0f && it.isFinite() && it > 0f }
+    } else null
+    return EnergySummary(
+        learnedNameplateWh = wh,
+        learnRides = learned?.rides ?: 0,
+        resistanceMilliOhm = record?.memory?.resistanceOhm
+            ?.takeIf { it.isFinite() && it > 0f }
+            ?.let { (it * 1000f).roundToInt() },
+        avgWhPerKm = avgWhPerKm
+    )
+}
+
 @OptIn(ExperimentalTime::class)
 class DefaultVehicleEditComponent(
     componentContext: ComponentContext,
@@ -617,6 +728,10 @@ class DefaultVehicleEditComponent(
     private val controllerConfigSource: ControllerConfigSource? = null,
     /** What the live link has proven about the series cell count; null in builds/tests without one. */
     private val learnedCellCountSource: LearnedCellCountSource? = null,
+    /** The Energy block's learned values. Read with `peek` only - never `load`, which deletes. */
+    private val energyStore: VehicleEnergyStore? = null,
+    /** Live consumption for the Energy block, used only while the edited vehicle is connected. */
+    private val rangeSource: RangeSource? = null,
     /**
      * A draft the setup wizard's "Skip" hands over: a NEW vehicle starts from it instead of from
      * the one-pack bootstrap. Ignored when editing a saved vehicle.
@@ -709,6 +824,31 @@ class DefaultVehicleEditComponent(
                     // The connection state is an input so a disconnect clears the learned count.
                     refreshLearnedCellCount(active, st)
                 }
+        }
+        // Average consumption is live, not stored, and meaningful only for the connected vehicle:
+        // another vehicle's rate would be another pack's number on this one's block.
+        val ranges = rangeSource
+        if (vehicleId != null && ranges != null) {
+            scope.launch {
+                combine(ranges.range, bmsRepository.activeVehicle) { range, active ->
+                    if (active?.id == vehicleId) range?.whPerKm?.toFloat()?.takeIf { it.isFinite() } else null
+                }.collect { wh ->
+                    liveWhPerKm = wh
+                    publishEnergy()
+                }
+            }
+        }
+    }
+
+    /** The edited vehicle's loaded alert config, for the learned-capacity bounds. */
+    private var loadedAlert: AlertConfig = AlertConfig()
+    private var storedRecord: EnergyRecord? = null
+    private var liveWhPerKm: Float? = null
+
+    private fun publishEnergy() {
+        _state.update { s ->
+            if (s.energy == null) s
+            else s.copy(energy = energySummaryOf(storedRecord, loadedAlert, liveWhPerKm))
         }
     }
 
@@ -827,9 +967,16 @@ class DefaultVehicleEditComponent(
                     // straight here) would otherwise see no scan button until
                     // the next connection event, and there may never be one.
                     canScanTarget = canScanTarget(draftOf(v), liveAddresses),
-                    learnedCellCount = learnedNow(bmsRepository.activeVehicle.value, bmsRepository.connectionState.value)
+                    learnedCellCount = learnedNow(bmsRepository.activeVehicle.value, bmsRepository.connectionState.value),
+                    capacityText = capacityText(v.batteryCapacity),
+                    capacityUnit = v.batteryCapacity?.unit ?: CapacityUnit.WH
                 )
-                _state.value = loaded.copy(savedValues = loaded.editableValues)
+                loadedAlert = v.alertConfig
+                storedRecord = energyStore?.peek(v.id)
+                _state.value = loaded.copy(
+                    savedValues = loaded.editableValues,
+                    energy = if (energyStore != null) energySummaryOf(storedRecord, loadedAlert, liveWhPerKm) else null
+                )
                 return
             }
         }
@@ -927,6 +1074,17 @@ class DefaultVehicleEditComponent(
     override fun onTemperatureHighChanged(v: Float?) { _state.update { it.copy(temperatureHighC = v) } }
     override fun onSocLowChanged(v: Int?) { _state.update { it.copy(socLowPercent = v) } }
     override fun onSocCutoffChanged(v: Int?) { _state.update { it.copy(socCutoffPercent = v) } }
+    override fun onCapacityChanged(text: String) { _state.update { it.copy(capacityText = text) } }
+    override fun onCapacityUnitChanged(unit: CapacityUnit) { _state.update { it.copy(capacityUnit = unit) } }
+    override fun onResetLearnedEnergy() {
+        val id = vehicleId ?: return
+        val store = energyStore ?: return
+        scope.launch {
+            store.reset(id)
+            storedRecord = null
+            publishEnergy()
+        }
+    }
     override fun onDisconnectNotifyChanged(enabled: Boolean) { _state.update { it.copy(disconnectNotify = enabled) } }
     override fun onChargeCompleteNotifyChanged(enabled: Boolean) { _state.update { it.copy(chargeCompleteNotify = enabled) } }
     override fun onDashboardStyleChanged(style: DashboardStyle?) { _state.update { it.copy(dashboardStyle = style) } }
@@ -1439,7 +1597,8 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
         dashboardStyle = s.dashboardStyle,
         secondaryGauge = s.secondaryGauge,
         yieldBmsToHeadUnit = s.yieldBmsToHeadUnit,
-        autoVolume = s.autoVolume
+        autoVolume = s.autoVolume,
+        batteryCapacity = s.batteryCapacity
     )
 }
 
@@ -1495,7 +1654,7 @@ private fun newVehicle(s: VehicleEditComponent.State, id: String): Vehicle = new
     secondaryGauge = s.secondaryGauge,
     yieldBmsToHeadUnit = s.yieldBmsToHeadUnit,
     autoVolume = s.autoVolume
-)
+).copy(batteryCapacity = s.batteryCapacity)
 
 /**
  * A blank address remains advisory while editing old rows, so a rider can

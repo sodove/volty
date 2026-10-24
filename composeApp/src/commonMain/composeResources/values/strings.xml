@@ -1338,4 +1338,20 @@
     <string name="vehicle_battery_series">Cells in series (S)</string>
     <string name="vehicle_battery_series_learned">%1$d: determined by the wheel</string>
     <string name="vehicle_controller_none">No controller added</string>
+    <string name="vehicle_energy_title">Energy</string>
+    <string name="vehicle_energy_capacity">Pack capacity (nameplate)</string>
+    <string name="vehicle_energy_capacity_invalid">Enter a number above zero</string>
+    <string name="vehicle_energy_unit">Unit</string>
+    <string name="vehicle_energy_unit_wh">Wh</string>
+    <string name="vehicle_energy_unit_ah">Ah</string>
+    <string name="vehicle_energy_learned">learned: ~%1$d Wh, rides: %2$d</string>
+    <string name="vehicle_energy_learning">learning…</string>
+    <string name="vehicle_energy_resistance">Resistance</string>
+    <string name="vehicle_energy_resistance_value">~%1$d mΩ</string>
+    <string name="vehicle_energy_consumption">Average consumption</string>
+    <string name="vehicle_energy_consumption_value">~%1$d Wh/km</string>
+    <string name="vehicle_energy_reset">Reset learned values</string>
+    <string name="vehicle_energy_reset_title">Reset learned values?</string>
+    <string name="vehicle_energy_reset_text">The learned capacity and resistance are forgotten and learning starts over. The capacity you typed stays.</string>
+    <string name="vehicle_energy_reset_confirm">Reset</string>
 </resources>

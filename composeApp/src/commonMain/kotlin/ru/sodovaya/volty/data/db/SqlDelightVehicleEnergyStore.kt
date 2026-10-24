@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.db
 
 import ru.sodovaya.volty.domain.energy.EnergyMemory
+import ru.sodovaya.volty.domain.energy.EnergyRecord
 import ru.sodovaya.volty.domain.energy.LearnedCapacity
 import ru.sodovaya.volty.domain.energy.PersistedCharge
 import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
@@ -15,6 +16,16 @@ class SqlDelightVehicleEnergyStore(provider: VoltyDatabaseProvider) : VehicleEne
             queries.deleteByVehicle(vehicleId)
             return EnergyMemory.EMPTY
         }
+        return memoryOf(row)
+    }
+
+    override suspend fun peek(vehicleId: String): EnergyRecord? {
+        val row = queries.selectByVehicle(vehicleId).executeAsOneOrNull() ?: return null
+        val chemistry = Chemistry.entries.firstOrNull { it.name == row.chemistry } ?: return null
+        return EnergyRecord(memoryOf(row), row.seriesCells.toInt(), chemistry)
+    }
+
+    private fun memoryOf(row: ru.sodovaya.volty.data.db.VehicleEnergyRow): EnergyMemory {
         val usable = row.learnedUsableAh?.toFloat()?.takeIf { it.isFinite() }
         val weight = row.learnWeight.toFloat()
         val learned = if (usable != null && weight.isFinite()) {

@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.db
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import kotlinx.coroutines.test.runTest
 import ru.sodovaya.volty.domain.energy.EnergyMemory
+import ru.sodovaya.volty.domain.energy.EnergyRecord
 import ru.sodovaya.volty.domain.energy.LearnedCapacity
 import ru.sodovaya.volty.domain.energy.PersistedCharge
 import ru.sodovaya.volty.domain.model.BatteryCapacity
@@ -108,5 +109,17 @@ class SqlDelightVehicleEnergyStoreTest {
             )
         )
         assertEquals(EnergyMemory(null, null, null), store.load("v1", 24, Chemistry.LI_ION_NMC))
+    }
+
+    @Test
+    fun peek_returns_the_row_under_its_own_key_and_deletes_nothing() = runTest {
+        val store = newStore()
+        assertNull(store.peek("nope"))
+        store.save("v1", 24, Chemistry.LI_ION_NMC, memory)
+        assertEquals(EnergyRecord(memory, 24, Chemistry.LI_ION_NMC), store.peek("v1"))
+        // Peeking twice finds it twice: a read that deleted would fail here.
+        assertEquals(EnergyRecord(memory, 24, Chemistry.LI_ION_NMC), store.peek("v1"))
+        // And the row is still there for the tracker's own keyed load.
+        assertEquals(memory, store.load("v1", 24, Chemistry.LI_ION_NMC))
     }
 }
