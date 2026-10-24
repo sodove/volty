@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
@@ -54,11 +55,21 @@ class DefaultSocialRepository(
     private val transport: SocialTransport,
     private val credentials: SocialCredentialStore,
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
+    /**
+     * Whether the device has internet now. An account opened offline from its remembered profile
+     * is checked with the server again the moment this turns true.
+     */
+    networkAvailable: Flow<Boolean> = emptyFlow(),
 ) : SocialRepository {
     private val _session = MutableStateFlow<SocialSession>(SocialSession.LoggedOut)
     override val session: StateFlow<SocialSession> = _session.asStateFlow()
     private val _credentials = MutableStateFlow<SocialCredentials?>(null)
     private val _activeSharing = MutableStateFlow<SharingSession?>(null)
+    /**
+     * True while the published account came from the remembered profile because the server could
+     * not be reached, so nobody has confirmed its tokens since this start.
+     */
+    private val awaitingConfirmation = MutableStateFlow(false)
     private val _authenticatedAccount = MutableStateFlow<SocialAuthenticatedAccount?>(null)
     val authenticatedAccount: StateFlow<SocialAuthenticatedAccount?> = _authenticatedAccount.asStateFlow()
     private class AuthenticationGeneration(var pendingCaller: Job? = null) {
@@ -78,6 +89,7 @@ class DefaultSocialRepository(
         // Capture before dispatch: a queued startup task must not adopt a later login.
         val generation = authenticationGeneration.value
         scope.launch { restoreSession(generation) }
+        scope.launch { networkAvailable.collect { online -> if (online) confirmOfflineAccount() } }
     }
 
     override suspend fun register(request: RegistrationRequest): SocialResult<Unit> =
@@ -409,6 +421,13 @@ class DefaultSocialRepository(
         currentCoroutineContext().ensureActive()
         try {
             credentials.write(stored)
+            // What the next start opens the account from if the server is out of reach then.
+            // Best effort: losing it only costs the offline start, never this sign-in.
+            if (profile != null) {
+                try { credentials.writeProfile(profile) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { }
+            }
             currentCoroutineContext().ensureActive()
         } catch (failure: Exception) {
             // A write can finish before delivering cancellation/another failure.
@@ -424,15 +443,8 @@ class DefaultSocialRepository(
             else {
                 _credentials.value = stored
                 if (profile != null) {
-                    generation.pendingCaller = null
-                    _session.value = profile
-                    if (_authenticatedAccount.value == null) {
-                        _authenticatedAccount.value = SocialAuthenticatedAccount(
-                            profile.userId,
-                            SupervisorJob(accountParentJob),
-                            scope.coroutineContext,
-                        ) { currentAccessToken(generation) }
-                    }
+                    adoptProfileLocked(generation, profile)
+                    awaitingConfirmation.value = false
                 }
                 true
             }
@@ -488,15 +500,68 @@ class DefaultSocialRepository(
                                     is SocialResult.Success -> commitCredentials(generation, retryCredentials, retryProfile.value)
                                     is SocialResult.Failure -> if (retryProfile.error is SocialFailure.Unauthorized)
                                         clearLocalSession(generation)
+                                    else restoreOffline(generation, retryCredentials)
                                 }
                             }
                             is SocialResult.Failure -> if (retry.error is SocialFailure.Unauthorized)
                                 clearLocalSession(generation)
+                            else restoreOffline(generation, refreshed)
                         }
-                    }
+                    } else restoreOffline(generation, refreshed)
                 }
             }
             is SocialResult.Failure -> if (session.error is SocialFailure.Unauthorized) clearLocalSession(generation)
+            else restoreOffline(generation, saved)
+        }
+    }
+
+    /**
+     * The server could not be reached, so nothing has rejected these tokens: open the account from
+     * the profile the server last confirmed. Retraction: restore used to publish nothing here, and
+     * every start without internet looked like a sign-out (field report 2026-10-24) - no server
+     * list, and so no way to the offline radio. Only an Unauthorized answer signs out.
+     */
+    private suspend fun restoreOffline(generation: AuthenticationGeneration, stored: SocialCredentials) {
+        val profile = credentialMutex.withLock {
+            if (!ownsAuthentication(generation)) return@withLock null
+            try { credentials.readProfile() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+        } ?: return
+        sessionMutex.withLock {
+            if (!ownsAuthenticationLocked(generation)) return@withLock
+            _credentials.value = stored
+            adoptProfileLocked(generation, profile)
+            awaitingConfirmation.value = true
+        }
+    }
+
+    /** Back online after an offline start: the server confirms the account, or it signs out. */
+    private suspend fun confirmOfflineAccount() {
+        if (!awaitingConfirmation.value) return
+        val generation = authenticationGeneration.value
+        when (val result = getProfile()) {
+            is SocialResult.Success -> credentialMutex.withLock {
+                if (!ownsAuthentication(generation)) return@withLock
+                awaitingConfirmation.value = false
+                try { credentials.writeProfile(result.value) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { }
+            }
+            is SocialResult.Failure -> if (result.error is SocialFailure.Unauthorized) clearLocalSession(generation)
+        }
+    }
+
+    /** Called only inside the generation-checked publication lock. */
+    private fun adoptProfileLocked(generation: AuthenticationGeneration, profile: SocialSession.Authenticated) {
+        generation.pendingCaller = null
+        _session.value = profile
+        if (_authenticatedAccount.value == null) {
+            _authenticatedAccount.value = SocialAuthenticatedAccount(
+                profile.userId,
+                SupervisorJob(accountParentJob),
+                scope.coroutineContext,
+            ) { currentAccessToken(generation) }
         }
     }
 
@@ -628,6 +693,7 @@ class DefaultSocialRepository(
             _credentials.value = null
             _activeSharing.value = null
             _session.value = SocialSession.LoggedOut
+            awaitingConfirmation.value = false
             next to previous
         } ?: return null
         return credentialMutex.withLock {

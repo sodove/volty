@@ -194,6 +194,7 @@ val androidModule = module {
             storeForActor = { actor -> AndroidInvitationDraftStore(context, actor) },
             generator = AndroidInvitationSecretGenerator(),
             radioKeyStore = AndroidRadioKeyStore(context),
+            communityCacheStorage = ru.sodovaya.volty.data.nearby.AndroidCommunityCacheStorage(context),
         )
     }
     single {

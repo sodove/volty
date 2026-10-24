@@ -8,6 +8,9 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
+import ru.sodovaya.volty.domain.social.SessionTokenState
+import ru.sodovaya.volty.domain.social.SocialSession
+import ru.sodovaya.volty.domain.social.SocialUserId
 
 /**
  * Small Keystore-backed token store for the optional social session.
@@ -51,6 +54,34 @@ class AndroidSocialCredentialStore(context: Context) : SocialCredentialStore {
         prefs.edit().clear().apply()
     }
 
+    override suspend fun readProfile(): SocialSession.Authenticated? = synchronized(lock) {
+        val iv = prefs.getString(KEY_PROFILE_IV, null) ?: return@synchronized null
+        val payload = prefs.getString(KEY_PROFILE, null) ?: return@synchronized null
+        runCatching {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(TAG_BITS, decode(iv)))
+            val parts = cipher.doFinal(decode(payload)).toString(StandardCharsets.UTF_8).split(SEP)
+            require(parts.size == 3)
+            SocialSession.Authenticated(
+                userId = SocialUserId(parts[0]),
+                displayName = parts[1],
+                tokenState = SessionTokenState.ACTIVE,
+                emailVerified = parts[2] == "1",
+            )
+        }.getOrNull()
+    }
+
+    override suspend fun writeProfile(profile: SocialSession.Authenticated) = synchronized(lock) {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        val value = listOf(profile.userId.value, profile.displayName, if (profile.emailVerified) "1" else "0")
+            .joinToString(SEP)
+        prefs.edit()
+            .putString(KEY_PROFILE_IV, encode(cipher.iv))
+            .putString(KEY_PROFILE, encode(cipher.doFinal(value.toByteArray(StandardCharsets.UTF_8))))
+            .apply()
+    }
+
     private fun key(): SecretKey {
         val store = KeyStore.getInstance(ANDROID_KEYSTORE).apply { load(null) }
         (store.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
@@ -75,6 +106,8 @@ class AndroidSocialCredentialStore(context: Context) : SocialCredentialStore {
         const val PREFS_NAME = "volty_social_credentials"
         const val KEY_IV = "iv"
         const val KEY_PAYLOAD = "payload"
+        const val KEY_PROFILE_IV = "profile_iv"
+        const val KEY_PROFILE = "profile"
         const val KEY_ALIAS = "volty.social.session"
         const val ANDROID_KEYSTORE = "AndroidKeyStore"
         const val ALGORITHM = "AES"

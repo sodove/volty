@@ -17,6 +17,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.data.nearby.NearbyAccountCredentials
 import ru.sodovaya.volty.data.nearby.NearbyAccountHttpSession
+import ru.sodovaya.volty.data.nearby.CommunityCacheStorage
 import ru.sodovaya.volty.data.nearby.nearbyHttpsApiBaseUrl
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 import ru.sodovaya.volty.domain.nearby.community.InvitationCreationDraftOwner
@@ -43,8 +44,10 @@ class NearbyCommunityAccount private constructor(
         client: HttpClient,
         baseUrl: String,
         radioKeyStore: RadioKeyStore? = null,
+        communityCacheStorage: CommunityCacheStorage? = null,
     ) : this(parent, credentials.actorId, store, generator, baseUrl,
-        { job -> NearbyAccountHttpSession(credentials, client, baseUrl, job, radioKeyStore) })
+        { job -> NearbyAccountHttpSession(credentials, client, baseUrl, job, radioKeyStore,
+            communityCacheStorage = communityCacheStorage) })
 
     internal constructor(
         account: SocialAuthenticatedAccount,
@@ -53,8 +56,10 @@ class NearbyCommunityAccount private constructor(
         client: HttpClient,
         baseUrl: String,
         radioKeyStore: RadioKeyStore? = null,
+        communityCacheStorage: CommunityCacheStorage? = null,
     ) : this(account.scope(), account.userId.value, store, generator, baseUrl,
-        { NearbyAccountHttpSession(account, client, baseUrl, radioKeyStore) })
+        { NearbyAccountHttpSession(account, client, baseUrl, radioKeyStore,
+            communityCacheStorage = communityCacheStorage) })
 
     private val accountJob: Job = requireNotNull(parent.coroutineContext[Job]) {
         "Nearby community account requires a parent Job"

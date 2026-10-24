@@ -478,11 +478,153 @@ class DefaultSocialRepositoryTest {
         assertNull(repository.activeSharing.value)
     }
 
-    private class FakeCredentials(initial: SocialCredentials? = null) : SocialCredentialStore {
+    // A start with no internet (field report 2026-10-24): the rider looked signed out on every
+    // offline launch, and with no account there was no server list and no way to the radio.
+
+    @Test
+    fun anOfflineStartKeepsTheAccountItLastConfirmed() = runTest {
+        val transport = FakeTransport(profile = SocialResult.Failure(SocialFailure.Network("offline")))
+        val credentials = FakeCredentials(SocialCredentials("access", "refresh", Long.MAX_VALUE), authenticatedProfile())
+        val repositoryJob = SupervisorJob()
+        val repository = DefaultSocialRepository(transport, credentials,
+            CoroutineScope(StandardTestDispatcher(testScheduler) + repositoryJob))
+        try {
+            runCurrent()
+            assertEquals(authenticatedProfile(), repository.session.value)
+            assertEquals("u1", repository.authenticatedAccount.value?.userId?.value)
+            assertEquals(SocialCredentials("access", "refresh", Long.MAX_VALUE), credentials.value)
+        } finally {
+            repositoryJob.cancel()
+        }
+    }
+
+    @Test
+    fun anOfflineStartWithAnExpiredTokenKeepsTheAccountToo() = runTest {
+        // The refresh itself cannot reach the server: the old pair is all there is, and it is kept.
+        val transport = object : FakeTransport() {
+            override suspend fun refreshSession(refreshToken: String): SocialResult<SessionCredentials> =
+                SocialResult.Failure(SocialFailure.Network("offline"))
+        }
+        val credentials = FakeCredentials(SocialCredentials("expired", "refresh", 0L), authenticatedProfile())
+        val repositoryJob = SupervisorJob()
+        val repository = DefaultSocialRepository(transport, credentials,
+            CoroutineScope(StandardTestDispatcher(testScheduler) + repositoryJob))
+        try {
+            runCurrent()
+            assertEquals(authenticatedProfile(), repository.session.value)
+            assertEquals(SocialCredentials("expired", "refresh", 0L), credentials.value)
+        } finally {
+            repositoryJob.cancel()
+        }
+    }
+
+    @Test
+    fun anOfflineStartWithNoConfirmedProfileStaysSignedOutButKeepsTheTokens() = runTest {
+        val transport = FakeTransport(profile = SocialResult.Failure(SocialFailure.Network("offline")))
+        val credentials = FakeCredentials(SocialCredentials("access", "refresh", Long.MAX_VALUE))
+        val repositoryJob = SupervisorJob()
+        val repository = DefaultSocialRepository(transport, credentials,
+            CoroutineScope(StandardTestDispatcher(testScheduler) + repositoryJob))
+        try {
+            runCurrent()
+            assertEquals(SocialSession.LoggedOut, repository.session.value)
+            assertEquals(SocialCredentials("access", "refresh", Long.MAX_VALUE), credentials.value)
+        } finally {
+            repositoryJob.cancel()
+        }
+    }
+
+    @Test
+    fun aRejectedTokenStillSignsOutDespiteTheRememberedProfile() = runTest {
+        val transport = object : FakeTransport(profile = SocialResult.Failure(SocialFailure.Unauthorized)) {
+            override suspend fun refreshSession(refreshToken: String): SocialResult<SessionCredentials> =
+                SocialResult.Failure(SocialFailure.Unauthorized)
+        }
+        val credentials = FakeCredentials(SocialCredentials("access", "refresh", Long.MAX_VALUE), authenticatedProfile())
+        val repositoryJob = SupervisorJob()
+        val repository = DefaultSocialRepository(transport, credentials,
+            CoroutineScope(StandardTestDispatcher(testScheduler) + repositoryJob))
+        try {
+            runCurrent()
+            assertEquals(SocialSession.LoggedOut, repository.session.value)
+            assertNull(credentials.value)
+            assertNull(credentials.profile, "signing out forgets the remembered profile with the tokens")
+        } finally {
+            repositoryJob.cancel()
+        }
+    }
+
+    @Test
+    fun aConfirmedLoginIsRememberedForTheNextOfflineStart() = runTest {
+        val credentials = FakeCredentials()
+        val repository = DefaultSocialRepository(FakeTransport(), credentials)
+        assertEquals(SocialResult.Success(Unit), repository.login(LoginRequest("rider@example.com", "secret")))
+        assertEquals(authenticatedProfile(), credentials.profile)
+    }
+
+    @Test
+    fun theAccountIsCheckedAgainWhenTheNetworkReturns() = runTest {
+        var online = false
+        val renamed = authenticatedProfile().copy(displayName = "Renamed")
+        val transport = object : FakeTransport() {
+            override suspend fun getProfile(accessToken: String): SocialResult<SocialSession.Authenticated> =
+                if (online) SocialResult.Success(renamed) else SocialResult.Failure(SocialFailure.Network("offline"))
+        }
+        val credentials = FakeCredentials(SocialCredentials("access", "refresh", Long.MAX_VALUE), authenticatedProfile())
+        val network = kotlinx.coroutines.flow.MutableSharedFlow<Boolean>(replay = 1)
+        val repositoryJob = SupervisorJob()
+        val repository = DefaultSocialRepository(transport, credentials,
+            CoroutineScope(StandardTestDispatcher(testScheduler) + repositoryJob), networkAvailable = network)
+        try {
+            runCurrent()
+            assertEquals(authenticatedProfile(), repository.session.value)
+            online = true
+            network.emit(true)
+            runCurrent()
+            assertEquals(renamed, repository.session.value)
+            assertEquals(renamed, credentials.profile)
+        } finally {
+            repositoryJob.cancel()
+        }
+    }
+
+    @Test
+    fun aTokenRevokedWhileOfflineSignsOutWhenTheNetworkReturns() = runTest {
+        var online = false
+        val transport = object : FakeTransport() {
+            override suspend fun getProfile(accessToken: String): SocialResult<SocialSession.Authenticated> =
+                if (online) SocialResult.Failure(SocialFailure.Unauthorized) else SocialResult.Failure(SocialFailure.Network("offline"))
+            override suspend fun refreshSession(refreshToken: String): SocialResult<SessionCredentials> =
+                SocialResult.Failure(SocialFailure.Unauthorized)
+        }
+        val credentials = FakeCredentials(SocialCredentials("access", "refresh", Long.MAX_VALUE), authenticatedProfile())
+        val network = kotlinx.coroutines.flow.MutableSharedFlow<Boolean>(replay = 1)
+        val repositoryJob = SupervisorJob()
+        val repository = DefaultSocialRepository(transport, credentials,
+            CoroutineScope(StandardTestDispatcher(testScheduler) + repositoryJob), networkAvailable = network)
+        try {
+            runCurrent()
+            assertTrue(repository.session.value is SocialSession.Authenticated)
+            online = true
+            network.emit(true)
+            runCurrent()
+            assertEquals(SocialSession.LoggedOut, repository.session.value)
+            assertNull(credentials.value)
+        } finally {
+            repositoryJob.cancel()
+        }
+    }
+
+    private class FakeCredentials(
+        initial: SocialCredentials? = null,
+        var profile: SocialSession.Authenticated? = null,
+    ) : SocialCredentialStore {
         var value: SocialCredentials? = initial
         override suspend fun read(): SocialCredentials? = value
         override suspend fun write(credentials: SocialCredentials) { value = credentials }
-        override suspend fun clear() { value = null }
+        override suspend fun clear() { value = null; profile = null }
+        override suspend fun readProfile(): SocialSession.Authenticated? = profile
+        override suspend fun writeProfile(profile: SocialSession.Authenticated) { this.profile = profile }
     }
 
     private class RestoreAwareCredentials : SocialCredentialStore {
@@ -585,7 +727,7 @@ class DefaultSocialRepositoryTest {
         override open suspend fun refreshSession(refreshToken: String): SocialResult<SessionCredentials> =
             SocialResult.Success(refreshedCredentials).also { refreshCalls++ }
         override suspend fun logout(accessToken: String) = logout
-        override suspend fun getProfile(accessToken: String): SocialResult<SocialSession.Authenticated> {
+        override open suspend fun getProfile(accessToken: String): SocialResult<SocialSession.Authenticated> {
             profileTokens += accessToken
             return if (accessToken == "fresh") refreshedProfile else profile
         }

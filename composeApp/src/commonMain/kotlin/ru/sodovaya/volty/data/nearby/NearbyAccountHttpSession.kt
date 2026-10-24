@@ -26,6 +26,7 @@ class NearbyAccountHttpSession private constructor(
     baseUrl: String,
     private val radioKeyStore: RadioKeyStore?,
     private val nowMillis: () -> Long,
+    communityCacheStorage: CommunityCacheStorage? = null,
 ) {
     constructor(
         credentials: NearbyAccountCredentials,
@@ -33,17 +34,22 @@ class NearbyAccountHttpSession private constructor(
         baseUrl: String,
         accountJob: Job? = null,
         radioKeyStore: RadioKeyStore? = null,
+        // Before nowMillis, so a trailing clock lambda still binds to the clock.
+        communityCacheStorage: CommunityCacheStorage? = null,
         nowMillis: () -> Long = ::radioClockMillis,
     ) : this(credentials.actorId, NearbyAccountBinding(credentials, accountJob), null, accountJob, client, baseUrl,
-        radioKeyStore, nowMillis)
+        radioKeyStore, nowMillis, communityCacheStorage)
 
     internal constructor(
         account: SocialAuthenticatedAccount,
         client: HttpClient,
         baseUrl: String,
         radioKeyStore: RadioKeyStore? = null,
+        // Before nowMillis, so a trailing clock lambda still binds to the clock.
+        communityCacheStorage: CommunityCacheStorage? = null,
         nowMillis: () -> Long = ::radioClockMillis,
-    ) : this(account.userId.value, null, account, account.job, client, baseUrl, radioKeyStore, nowMillis)
+    ) : this(account.userId.value, null, account, account.job, client, baseUrl, radioKeyStore, nowMillis,
+        communityCacheStorage)
 
     private val root = nearbyHttpsApiBaseUrl(baseUrl)
     init { invitationDraftId(actorId) }
@@ -56,6 +62,8 @@ class NearbyAccountHttpSession private constructor(
     private val invitationListingHttp = InvitationListingHttpPort(client, root) { currentBearer() }
     private val membersHttp=CommunityMembersHttpPort(client,root,actorId) {currentBearer()}
     private val radioKeyHttp = RadioKeyHttpPort(client, root, actorId) { currentBearer() }
+    /** The server list and pages as last answered, for a start with no internet (the radio lives there). */
+    private val offline = communityCacheStorage?.let { CommunityOfflineCache(it, actorId) }
 
     // Radio keys refresh in the background after a membership list loads; failures never reach the list.
     // Deliberately not a child of the account Job (borrowed Jobs must gain no children); tied to it by completion.
@@ -81,16 +89,22 @@ class NearbyAccountHttpSession private constructor(
 
     val communities: CommunityPort = object : CommunityPort {
         override suspend fun memberships(after: String?, limit: Int) = guarded {
-            communitiesHttp.memberships(after, limit).also { result ->
-                if (result is CommunityResult.Ready) refreshRadioKeys(result.value)
+            val live: suspend () -> CommunityResult<List<CommunitySummary>> = {
+                communitiesHttp.memberships(after, limit).also { result ->
+                    if (result is CommunityResult.Ready) refreshRadioKeys(result.value)
+                }
             }
+            offline?.memberships(after, live) ?: live()
         }
 
         override suspend fun catalog(query: String, after: String?, limit: Int) = guarded {
             communitiesHttp.catalog(query, after, limit)
         }
 
-        override suspend fun detail(community: String) = guarded { communitiesHttp.detail(community) }
+        override suspend fun detail(community: String) = guarded {
+            val live: suspend () -> CommunityResult<CommunityDetails> = { communitiesHttp.detail(community) }
+            offline?.detail(community, live) ?: live()
+        }
 
         override suspend fun create(
             community: String,

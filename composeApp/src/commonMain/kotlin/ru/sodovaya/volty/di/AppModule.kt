@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.di
 
+import kotlinx.coroutines.flow.map
 import ru.sodovaya.volty.data.ble.KableBmsRepository
 import ru.sodovaya.volty.data.ble.BleAdapterStateProvider
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
@@ -77,7 +78,15 @@ val appModule = module {
     // available for it without defining the interface twice in Koin.
     single { OsmNavigationRepository() }
     single<NavigationEnergySource> { BmsNavigationEnergySource(get()) }
-    single { DefaultSocialRepository(get(), get()) } bind SocialRepository::class
+    single {
+        DefaultSocialRepository(
+            get(), get(),
+            // An account opened offline is checked with the server again once internet returns.
+            networkAvailable = getOrNull<ru.sodovaya.volty.domain.navigation.region.OfflineNetworkStatus>()?.changes
+                ?.map { it != ru.sodovaya.volty.domain.navigation.region.OfflineNetworkAvailability.OFFLINE }
+                ?: kotlinx.coroutines.flow.emptyFlow(),
+        )
+    } bind SocialRepository::class
     single<VoiceRoomRepository> { LiveKitVoiceRoomRepository(get(), get()) }
     single<SocialTelemetrySource> { BmsSocialTelemetrySource(get()) }
     single { SocialShareSessionCoordinator(get(), get()) }
