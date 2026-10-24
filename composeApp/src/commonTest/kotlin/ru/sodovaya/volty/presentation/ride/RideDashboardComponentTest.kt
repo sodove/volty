@@ -265,6 +265,7 @@ class RideDashboardComponentTest {
         onAddVehicleRequested: () -> Unit = {},
         onDisconnectRequested: () -> Unit = {},
         onEditVehicleRequested: (String) -> Unit = {},
+        rangeSource: ru.sodovaya.volty.data.energy.RangeSource? = null,
     ): DefaultRideDashboardComponent {
         if (repo.activeVehicle.value == null) {
             repo.activeVehicle.value = vehicleWith(vehicleStyle, secondary)
@@ -280,7 +281,26 @@ class RideDashboardComponentTest {
             onAddVehicleRequested = onAddVehicleRequested,
             onDisconnectRequested = onDisconnectRequested,
             onEditVehicleRequested = onEditVehicleRequested,
+            rangeSource = rangeSource,
         )
+    }
+
+    @Test
+    fun `state range follows the range source and is null before it is earned`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val flow = MutableStateFlow<ru.sodovaya.volty.domain.energy.RangeEstimate?>(null)
+        val source = object : ru.sodovaya.volty.data.energy.RangeSource {
+            override val range: kotlinx.coroutines.flow.StateFlow<ru.sodovaya.volty.domain.energy.RangeEstimate?> = flow
+        }
+        val c = component(FakeBmsRepo(), rangeSource = source)
+        advanceUntilIdle()
+        assertNull(c.state.value.range)
+        flow.value = ru.sodovaya.volty.domain.energy.RangeEstimate(42f, 20.0)
+        advanceUntilIdle()
+        assertEquals(42f, c.state.value.range?.km)
+        flow.value = null
+        advanceUntilIdle()
+        assertNull(c.state.value.range)
     }
 
     /**

@@ -282,7 +282,7 @@ fun RideDashboardScreen(
                                 modifier = Modifier.weight(1f),
                                 verticalArrangement = Arrangement.spacedBy(12.dp)
                             ) {
-                                MetricCluster(motion = motion, battery = state.battery)
+                                MetricCluster(motion = motion, battery = state.battery, state = state)
                                 ConsumptionCard(
                                     motion = motion,
                                     sessionWhPerKm = state.sessionWhPerKm,
@@ -293,7 +293,7 @@ fun RideDashboardScreen(
                         }
                     } else {
                         RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed)
-                        MetricCluster(motion = motion, battery = state.battery)
+                        MetricCluster(motion = motion, battery = state.battery, state = state)
                         ConsumptionCard(
                             motion = motion,
                             sessionWhPerKm = state.sessionWhPerKm,
@@ -464,7 +464,8 @@ private fun RideHero(
     // from the Classic dial for the same vehicle (`G §9.2`).
     val secondary = SecondaryGaugeMapper.map(
         state.secondary, motion, state.battery, state.units, secondaryLabels,
-        currentRangeA = state.currentRangeA, powerRangeW = state.powerRangeW
+        currentRangeA = state.currentRangeA, powerRangeW = state.powerRangeW,
+        rangeLabel = localizedRangeLabel(state.range, state.units)
     )
     // Through the mapper, not `motion.speedKmh / vehicleMaxSpeed`: an unobserved
     // speed is 0f in the field, so the raw division drew a confident empty ring
@@ -527,6 +528,13 @@ private fun RideHero(
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
                     }
+                    secondary.subLabel?.let {
+                        Text(
+                            text = it,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
                 }
             }
         }
@@ -552,7 +560,7 @@ internal fun SpeedUnknownReasonLine(motion: ControllerData) {
 }
 
 @Composable
-private fun MetricCluster(motion: ControllerData, battery: BmsData) {
+private fun MetricCluster(motion: ControllerData, battery: BmsData, state: RideDashboardComponent.State) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -567,7 +575,9 @@ private fun MetricCluster(motion: ControllerData, battery: BmsData) {
             MetricCard(
                 label = stringResource(Res.string.ride_battery),
                 value = CleanMetricMapper.batterySocValue(battery),
-                sub = CleanMetricMapper.batteryVoltageValue(battery),
+                sub = CleanMetricMapper.batteryCardSub(
+                    battery, localizedRangeLabel(state.range, state.units), state.secondary
+                ),
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }

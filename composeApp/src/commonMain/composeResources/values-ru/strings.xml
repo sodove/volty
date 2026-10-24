@@ -1352,4 +1352,6 @@
     <string name="vehicle_energy_reset_title">Сбросить выученное?</string>
     <string name="vehicle_energy_reset_text">Выученные ёмкость и сопротивление забудутся, обучение начнётся заново. Введённая вами ёмкость останется.</string>
     <string name="vehicle_energy_reset_confirm">Сбросить</string>
+    <string name="range_unit_km">км</string>
+    <string name="range_unit_mi">mi</string>
 </resources>

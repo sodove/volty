@@ -50,7 +50,9 @@ data class VescDialSpec(
     /** `CustomGauge.qml` :47. */
     val tickmarkSuffix: String = "",
     /** What colours the needle (`nibColor`). [DutyLevel.NORMAL] means the plain fixed accent. */
-    val severity: DutyLevel = DutyLevel.NORMAL
+    val severity: DutyLevel = DutyLevel.NORMAL,
+    /** Battery dial only: the earned range ("~42 км") drawn under the percentage; null otherwise. */
+    val subLabel: String? = null
 )
 
 /**
@@ -450,7 +452,9 @@ object ClassicDialSpecs {
          */
         currentRangeA: Float = GaugeScale.CURRENT_RUNGS_A.first(),
         /** The POWER dial's `±max` in WATTS, likewise a [GaugeScale.POWER_RUNGS_W] rung. */
-        powerRangeW: Float = GaugeScale.POWER_RUNGS_W.first()
+        powerRangeW: Float = GaugeScale.POWER_RUNGS_W.first(),
+        /** The range readout from [rangeLabel]; only the BATTERY dial carries it. */
+        rangeLabel: String? = null
     ): List<VescDialSpec> {
         val heroMax = heroDisplayMax(maxSpeedKmh, units)
         val currentMax = currentRangeA.toDouble()
@@ -571,7 +575,8 @@ object ClassicDialSpecs {
                 unit = "%",
                 valueTextOverride = if (battery.isConnected && battery.socKnown) "${battery.soc.roundToInt()}%" else UNKNOWN,
                 centerTextVisible = false,            // QML :312
-                severity = batteryLevel(battery.soc, battery.isConnected && battery.socKnown)
+                severity = batteryLevel(battery.soc, battery.isConnected && battery.socKnown),
+                subLabel = rangeLabel
             ),
             // QML :434-460.
             VescDialSpec(

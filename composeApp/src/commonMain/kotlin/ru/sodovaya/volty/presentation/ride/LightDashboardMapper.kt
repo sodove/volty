@@ -31,6 +31,15 @@ data class LightTelemetryReadouts(
     val batteryVoltage: LightReadout,
 )
 
+/** What the Light battery line draws: sizes and the earned range text, decided here. */
+data class LightBatteryLineSpec(
+    val voltageSp: Float,
+    val socSp: Float,
+    val rangeSp: Float,
+    /** " · ~42 км", or null when no range is earned (nothing is drawn). */
+    val rangeText: String?,
+)
+
 /** Pure controller/BMS/GPS-to-HUD mapping; unknown values stay unknown. */
 object LightDashboardMapper {
     fun map(
@@ -77,6 +86,14 @@ object LightDashboardMapper {
             batteryVoltage = values.batteryVoltageV?.let { LightReadout(formatFixed(it, 1), "V") }
                 ?: LightReadout(UNKNOWN_READOUT),
         )
+
+    /** Battery numbers were enlarged 10/11 -> 12/13 sp at the rider's request. */
+    fun batteryLine(rangeLabel: String?): LightBatteryLineSpec = LightBatteryLineSpec(
+        voltageSp = 12f,
+        socSp = 13f,
+        rangeSp = 13f,
+        rangeText = rangeLabel?.let { " · $it" },
+    )
 
     fun speedKmh(motion: ControllerData, gpsSpeedKmh: Float?): Float? =
         MotionReadings.speedKmh(motion)?.takeIf { motion.isConnected }

@@ -391,6 +391,7 @@ internal fun LightRideDashboard(
             LightBatteryLine(
                 readout = readouts.batteryVoltage,
                 soc = readouts.batterySoc,
+                line = LightDashboardMapper.batteryLine(localizedRangeLabel(state.range, state.units)),
                 fraction = LightDashboardMapper.batteryFraction(state.battery),
                 layoutMode = layoutMode,
             )
@@ -768,7 +769,7 @@ private fun LightTelemetryStrip(
 private data class LightMetric(val label: String, val readout: LightReadout, val history: List<Float>, val color: Color)
 
 @Composable
-private fun LightBatteryLine(readout: LightReadout, soc: LightReadout, fraction: Float, layoutMode: LightLayoutMode) {
+private fun LightBatteryLine(readout: LightReadout, soc: LightReadout, line: LightBatteryLineSpec, fraction: Float, layoutMode: LightLayoutMode) {
     val palette = LocalLightHudPalette.current
     Column(Modifier.fillMaxWidth().padding(horizontal = 5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Canvas(Modifier.fillMaxWidth().height(13.dp)) {
@@ -781,8 +782,11 @@ private fun LightBatteryLine(readout: LightReadout, soc: LightReadout, fraction:
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(if (readout.unit.isNotEmpty()) "${readout.value} ${readout.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.muted, fontSize = lightHudSp(10f, layoutMode))
-            Text(if (soc.unit.isNotEmpty()) "${soc.value}${soc.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.battery, fontSize = lightHudSp(11f, layoutMode), fontWeight = FontWeight.Bold)
+            Text(if (readout.unit.isNotEmpty()) "${readout.value} ${readout.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.muted, fontSize = lightHudSp(line.voltageSp, layoutMode))
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(if (soc.unit.isNotEmpty()) "${soc.value}${soc.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.battery, fontSize = lightHudSp(line.socSp, layoutMode), fontWeight = FontWeight.Bold)
+                line.rangeText?.let { Text(it, color = LocalLightHudPalette.current.muted, fontSize = lightHudSp(line.rangeSp, layoutMode)) }
+            }
         }
     }
 }

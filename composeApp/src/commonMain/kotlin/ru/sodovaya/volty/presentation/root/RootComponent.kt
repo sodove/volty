@@ -785,7 +785,8 @@ class DefaultRootComponent(
                     onAddVehicleRequested = {
                         goTo(configForCreateVehicle(CreateVehicleEntry.RIDE))
                     },
-                    onDisconnectRequested = { replaceAll(configAfterDisconnect()) }
+                    onDisconnectRequested = { replaceAll(configAfterDisconnect()) },
+                    rangeSource = get<ru.sodovaya.volty.data.energy.RangeSource>()
                 )
             )
             is Config.Dashboard -> RootComponent.Child.Dashboard(

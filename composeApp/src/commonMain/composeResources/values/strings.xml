@@ -1354,4 +1354,6 @@
     <string name="vehicle_energy_reset_title">Reset learned values?</string>
     <string name="vehicle_energy_reset_text">The learned capacity and resistance are forgotten and learning starts over. The capacity you typed stays.</string>
     <string name="vehicle_energy_reset_confirm">Reset</string>
+    <string name="range_unit_km">km</string>
+    <string name="range_unit_mi">mi</string>
 </resources>

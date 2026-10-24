@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.ride
 
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.util.UnitFormatter
@@ -34,6 +35,15 @@ object CleanMetricMapper {
 
     fun batteryVoltageValue(battery: BmsData): String =
         if (battery.isConnected && battery.voltage > 0f) "${formatFixed(battery.voltage, 1)} V" else UNKNOWN_READOUT
+
+    /**
+     * The battery card's sub line: voltage, plus " · range" when the range is earned and the
+     * hero's BATTERY centre is not already showing it (then the card would say it twice).
+     */
+    fun batteryCardSub(battery: BmsData, rangeLabel: String?, hero: SecondaryGauge): String {
+        val voltage = batteryVoltageValue(battery)
+        return if (rangeLabel != null && hero != SecondaryGauge.BATTERY) "$voltage · $rangeLabel" else voltage
+    }
 
     /** Resource choice for the explanatory line below an unknown speed readout. */
     enum class SpeedUnknownReasonKey(val resourceName: String) {

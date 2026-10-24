@@ -19,7 +19,9 @@ data class SecondaryReadout(
     val unit: String,
     /** 0..1 for the ring; 0 when the value is unknown. */
     val fraction: Float,
-    val severity: DutyLevel
+    val severity: DutyLevel,
+    /** The earned range ("~42 км") under the BATTERY readout; null for every other gauge and when unearned. */
+    val subLabel: String? = null
 )
 
 /**
@@ -80,7 +82,9 @@ object SecondaryGaugeMapper {
         /** The CURRENT ring's full-scale value in amps — a [GaugeScale.CURRENT_RUNGS_A] rung. */
         currentRangeA: Float = GaugeScale.CURRENT_RUNGS_A.first(),
         /** The POWER ring's full-scale value in watts — a [GaugeScale.POWER_RUNGS_W] rung. */
-        powerRangeW: Float = GaugeScale.POWER_RUNGS_W.first()
+        powerRangeW: Float = GaugeScale.POWER_RUNGS_W.first(),
+        /** The range readout from [rangeLabel]; only the BATTERY centre carries it. */
+        rangeLabel: String? = null
     ): SecondaryReadout = when (gauge) {
         SecondaryGauge.DUTY -> {
             // G §9: hasDuty used to be read nowhere in presentation/, so a wheel
@@ -97,7 +101,8 @@ object SecondaryGaugeMapper {
             labels.battery,
             if (battery.isConnected && battery.socKnown) battery.soc.roundToInt().toString() else "—", "%",
             if (battery.isConnected && battery.socKnown) frac(battery.soc, 100f) else 0f,
-            DutyLevel.NORMAL
+            DutyLevel.NORMAL,
+            subLabel = rangeLabel
         )
         SecondaryGauge.POWER -> {
             val power = MotionReadings.powerW(motion)

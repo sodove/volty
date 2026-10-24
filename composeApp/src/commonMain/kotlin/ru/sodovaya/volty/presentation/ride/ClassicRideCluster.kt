@@ -92,7 +92,8 @@ fun ClassicRideCluster(
         // by DefaultRideDashboardComponent (`G §9.2`), not by this Composable and not by a session
         // tracker on the screen above it. Two parameters became none.
         currentRangeA = state.currentRangeA,
-        powerRangeW = state.powerRangeW
+        powerRangeW = state.powerRangeW,
+        rangeLabel = localizedRangeLabel(state.range, state.units)
     )
 
     Column(modifier = modifier) {
@@ -183,8 +184,19 @@ private fun BatteryDial(
             color = MaterialTheme.colorScheme.onSurface,
             modifier = Modifier.offset(y = size * VALUE_OFFSET_FRACTION)
         )
+        spec.subLabel?.let {
+            Text(
+                text = it,
+                fontSize = size.fractionSp(CAPTION_FONT_FRACTION),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.offset(y = size * RANGE_OFFSET_FRACTION)
+            )
+        }
     }
 }
+
+/** Below the percentage; a fraction of the dial like every size here. Unverified on a device. */
+private const val RANGE_OFFSET_FRACTION = 0.14f
 
 /** QML :321 — `font.pixelSize: gaugeSize2/18.0`. */
 private const val CAPTION_FONT_FRACTION = 1f / 18f

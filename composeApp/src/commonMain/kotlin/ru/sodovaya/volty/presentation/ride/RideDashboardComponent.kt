@@ -83,6 +83,8 @@ interface RideDashboardComponent {
         val currentRangeA: Float = GaugeScale.CURRENT_RUNGS_A.first(),
         /** The POWER dial's `±max` in watts. See [currentRangeA]. */
         val powerRangeW: Float = GaugeScale.POWER_RUNGS_W.first(),
+        /** The earned range estimate; null until a capacity and enough riding back it. */
+        val range: ru.sodovaya.volty.domain.energy.RangeEstimate? = null,
         val sessionWhPerKm: Float? = null,
         /**
          * True when [sessionWhPerKm] was **integrated from power** rather than
@@ -193,6 +195,7 @@ class DefaultRideDashboardComponent(
     private val onAddVehicleRequested: () -> Unit,
     private val onDisconnectRequested: () -> Unit,
     private val onEditVehicleRequested: (String) -> Unit = {},
+    private val rangeSource: ru.sodovaya.volty.data.energy.RangeSource? = null,
 ) : RideDashboardComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -848,6 +851,12 @@ class DefaultRideDashboardComponent(
                 // Only now may a rung be written back. See [storedPeaksSeen].
                 storedPeaksSeen = true
                 republishRanges()
+            }
+        }
+
+        rangeSource?.let { source ->
+            scope.launch {
+                source.range.collect { range -> _state.update { it.copy(range = range) } }
             }
         }
 
