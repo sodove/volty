@@ -102,7 +102,7 @@ object SecondaryGaugeMapper {
             if (battery.isConnected && battery.socKnown) battery.soc.roundToInt().toString() else "—", "%",
             if (battery.isConnected && battery.socKnown) frac(battery.soc, 100f) else 0f,
             DutyLevel.NORMAL,
-            subLabel = rangeLabel
+            subLabel = rangeLabel?.takeIf { battery.isConnected && battery.socKnown }
         )
         SecondaryGauge.POWER -> {
             val power = MotionReadings.powerW(motion)

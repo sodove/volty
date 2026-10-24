@@ -38,11 +38,13 @@ object CleanMetricMapper {
 
     /**
      * The battery card's sub line: voltage, plus " · range" when the range is earned and the
-     * hero's BATTERY centre is not already showing it (then the card would say it twice).
+     * hero's BATTERY centre is not already showing it (then the card would say it twice). Never beside
+     * a charge that is not itself shown (disconnected or SoC unknown).
      */
     fun batteryCardSub(battery: BmsData, rangeLabel: String?, hero: SecondaryGauge): String {
         val voltage = batteryVoltageValue(battery)
-        return if (rangeLabel != null && hero != SecondaryGauge.BATTERY) "$voltage · $rangeLabel" else voltage
+        val earned = rangeLabel != null && battery.isConnected && battery.socKnown
+        return if (earned && hero != SecondaryGauge.BATTERY) "$voltage · $rangeLabel" else voltage
     }
 
     /** Resource choice for the explanatory line below an unknown speed readout. */

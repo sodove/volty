@@ -576,7 +576,7 @@ object ClassicDialSpecs {
                 valueTextOverride = if (battery.isConnected && battery.socKnown) "${battery.soc.roundToInt()}%" else UNKNOWN,
                 centerTextVisible = false,            // QML :312
                 severity = batteryLevel(battery.soc, battery.isConnected && battery.socKnown),
-                subLabel = rangeLabel
+                subLabel = rangeLabel?.takeIf { battery.isConnected && battery.socKnown }
             ),
             // QML :434-460.
             VescDialSpec(

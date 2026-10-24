@@ -11,13 +11,17 @@ import ru.sodovaya.volty.util.UnitSystem
  * placeholder would claim a range slot the vehicle has not earned. The distance goes through
  * [UnitFormatter] like [RideDistanceMapper], at zero decimals - an estimate is not a measurement.
  * [kmUnit] / [miUnit] are the localized unit words, resolved by the caller ([UnitFormatter]'s own
- * unit strings are language-neutral "km"); the defaults are the Russian UI's.
+ * unit strings are language-neutral "km").
+ *
+ * Revision note: an earlier revision gave [kmUnit] / [miUnit] defaults ("км", "mi"). Wrong, because a
+ * default is a Russian word that reaches an English UI the moment one caller forgets to pass the
+ * resolved string; both are required now.
  */
 fun rangeLabel(
     range: RangeEstimate?,
     units: UnitSystem,
-    kmUnit: String = "км",
-    miUnit: String = "mi",
+    kmUnit: String,
+    miUnit: String,
 ): String? {
     if (range == null) return null
     val unit = if (units == UnitSystem.IMPERIAL) miUnit else kmUnit

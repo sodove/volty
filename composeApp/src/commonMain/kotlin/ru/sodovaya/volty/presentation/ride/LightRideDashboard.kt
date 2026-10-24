@@ -391,7 +391,7 @@ internal fun LightRideDashboard(
             LightBatteryLine(
                 readout = readouts.batteryVoltage,
                 soc = readouts.batterySoc,
-                line = LightDashboardMapper.batteryLine(localizedRangeLabel(state.range, state.units)),
+                line = LightDashboardMapper.batteryLine(state.battery, localizedRangeLabel(state.range, state.units)),
                 fraction = LightDashboardMapper.batteryFraction(state.battery),
                 layoutMode = layoutMode,
             )

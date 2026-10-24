@@ -577,7 +577,7 @@ interface VehicleEditComponent : DraftExitComponent {
          * it concerns ([issuesBySource]). This property is the same fact for
          * anything that wants to ask *before* the tap; nothing does today.
          */
-        val canSave: Boolean get() = name.isNotBlank() && issues.none { it.blocksSave(isEditing) }
+        val canSave: Boolean get() = name.isNotBlank() && !capacityError && issues.none { it.blocksSave(isEditing) }
 
         /**
          * Whether the "yield BMS to head unit while riding" toggle applies at

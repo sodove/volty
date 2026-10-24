@@ -87,12 +87,16 @@ object LightDashboardMapper {
                 ?: LightReadout(UNKNOWN_READOUT),
         )
 
-    /** Battery numbers were enlarged 10/11 -> 12/13 sp at the rider's request. */
-    fun batteryLine(rangeLabel: String?): LightBatteryLineSpec = LightBatteryLineSpec(
+    /**
+     * Battery numbers were enlarged 10/11 -> 12/13 sp at the rider's request. The range is shown only
+     * beside a charge that is itself shown ([battery] connected with a known SoC): "~42 км" next to
+     * "—" would be a figure derived from a charge the screen admits it does not have.
+     */
+    fun batteryLine(battery: BmsData, rangeLabel: String?): LightBatteryLineSpec = LightBatteryLineSpec(
         voltageSp = 12f,
         socSp = 13f,
         rangeSp = 13f,
-        rangeText = rangeLabel?.let { " · $it" },
+        rangeText = rangeLabel?.takeIf { battery.isConnected && battery.socKnown }?.let { " · $it" },
     )
 
     fun speedKmh(motion: ControllerData, gpsSpeedKmh: Float?): Float? =

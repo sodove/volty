@@ -11,11 +11,17 @@ import ru.sodovaya.volty.domain.model.Chemistry
  * in between (T4 field report 2026-10-24: a Begode's readout collapsed 60 -> 15 % under load).
  *
  * Tables are resting voltage at 0, 10, ..., 100 % of NAMEPLATE capacity, piecewise-linear
- * between points. They were sanity-checked against the commonly published NMC 18650/21700
- * discharge tables (e.g. Battery University "BU-501"/"BU-409" charge/discharge curves, typical
- * 3.0 V cut-off to 4.2 V full cell datasheets) and against LiFePO4 cell datasheets (3.65 V full,
- * ~3.20-3.35 V plateau, 2.50 V cut-off). They are approximations, not measurements of the
- * rider's packs. Lead-acid has no table: it is linear between [Chemistry.emptyCellV] and
+ * between points. They are approximations of the typical published resting-voltage curves of
+ * these chemistries (NMC: 3.0 V empty to 4.2 V full; LiFePO4: 2.50 V empty, a ~3.20-3.35 V
+ * plateau, 3.65 V full), NOT verified against any specific source, and not measurements of the
+ * rider's packs.
+ *
+ * Revision note: an earlier revision said the tables were "sanity-checked against" Battery
+ * University BU-501 / BU-409 and cell datasheets. That was wrong to claim: no such source was
+ * opened while the numbers were written, so the citation is withdrawn rather than silently
+ * dropped. Check a figure against a real datasheet before relying on it.
+ *
+ * Lead-acid has no table: it is linear between [Chemistry.emptyCellV] and
  * [Chemistry.defaultHighV].
  *
  * Below the first point the fraction is 0, above the last it is 1.

@@ -3853,6 +3853,19 @@ class VehicleEditComponentTest {
     }
 
     @Test
+    fun `an unreadable capacity makes canSave false and fixing it restores it`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        assertTrue(c.state.value.canSave, "precondition: the untouched form is savable")
+        c.onCapacityChanged("18OO")
+        assertTrue(c.state.value.capacityError)
+        assertFalse(c.state.value.canSave, "save() refuses it, so canSave must say so")
+        c.onCapacityChanged("")
+        assertTrue(c.state.value.canSave, "blank is a clear, not a mistake")
+    }
+
+    @Test
     fun `switching the unit keeps the typed number and changes only the unit`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val c = component(FakeVehicleRepo(listOf(existingVehicle())))

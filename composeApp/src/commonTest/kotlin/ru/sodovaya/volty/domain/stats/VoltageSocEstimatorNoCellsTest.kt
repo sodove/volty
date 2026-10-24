@@ -149,8 +149,10 @@ class VoltageSocEstimatorNoCellsTest {
     fun presentCellsStillWinOverTheVoltageDerivedPath() {
         // Cells are the better evidence and must keep driving the estimate
         // exactly as before this fallback existed: 40 cells at 4.09 V give
-        // 90.18 %, not the 76.9 % the (deliberately inconsistent) pack
-        // voltage field would suggest.
+        // 90.18 %, not the 80.7 % the (deliberately inconsistent) pack
+        // voltage field would suggest (160 V / 40 cells = 4.0 V/cell on the OCV
+        // curve; measured, 2026-10-24). An earlier revision of this comment said
+        // 76.9 %, which no longer matches the estimator.
         val sample = BmsData(voltage = 160.0f, cellVoltages = List(40) { 4.09f }, isConnected = true)
         val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
         assertEquals(90.18f, out.soc, 0.05f)
