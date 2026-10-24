@@ -47,11 +47,14 @@ class BmsRangeSourceTest {
         fake.activeMotion.value = motion(time, consumedWh = 500f) // 50 Wh/km -> 900 Wh = 18 km
 
         // The sampler's ticker never goes idle: bounded advances only, and the scope is cancelled.
+        var computations = 0
         val job = Job()
-        val source = BmsRangeSource(fake, CoroutineScope(UnconfinedTestDispatcher(testScheduler) + job))
+        val source = BmsRangeSource(fake, CoroutineScope(UnconfinedTestDispatcher(testScheduler) + job)) { computations++ }
         try {
             assertNull(source.range.value)
+            assertEquals(0, computations) // nothing computed before the first tick
             advanceTimeBy(1_001L)
+            assertEquals(1, computations)
             assertEquals(18f, assertNotNull(source.range.value).km, 0.01f)
 
             // Four motion updates inside one second: none may reach the published range yet.
@@ -59,10 +62,12 @@ class BmsRangeSourceTest {
                 fake.activeMotion.value = motion(time, consumedWh = wh)
                 advanceTimeBy(100L)
                 assertEquals(18f, assertNotNull(source.range.value).km, 0.01f)
+                assertEquals(1, computations) // updates inside the second do no work at all
             }
             // The next tick publishes only the latest (450 Wh / 10 km = 45 Wh/km -> 20 km).
             advanceTimeBy(1_000L)
             assertEquals(20f, assertNotNull(source.range.value).km, 0.01f)
+            assertEquals(2, computations)
         } finally {
             job.cancel()
         }
