@@ -1,0 +1,17 @@
+-- The nameplate capacity the rider typed (value + unit); NULL = nothing typed.
+ALTER TABLE VehicleRow ADD COLUMN capacityValue REAL;
+ALTER TABLE VehicleRow ADD COLUMN capacityUnit TEXT;
+
+-- Learned energy state per vehicle (see VehicleEnergyRow.sq).
+CREATE TABLE VehicleEnergyRow (
+    vehicleId       TEXT NOT NULL PRIMARY KEY,
+    seriesCells     INTEGER NOT NULL,
+    chemistry       TEXT NOT NULL,
+    learnedUsableAh REAL,
+    learnWeight     REAL NOT NULL DEFAULT 0,
+    learnRides      INTEGER NOT NULL DEFAULT 0,
+    resistanceOhm   REAL,
+    counterPercent  REAL,
+    counterAtMillis INTEGER,
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);

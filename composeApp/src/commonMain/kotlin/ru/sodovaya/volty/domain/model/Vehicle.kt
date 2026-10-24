@@ -61,7 +61,9 @@ data class Vehicle(
      */
     val motionAlerts: List<AlertRule>? = null,
     /** Speed-based media-volume curve, disabled by default. */
-    val autoVolume: AutoVolumeSettings = AutoVolumeSettings()
+    val autoVolume: AutoVolumeSettings = AutoVolumeSettings(),
+    /** The nameplate pack capacity the rider typed, or null when none was. */
+    val batteryCapacity: BatteryCapacity? = null
 ) {
     init {
         require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }

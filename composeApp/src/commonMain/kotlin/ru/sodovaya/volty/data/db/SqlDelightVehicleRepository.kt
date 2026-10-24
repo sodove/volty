@@ -8,7 +8,9 @@ import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.alert.sortedLevels
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.AutoVolumeSettings
+import ru.sodovaya.volty.domain.model.BatteryCapacity
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.CapacityUnit
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
@@ -38,6 +40,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     private val controllerQueries = provider.database.controllerRowQueries
     private val alertLevelQueries = provider.database.alertLevelRowQueries
     private val gaugePeakQueries = provider.database.gaugePeakRowQueries
+    private val energyQueries = provider.database.vehicleEnergyRowQueries
     private val deviceTypeMemoryQueries = provider.database.deviceTypeMemoryRowQueries
 
     private val vehicleRows: Flow<List<VehicleRow>> = queries.selectAll()
@@ -160,7 +163,9 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 autoVolumeMaxPercent = vehicle.autoVolume.maxVolumePercent.toLong(),
                 autoVolumeMinSpeedKmh = vehicle.autoVolume.minSpeedKmh.toLong(),
                 autoVolumeMaxSpeedKmh = vehicle.autoVolume.maxSpeedKmh.toLong(),
-                autoVolumeDeadbandKmh = vehicle.autoVolume.deadbandKmh.toLong()
+                autoVolumeDeadbandKmh = vehicle.autoVolume.deadbandKmh.toLong(),
+                capacityValue = vehicle.batteryCapacity?.value?.toDouble(),
+                capacityUnit = vehicle.batteryCapacity?.unit?.name
             )
             // GaugePeakRow is deliberately NOT touched here — not written, and
             // not deleted either. It is not part of a vehicle's description; a
@@ -256,6 +261,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
             controllerQueries.deleteByVehicle(id)
             alertLevelQueries.deleteByVehicle(id)
             gaugePeakQueries.deleteByVehicle(id)
+            energyQueries.deleteByVehicle(id)
             queries.delete(id)
         }
     }
@@ -385,7 +391,10 @@ private fun VehicleRow.toDomain(
         minSpeedKmh = autoVolumeMinSpeedKmh.toInt(),
         maxSpeedKmh = autoVolumeMaxSpeedKmh.toInt(),
         deadbandKmh = autoVolumeDeadbandKmh.toInt()
-    )
+    ),
+    batteryCapacity = capacityValue?.toFloat()?.takeIf { it.isFinite() }?.let { v ->
+        capacityUnit?.let { u -> runCatching { CapacityUnit.valueOf(u) }.getOrNull() }?.let { BatteryCapacity(v, it) }
+    }
 )
 
 /**

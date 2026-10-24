@@ -1,7 +1,9 @@
 package ru.sodovaya.volty.data.db
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import ru.sodovaya.volty.domain.model.BatteryCapacity
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.CapacityUnit
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
@@ -61,5 +63,21 @@ class SqlDelightVehicleRepositoryControllersTest {
         val back = repo.get("v1")!!
         assertEquals(24, back.controllers[0].derivedCellCount)
         assertEquals(null, back.controllers[1].derivedCellCount)
+    }
+
+    @Test
+    fun a_typed_battery_capacity_round_trips_in_both_units_and_null_stays_null() = runTest {
+        val repo = newInMemoryRepo()
+        fun v(id: String, cap: BatteryCapacity?) = Vehicle(
+            id = id, name = id, iconKey = "unicycle",
+            packs = listOf(Pack(0, "P", BmsType.ANT_BMS, "AA:BB")),
+            chemistry = Chemistry.LI_ION_NMC, createdAt = Clock.System.now(), batteryCapacity = cap
+        )
+        repo.upsert(v("wh", BatteryCapacity(1800f, CapacityUnit.WH)))
+        repo.upsert(v("ah", BatteryCapacity(20.5f, CapacityUnit.AH)))
+        repo.upsert(v("none", null))
+        assertEquals(BatteryCapacity(1800f, CapacityUnit.WH), repo.get("wh")!!.batteryCapacity)
+        assertEquals(BatteryCapacity(20.5f, CapacityUnit.AH), repo.get("ah")!!.batteryCapacity)
+        assertEquals(null, repo.get("none")!!.batteryCapacity)
     }
 }

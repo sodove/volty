@@ -16,7 +16,9 @@ import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.AutoVolumeSettings
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.BatteryCapacity
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.CapacityUnit
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Controller
@@ -311,7 +313,9 @@ class VehicleEditComponentTest {
             minSpeedKmh = 3,
             maxSpeedKmh = 42,
             deadbandKmh = 4
-        )
+        ),
+        // Typed by the rider; the edit form does not expose it yet, so a save must carry it.
+        batteryCapacity = BatteryCapacity(1800f, CapacityUnit.WH)
         // G §9.2's learned dial widths are NOT here, and cannot be: since `8.sqm`
         // they are not fields of a Vehicle at all. Tests that need a vehicle
         // which has been ridden seed [learnedRanges] into the fake instead.

@@ -1,0 +1,30 @@
+-- What the app has learned about one vehicle's pack (energy model): usable capacity, internal
+-- resistance and the last charge counter. One row per vehicle.
+--
+-- KEYED BY (seriesCells, chemistry) as well as the vehicle: a row stored under a different pack
+-- shape is stale, and VehicleEnergyStore.load deletes it. The cell BOUNDS are not part of the key.
+--
+-- NULL means "not earned". The declared cascade is documentation of intent only (foreign keys are
+-- off in both drivers); SqlDelightVehicleRepository.delete removes this row explicitly.
+CREATE TABLE VehicleEnergyRow (
+    vehicleId       TEXT NOT NULL PRIMARY KEY,
+    seriesCells     INTEGER NOT NULL,
+    chemistry       TEXT NOT NULL,
+    learnedUsableAh REAL,
+    learnWeight     REAL NOT NULL DEFAULT 0,
+    learnRides      INTEGER NOT NULL DEFAULT 0,
+    resistanceOhm   REAL,
+    counterPercent  REAL,
+    counterAtMillis INTEGER,
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+
+selectByVehicle:
+SELECT * FROM VehicleEnergyRow WHERE vehicleId = :vehicleId;
+
+upsert:
+INSERT OR REPLACE INTO VehicleEnergyRow(vehicleId, seriesCells, chemistry, learnedUsableAh, learnWeight, learnRides, resistanceOhm, counterPercent, counterAtMillis)
+VALUES (:vehicleId, :seriesCells, :chemistry, :learnedUsableAh, :learnWeight, :learnRides, :resistanceOhm, :counterPercent, :counterAtMillis);
+
+deleteByVehicle:
+DELETE FROM VehicleEnergyRow WHERE vehicleId = :vehicleId;
