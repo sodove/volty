@@ -17,12 +17,36 @@ enum class AlertSeverity { CRITICAL, WARNING, INFO }
  * would otherwise mean three notifications for a single continuous climb, which
  * is the alarm-fatigue failure F ยง10 exists to prevent. The level reached is
  * carried by the [AlertSeverity] instead.
+ *
+ * [BMS_FAULT], [SPEED_HIGH] and [DUTY_HIGH] arrived with the per-kind notify switches
+ * (2026-10-25): a BMS fault had no notification at all, and speed and duty had none by design
+ * until the rider asked for an opt-in one. The last two are only ever posted when switched on.
  */
 enum class AlertKind {
     CELL_HIGH, CELL_LOW, CELL_DELTA, TEMPERATURE_WARN, TEMPERATURE_HIGH,
     SOC_LOW, SOC_CUTOFF, DISCONNECT, CHARGE_COMPLETE,
-    CONTROLLER_FAULT, MOTOR_TEMP_HIGH, ESC_TEMP_HIGH
+    CONTROLLER_FAULT, MOTOR_TEMP_HIGH, ESC_TEMP_HIGH,
+    BMS_FAULT, SPEED_HIGH, DUTY_HIGH
 }
+
+/**
+ * What the engine tells the notifier: a kind and the numbers behind it, **not** words.
+ *
+ * Text is produced at the platform edge from string resources (rider-approved decision 7,
+ * 2026-10-25), because the engine used to build English titles inline for a Russian UI. Keeping
+ * the message structured also lets tests assert on what was *decided* rather than on a rendering.
+ *
+ * Units are canonical, as everywhere in the domain: [value] is volts for the cell kinds, millivolts
+ * for [AlertKind.CELL_DELTA], ฐC for temperatures, percent for state of charge and duty, km/h for
+ * speed. The formatter converts for display. [details] carries the fault names for the two fault
+ * kinds (decoder strings, shown as the decoder wrote them).
+ */
+data class AlertMessage(
+    val kind: AlertKind,
+    val vehicleName: String,
+    val value: Float? = null,
+    val details: List<String> = emptyList()
+)
 
 // `AlertEvent`, a data class carrying (kind, severity, title, text, vehicleId),
 // lived here and was constructed and consumed by nothing in the whole source

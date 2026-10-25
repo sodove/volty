@@ -6,12 +6,23 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationCompat
 import ru.sodovaya.volty.MainActivity
+import ru.sodovaya.volty.R
+import ru.sodovaya.volty.domain.usecase.AlertMessage
 import ru.sodovaya.volty.domain.usecase.AlertSeverity
 import ru.sodovaya.volty.service.MonitoringService
+import ru.sodovaya.volty.util.UnitSystem
 
 private const val LIVE_NOTIFICATION_ID = 1001
 
-class AndroidNotifier(private val context: Context) : Notifier {
+/**
+ * @param unitSystem read at the moment an alert is formatted, so a rider who flips to mph sees mph
+ * in the very next speed notification. The preference is a cheap in-memory StateFlow value
+ * (`AppPrefs.unitSystem.value`), so no suspend is needed here.
+ */
+class AndroidNotifier(
+    private val context: Context,
+    private val unitSystem: () -> UnitSystem = { UnitSystem.METRIC }
+) : Notifier {
 
     init { NotificationChannels.ensureCreated(context) }
 
@@ -40,7 +51,14 @@ class AndroidNotifier(private val context: Context) : Notifier {
 
     override fun cancelLive() { manager?.cancel(LIVE_NOTIFICATION_ID) }
 
-    override fun showAlert(title: String, text: String, severity: AlertSeverity, alertId: Int) {
+    /**
+     * Words come from `res/values` / `res/values-ru` through [AlertNotificationFormatter] in the
+     * system language (the app has no language setting of its own); this only renders them.
+     */
+    override fun showAlert(message: AlertMessage, severity: AlertSeverity, alertId: Int) {
+        val words = AlertNotificationFormatter.format(message, unitSystem(), AndroidAlertStrings(context))
+        val title = words.title
+        val text = words.text
         val channel = when (severity) {
             AlertSeverity.CRITICAL -> NotificationChannels.CRITICAL
             AlertSeverity.WARNING -> NotificationChannels.WARNING

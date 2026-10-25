@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.notification
 
+import ru.sodovaya.volty.domain.usecase.AlertMessage
 import ru.sodovaya.volty.domain.usecase.AlertSeverity
 import ru.sodovaya.volty.util.formatFixed
 import ru.sodovaya.volty.util.formatSigned
@@ -97,5 +98,5 @@ object LiveNotificationText {
 interface Notifier {
     fun showLive(summary: LiveSummary)
     fun cancelLive()
-    fun showAlert(title: String, text: String, severity: AlertSeverity, alertId: Int)
+    fun showAlert(message: AlertMessage, severity: AlertSeverity, alertId: Int)
 }

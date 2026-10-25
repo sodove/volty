@@ -2,6 +2,7 @@ package ru.sodovaya.volty.domain.model
 
 import ru.sodovaya.volty.domain.alert.AlarmDefaults
 import ru.sodovaya.volty.domain.alert.AlertRule
+import ru.sodovaya.volty.domain.alert.NotifyKind
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
@@ -63,7 +64,15 @@ data class Vehicle(
     /** Speed-based media-volume curve, disabled by default. */
     val autoVolume: AutoVolumeSettings = AutoVolumeSettings(),
     /** The nameplate pack capacity the rider typed, or null when none was. */
-    val batteryCapacity: BatteryCapacity? = null
+    val batteryCapacity: BatteryCapacity? = null,
+    /**
+     * Which alert kinds may raise a **notification** on this vehicle, or **null when the rider has
+     * never chosen** — then [NotifyKind.DEFAULTS] apply (use [notifies]). Null is not a second way
+     * to say "none": an empty set is the explicit "notify nothing".
+     *
+     * Gates the notification only; the live sound alarm and its rules are independent of it.
+     */
+    val notifyKinds: Set<NotifyKind>? = null
 ) {
     init {
         require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }
@@ -84,6 +93,12 @@ data class Vehicle(
  * sees it.
  */
 val Vehicle.motionAlertRules: List<AlertRule> get() = motionAlerts ?: AlarmDefaults.all()
+
+/** The notify switches with "never chosen" resolved to [NotifyKind.DEFAULTS]. */
+val Vehicle.effectiveNotifyKinds: Set<NotifyKind> get() = notifyKinds ?: NotifyKind.DEFAULTS
+
+/** May [kind] raise a notification on this vehicle? */
+fun Vehicle.notifies(kind: NotifyKind): Boolean = kind in effectiveNotifyKinds
 
 /** True when this vehicle has at least one motor controller wired in. */
 val Vehicle.hasControllers: Boolean get() = controllers.isNotEmpty()

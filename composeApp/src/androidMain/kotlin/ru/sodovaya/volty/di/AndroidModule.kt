@@ -539,7 +539,7 @@ val androidModule = module {
         }
     }
     single { PermissionsChecker(androidContext()) }
-    single<Notifier> { AndroidNotifier(androidContext()) }
+    single<Notifier> { AndroidNotifier(androidContext(), get<AppPrefs>().unitSystem.let { flow -> { flow.value } }) }
     // A single: one speaker, so exactly one owner. Task 8's service drives it and
     // Task 9's settings screen previews through it; two instances would fight.
     //

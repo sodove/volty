@@ -29,6 +29,7 @@ import ru.sodovaya.volty.domain.alert.AlertLevel
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.AlertUnavailableReason
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.NotifyKind
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -52,6 +53,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -818,5 +820,116 @@ class VehicleAlertsComponentTest {
 
         assertTrue(c.state.value.toneEnabled && c.state.value.vibrationEnabled, "fixture check: only the master is off")
         assertFalse(c.state.value.canPreview)
+    }
+
+    // ------------------------------------------------- per-kind notify switches
+
+    @Test
+    fun `a vehicle that never chose opens on the defaults with Save disarmed`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(vehicle()))
+        advanceUntilIdle()
+
+        assertEquals(NotifyKind.DEFAULTS, c.state.value.notifyKinds)
+        assertFalse(c.state.value.notifyKinds.contains(NotifyKind.SPEED))
+        assertFalse(c.state.value.isDirty, "showing today's behaviour is not an edit")
+    }
+
+    @Test
+    fun `the screen opens showing the notify choice as it was saved`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val chosen = setOf(NotifyKind.SPEED, NotifyKind.BMS_FAULT)
+        val c = component(FakeVehicleRepo(vehicle().copy(notifyKinds = chosen)))
+        advanceUntilIdle()
+
+        assertEquals(chosen, c.state.value.notifyKinds)
+        assertFalse(c.state.value.isDirty)
+    }
+
+    @Test
+    fun `switching speed on arms Save and saving persists the set`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(vehicle())
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onNotifyKindChanged(NotifyKind.SPEED, true)
+        assertTrue(c.state.value.notifyKinds.contains(NotifyKind.SPEED))
+        assertTrue(c.state.value.isDirty)
+        assertTrue(c.state.value.canSave)
+
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(NotifyKind.DEFAULTS + NotifyKind.SPEED, repo.upserts.single().notifyKinds)
+        assertFalse(c.state.value.isDirty, "what was just written is not still outstanding")
+    }
+
+    @Test
+    fun `switching a default kind off persists without it`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(vehicle())
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onNotifyKindChanged(NotifyKind.BMS_FAULT, false)
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(NotifyKind.DEFAULTS - NotifyKind.BMS_FAULT, repo.upserts.single().notifyKinds)
+    }
+
+    @Test
+    fun `switching every kind off persists an empty set rather than null`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(vehicle())
+        val c = component(repo)
+        advanceUntilIdle()
+
+        NotifyKind.entries.forEach { c.onNotifyKindChanged(it, false) }
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(emptySet(), repo.upserts.single().notifyKinds, "null would hand the defaults back")
+    }
+
+    @Test
+    fun `toggling a notify switch and back is not an edit`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(vehicle()))
+        advanceUntilIdle()
+
+        c.onNotifyKindChanged(NotifyKind.DUTY, true)
+        c.onNotifyKindChanged(NotifyKind.DUTY, false)
+
+        assertFalse(c.state.value.isDirty)
+    }
+
+    @Test
+    fun `saving a threshold edit does not pin a never-chosen notify set`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(vehicle())
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onThresholdChanged(MotionAlertKind.DUTY, 0, "85")
+        c.onSave()
+        advanceUntilIdle()
+
+        assertNull(repo.upserts.single().notifyKinds, "null stays null until the rider touches a switch")
+    }
+
+    @Test
+    fun `backing out with a changed notify switch asks first`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var left = false
+        val c = component(FakeVehicleRepo(vehicle()), onBack = { left = true })
+        advanceUntilIdle()
+
+        c.onNotifyKindChanged(NotifyKind.SPEED, true)
+        c.onBack()
+
+        assertTrue(c.state.value.discardPrompt)
+        assertFalse(left)
     }
 }

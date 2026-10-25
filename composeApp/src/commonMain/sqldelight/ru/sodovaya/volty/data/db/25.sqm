@@ -1,0 +1,5 @@
+-- Which alert kinds may raise a notification on this vehicle (Vehicle.notifyKinds).
+-- Comma-separated NotifyKind names; NULL = the rider never chose, so the defaults apply
+-- (temperatures and faults notify, speed and duty do not). The empty string is an explicit
+-- "notify nothing" and is NOT the same as NULL.
+ALTER TABLE VehicleRow ADD COLUMN notifyKinds TEXT;

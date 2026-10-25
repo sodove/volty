@@ -18,6 +18,7 @@ import ru.sodovaya.volty.domain.alert.AlarmMusicMode
 import ru.sodovaya.volty.domain.alert.AlarmModalities
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.NotifyKind
 import ru.sodovaya.volty.domain.alert.alarmPreviewCommand
 import ru.sodovaya.volty.domain.audio.AlertSoundKind
 import ru.sodovaya.volty.domain.audio.AlertSoundSettings
@@ -25,6 +26,7 @@ import ru.sodovaya.volty.domain.alert.availabilityFor
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.effectiveNotifyKinds
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.notification.AlarmPreview
@@ -51,6 +53,12 @@ interface VehicleAlertsComponent {
     fun onLevelEnabledChanged(kind: MotionAlertKind, index: Int, enabled: Boolean)
     fun onAddLevel(kind: MotionAlertKind)
     fun onRemoveLevel(kind: MotionAlertKind, index: Int)
+
+    /**
+     * The per-kind "Уведомлять" switch (rider-approved decision 6). Commits with Save like the
+     * thresholds; it gates the **notification** only, never the live sound alarm.
+     */
+    fun onNotifyKindChanged(kind: NotifyKind, enabled: Boolean)
 
     /** Battery alerts live on this same screen and each has its own gate. */
     fun onCellHighChanged(text: String)
@@ -112,6 +120,10 @@ interface VehicleAlertsComponent {
         val savedLevels: Map<MotionAlertKind, List<AlertLevelDraft>> = emptyMap(),
         val battery: BatteryAlertDraft = BatteryAlertDraft(),
         val savedBattery: BatteryAlertDraft = BatteryAlertDraft(),
+        /** The notify switches as the rider has them now; a never-chosen vehicle shows [NotifyKind.DEFAULTS]. */
+        val notifyKinds: Set<NotifyKind> = NotifyKind.DEFAULTS,
+        /** The switches as last persisted - [isDirty]'s baseline for them. */
+        val savedNotifyKinds: Set<NotifyKind> = NotifyKind.DEFAULTS,
         val alarmEnabled: Boolean = true,
         val toneEnabled: Boolean = true,
         val vibrationEnabled: Boolean = true,
@@ -137,7 +149,9 @@ interface VehicleAlertsComponent {
          * mark an untouched screen dirty. Neither is [AlertKindDraft.stashed] —
          * it is an undo buffer that is never persisted.
          */
-        val isDirty: Boolean get() = loaded && (editedLevels(kinds) != savedLevels || battery != savedBattery)
+        val isDirty: Boolean
+            get() = loaded && (editedLevels(kinds) != savedLevels || battery != savedBattery ||
+                notifyKinds != savedNotifyKinds)
 
         /**
          * Blocked while any visible row is half-typed, and **blocked when nothing
@@ -341,6 +355,8 @@ class DefaultVehicleAlertsComponent(
                     savedLevels = editedLevels(drafts),
                     battery = battery,
                     savedBattery = battery,
+                    notifyKinds = vehicle.effectiveNotifyKinds,
+                    savedNotifyKinds = vehicle.effectiveNotifyKinds,
                 )
             }
         }
@@ -396,6 +412,12 @@ class DefaultVehicleAlertsComponent(
 
     override fun onRemoveLevel(kind: MotionAlertKind, index: Int) =
         editKind(kind) { it.withLevelRemoved(index) }
+
+    override fun onNotifyKindChanged(kind: NotifyKind, enabled: Boolean) {
+        _state.update { s ->
+            s.copy(notifyKinds = if (enabled) s.notifyKinds + kind else s.notifyKinds - kind)
+        }
+    }
 
     private fun editBattery(edit: (BatteryAlertDraft) -> BatteryAlertDraft) {
         _state.update { it.copy(battery = edit(it.battery)) }
@@ -467,6 +489,11 @@ class DefaultVehicleAlertsComponent(
                 current.copy(
                     motionAlerts = commitRules(s.kinds),
                     alertConfig = s.battery.toAlertConfig(),
+                    // Untouched switches keep whatever is stored - in particular a null
+                    // ("never chosen, follow the defaults") is not pinned to today's defaults
+                    // by an unrelated threshold edit. Any touched switch stores the set, and an
+                    // empty set is the explicit "notify nothing", never null.
+                    notifyKinds = if (s.notifyKinds == s.savedNotifyKinds) current.notifyKinds else s.notifyKinds,
                 )
             )
             // The rows are now what is stored, so the screen is clean again: if
@@ -477,6 +504,7 @@ class DefaultVehicleAlertsComponent(
                     saving = false,
                     savedLevels = editedLevels(s.kinds),
                     savedBattery = s.battery,
+                    savedNotifyKinds = s.notifyKinds,
                 )
             }
             onSaved()

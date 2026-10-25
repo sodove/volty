@@ -50,6 +50,16 @@ import ru.sodovaya.volty.presentation.alerts.BatteryAlertDraft
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.alerts_add_level
+import volty.composeapp.generated.resources.alerts_notify_bms_fault
+import volty.composeapp.generated.resources.alerts_notify_controller_fault
+import volty.composeapp.generated.resources.alerts_notify_duty
+import volty.composeapp.generated.resources.alerts_notify_esc_temp
+import volty.composeapp.generated.resources.alerts_notify_motor_temp
+import volty.composeapp.generated.resources.alerts_notify_section
+import volty.composeapp.generated.resources.alerts_notify_speed
+import volty.composeapp.generated.resources.alerts_notify_subtitle
+import org.jetbrains.compose.resources.StringResource
+import ru.sodovaya.volty.domain.alert.NotifyKind
 import volty.composeapp.generated.resources.alerts_battery_cell_delta
 import volty.composeapp.generated.resources.alerts_battery_cell_high
 import volty.composeapp.generated.resources.alerts_battery_cell_low
@@ -324,6 +334,18 @@ fun VehicleAlertsScreen(component: VehicleAlertsComponent) {
 
             HorizontalDivider()
 
+            SectionLabel(stringResource(Res.string.alerts_notify_section))
+            Caption(stringResource(Res.string.alerts_notify_subtitle))
+            for (kind in NotifyKind.entries) {
+                SwitchRow(
+                    label = stringResource(kind.labelRes()),
+                    subtitle = null,
+                    checked = kind in state.notifyKinds,
+                    enabled = true,
+                    onChange = { on -> component.onNotifyKindChanged(kind, on) },
+                )
+            }
+
             SectionLabel(stringResource(Res.string.alerts_section_thresholds))
             Caption(stringResource(Res.string.alerts_section_thresholds_subtitle))
 
@@ -504,6 +526,15 @@ private fun LevelRow(
             Text(stringResource(Res.string.alerts_remove_level), fontSize = 11.sp)
         }
     }
+}
+
+private fun NotifyKind.labelRes(): StringResource = when (this) {
+    NotifyKind.MOTOR_TEMP -> Res.string.alerts_notify_motor_temp
+    NotifyKind.ESC_TEMP -> Res.string.alerts_notify_esc_temp
+    NotifyKind.SPEED -> Res.string.alerts_notify_speed
+    NotifyKind.DUTY -> Res.string.alerts_notify_duty
+    NotifyKind.CONTROLLER_FAULT -> Res.string.alerts_notify_controller_fault
+    NotifyKind.BMS_FAULT -> Res.string.alerts_notify_bms_fault
 }
 
 @Composable

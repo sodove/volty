@@ -496,6 +496,14 @@
     <string name="alerts_preview_subtitle">Play each level and hear them apart with the phone in a pocket</string>
     <string name="alerts_preview_level">Level %1$d</string>
     <string name="alerts_section_thresholds">Alert thresholds</string>
+    <string name="alerts_notify_section">Notify about</string>
+    <string name="alerts_notify_subtitle">Whether each alert also posts a notification. The sound alarm below is set separately. Battery alerts have their own switches.</string>
+    <string name="alerts_notify_motor_temp">Motor temperature</string>
+    <string name="alerts_notify_esc_temp">Controller temperature</string>
+    <string name="alerts_notify_speed">Speed</string>
+    <string name="alerts_notify_duty">Duty</string>
+    <string name="alerts_notify_controller_fault">Controller faults</string>
+    <string name="alerts_notify_bms_fault">Battery faults</string>
     <string name="alerts_section_thresholds_subtitle">Up to three levels per alert. Level 1 is the mildest. Unlike the switches above, thresholds are kept only when you press Save.</string>
     <string name="alerts_level">Level %1$d</string>
     <string name="alerts_level_muted">Muted</string>

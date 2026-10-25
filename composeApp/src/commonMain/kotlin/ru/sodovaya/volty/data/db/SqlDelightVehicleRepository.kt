@@ -5,6 +5,7 @@ import app.cash.sqldelight.coroutines.mapToList
 import ru.sodovaya.volty.domain.alert.AlertLevel
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.NotifyKind
 import ru.sodovaya.volty.domain.alert.sortedLevels
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.AutoVolumeSettings
@@ -165,7 +166,8 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 autoVolumeMaxSpeedKmh = vehicle.autoVolume.maxSpeedKmh.toLong(),
                 autoVolumeDeadbandKmh = vehicle.autoVolume.deadbandKmh.toLong(),
                 capacityValue = vehicle.batteryCapacity?.value?.toDouble(),
-                capacityUnit = vehicle.batteryCapacity?.unit?.name
+                capacityUnit = vehicle.batteryCapacity?.unit?.name,
+                notifyKinds = vehicle.notifyKinds?.let(::encodeNotifyKinds)
             )
             // GaugePeakRow is deliberately NOT touched here — not written, and
             // not deleted either. It is not part of a vehicle's description; a
@@ -394,8 +396,17 @@ private fun VehicleRow.toDomain(
     ),
     batteryCapacity = capacityValue?.toFloat()?.takeIf { it.isFinite() }?.let { v ->
         capacityUnit?.let { u -> runCatching { CapacityUnit.valueOf(u) }.getOrNull() }?.let { BatteryCapacity(v, it) }
-    }
+    },
+    notifyKinds = notifyKinds?.let(::decodeNotifyKinds)
 )
+
+/** Enum names in declaration order, comma-separated: stable bytes for equal sets. "" = the empty set. */
+internal fun encodeNotifyKinds(kinds: Set<NotifyKind>): String =
+    NotifyKind.entries.filter { it in kinds }.joinToString(",") { it.name }
+
+/** Inverse of [encodeNotifyKinds]; a name this build does not know is skipped, never fatal. */
+internal fun decodeNotifyKinds(text: String): Set<NotifyKind> =
+    text.split(',').mapNotNull { name -> NotifyKind.entries.firstOrNull { it.name == name.trim() } }.toSet()
 
 /**
  * Rows -> one [AlertRule] per [MotionAlertKind], in enum order. A kind with no

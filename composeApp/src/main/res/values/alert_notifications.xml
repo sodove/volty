@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Alert notification wording. One title and one text per kind; names are AlertString.resourceName.
+  Texts take positional arguments (see AlertNotificationText.kt); %% is a literal percent sign.
+  Keep in step with values-ru/alert_notifications.xml: AlertNotificationTextResourcesTest checks both.
+-->
+<resources>
+    <string name="alert_cell_high_title">Cell voltage high</string>
+    <string name="alert_cell_high_text">Max cell %1$s V on %2$s</string>
+    <string name="alert_cell_low_title">Cell voltage low</string>
+    <string name="alert_cell_low_text">Min cell %1$s V on %2$s</string>
+    <string name="alert_cell_delta_title">Cell imbalance</string>
+    <string name="alert_cell_delta_text">Δ %1$s mV on %2$s</string>
+    <string name="alert_temperature_warn_title">Temperature warning</string>
+    <string name="alert_temperature_warn_text">%1$s°C on %2$s</string>
+    <string name="alert_temperature_high_title">Temperature high</string>
+    <string name="alert_temperature_high_text">%1$s°C on %2$s</string>
+    <string name="alert_motor_temp_title">Motor temperature high</string>
+    <string name="alert_motor_temp_text">Motor %1$s°C on %2$s</string>
+    <string name="alert_esc_temp_title">Controller temperature high</string>
+    <string name="alert_esc_temp_text">ESC %1$s°C on %2$s</string>
+    <string name="alert_soc_low_title">Battery low</string>
+    <string name="alert_soc_low_text">%1$s%% on %2$s</string>
+    <string name="alert_soc_cutoff_title">Discharge cutoff</string>
+    <string name="alert_soc_cutoff_text">%1$s%% — stop now (%2$s)</string>
+    <string name="alert_duty_title">Duty high</string>
+    <string name="alert_duty_text">Duty %1$s%% on %2$s</string>
+    <string name="alert_charge_complete_title">Charge complete</string>
+    <string name="alert_charge_complete_text">%1$s reached 100%%</string>
+    <string name="alert_disconnect_title">Disconnected</string>
+    <string name="alert_disconnect_text">%1$s disconnected</string>
+    <string name="alert_controller_fault_title">Controller fault</string>
+    <string name="alert_controller_fault_text">%1$s on %2$s</string>
+    <string name="alert_bms_fault_title">Battery fault</string>
+    <string name="alert_bms_fault_text">%1$s on %2$s</string>
+    <string name="alert_speed_title">Speed high</string>
+    <string name="alert_speed_text">%1$s %2$s on %3$s</string>
+    <string name="alert_unit_kmh">km/h</string>
+    <string name="alert_unit_mph">mph</string>
+</resources>

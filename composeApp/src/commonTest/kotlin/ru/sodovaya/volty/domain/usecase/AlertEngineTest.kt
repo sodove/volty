@@ -18,12 +18,17 @@ import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
+import ru.sodovaya.volty.domain.model.effectiveNotifyKinds
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.domain.stats.PackAggregator
+import ru.sodovaya.volty.domain.alert.NotifyKind
+import ru.sodovaya.volty.notification.AlertNotificationFormatter
 import ru.sodovaya.volty.notification.LiveSummary
+import ru.sodovaya.volty.notification.TestAlertStrings
+import ru.sodovaya.volty.util.UnitSystem
 import ru.sodovaya.volty.notification.Notifier
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,11 +49,24 @@ class AlertEngineTest {
 
     private class TestNotifier : Notifier {
         val live = mutableListOf<LiveSummary>()
-        val alerts = mutableListOf<Triple<String, String, AlertSeverity>>()
+
+        /** What the engine decided, structured: the thing the new tests assert on. */
+        val messages = mutableListOf<Pair<AlertMessage, AlertSeverity>>()
+
+        /**
+         * The same notifications rendered in English metric - the wording the engine used to build
+         * inline - so the long-standing assertions below still read as meaning.
+         */
+        val alerts: List<Triple<String, String, AlertSeverity>>
+            get() = messages.map { (message, severity) ->
+                val t = AlertNotificationFormatter.format(message, UnitSystem.METRIC, TestAlertStrings)
+                Triple(t.title, t.text, severity)
+            }
+
         override fun showLive(summary: LiveSummary) { live += summary }
         override fun cancelLive() {}
-        override fun showAlert(title: String, text: String, severity: AlertSeverity, alertId: Int) {
-            alerts += Triple(title, text, severity)
+        override fun showAlert(message: AlertMessage, severity: AlertSeverity, alertId: Int) {
+            messages += message to severity
         }
     }
 
@@ -986,5 +1004,185 @@ class AlertEngineTest {
             engine.evaluateMotionForTest(motion(escTempC = esc), v)
         }
         assertEquals(2, notifier.alerts.size)
+    }
+
+    // ======================================================================
+    // Rider alerts, Task 3: structured messages, BMS faults, notify switches
+    // ======================================================================
+
+    private fun AlertEngine.bmsSample(faults: List<String>, atMillis: Long, vehicle: Vehicle?) =
+        evaluateForTest(
+            bmsData(ts = Instant.fromEpochMilliseconds(atMillis)).copy(bmsFaults = faults),
+            vehicle
+        )
+
+    @Test
+    fun `the engine hands the notifier a structured message not words`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        engine.evaluateForTest(bmsData(cells = listOf(4.3f, 3.7f)), vehicleWith())
+        val (message, severity) = notifier.messages.first()
+        assertEquals(AlertKind.CELL_HIGH, message.kind)
+        assertEquals("Test", message.vehicleName)
+        assertEquals(4.3f, message.value)
+        assertEquals(AlertSeverity.CRITICAL, severity)
+    }
+
+    @Test
+    fun `a controller fault message carries the fault names`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        engine.evaluateMotionForTest(motion(faults = listOf("ESC0: DRV", "ESC1: OVP")), motionVehicle())
+        val message = notifier.messages.single().first
+        assertEquals(AlertKind.CONTROLLER_FAULT, message.kind)
+        assertEquals(listOf("ESC0: DRV", "ESC1: OVP"), message.details)
+    }
+
+    @Test
+    fun `a bms fault present in fifty consecutive samples notifies once`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        repeat(50) { i -> engine.bmsSample(listOf("discharge disabled"), 1_000_000L + i * 100L, v) }
+        assertEquals(1, notifier.messages.size, "one notification per episode, not one per frame")
+        val (message, severity) = notifier.messages.single()
+        assertEquals(AlertKind.BMS_FAULT, message.kind)
+        assertEquals(listOf("discharge disabled"), message.details)
+        assertEquals(AlertSeverity.CRITICAL, severity)
+    }
+
+    @Test
+    fun `a bms fault that flickers within the episode gap stays one episode`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        val t = 1_000_000L
+        engine.bmsSample(listOf("OVP"), t, v)
+        engine.bmsSample(emptyList(), t + 500, v)
+        engine.bmsSample(listOf("OVP"), t + 1_999, v)
+        // Absent from +2_100; back at +4_099 -- 1.999 s of absence, still under the gap.
+        engine.bmsSample(emptyList(), t + 2_100, v)
+        engine.bmsSample(listOf("OVP"), t + 4_099, v)
+        assertEquals(1, notifier.messages.size)
+    }
+
+    @Test
+    fun `a bms fault returning after the episode gap is a new episode`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        val t = 1_000_000L
+        engine.bmsSample(listOf("OVP"), t, v)
+        engine.bmsSample(emptyList(), t + 1_000, v)
+        engine.bmsSample(emptyList(), t + 3_000, v)   // absent 2 s -> episode over
+        engine.bmsSample(listOf("OVP"), t + 4_000, v)
+        assertEquals(2, notifier.messages.size)
+    }
+
+    @Test
+    fun `a bms fault is silent when its notify switch is off`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith().copy(notifyKinds = NotifyKind.DEFAULTS - NotifyKind.BMS_FAULT)
+        repeat(3) { i -> engine.bmsSample(listOf("OVP"), 1_000_000L + i * 100L, v) }
+        assertEquals(0, notifier.messages.size)
+    }
+
+    @Test
+    fun `a vehicle that never chose notifies for bms faults by default`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        engine.bmsSample(listOf("OVP"), 1_000_000L, vehicleWith())
+        assertEquals(1, notifier.messages.size)
+    }
+
+    @Test
+    fun `speed does not notify by default however fast`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.SPEED, 50f)))
+        repeat(5) { engine.evaluateMotionForTest(motion(speedKmh = 70f), v) }
+        assertEquals(0, notifier.messages.size)
+    }
+
+    @Test
+    fun `duty does not notify by default however high`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle()   // shipped defaults: duty 80 / 90
+        repeat(5) { engine.evaluateMotionForTest(motion(dutyPercent = 95f), v) }
+        assertEquals(0, notifier.messages.size)
+    }
+
+    @Test
+    fun `speed notifies once per episode when switched on`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.SPEED, 50f)))
+            .copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.SPEED)
+        repeat(5) { engine.evaluateMotionForTest(motion(speedKmh = 62f), v) }
+        assertEquals(1, notifier.messages.size, "one per arming episode, like a temperature")
+        val (message, severity) = notifier.messages.single()
+        assertEquals(AlertKind.SPEED_HIGH, message.kind)
+        assertEquals(62f, message.value)
+        assertEquals(AlertSeverity.CRITICAL, severity)
+        engine.evaluateMotionForTest(motion(speedKmh = 10f), v)
+        engine.evaluateMotionForTest(motion(speedKmh = 63f), v)
+        assertEquals(2, notifier.messages.size, "falling below the level re-arms it")
+    }
+
+    @Test
+    fun `duty notifies once per episode when switched on`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.DUTY)
+        for (d in listOf(85f, 92f, 95f, 88f, 93f)) engine.evaluateMotionForTest(motion(dutyPercent = d), v)
+        assertEquals(1, notifier.messages.size)
+        val (message, severity) = notifier.messages.single()
+        assertEquals(AlertKind.DUTY_HIGH, message.kind)
+        assertEquals(85f, message.value, "the value at the moment it engaged")
+        assertEquals(AlertSeverity.WARNING, severity, "it engaged at step 1; the peak was not reached yet when it fired")
+    }
+
+    @Test
+    fun `switching motor temperature off silences its notification only`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS - NotifyKind.MOTOR_TEMP)
+        engine.settle(motion(motorTempC = 130f, escTempC = 20f), v)
+        assertEquals(0, notifier.messages.size)
+        engine.settle(motion(motorTempC = 130f, escTempC = 95f), v)
+        assertEquals(listOf(AlertKind.ESC_TEMP_HIGH), notifier.messages.map { it.first.kind })
+    }
+
+    @Test
+    fun `switching controller temperature off silences it and leaves the motor`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS - NotifyKind.ESC_TEMP)
+        engine.settle(motion(motorTempC = 20f, escTempC = 120f), v)
+        assertEquals(0, notifier.messages.size)
+        engine.settle(motion(motorTempC = 130f, escTempC = 120f), v)
+        assertEquals(listOf(AlertKind.MOTOR_TEMP_HIGH), notifier.messages.map { it.first.kind })
+    }
+
+    @Test
+    fun `switching controller faults off silences them`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle().copy(notifyKinds = emptySet())
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
+        assertEquals(0, notifier.messages.size)
+    }
+
+    @Test
+    fun `an empty notify set is not the defaults`() {
+        val v = motionVehicle()
+        assertEquals(NotifyKind.DEFAULTS, v.effectiveNotifyKinds)
+        assertEquals(emptySet(), v.copy(notifyKinds = emptySet()).effectiveNotifyKinds)
+        assertEquals(
+            setOf(NotifyKind.MOTOR_TEMP, NotifyKind.ESC_TEMP, NotifyKind.CONTROLLER_FAULT, NotifyKind.BMS_FAULT),
+            NotifyKind.DEFAULTS
+        )
     }
 }

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Тексты уведомлений об алертах. Имена совпадают с AlertString.resourceName; аргументы позиционные,
+  %% - знак процента. Держать в соответствии с values/alert_notifications.xml.
+-->
+<resources>
+    <string name="alert_cell_high_title">Высокое напряжение ячейки</string>
+    <string name="alert_cell_high_text">%2$s: макс. ячейка %1$s В</string>
+    <string name="alert_cell_low_title">Низкое напряжение ячейки</string>
+    <string name="alert_cell_low_text">%2$s: мин. ячейка %1$s В</string>
+    <string name="alert_cell_delta_title">Разбаланс ячеек</string>
+    <string name="alert_cell_delta_text">%2$s: Δ %1$s мВ</string>
+    <string name="alert_temperature_warn_title">Предупреждение о температуре</string>
+    <string name="alert_temperature_warn_text">%2$s: %1$s°C</string>
+    <string name="alert_temperature_high_title">Высокая температура</string>
+    <string name="alert_temperature_high_text">%2$s: %1$s°C</string>
+    <string name="alert_motor_temp_title">Перегрев мотора</string>
+    <string name="alert_motor_temp_text">%2$s: мотор %1$s°C</string>
+    <string name="alert_esc_temp_title">Перегрев контроллера</string>
+    <string name="alert_esc_temp_text">%2$s: контроллер %1$s°C</string>
+    <string name="alert_soc_low_title">Низкий заряд</string>
+    <string name="alert_soc_low_text">%2$s: %1$s%%</string>
+    <string name="alert_soc_cutoff_title">Отсечка разряда</string>
+    <string name="alert_soc_cutoff_text">%2$s: %1$s%% — остановитесь</string>
+    <string name="alert_duty_title">Высокий ШИМ</string>
+    <string name="alert_duty_text">%2$s: ШИМ %1$s%%</string>
+    <string name="alert_charge_complete_title">Зарядка завершена</string>
+    <string name="alert_charge_complete_text">%1$s: заряжено на 100%%</string>
+    <string name="alert_disconnect_title">Нет связи</string>
+    <string name="alert_disconnect_text">%1$s: соединение потеряно</string>
+    <string name="alert_controller_fault_title">Ошибка контроллера</string>
+    <string name="alert_controller_fault_text">%2$s: %1$s</string>
+    <string name="alert_bms_fault_title">Ошибка батареи</string>
+    <string name="alert_bms_fault_text">%2$s: %1$s</string>
+    <string name="alert_speed_title">Высокая скорость</string>
+    <string name="alert_speed_text">%3$s: %1$s %2$s</string>
+    <string name="alert_unit_kmh">км/ч</string>
+    <string name="alert_unit_mph">миль/ч</string>
+</resources>

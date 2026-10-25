@@ -2,15 +2,17 @@ package ru.sodovaya.volty.domain.usecase
 
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.NotifyKind
 import ru.sodovaya.volty.domain.alert.TemperatureGate
 import ru.sodovaya.volty.domain.alert.armedRules
+import ru.sodovaya.volty.domain.alert.startsNewEpisode
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.motionAlertRules
+import ru.sodovaya.volty.domain.model.notifies
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.notification.Notifier
-import ru.sodovaya.volty.util.formatFixed
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -29,8 +31,23 @@ import kotlin.time.Instant
  *
  * The continuous, graded audible alarm is
  * [ru.sodovaya.volty.domain.alert.AlarmController]'s job and is not a
- * notification at all. Duty and speed belong entirely to it — see
- * [evaluateMotion] for why they raise no notification here.
+ * notification at all. Duty and speed are its metrics; they raise a notification
+ * here only when the rider switches [NotifyKind.SPEED] / [NotifyKind.DUTY] on —
+ * see [evaluateMotion].
+ *
+ * **Retraction (2026-10-25): duty and speed may now notify.** This KDoc, and the
+ * one on [evaluateMotion], used to say they raise no notification here, ever,
+ * because a duty excursion past 80 % is ordinary riding and one notification per
+ * excursion would train the rider to ignore them. That reasoning is why they are
+ * **off by default**; the rider then asked for an opt-in switch per kind
+ * (decision 6), and an enabled kind posts one notification per arming episode,
+ * exactly like a temperature ([fireLevelled]) — not one per excursion sample.
+ *
+ * **Notifications are structured, not worded.** The engine hands the notifier an
+ * [AlertMessage]; the platform turns it into the app language
+ * ([ru.sodovaya.volty.notification.AlertNotificationFormatter]). The English
+ * strings that used to be built inline here are now resources, with the same
+ * meaning.
  *
  * **Retraction (2026-10-25): temperatures no longer fire on the first sample.**
  * An earlier revision of this class (and of [fire]'s "debounce") notified on
@@ -66,6 +83,15 @@ class AlertEngine(
     private val peakLevel = mutableMapOf<Pair<String, AlertKind>, Int>()
 
     private val debounce = 3.seconds
+
+    /**
+     * Per vehicle: the timestamp of the first BMS sample that carried no fault
+     * since the last one that did, or absent while a fault is present. A BMS
+     * fault episode (rider-approved decision 2) ends only after [startsNewEpisode]
+     * says so, so a flickering flag re-arms nothing and cannot notify twice.
+     * Measured by the samples' own timestamps, never by [clock].
+     */
+    private val bmsFaultClearedAt = mutableMapOf<String, Instant>()
 
     /**
      * One [TemperatureGate] per (vehicle, kind). The battery's WARN and HIGH
@@ -175,8 +201,7 @@ class AlertEngine(
             triggered = maxCell > cfg.cellHighV,
             recovered = maxCell < cfg.cellHighV - 0.05f,
             severity = AlertSeverity.CRITICAL,
-            title = "Cell voltage high",
-            text = "Max cell ${formatV(maxCell)} V on ${vehicle.name}"
+            message = AlertMessage(AlertKind.CELL_HIGH, vehicle.name, value = maxCell)
         )
 
         if (minCell > 0.1f) {
@@ -185,8 +210,7 @@ class AlertEngine(
                 triggered = minCell < cfg.cellLowV,
                 recovered = minCell > cfg.cellLowV + 0.05f,
                 severity = AlertSeverity.CRITICAL,
-                title = "Cell voltage low",
-                text = "Min cell ${formatV(minCell)} V on ${vehicle.name}"
+                message = AlertMessage(AlertKind.CELL_LOW, vehicle.name, value = minCell)
             )
         }
 
@@ -196,8 +220,7 @@ class AlertEngine(
                 triggered = deltaMv > cfg.cellDeltaMv,
                 recovered = deltaMv < cfg.cellDeltaMv - 30,
                 severity = AlertSeverity.WARNING,
-                title = "Cell imbalance",
-                text = "Δ ${deltaMv} mV on ${vehicle.name}"
+                message = AlertMessage(AlertKind.CELL_DELTA, vehicle.name, value = deltaMv.toFloat())
             )
         }
 
@@ -216,16 +239,14 @@ class AlertEngine(
                 triggered = engage > cfg.temperatureWarnC && engage < cfg.temperatureHighC,
                 recovered = release < cfg.temperatureWarnC - 3f,
                 severity = AlertSeverity.WARNING,
-                title = "Temperature warning",
-                text = "${maxTemp.toInt()}°C on ${vehicle.name}"
+                message = AlertMessage(AlertKind.TEMPERATURE_WARN, vehicle.name, value = maxTemp)
             )
             fire(AlertKind.TEMPERATURE_HIGH, vehicle, now,
                 enabled = cfg.temperatureHighEnabled,
                 triggered = engage > cfg.temperatureHighC,
                 recovered = release < cfg.temperatureHighC - 3f,
                 severity = AlertSeverity.CRITICAL,
-                title = "Temperature high",
-                text = "${maxTemp.toInt()}°C on ${vehicle.name}"
+                message = AlertMessage(AlertKind.TEMPERATURE_HIGH, vehicle.name, value = maxTemp)
             )
         }
 
@@ -241,8 +262,7 @@ class AlertEngine(
                 triggered = data.soc.toInt() < cfg.socLowPercent,
                 recovered = data.soc.toInt() > cfg.socLowPercent + 3,
                 severity = AlertSeverity.WARNING,
-                title = "Battery low",
-                text = "${data.soc.toInt()}% on ${vehicle.name}"
+                message = AlertMessage(AlertKind.SOC_LOW, vehicle.name, value = data.soc)
             )
 
             cfg.socCutoffPercent?.takeIf { cfg.socCutoffEnabled }?.let { cutoff ->
@@ -250,8 +270,7 @@ class AlertEngine(
                     triggered = data.soc.toInt() < cutoff,
                     recovered = data.soc.toInt() > cutoff + 2,
                     severity = AlertSeverity.CRITICAL,
-                    title = "Discharge cutoff",
-                    text = "${data.soc.toInt()}% — stop now (${vehicle.name})"
+                    message = AlertMessage(AlertKind.SOC_CUTOFF, vehicle.name, value = data.soc)
                 )
             }
         }
@@ -262,10 +281,34 @@ class AlertEngine(
                 triggered = isFull,
                 recovered = data.soc < 98f,
                 severity = AlertSeverity.INFO,
-                title = "Charge complete",
-                text = "${vehicle.name} reached 100%"
+                message = AlertMessage(AlertKind.CHARGE_COMPLETE, vehicle.name)
             )
         }
+
+        evaluateBmsFaults(data, vehicle, now)
+    }
+
+    /**
+     * BMS faults notify once per **episode** (rider-approved decisions 2 and 5).
+     *
+     * ANT BMS repeats its fault flags in every frame, so "armed until the list is
+     * empty" is not enough: a flag that drops for one frame and returns would
+     * re-arm and notify again (after the debounce). The episode rule re-arms only
+     * once the list has been empty for the shared [startsNewEpisode] gap, judged
+     * by the samples' own timestamps. Gated by [NotifyKind.BMS_FAULT]; always
+     * CRITICAL, like a controller fault.
+     */
+    private fun evaluateBmsFaults(data: BmsData, vehicle: Vehicle, now: Instant) {
+        val present = data.bmsFaults.isNotEmpty()
+        if (present) bmsFaultClearedAt.remove(vehicle.id)
+        else bmsFaultClearedAt.getOrPut(vehicle.id) { data.timestamp }
+        fire(AlertKind.BMS_FAULT, vehicle, now,
+            enabled = vehicle.notifies(NotifyKind.BMS_FAULT),
+            triggered = present,
+            recovered = !present && startsNewEpisode(bmsFaultClearedAt[vehicle.id], data.timestamp),
+            severity = AlertSeverity.CRITICAL,
+            message = AlertMessage(AlertKind.BMS_FAULT, vehicle.name, details = data.bmsFaults)
+        )
     }
 
     /**
@@ -273,13 +316,19 @@ class AlertEngine(
      * kinds. Same debounce/arm/recover machinery as the battery alerts above —
      * only the source of the readings differs.
      *
-     * **Duty and speed raise nothing here on purpose.** They are the continuous
-     * alarm's metrics: a duty excursion past 80 % is ordinary riding and happens
-     * repeatedly in a single ride, so one notification per excursion would be
-     * dozens of notifications per ride — F §10's train-the-rider-to-ignore-it
-     * failure. They are already served, live and graded, by [ru.sodovaya.volty.domain.alert.AlarmController].
-     * Temperature is the opposite shape: slow, near-monotone, and genuinely the
-     * "discrete event crossed a line" F §2 describes.
+     * **Duty and speed notify only when the rider switches them on.** They are
+     * the continuous alarm's metrics: a duty excursion past 80 % is ordinary
+     * riding and happens repeatedly in a single ride, which is why they are off
+     * by default (F §10's train-the-rider-to-ignore-it failure). *Retraction
+     * (2026-10-25): an earlier revision of this comment said they raise nothing
+     * here at all; the rider asked for an opt-in per-kind switch, so a kind
+     * switched on posts one notification per arming episode through
+     * [fireLevelled] — never one per excursion sample, which is the failure the
+     * default protects against.* Temperature is the opposite shape: slow,
+     * near-monotone, and genuinely the "discrete event crossed a line" F §2
+     * describes. Each kind's [NotifyKind] switch gates its notification only; the
+     * live alarm is [ru.sodovaya.volty.domain.alert.AlarmController]'s and never
+     * reads it.
      *
      * **A disconnected sample fires nothing and changes nothing.**
      * `activeMotion` emits a zero-filled placeholder `ControllerData()` while
@@ -307,11 +356,11 @@ class AlertEngine(
         // in it, and `isConnected` above is true only when a controller is
         // actually online (MotionAggregator sets it).
         fire(AlertKind.CONTROLLER_FAULT, vehicle, now,
+            enabled = vehicle.notifies(NotifyKind.CONTROLLER_FAULT),
             triggered = motion.faults.isNotEmpty(),
             recovered = motion.faults.isEmpty(),
             severity = AlertSeverity.CRITICAL,
-            title = "Controller fault",
-            text = "${motion.faults.joinToString(", ")} on ${vehicle.name}"
+            message = AlertMessage(AlertKind.CONTROLLER_FAULT, vehicle.name, details = motion.faults)
         )
 
         // Recomputed from THIS sample, every sample — never cached. Every
@@ -328,8 +377,8 @@ class AlertEngine(
                     fireLevelled(
                         AlertKind.MOTOR_TEMP_HIGH, rule, vehicle, now,
                         value = confirmed,
-                        title = "Motor temperature high",
-                        text = "Motor ${confirmed.latest.toInt()}°C on ${vehicle.name}"
+                        enabled = vehicle.notifies(NotifyKind.MOTOR_TEMP),
+                        message = AlertMessage(AlertKind.MOTOR_TEMP_HIGH, vehicle.name, value = confirmed.latest)
                     )
                 }
             MotionAlertKind.ESC_TEMP -> gate(vehicle, AlertKind.ESC_TEMP_HIGH)
@@ -337,14 +386,29 @@ class AlertEngine(
                     fireLevelled(
                         AlertKind.ESC_TEMP_HIGH, rule, vehicle, now,
                         value = confirmed,
-                        title = "Controller temperature high",
-                        text = "ESC ${confirmed.latest.toInt()}°C on ${vehicle.name}"
+                        enabled = vehicle.notifies(NotifyKind.ESC_TEMP),
+                        message = AlertMessage(AlertKind.ESC_TEMP_HIGH, vehicle.name, value = confirmed.latest)
                     )
                 }
-            // Exhaustive and deliberately empty — see the KDoc above. Listed
-            // rather than `else` so a new MotionAlertKind has to answer this
-            // question instead of silently inheriting "no notification".
-            MotionAlertKind.DUTY, MotionAlertKind.SPEED -> Unit
+            // Speed and duty are not gated (decision 1: unchanged) - one raw
+            // reading is its own min, max and latest. Switched off by default,
+            // in which case fireLevelled posts nothing.
+            MotionAlertKind.DUTY -> motion.dutyPercent.let { v ->
+                fireLevelled(
+                    AlertKind.DUTY_HIGH, rule, vehicle, now,
+                    value = TemperatureGate.Confirmed(min = v, max = v, latest = v),
+                    enabled = vehicle.notifies(NotifyKind.DUTY),
+                    message = AlertMessage(AlertKind.DUTY_HIGH, vehicle.name, value = v)
+                )
+            }
+            MotionAlertKind.SPEED -> motion.speedKmh.let { v ->
+                fireLevelled(
+                    AlertKind.SPEED_HIGH, rule, vehicle, now,
+                    value = TemperatureGate.Confirmed(min = v, max = v, latest = v),
+                    enabled = vehicle.notifies(NotifyKind.SPEED),
+                    message = AlertMessage(AlertKind.SPEED_HIGH, vehicle.name, value = v)
+                )
+            }
         }
     }
 
@@ -362,7 +426,7 @@ class AlertEngine(
      */
     private fun fireLevelled(
         kind: AlertKind, rule: AlertRule, vehicle: Vehicle, now: Instant,
-        value: TemperatureGate.Confirmed, title: String, text: String
+        value: TemperatureGate.Confirmed, enabled: Boolean, message: AlertMessage
     ) {
         val key = vehicle.id to kind
         // Engage needs all three samples over a level (min); re-arming needs all
@@ -374,11 +438,11 @@ class AlertEngine(
         val peak = if (recovered) 0 else maxOf(level, peakLevel[key] ?: 0)
         peakLevel[key] = peak
         fire(kind, vehicle, now,
+            enabled = enabled,
             triggered = level > 0,
             recovered = recovered,
             severity = if (peak >= rule.topEnabledLevel) AlertSeverity.CRITICAL else AlertSeverity.WARNING,
-            title = title,
-            text = text
+            message = message
         )
     }
 
@@ -386,7 +450,7 @@ class AlertEngine(
         kind: AlertKind, vehicle: Vehicle, now: Instant,
         enabled: Boolean = true,
         triggered: Boolean, recovered: Boolean,
-        severity: AlertSeverity, title: String, text: String
+        severity: AlertSeverity, message: AlertMessage
     ) {
         if (!enabled) {
             // An alert that was disabled while engaged must be forgotten as an
@@ -404,10 +468,8 @@ class AlertEngine(
         if (last != null && (now - last) < debounce) return
         lastFired[key] = now
         armed[key] = false
-        notifier.showAlert(title, text, severity, alertCounter++)
+        notifier.showAlert(message, severity, alertCounter++)
     }
-
-    private fun formatV(v: Float): String = formatFixed(v, 2)
 }
 
 /**
