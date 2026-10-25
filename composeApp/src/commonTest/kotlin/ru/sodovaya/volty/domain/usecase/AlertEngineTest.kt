@@ -128,6 +128,13 @@ class AlertEngineTest {
         }
     }
 
+    /** A temperature is only believed after three agreeing samples (TemperatureGate). */
+    private fun AlertEngine.settleBattery(data: BmsData, vehicle: Vehicle?) =
+        repeat(3) { evaluateForTest(data, vehicle) }
+
+    private fun AlertEngine.settle(motion: ControllerData, vehicle: Vehicle?) =
+        repeat(3) { evaluateMotionForTest(motion, vehicle) }
+
     @Test
     fun `cell high triggers critical alert`() {
         val notifier = TestNotifier()
@@ -180,7 +187,7 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = vehicleWith()
-        engine.evaluateForTest(bmsData(temps = listOf(65f)), v)
+        engine.settleBattery(bmsData(temps = listOf(65f)), v)
         assertEquals(1, notifier.alerts.size)
         assertEquals(AlertSeverity.CRITICAL, notifier.alerts.first().third)
     }
@@ -191,7 +198,7 @@ class AlertEngineTest {
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = vehicleWith()
         // 54°C is above warn (50) but below high (60) -> a single WARNING.
-        engine.evaluateForTest(bmsData(temps = listOf(54f)), v)
+        engine.settleBattery(bmsData(temps = listOf(54f)), v)
         assertEquals(1, notifier.alerts.size)
         val (title, _, severity) = notifier.alerts.first()
         assertEquals("Temperature warning", title)
@@ -204,7 +211,7 @@ class AlertEngineTest {
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = vehicleWith()
         // First sensor is cool, a later one is hot -> warn must still fire on max.
-        engine.evaluateForTest(bmsData(temps = listOf(25f, 30f, 54f)), v)
+        engine.settleBattery(bmsData(temps = listOf(25f, 30f, 54f)), v)
         assertEquals(1, notifier.alerts.size)
         assertEquals(AlertSeverity.WARNING, notifier.alerts.first().third)
     }
@@ -214,8 +221,8 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = vehicleWith()
-        engine.evaluateForTest(bmsData(temps = listOf(54f)), v) // WARNING
-        engine.evaluateForTest(bmsData(temps = listOf(65f)), v) // CRITICAL (warn no longer in band)
+        engine.settleBattery(bmsData(temps = listOf(54f)), v) // WARNING
+        engine.settleBattery(bmsData(temps = listOf(65f)), v) // CRITICAL (warn no longer in band)
         assertEquals(2, notifier.alerts.size)
         assertEquals(AlertSeverity.WARNING, notifier.alerts[0].third)
         assertEquals(AlertSeverity.CRITICAL, notifier.alerts[1].third)
@@ -227,7 +234,7 @@ class AlertEngineTest {
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = vehicleWith()
         // Jumping straight into the critical range must not emit a warn too.
-        engine.evaluateForTest(bmsData(temps = listOf(65f)), v)
+        engine.settleBattery(bmsData(temps = listOf(65f)), v)
         assertEquals(1, notifier.alerts.size)
         assertEquals(AlertSeverity.CRITICAL, notifier.alerts.first().third)
     }
@@ -304,7 +311,7 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
-        engine.evaluateForTest(bmsData(temps = listOf(65f), soc = 0f).copy(socKnown = false), v)
+        engine.settleBattery(bmsData(temps = listOf(65f), soc = 0f).copy(socKnown = false), v)
         assertEquals(1, notifier.alerts.size)
         assertEquals("Temperature high", notifier.alerts.first().first)
     }
@@ -562,7 +569,7 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         // Defaults: motor 110 °C, one step. 115 is past it; the ESC's 20 °C is not.
-        engine.evaluateMotionForTest(motion(motorTempC = 115f), motionVehicle())
+        engine.settle(motion(motorTempC = 115f), motionVehicle())
         assertEquals(1, notifier.alerts.size)
         val (title, text, severity) = notifier.alerts.first()
         assertEquals("Motor temperature high", title)
@@ -578,7 +585,7 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         // ESC 95 °C is past its 90 °C default; the motor's 20 °C is nowhere near 110.
-        engine.evaluateMotionForTest(motion(escTempC = 95f), motionVehicle())
+        engine.settle(motion(escTempC = 95f), motionVehicle())
         assertEquals(1, notifier.alerts.size)
         assertEquals("Controller temperature high", notifier.alerts.first().first)
         assertEquals("ESC 95°C on Test", notifier.alerts.first().second)
@@ -589,9 +596,9 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
-        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // level 1
-        engine.evaluateMotionForTest(motion(motorTempC = 115f), v) // level 2
-        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // level 3
+        engine.settle(motion(motorTempC = 105f), v) // level 1
+        engine.settle(motion(motorTempC = 115f), v) // level 2
+        engine.settle(motion(motorTempC = 125f), v) // level 3
         assertEquals(
             1, notifier.alerts.size,
             "three rider-defined levels are one alert, not three — F §10's alarm fatigue"
@@ -603,12 +610,12 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 120f)))
-        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // fires at level 2
-        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // down to level 1 — still engaged
-        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // back up — no new episode
+        engine.settle(motion(motorTempC = 125f), v) // fires at level 2
+        engine.settle(motion(motorTempC = 105f), v) // down to level 1 — still engaged
+        engine.settle(motion(motorTempC = 125f), v) // back up — no new episode
         assertEquals(1, notifier.alerts.size, "dropping a level is not a recovery")
-        engine.evaluateMotionForTest(motion(motorTempC = 90f), v)  // below every level — recovered
-        engine.evaluateMotionForTest(motion(motorTempC = 105f), v)
+        engine.settle(motion(motorTempC = 90f), v)  // below every level — recovered
+        engine.settle(motion(motorTempC = 105f), v)
         assertEquals(2, notifier.alerts.size, "and falling below every level does re-arm it")
     }
 
@@ -620,15 +627,20 @@ class AlertEngineTest {
     @Test
     fun `the severity is the highest level the episode reached, not the level at the moment it fires`() {
         val notifier = TestNotifier()
-        // 1 s per sample, so the 3 s debounce spans exactly three samples.
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockStepping(1))
+        // A hand-set clock: every temperature reading is confirmed over three
+        // samples, so the clock must not tick per sample here.
+        var nowSeconds = 1_000_000L
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = { Instant.fromEpochSeconds(nowSeconds) })
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
-        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // t=0 fires at level 1
+        engine.settle(motion(motorTempC = 105f), v) // t=0 fires at level 1
         assertEquals(AlertSeverity.WARNING, notifier.alerts.single().third, "the first episode was only step 1")
-        engine.evaluateMotionForTest(motion(motorTempC = 90f), v)  // t=1 recovers, arming the next episode
-        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // t=2 level 3, but 2 s < the 3 s debounce
+        nowSeconds += 1
+        engine.settle(motion(motorTempC = 90f), v)  // t=1 recovers, arming the next episode
+        nowSeconds += 1
+        engine.settle(motion(motorTempC = 125f), v) // t=2 level 3, but 2 s < the 3 s debounce
         assertEquals(1, notifier.alerts.size, "still held back by the debounce")
-        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // t=3 back to level 1, debounce expired
+        nowSeconds += 1
+        engine.settle(motion(motorTempC = 105f), v) // t=3 back to level 1, debounce expired
         assertEquals(2, notifier.alerts.size)
         assertEquals(
             AlertSeverity.CRITICAL, notifier.alerts[1].third,
@@ -641,10 +653,10 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
-        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // episode 1 reaches step 3
+        engine.settle(motion(motorTempC = 125f), v) // episode 1 reaches step 3
         assertEquals(AlertSeverity.CRITICAL, notifier.alerts.single().third)
-        engine.evaluateMotionForTest(motion(motorTempC = 90f), v)  // recovers, ending the episode
-        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // episode 2 only reaches step 1
+        engine.settle(motion(motorTempC = 90f), v)  // recovers, ending the episode
+        engine.settle(motion(motorTempC = 105f), v) // episode 2 only reaches step 1
         assertEquals(
             AlertSeverity.WARNING, notifier.alerts[1].third,
             "the peak is per episode — yesterday's step 3 must not make today's step 1 critical"
@@ -663,7 +675,7 @@ class AlertEngineTest {
                 )
             )
         )
-        engine.evaluateMotionForTest(motion(motorTempC = 110f), v)
+        engine.settle(motion(motorTempC = 110f), v)
         assertEquals(0, notifier.alerts.size, "the rider muted that step; passing it is not an event")
     }
 
@@ -679,7 +691,7 @@ class AlertEngineTest {
                 )
             )
         )
-        engine.evaluateMotionForTest(motion(motorTempC = 105f), v)
+        engine.settle(motion(motorTempC = 105f), v)
         assertEquals(
             AlertSeverity.CRITICAL, notifier.alerts.single().third,
             "with the step above muted, step 1 IS the rider's most urgent step"
@@ -694,7 +706,7 @@ class AlertEngineTest {
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         // 200 °C in a field the hardware does not measure is not evidence of
         // anything (F §10: an unavailable alert must be impossible to arm).
-        engine.evaluateMotionForTest(motion(motorTempC = 200f, hasMotorTemp = false), motionVehicle())
+        engine.settle(motion(motorTempC = 200f, hasMotorTemp = false), motionVehicle())
         assertEquals(0, notifier.alerts.size)
     }
 
@@ -720,7 +732,7 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(AlertRule(MotionAlertKind.MOTOR_TEMP, emptyList())))
-        engine.evaluateMotionForTest(motion(motorTempC = 200f), v)
+        engine.settle(motion(motorTempC = 200f), v)
         assertEquals(0, notifier.alerts.size)
     }
 
@@ -846,5 +858,93 @@ class AlertEngineTest {
             1, notifier.alerts.count { it.first == "Cell voltage high" },
             "and a motion sample does not re-evaluate the battery alerts"
         )
+    }
+
+    // ------------------------------------------- temperature confirmation
+
+    @Test
+    fun `oneCorruptFrameRaisesNothing`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle()
+        // Three good frames establish the baseline, then one corrupt 130 °C
+        // controller frame (the field report) between good ones.
+        for (esc in listOf(40f, 40f, 40f, 130f, 40f, 40f)) {
+            engine.evaluateMotionForTest(motion(escTempC = esc), v)
+        }
+        assertEquals(0, notifier.alerts.size, "one corrupt frame is not an event")
+    }
+
+    @Test
+    fun `a single corrupt frame on a fresh gate raises nothing either`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        engine.evaluateMotionForTest(motion(motorTempC = 150f), motionVehicle())
+        assertEquals(0, notifier.alerts.size, "the first sample after a reset needs corroboration too")
+    }
+
+    @Test
+    fun `aRealRiseConfirmsAfterThreeFrames`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
+        for (esc in listOf(40f, 40f, 40f, 60f, 79f)) engine.evaluateMotionForTest(motion(escTempC = esc), v)
+        assertEquals(0, notifier.alerts.size)
+        engine.evaluateMotionForTest(motion(escTempC = 82f), v)
+        assertEquals(1, notifier.alerts.size, "a smooth rise over the threshold fires once confirmed")
+        assertEquals("ESC 82°C on Test", notifier.alerts.single().second)
+    }
+
+    @Test
+    fun `three frames over the threshold on a fresh gate fire on the third`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
+        engine.evaluateMotionForTest(motion(escTempC = 82f), v)
+        engine.evaluateMotionForTest(motion(escTempC = 83f), v)
+        assertEquals(0, notifier.alerts.size)
+        engine.evaluateMotionForTest(motion(escTempC = 84f), v)
+        assertEquals(1, notifier.alerts.size)
+    }
+
+    @Test
+    fun `aGenuineFastJumpIsAcceptedOnceItHolds`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 70f)))
+        for (t in listOf(40f, 40f, 40f, 75f, 75f)) engine.evaluateMotionForTest(motion(motorTempC = t), v)
+        assertEquals(0, notifier.alerts.size, "a 35 degree jump is held until it repeats")
+        engine.evaluateMotionForTest(motion(motorTempC = 75f), v)
+        assertEquals(1, notifier.alerts.size, "accepted on the third agreeing sample")
+    }
+
+    @Test
+    fun `nanIsRejected`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 70f)))
+        repeat(6) { engine.evaluateMotionForTest(motion(motorTempC = Float.NaN), v) }
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `a corrupt battery temperature frame raises nothing`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        for (t in listOf(25f, 25f, 25f, 90f, 25f, 25f)) engine.evaluateForTest(bmsData(temps = listOf(t)), v)
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `a disconnect clears the gate so the next link must confirm itself again`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 70f)))
+        repeat(3) { engine.evaluateMotionForTest(motion(motorTempC = 40f), v) }
+        engine.evaluateMotionForTest(motion(isConnected = false), v)
+        // A fresh link whose first frame is a lone 90: nothing to corroborate it.
+        engine.evaluateMotionForTest(motion(motorTempC = 90f), v)
+        assertEquals(0, notifier.alerts.size)
     }
 }

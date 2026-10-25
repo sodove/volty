@@ -20,6 +20,12 @@ class AlarmControllerTest {
         )
     )
 
+    /** A temperature only sounds once confirmed: feed the same sample the three times it takes. */
+    private fun AlarmController.settle(sample: ControllerData, rules: ArmedRules): AlarmState {
+        repeat(TemperatureGate.CONFIRMATIONS - 1) { update(sample, rules) }
+        return update(sample, rules)
+    }
+
     private fun duty(percent: Float) = ControllerData(dutyPercent = percent, isConnected = true)
 
     /** Feed a whole sequence and return the level after each sample. */
@@ -60,7 +66,7 @@ class AlarmControllerTest {
                 AlertRule(MotionAlertKind.SPEED, listOf(AlertLevel(50f)))
             )
         )
-        val state = controller.update(
+        val state = controller.settle(
             ControllerData(
                 dutyPercent = 72f,          // duty step 1
                 motorTempC = 125f,          // motor step 2 — the loudest
@@ -92,7 +98,7 @@ class AlarmControllerTest {
     )
 
     @Test fun esc_temperature_raises_the_alarm_on_its_own() {
-        val state = AlarmController().update(
+        val state = AlarmController().settle(
             ControllerData(escTempC = 91f, speedKmh = 10f, isConnected = true),
             tempAndSpeed
         )
@@ -167,7 +173,7 @@ class AlarmControllerTest {
         )
 
         val controller = AlarmController()
-        controller.update(sample(tempC = 105f, speed = 55f), rules)
+        controller.settle(sample(tempC = 105f, speed = 55f), rules)
         assertEquals(2, controller.state.contributors.size, "both kinds engaged first")
 
         // 1 °C for temperature, 2 km/h for speed: one sample inside each band,
@@ -294,7 +300,7 @@ class AlarmControllerTest {
                 AlertRule(MotionAlertKind.ESC_TEMP, listOf(AlertLevel(60f), AlertLevel(80f)))
             )
         )
-        val state = AlarmController().update(
+        val state = AlarmController().settle(
             ControllerData(dutyPercent = 72f, escTempC = 75f, isConnected = true),
             rules
         )
@@ -468,5 +474,57 @@ class AlarmControllerTest {
             controller.update(duty(95f), dutyThreeSteps).level,
             "attack is immediate, so clearing the memory costs no warning time"
         )
+    }
+
+    // ------------------------------------------- temperature confirmation
+
+    private val motorOnly = ArmedRules(
+        listOf(AlertRule(MotionAlertKind.MOTOR_TEMP, listOf(AlertLevel(100f))))
+    )
+
+    private fun motor(tempC: Float) =
+        ControllerData(motorTempC = tempC, hasMotorTemp = true, isConnected = true)
+
+    @Test fun oneCorruptFrameRaisesNoAlarmLevel() {
+        val controller = AlarmController()
+        val levels = listOf(40f, 40f, 40f, 130f, 40f, 40f).map { controller.update(motor(it), motorOnly).level }
+        assertEquals(List(6) { 0 }, levels, "a lone 130 degree frame never reaches the sound")
+    }
+
+    @Test fun a_lone_first_frame_raises_nothing() {
+        assertEquals(0, AlarmController().update(motor(150f), motorOnly).level, "a fresh gate needs three agreeing frames")
+    }
+
+    @Test fun aRealRiseConfirmsAfterThreeFrames() {
+        val controller = AlarmController()
+        val levels = listOf(102f, 103f, 104f).map { controller.update(motor(it), motorOnly).level }
+        assertEquals(listOf(0, 0, 1), levels)
+    }
+
+    @Test fun aGenuineFastJumpIsAcceptedOnceItHolds() {
+        val controller = AlarmController()
+        val levels = listOf(40f, 40f, 40f, 110f, 110f, 110f).map { controller.update(motor(it), motorOnly).level }
+        assertEquals(listOf(0, 0, 0, 0, 0, 1), levels, "a 70 degree jump sounds only on the third agreeing frame")
+    }
+
+    @Test fun nanIsRejected() {
+        val controller = AlarmController()
+        repeat(5) { assertEquals(0, controller.update(motor(Float.NaN), motorOnly).level) }
+    }
+
+    @Test fun an_unconfirmed_frame_holds_the_alarm_instead_of_releasing_it() {
+        val controller = AlarmController()
+        repeat(3) { controller.update(motor(105f), motorOnly) }
+        assertEquals(1, controller.state.level)
+        // A corrupt low frame must not drop the sound, and must not reset it.
+        assertEquals(1, controller.update(motor(20f), motorOnly).level)
+        assertEquals(1, controller.update(motor(105f), motorOnly).level)
+    }
+
+    @Test fun reset_clears_the_gate_too() {
+        val controller = AlarmController()
+        repeat(3) { controller.update(motor(40f), motorOnly) }
+        controller.reset()
+        assertEquals(0, controller.update(motor(150f), motorOnly).level, "after a reset a lone frame is unconfirmed again")
     }
 }

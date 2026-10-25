@@ -206,8 +206,12 @@ class AlarmDriverTest {
             "fixture guard: motor temperature really is Unknown before any sample, or this test proves nothing"
         )
 
-        repo.activeMotion.value = motion(motorTempC = 120f, hasMotorTemp = true)
-        runCurrent()
+        // Three slightly different samples: a StateFlow drops equal values, and
+        // a temperature needs three agreeing frames to be believed.
+        for (t in listOf(120f, 121f, 122f)) {
+            repo.activeMotion.value = motion(motorTempC = t, hasMotorTemp = true)
+            runCurrent()
+        }
 
         assertEquals(
             1, alarm.level,

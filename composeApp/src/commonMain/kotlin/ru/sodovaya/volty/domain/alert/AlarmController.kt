@@ -57,6 +57,19 @@ import ru.sodovaya.volty.domain.model.ControllerData
  * than crashes. It cannot latch anything on, and the next real sample re-arms
  * immediately.
  *
+ * ### Temperature confirmation
+ *
+ * **Retraction (2026-10-25): temperatures used to sound on the first sample
+ * over a step.** Begode frames carry no checksum, so one corrupted frame at the
+ * edge of BLE range produced a plausible "controller 130 °C" and a blip of
+ * alarm. Motor and ESC temperature now pass a per-kind [TemperatureGate] (three
+ * agreeing samples; a step over 20 °C is discarded as corrupt unless three such
+ * steps agree). While the gate has nothing confirmed the kind holds the step it
+ * already had — neither engaging nor releasing — and reports the last confirmed
+ * value. The gates are part of the deterministic state (samples in, nothing
+ * else) and [reset] clears them. Duty and speed are unchanged: they are not
+ * gated and still engage on the first sample.
+ *
  * ### Disconnected samples
  *
  * **A sample with [ControllerData.isConnected] false silences the alarm and
@@ -87,6 +100,12 @@ class AlarmController {
     /** Per kind, the step it is currently holding. Absent means 0. Hysteresis's only state. */
     private var heldSteps: Map<MotionAlertKind, Int> = emptyMap()
 
+    /** One confirmation gate per temperature kind; created on first use, emptied by [reset]. */
+    private val gates = mutableMapOf<MotionAlertKind, TemperatureGate>()
+
+    /** The last value each temperature kind's gate confirmed, for reporting while it holds. */
+    private val confirmedValues = mutableMapOf<MotionAlertKind, Float>()
+
     /** The most recent result of [update] — the same value that call returned. */
     var state: AlarmState = AlarmState.SILENT
         private set
@@ -110,9 +129,33 @@ class AlarmController {
         val urgencies = mutableMapOf<MotionAlertKind, Float>()
         val values = mutableMapOf<MotionAlertKind, Float>()
 
+        // Each temperature gate is fed exactly once per sample, even if a hand
+        // assembled rule list repeats a kind.
+        val checked = mutableMapOf<MotionAlertKind, Float?>()
+
         for (rule in rules.rules) {
-            val value = sample.valueFor(rule.kind)
-            val step = rule.stepFor(value, heldSteps[rule.kind] ?: 0)
+            val raw = sample.valueFor(rule.kind)
+            val value: Float
+            val step: Int
+            if (rule.kind in GATED) {
+                if (rule.kind !in checked) {
+                    val confirmed = gates.getOrPut(rule.kind) { TemperatureGate() }.accept(raw)
+                    checked[rule.kind] = confirmed
+                    if (confirmed != null) confirmedValues[rule.kind] = confirmed
+                }
+                val confirmed = checked.getValue(rule.kind)
+                if (confirmed == null) {
+                    // Unconfirmed: hold the previous decision, neither engage nor release.
+                    value = confirmedValues[rule.kind] ?: raw
+                    step = heldSteps[rule.kind] ?: 0
+                } else {
+                    value = confirmed
+                    step = rule.stepFor(value, heldSteps[rule.kind] ?: 0)
+                }
+            } else {
+                value = raw
+                step = rule.stepFor(value, heldSteps[rule.kind] ?: 0)
+            }
             // Two things at once, which is why there is no separate `step == 0`
             // guard above it (that guard is an equivalent mutant — removing it
             // changes no behaviour and no test, so it would be a second code path
@@ -157,9 +200,14 @@ class AlarmController {
      */
     fun reset() {
         heldSteps = emptyMap()
+        gates.clear()
+        confirmedValues.clear()
         state = AlarmState.SILENT
     }
 }
+
+/** The kinds whose readings must be confirmed by a [TemperatureGate] before they act. */
+private val GATED = setOf(MotionAlertKind.MOTOR_TEMP, MotionAlertKind.ESC_TEMP)
 
 /**
  * The reading a kind thresholds against, in the kind's own unit.

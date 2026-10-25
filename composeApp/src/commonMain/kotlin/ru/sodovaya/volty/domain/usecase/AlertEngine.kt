@@ -2,6 +2,7 @@ package ru.sodovaya.volty.domain.usecase
 
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.TemperatureGate
 import ru.sodovaya.volty.domain.alert.armedRules
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
@@ -30,6 +31,17 @@ import kotlin.time.Instant
  * [ru.sodovaya.volty.domain.alert.AlarmController]'s job and is not a
  * notification at all. Duty and speed belong entirely to it — see
  * [evaluateMotion] for why they raise no notification here.
+ *
+ * **Retraction (2026-10-25): temperatures no longer fire on the first sample.**
+ * An earlier revision of this class (and of [fire]'s "debounce") notified on
+ * the first reading over a threshold, and [debounce] was only ever a minimum
+ * interval between notifications, never a confirmation. That was wrong for
+ * Begode, whose checksum-less frames let one corrupted frame decode into a
+ * plausible "controller 130 °C" at the edge of BLE range. Motor, controller and
+ * battery temperatures now pass a [TemperatureGate] first: three agreeing
+ * samples, a >20 °C step discarded as corrupt unless it holds three times over.
+ * While the gate has nothing confirmed the previous decision stands. Faults and
+ * the battery's non-temperature kinds are unchanged and still fire at once.
  */
 @OptIn(ExperimentalTime::class)
 class AlertEngine(
@@ -54,6 +66,21 @@ class AlertEngine(
     private val peakLevel = mutableMapOf<Pair<String, AlertKind>, Int>()
 
     private val debounce = 3.seconds
+
+    /**
+     * One [TemperatureGate] per (vehicle, kind). The battery's WARN and HIGH
+     * tiers read the same max-sensor value, so they share the one keyed
+     * [AlertKind.TEMPERATURE_HIGH]. Cleared by the disconnected-sample returns
+     * of [evaluate] and [evaluateMotion], each for the stream it owns.
+     */
+    private val gates = mutableMapOf<Pair<String, AlertKind>, TemperatureGate>()
+
+    private fun gate(vehicle: Vehicle, kind: AlertKind): TemperatureGate =
+        gates.getOrPut(vehicle.id to kind) { TemperatureGate() }
+
+    private fun forgetGates(vararg kinds: AlertKind) {
+        gates.keys.removeAll { it.second in kinds }
+    }
 
     // Alert notification ids. Starts well clear of the foreground/live
     // notification id (1001) so a long session can't collide with it.
@@ -127,7 +154,10 @@ class AlertEngine(
         evaluateMotion(motion, vehicle)
 
     private fun evaluate(data: BmsData, vehicle: Vehicle?) {
-        if (vehicle == null || !data.isConnected) return
+        if (vehicle == null || !data.isConnected) {
+            forgetGates(AlertKind.TEMPERATURE_HIGH)
+            return
+        }
         val cfg = resolveAlertConfig(vehicle.alertConfig, vehicle.chemistry)
         val now = clock()
 
@@ -135,7 +165,10 @@ class AlertEngine(
         val maxCell = cells.maxOrNull() ?: 0f
         val minCell = cells.minOrNull() ?: 0f
         val deltaMv = ((maxCell - minCell) * 1000f).toInt()
-        val maxTemp = data.temperatures.maxOrNull() ?: 0f
+        // Confirmed, not raw: null means the gate has not (yet) believed this
+        // reading, and the temperature block below then holds its decisions.
+        val maxTemp = if (data.temperatures.isEmpty()) null
+            else gate(vehicle, AlertKind.TEMPERATURE_HIGH).accept(data.temperatures.max())
 
         fire(AlertKind.CELL_HIGH, vehicle, now,
             enabled = cfg.cellHighEnabled,
@@ -168,7 +201,7 @@ class AlertEngine(
             )
         }
 
-        if (data.temperatures.isNotEmpty()) {
+        if (maxTemp != null) {
             // Two tiers off the SAME max-sensor reading. WARN fires only in the
             // band [warn, high) so a single rising trend escalates warn -> high
             // instead of emitting both at once; HIGH owns everything at/above the
@@ -257,7 +290,10 @@ class AlertEngine(
      * only memory to leave alone.
      */
     private fun evaluateMotion(motion: ControllerData, vehicle: Vehicle?) {
-        if (vehicle == null || !motion.isConnected) return
+        if (vehicle == null || !motion.isConnected) {
+            forgetGates(AlertKind.MOTOR_TEMP_HIGH, AlertKind.ESC_TEMP_HIGH)
+            return
+        }
         val now = clock()
 
         // Always CRITICAL: a fault is the controller saying it has stopped
@@ -283,18 +319,24 @@ class AlertEngine(
         // the availability both come from the `vehicle` this sample arrived with.
         val rules = armedRules(vehicle, motion, vehicle.motionAlertRules)
         for (rule in rules.rules) when (rule.kind) {
-            MotionAlertKind.MOTOR_TEMP -> fireLevelled(
-                AlertKind.MOTOR_TEMP_HIGH, rule, vehicle, now,
-                value = motion.motorTempC,
-                title = "Motor temperature high",
-                text = "Motor ${motion.motorTempC.toInt()}°C on ${vehicle.name}"
-            )
-            MotionAlertKind.ESC_TEMP -> fireLevelled(
-                AlertKind.ESC_TEMP_HIGH, rule, vehicle, now,
-                value = motion.escTempC,
-                title = "Controller temperature high",
-                text = "ESC ${motion.escTempC.toInt()}°C on ${vehicle.name}"
-            )
+            MotionAlertKind.MOTOR_TEMP -> gate(vehicle, AlertKind.MOTOR_TEMP_HIGH)
+                .accept(motion.motorTempC)?.let { confirmed ->
+                    fireLevelled(
+                        AlertKind.MOTOR_TEMP_HIGH, rule, vehicle, now,
+                        value = confirmed,
+                        title = "Motor temperature high",
+                        text = "Motor ${confirmed.toInt()}°C on ${vehicle.name}"
+                    )
+                }
+            MotionAlertKind.ESC_TEMP -> gate(vehicle, AlertKind.ESC_TEMP_HIGH)
+                .accept(motion.escTempC)?.let { confirmed ->
+                    fireLevelled(
+                        AlertKind.ESC_TEMP_HIGH, rule, vehicle, now,
+                        value = confirmed,
+                        title = "Controller temperature high",
+                        text = "ESC ${confirmed.toInt()}°C on ${vehicle.name}"
+                    )
+                }
             // Exhaustive and deliberately empty — see the KDoc above. Listed
             // rather than `else` so a new MotionAlertKind has to answer this
             // question instead of silently inheriting "no notification".
