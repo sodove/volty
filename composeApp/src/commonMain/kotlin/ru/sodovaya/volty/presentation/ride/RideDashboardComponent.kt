@@ -250,12 +250,18 @@ class DefaultRideDashboardComponent(
         present.forEach { message ->
             val previous = faultHistory[message]
             faultHistory[message] = when {
-                previous == null || !previous.active ->
+                previous == null ->
                     FaultRecord(message, 1, setOf(source), null, nextFaultOrder++)
-                else -> previous.copy(
-                    occurrences = previous.occurrences + 1,
+                // Still (or again, within EPISODE_GAP) the same episode: no new occurrence.
+                previous.active || !startsNewEpisode(previous.clearedAt, now) -> previous.copy(
                     activeSources = previous.activeSources + source,
                     clearedAt = null
+                )
+                else -> previous.copy(
+                    occurrences = previous.occurrences + 1,
+                    activeSources = setOf(source),
+                    clearedAt = null,
+                    order = nextFaultOrder++
                 )
             }
         }

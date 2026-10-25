@@ -447,11 +447,11 @@ class RideDashboardComponentTest {
 
         emit(1, listOf("over-voltage"))
         advanceUntilIdle()
-        assertEquals(listOf(RideDashboardComponent.FaultEntry("over-voltage", 2, true)), c.state.value.faults)
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("over-voltage", 1, true)), c.state.value.faults)
 
         emit(2, emptyList())
         advanceUntilIdle()
-        assertEquals(listOf(RideDashboardComponent.FaultEntry("over-voltage", 2, false)), c.state.value.faults)
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("over-voltage", 1, false)), c.state.value.faults)
 
         emit(62, emptyList())
         advanceUntilIdle()
@@ -478,7 +478,7 @@ class RideDashboardComponentTest {
         assertEquals(
             listOf(
                 RideDashboardComponent.FaultEntry("over-temperature", 1, true),
-                RideDashboardComponent.FaultEntry("over-voltage", 2, true)
+                RideDashboardComponent.FaultEntry("over-voltage", 1, true)
             ),
             c.state.value.faults
         )
@@ -497,6 +497,84 @@ class RideDashboardComponentTest {
         repo.emitMotion(ControllerData(isConnected = true, timestamp = start + 1.seconds))
         advanceUntilIdle()
         assertTrue(c.state.value.faults.isEmpty(), "zero is not never-show; it means active-only")
+    }
+
+    private fun controllerSample(start: Instant, atMs: Long, faults: List<String>) =
+        ControllerData(faults = faults, isConnected = true, timestamp = start + atMs.milliseconds)
+
+    private fun bmsSample(start: Instant, atMs: Long, faults: List<String>) = VehicleData(
+        aggregate = BmsData(bmsFaults = faults, isConnected = true, timestamp = start + atMs.milliseconds)
+    )
+
+    @Test
+    fun aFaultRepeatedInEveryFrameCountsOnce() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(40_000)
+        repeat(100) { i ->
+            repo.activeVehicleData.value = bmsSample(start, i * 100L, listOf("discharge-disabled"))
+            advanceUntilIdle()
+        }
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("discharge-disabled", 1, true)), c.state.value.faults)
+    }
+
+    @Test
+    fun aControllerFaultRepeatedInEveryFrameCountsOnce() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(41_000)
+        repeat(100) { i ->
+            repo.emitMotion(controllerSample(start, i * 100L, listOf("over-voltage")))
+            advanceUntilIdle()
+        }
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("over-voltage", 1, true)), c.state.value.faults)
+    }
+
+    @Test
+    fun aFaultThatFlickersWithinTwoSecondsIsOneEpisode() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(42_000)
+        // present, absent, present again 1.9 s after the first absent sample
+        repo.activeVehicleData.value = bmsSample(start, 0, listOf("cell-overvoltage")); advanceUntilIdle()
+        repo.activeVehicleData.value = bmsSample(start, 500, emptyList()); advanceUntilIdle()
+        repo.activeVehicleData.value = bmsSample(start, 2_399, listOf("cell-overvoltage")); advanceUntilIdle()
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("cell-overvoltage", 1, true)), c.state.value.faults)
+    }
+
+    @Test
+    fun aFaultGoneForTwoSecondsThenBackCountsTwice() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(43_000)
+        repo.activeVehicleData.value = bmsSample(start, 0, listOf("cell-overvoltage")); advanceUntilIdle()
+        repo.activeVehicleData.value = bmsSample(start, 500, emptyList()); advanceUntilIdle()
+        repo.activeVehicleData.value = bmsSample(start, 2_500, listOf("cell-overvoltage")); advanceUntilIdle()
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("cell-overvoltage", 2, true)), c.state.value.faults)
+    }
+
+    @Test
+    fun aControllerFaultThatFlickersIsOneEpisodeAndAGapOfTwoSecondsIsTwo() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(44_000)
+        repo.emitMotion(controllerSample(start, 0, listOf("over-temperature"))); advanceUntilIdle()
+        repo.emitMotion(controllerSample(start, 300, emptyList())); advanceUntilIdle()
+        repo.emitMotion(controllerSample(start, 1_000, listOf("over-temperature"))); advanceUntilIdle()
+        assertEquals(1, c.state.value.faults.single().occurrences)
+        repo.emitMotion(controllerSample(start, 1_300, emptyList())); advanceUntilIdle()
+        repo.emitMotion(controllerSample(start, 3_300, listOf("over-temperature"))); advanceUntilIdle()
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("over-temperature", 2, true)), c.state.value.faults)
     }
 
     @Test

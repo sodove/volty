@@ -236,6 +236,8 @@ import ru.sodovaya.volty.domain.audio.AlertSoundKind
 import ru.sodovaya.volty.domain.audio.MAX_ALERT_GAIN_DB
 import ru.sodovaya.volty.domain.audio.VoiceListenSettings
 import ru.sodovaya.volty.presentation.common.settings.SettingsChoiceRow
+import ru.sodovaya.volty.presentation.ride.LINGER_OPTIONS_SEC
+import ru.sodovaya.volty.presentation.ride.lingerOptionFor
 import ru.sodovaya.volty.presentation.common.settings.PageDirection
 import ru.sodovaya.volty.presentation.common.settings.SettingsExpandableRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsGroup
@@ -623,19 +625,20 @@ private fun ColumnScope.DashboardControls(state: SettingsComponent.State, compon
             onSelect = component::onDefaultDashboardStyleChanged,
         )
         SettingsRowDivider()
-        SettingsSliderRow(
+        SettingsChoiceRow(
             title = stringResource(Res.string.settings_fault_display_duration),
-            valueText = if (state.faultDisplayDurationSec == 0) {
-                stringResource(Res.string.settings_fault_display_duration_active)
-            } else {
-                stringResource(Res.string.settings_minutes, state.faultDisplayDurationSec / 60)
-            },
-            value = state.faultDisplayDurationSec.toFloat(),
-            range = 0f..300f,
-            steps = 9,
-            onChange = { component.onFaultDisplayDurationChanged(it.toInt()) },
+            options = LINGER_OPTIONS_SEC.map { it to lingerLabel(it) },
+            selected = lingerOptionFor(state.faultDisplayDurationSec),
+            onSelect = component::onFaultDisplayDurationChanged,
         )
     }
+}
+
+@Composable
+private fun lingerLabel(seconds: Int): String = when {
+    seconds == 0 -> stringResource(Res.string.settings_fault_display_duration_active)
+    seconds < 60 -> stringResource(Res.string.settings_seconds, seconds)
+    else -> stringResource(Res.string.settings_minutes, seconds / 60)
 }
 
 /** The global alert sound; the vehicle alerts screen keeps the same controls over the same prefs. */
