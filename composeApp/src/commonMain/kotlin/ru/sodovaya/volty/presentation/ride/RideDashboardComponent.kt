@@ -237,7 +237,11 @@ class DefaultRideDashboardComponent(
         val clearedAt: Instant?,
         val order: Long,
         /** Set for our own alerts only: the kind, the episode's worst reading and severity. */
-        val alert: ActiveAlert? = null
+        val alert: ActiveAlert? = null,
+        /** When the row last appeared (episode start or escalation); drives the charge row's auto-hide. */
+        val surfacedAt: Instant? = null,
+        /** An auto-hiding row that has stepped aside: kept for episode counting, not rendered. */
+        val suppressed: Boolean = false
     ) {
         val active: Boolean get() = activeSources.isNotEmpty()
     }
@@ -281,19 +285,26 @@ class DefaultRideDashboardComponent(
             val live = alerts[message]
             faultHistory[message] = when {
                 previous == null ->
-                    FaultRecord(message, 1, setOf(source), null, nextFaultOrder++, live)
+                    FaultRecord(message, 1, setOf(source), null, nextFaultOrder++, live, surfacedAt = now)
                 // Still (or again, within EPISODE_GAP) the same episode: no new occurrence.
                 previous.active || !startsNewEpisode(previous.clearedAt, now) -> previous.copy(
                     activeSources = previous.activeSources + source,
                     clearedAt = null,
                     alert = worstOf(previous.alert, live)
-                )
+                ).let { merged ->
+                    // Escalation (low -> cutoff) brings an auto-hidden row back, and restarts its 30 s.
+                    val escalated = previous.alert != null && live != null && autoHides(live.kind) &&
+                        live.severity.ordinal < previous.alert.severity.ordinal
+                    if (escalated) merged.copy(surfacedAt = now, suppressed = false) else merged
+                }
                 else -> previous.copy(
                     occurrences = previous.occurrences + 1,
                     activeSources = setOf(source),
                     clearedAt = null,
                     order = nextFaultOrder++,
-                    alert = live
+                    alert = live,
+                    surfacedAt = now,
+                    suppressed = false
                 )
             }
         }
@@ -313,7 +324,8 @@ class DefaultRideDashboardComponent(
         episode == null -> live
         live == null -> episode
         else -> ActiveAlert(
-            episode.kind,
+            // the kind of the more urgent level (SOC_CUTOFF over SOC_LOW), so the row names its worst
+            if (live.severity.ordinal < episode.severity.ordinal) live.kind else episode.kind,
             worseOf(episode.kind, episode.peakValue, live.peakValue),
             worseOf(episode.severity, live.severity)
         )
@@ -325,7 +337,9 @@ class DefaultRideDashboardComponent(
         alerts: List<ActiveAlert>,
         now: Instant
     ): List<RideDashboardComponent.FaultEntry> {
-        val byKey = alerts.associateBy { alertRowKey(it.kind) }
+        // Two kinds can share a key (charge low + cutoff): fold them into the worse one.
+        val byKey = alerts.groupBy { alertRowKey(it.kind) }
+            .mapValues { (_, group) -> group.reduce { a, b -> worstOf(a, b)!! } }
         return observeFaults(source, byKey.keys.toList(), now, byKey)
     }
 
@@ -342,7 +356,15 @@ class DefaultRideDashboardComponent(
         faultHistory.entries.removeIf { (_, record) ->
             !record.active && record.clearedAt?.let { now - it >= hold } != false
         }
+        // The charge row steps aside CHARGE_ROW_HIDE_AFTER after it appeared, judged by sample time.
+        faultHistory.replaceAll { _, record ->
+            val shownFor = record.surfacedAt?.let { now - it }
+            if (record.active && !record.suppressed && record.alert?.let { autoHides(it.kind) } == true &&
+                shownFor != null && shownFor >= CHARGE_ROW_HIDE_AFTER
+            ) record.copy(suppressed = true) else record
+        }
         return faultHistory.values
+            .filterNot { it.suppressed }
             .sortedByDescending { it.order }
             .map { RideDashboardComponent.FaultEntry(it.message, it.occurrences, it.active, it.alert) }
     }

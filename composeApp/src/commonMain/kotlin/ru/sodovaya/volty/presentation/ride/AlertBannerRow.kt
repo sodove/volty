@@ -6,6 +6,7 @@ import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
 import ru.sodovaya.volty.util.formatFixed
 import kotlin.math.roundToInt
+import kotlin.time.Duration.Companion.seconds
 
 // The pure half of the banner's alert rows. The @Composable banner only picks a string resource per
 // kind and hands it the text built here - Compose is not unit-testable in this repo, so every
@@ -20,6 +21,8 @@ internal fun alertRowKey(kind: AlertKind): String = when (kind) {
     // One row, "Battery N C", for the whole warn -> high escalation: two keys would show a lingering
     // warn row beside the high one, and count warn again as a second episode when high released.
     AlertKind.TEMPERATURE_WARN, AlertKind.TEMPERATURE_HIGH -> "alert:BATTERY_TEMP"
+    // Likewise "Charge N %": low and cutoff are one escalating row (rider's request).
+    AlertKind.SOC_LOW, AlertKind.SOC_CUTOFF -> "alert:SOC"
     else -> "alert:${kind.name}"
 }
 
@@ -45,3 +48,9 @@ internal fun bannerTone(entries: List<RideDashboardComponent.FaultEntry>): Banne
 /** The banner's title is "faults" while any real fault is listed, "alerts" when it is only ours. */
 internal fun bannerTitleIsFaults(entries: List<RideDashboardComponent.FaultEntry>): Boolean =
     entries.any { it.alert == null }
+
+/** Charge does not recover during a ride, so its row would sit in the banner for the whole ride; it steps aside this long after it appeared. */
+internal val CHARGE_ROW_HIDE_AFTER = 30.seconds
+
+/** The rows that step aside after [CHARGE_ROW_HIDE_AFTER] and come back only on escalation. */
+internal fun autoHides(kind: AlertKind): Boolean = kind == AlertKind.SOC_LOW || kind == AlertKind.SOC_CUTOFF

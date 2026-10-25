@@ -717,6 +717,73 @@ class RideDashboardComponentTest {
         assertTrue(row.active)
     }
 
+    // ---- one charge row that steps aside after 30 s ----
+
+    private suspend fun kotlinx.coroutines.test.TestScope.chargeComponent(): Pair<FakeBmsRepo, DefaultRideDashboardComponent> {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle().copy(
+            alertConfig = ru.sodovaya.volty.domain.model.AlertConfig(socCutoffPercent = 8)
+        )
+        val c = component(repo, faultLingerSeconds = 60)
+        advanceUntilIdle()
+        return repo to c
+    }
+
+    private fun FakeBmsRepo.soc(start: Instant, atSec: Long, soc: Float) {
+        activeVehicleData.value = VehicleData(
+            aggregate = BmsData(soc = soc, socKnown = true, isConnected = true, timestamp = start + atSec.seconds)
+        )
+    }
+
+    @Test
+    fun low_then_cutoff_is_one_charge_row_with_the_worst_charge() = runTest {
+        val (repo, c) = chargeComponent()
+        val start = Instant.fromEpochSeconds(60_000)
+        repo.soc(start, 0, 14f); advanceUntilIdle()
+        repo.soc(start, 1, 7f); advanceUntilIdle()
+        val row = c.state.value.faults.single()
+        assertEquals(1, row.occurrences)
+        assertEquals(ru.sodovaya.volty.domain.usecase.AlertKind.SOC_CUTOFF, row.alert?.kind)
+        assertEquals(7f, row.alert?.peakValue)
+        assertEquals(ru.sodovaya.volty.domain.usecase.AlertSeverity.CRITICAL, row.alert?.severity)
+    }
+
+    @Test
+    fun the_charge_row_steps_aside_after_thirty_seconds_and_escalation_brings_it_back() = runTest {
+        val (repo, c) = chargeComponent()
+        val start = Instant.fromEpochSeconds(61_000)
+        repo.soc(start, 0, 14f); advanceUntilIdle()
+        repo.soc(start, 29, 14f); advanceUntilIdle()
+        assertEquals(1, c.state.value.faults.size, "still shown at 29 s")
+        repo.soc(start, 30, 14f); advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "hidden 30 s after it appeared, though still active")
+        repo.soc(start, 90, 13f); advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "and it stays hidden")
+        // escalation: only SOC_LOW was shown, now the cutoff is reached
+        repo.soc(start, 100, 7f); advanceUntilIdle()
+        assertEquals(1, c.state.value.faults.size)
+        assertEquals(1, c.state.value.faults.single().occurrences)
+        repo.soc(start, 129, 7f); advanceUntilIdle()
+        assertEquals(1, c.state.value.faults.size)
+        repo.soc(start, 130, 7f); advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "hides again 30 s after the escalation")
+    }
+
+    @Test
+    fun a_new_charge_episode_after_recovery_shows_again() = runTest {
+        val (repo, c) = chargeComponent()
+        val start = Instant.fromEpochSeconds(62_000)
+        repo.soc(start, 0, 14f); advanceUntilIdle()
+        repo.soc(start, 31, 14f); advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty())
+        repo.soc(start, 35, 50f); advanceUntilIdle()   // charging: recovered
+        repo.soc(start, 45, 14f); advanceUntilIdle()   // 10 s later: a new episode
+        val row = c.state.value.faults.single()
+        assertEquals(2, row.occurrences)
+        assertTrue(row.active)
+    }
+
     @Test
     fun a_notify_switch_never_hides_a_row() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
