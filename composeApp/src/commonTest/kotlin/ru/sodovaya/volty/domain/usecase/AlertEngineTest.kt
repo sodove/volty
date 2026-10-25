@@ -888,11 +888,11 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
-        for (esc in listOf(40f, 40f, 40f, 60f, 79f)) engine.evaluateMotionForTest(motion(escTempC = esc), v)
-        assertEquals(0, notifier.alerts.size)
-        engine.evaluateMotionForTest(motion(escTempC = 82f), v)
-        assertEquals(1, notifier.alerts.size, "a smooth rise over the threshold fires once confirmed")
-        assertEquals("ESC 82°C on Test", notifier.alerts.single().second)
+        for (esc in listOf(40f, 40f, 40f, 60f, 82f, 83f)) engine.evaluateMotionForTest(motion(escTempC = esc), v)
+        assertEquals(0, notifier.alerts.size, "only two samples over the line so far")
+        engine.evaluateMotionForTest(motion(escTempC = 84f), v)
+        assertEquals(1, notifier.alerts.size, "a smooth rise fires on the third consecutive sample over")
+        assertEquals("ESC 84°C on Test", notifier.alerts.single().second)
     }
 
     @Test
@@ -946,5 +946,45 @@ class AlertEngineTest {
         // A fresh link whose first frame is a lone 90: nothing to corroborate it.
         engine.evaluateMotionForTest(motion(motorTempC = 90f), v)
         assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `aSmallGlitchOverTheThresholdDoesNotFire`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
+        for (esc in listOf(75f, 75f, 75f, 85f, 75f)) engine.evaluateMotionForTest(motion(escTempC = esc), v)
+        assertEquals(0, notifier.alerts.size, "one frame over the line is not three consecutive samples")
+    }
+
+    @Test
+    fun `aSmallGlitchOverTheBatteryThresholdDoesNotFire`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        for (t in listOf(45f, 45f, 45f, 55f, 45f, 45f)) engine.evaluateForTest(bmsData(temps = listOf(t)), v)
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `oneLowGlitchDoesNotRearm`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
+        for (esc in listOf(85f, 85f, 85f, 85f, 70f, 85f, 85f, 85f)) {
+            engine.evaluateMotionForTest(motion(escTempC = esc), v)
+        }
+        assertEquals(1, notifier.alerts.size, "a single low sample must not re-arm and notify twice")
+    }
+
+    @Test
+    fun `three low samples do rearm`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
+        for (esc in listOf(85f, 85f, 85f, 70f, 70f, 70f, 85f, 85f, 85f)) {
+            engine.evaluateMotionForTest(motion(escTempC = esc), v)
+        }
+        assertEquals(2, notifier.alerts.size)
     }
 }

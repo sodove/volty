@@ -178,14 +178,14 @@ class AlarmControllerTest {
 
         // 1 °C for temperature, 2 km/h for speed: one sample inside each band,
         // one just outside. Swap the two constants and this test fails.
-        val held = controller.update(sample(tempC = 99.5f, speed = 48f), rules)
+        val held = controller.settle(sample(tempC = 99.5f, speed = 48f), rules)
         assertEquals(
             listOf(MotionAlertKind.SPEED, MotionAlertKind.MOTOR_TEMP),
             held.contributors.map { it.kind }.sortedBy { it.ordinal },
             "99.5 °C is still within 1 °C of 100, and 48 km/h within 2 km/h of 50"
         )
 
-        val released = controller.update(sample(tempC = 98.9f, speed = 47.9f), rules)
+        val released = controller.settle(sample(tempC = 98.9f, speed = 47.9f), rules)
         assertEquals(AlarmState.SILENT, released, "a hair further and both let go")
     }
 
@@ -526,5 +526,19 @@ class AlarmControllerTest {
         repeat(3) { controller.update(motor(40f), motorOnly) }
         controller.reset()
         assertEquals(0, controller.update(motor(150f), motorOnly).level, "after a reset a lone frame is unconfirmed again")
+    }
+
+    @Test fun aSmallGlitchOverTheThresholdDoesNotSound() {
+        val controller = AlarmController()
+        val levels = listOf(95f, 95f, 95f, 105f, 95f, 95f).map { controller.update(motor(it), motorOnly).level }
+        assertEquals(List(6) { 0 }, levels, "one frame over the step is not three consecutive samples")
+    }
+
+    @Test fun oneLowGlitchDoesNotReleaseTheAlarm() {
+        val controller = AlarmController()
+        // Engaged on 105 x3; 99.5 would release a single reading (1 degree band)
+        // but the other two samples in the window are still 105.
+        val levels = listOf(105f, 105f, 105f, 90f, 105f, 105f).map { controller.update(motor(it), motorOnly).level }
+        assertEquals(listOf(0, 0, 1, 1, 1, 1), levels)
     }
 }

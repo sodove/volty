@@ -167,8 +167,8 @@ class AlertEngine(
         val deltaMv = ((maxCell - minCell) * 1000f).toInt()
         // Confirmed, not raw: null means the gate has not (yet) believed this
         // reading, and the temperature block below then holds its decisions.
-        val maxTemp = if (data.temperatures.isEmpty()) null
-            else gate(vehicle, AlertKind.TEMPERATURE_HIGH).accept(data.temperatures.max())
+        val temp = if (data.temperatures.isEmpty()) null
+            else gate(vehicle, AlertKind.TEMPERATURE_HIGH).confirm(data.temperatures.max())
 
         fire(AlertKind.CELL_HIGH, vehicle, now,
             enabled = cfg.cellHighEnabled,
@@ -201,7 +201,11 @@ class AlertEngine(
             )
         }
 
-        if (maxTemp != null) {
+        if (temp != null) {
+            // Engage on the coolest of the last three, release on the hottest.
+            val engage = temp.min
+            val release = temp.max
+            val maxTemp = temp.latest
             // Two tiers off the SAME max-sensor reading. WARN fires only in the
             // band [warn, high) so a single rising trend escalates warn -> high
             // instead of emitting both at once; HIGH owns everything at/above the
@@ -209,16 +213,16 @@ class AlertEngine(
             // protection, so WARN is the user's lead time before that).
             fire(AlertKind.TEMPERATURE_WARN, vehicle, now,
                 enabled = cfg.temperatureWarnEnabled,
-                triggered = maxTemp > cfg.temperatureWarnC && maxTemp < cfg.temperatureHighC,
-                recovered = maxTemp < cfg.temperatureWarnC - 3f,
+                triggered = engage > cfg.temperatureWarnC && engage < cfg.temperatureHighC,
+                recovered = release < cfg.temperatureWarnC - 3f,
                 severity = AlertSeverity.WARNING,
                 title = "Temperature warning",
                 text = "${maxTemp.toInt()}°C on ${vehicle.name}"
             )
             fire(AlertKind.TEMPERATURE_HIGH, vehicle, now,
                 enabled = cfg.temperatureHighEnabled,
-                triggered = maxTemp > cfg.temperatureHighC,
-                recovered = maxTemp < cfg.temperatureHighC - 3f,
+                triggered = engage > cfg.temperatureHighC,
+                recovered = release < cfg.temperatureHighC - 3f,
                 severity = AlertSeverity.CRITICAL,
                 title = "Temperature high",
                 text = "${maxTemp.toInt()}°C on ${vehicle.name}"
@@ -320,21 +324,21 @@ class AlertEngine(
         val rules = armedRules(vehicle, motion, vehicle.motionAlertRules)
         for (rule in rules.rules) when (rule.kind) {
             MotionAlertKind.MOTOR_TEMP -> gate(vehicle, AlertKind.MOTOR_TEMP_HIGH)
-                .accept(motion.motorTempC)?.let { confirmed ->
+                .confirm(motion.motorTempC)?.let { confirmed ->
                     fireLevelled(
                         AlertKind.MOTOR_TEMP_HIGH, rule, vehicle, now,
                         value = confirmed,
                         title = "Motor temperature high",
-                        text = "Motor ${confirmed.toInt()}°C on ${vehicle.name}"
+                        text = "Motor ${confirmed.latest.toInt()}°C on ${vehicle.name}"
                     )
                 }
             MotionAlertKind.ESC_TEMP -> gate(vehicle, AlertKind.ESC_TEMP_HIGH)
-                .accept(motion.escTempC)?.let { confirmed ->
+                .confirm(motion.escTempC)?.let { confirmed ->
                     fireLevelled(
                         AlertKind.ESC_TEMP_HIGH, rule, vehicle, now,
                         value = confirmed,
                         title = "Controller temperature high",
-                        text = "ESC ${confirmed.toInt()}°C on ${vehicle.name}"
+                        text = "ESC ${confirmed.latest.toInt()}°C on ${vehicle.name}"
                     )
                 }
             // Exhaustive and deliberately empty — see the KDoc above. Listed
@@ -358,17 +362,20 @@ class AlertEngine(
      */
     private fun fireLevelled(
         kind: AlertKind, rule: AlertRule, vehicle: Vehicle, now: Instant,
-        value: Float, title: String, text: String
+        value: TemperatureGate.Confirmed, title: String, text: String
     ) {
         val key = vehicle.id to kind
-        val level = rule.engagedLevel(value)
-        // 0 both clears the episode's peak and is the recovery condition below,
-        // which is why they cannot drift apart.
-        val peak = if (level == 0) 0 else maxOf(level, peakLevel[key] ?: 0)
+        // Engage needs all three samples over a level (min); re-arming needs all
+        // three under every level (max), so one glitch either way is inert.
+        val level = rule.engagedLevel(value.min)
+        val recovered = rule.engagedLevel(value.max) == 0
+        // The peak is cleared exactly when the episode is recovered, so the two
+        // cannot drift apart.
+        val peak = if (recovered) 0 else maxOf(level, peakLevel[key] ?: 0)
         peakLevel[key] = peak
         fire(kind, vehicle, now,
             triggered = level > 0,
-            recovered = level == 0,
+            recovered = recovered,
             severity = if (peak >= rule.topEnabledLevel) AlertSeverity.CRITICAL else AlertSeverity.WARNING,
             title = title,
             text = text

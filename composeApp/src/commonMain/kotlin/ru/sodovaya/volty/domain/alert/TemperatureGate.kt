@@ -31,6 +31,12 @@ import kotlin.math.abs
  *    every sample as a jump, so a single frame cannot be accepted on its own
  *    either.
  *
+ * **Triggering and releasing use different edges of the window** (fix round 1:
+ * "latest confirmed value" let a sub-20 C glitch that crossed a threshold fire
+ * alone). See [Confirmed]: engage on [Confirmed.min], release on
+ * [Confirmed.max], so three consecutive samples are needed either way and one
+ * stray sample can neither raise an alert nor re-arm one.
+ *
  * A non-finite reading is rejected outright and touches no state.
  *
  * Deterministic and clock-free, like [AlarmController]: the same sequence from a
@@ -41,20 +47,32 @@ class TemperatureGate {
 
     private var lastAccepted: Float? = null
 
-    /** How many consecutive samples the accepted run currently spans. */
-    private var run = 0
+    /** The last [CONFIRMATIONS] accepted samples, oldest first. */
+    private val window = ArrayList<Float>(CONFIRMATIONS)
 
     /** The current run of mutually agreeing jumps, oldest first. */
     private val pending = ArrayList<Float>(CONFIRMATIONS)
 
-    fun accept(value: Float): Float? {
+    /**
+     * What a confirmed reading looks like: the last [CONFIRMATIONS] accepted
+     * samples. [min] is what every one of them is at least (use it to *engage*:
+     * all three must be over a level) and [max] what none exceeds (use it to
+     * *release*: all three must be under). [latest] is the newest, for display.
+     */
+    class Confirmed(val min: Float, val max: Float, val latest: Float)
+
+    /** [confirm]'s latest value only; kept for callers that need nothing more. */
+    fun accept(value: Float): Float? = confirm(value)?.latest
+
+    fun confirm(value: Float): Confirmed? {
         if (!value.isFinite()) return null
         val last = lastAccepted
         if (last != null && abs(value - last) <= MAX_JUMP_C) {
             pending.clear()
-            run++
             lastAccepted = value
-            return if (run >= CONFIRMATIONS) value else null
+            window.add(value)
+            if (window.size > CONFIRMATIONS) window.removeAt(0)
+            return confirmedOrNull()
         }
         // A jump (or the very first samples): it must be corroborated by its own
         // successors, not by the accepted history.
@@ -63,16 +81,20 @@ class TemperatureGate {
         }
         pending.add(value)
         if (pending.size < CONFIRMATIONS) return null
+        window.clear()
+        window.addAll(pending)
         pending.clear()
         lastAccepted = value
-        run = CONFIRMATIONS
-        return value
+        return confirmedOrNull()
     }
+
+    private fun confirmedOrNull(): Confirmed? =
+        if (window.size < CONFIRMATIONS) null else Confirmed(window.min(), window.max(), window.last())
 
     /** Forget everything; the next samples must confirm themselves from scratch. */
     fun reset() {
         lastAccepted = null
-        run = 0
+        window.clear()
         pending.clear()
     }
 

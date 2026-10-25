@@ -131,7 +131,7 @@ class AlarmController {
 
         // Each temperature gate is fed exactly once per sample, even if a hand
         // assembled rule list repeats a kind.
-        val checked = mutableMapOf<MotionAlertKind, Float?>()
+        val checked = mutableMapOf<MotionAlertKind, TemperatureGate.Confirmed?>()
 
         for (rule in rules.rules) {
             val raw = sample.valueFor(rule.kind)
@@ -139,9 +139,9 @@ class AlarmController {
             val step: Int
             if (rule.kind in GATED) {
                 if (rule.kind !in checked) {
-                    val confirmed = gates.getOrPut(rule.kind) { TemperatureGate() }.accept(raw)
+                    val confirmed = gates.getOrPut(rule.kind) { TemperatureGate() }.confirm(raw)
                     checked[rule.kind] = confirmed
-                    if (confirmed != null) confirmedValues[rule.kind] = confirmed
+                    if (confirmed != null) confirmedValues[rule.kind] = confirmed.latest
                 }
                 val confirmed = checked.getValue(rule.kind)
                 if (confirmed == null) {
@@ -149,12 +149,13 @@ class AlarmController {
                     value = confirmedValues[rule.kind] ?: raw
                     step = heldSteps[rule.kind] ?: 0
                 } else {
-                    value = confirmed
-                    step = rule.stepFor(value, heldSteps[rule.kind] ?: 0)
+                    value = confirmed.latest
+                    // Engage on the coolest of the last three, release on the hottest.
+                    step = rule.stepFor(confirmed.min, confirmed.max, heldSteps[rule.kind] ?: 0)
                 }
             } else {
                 value = raw
-                step = rule.stepFor(value, heldSteps[rule.kind] ?: 0)
+                step = rule.stepFor(value, value, heldSteps[rule.kind] ?: 0)
             }
             // Two things at once, which is why there is no separate `step == 0`
             // guard above it (that guard is an equivalent mutant — removing it
@@ -237,13 +238,13 @@ internal fun ControllerData.valueFor(kind: MotionAlertKind): Float = when (kind)
  * they are skipped without the steps above them moving down: the step number is
  * the level's position in the list, not a running count of the enabled ones.
  */
-private fun AlertRule.stepFor(value: Float, previousStep: Int): Int {
+private fun AlertRule.stepFor(engageValue: Float, holdValue: Float, previousStep: Int): Int {
     var step = 0
     for ((index, level) in levels.withIndex()) {
         if (!level.enabled) continue
         val position = index + 1
-        val engaged = value >= level.thresholdValue ||
-            (previousStep >= position && value >= level.thresholdValue - kind.releaseBand)
+        val engaged = engageValue >= level.thresholdValue ||
+            (previousStep >= position && holdValue >= level.thresholdValue - kind.releaseBand)
         if (engaged && position > step) step = position
     }
     return step
