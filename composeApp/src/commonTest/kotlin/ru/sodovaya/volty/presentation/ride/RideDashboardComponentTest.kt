@@ -690,6 +690,34 @@ class RideDashboardComponentTest {
     }
 
     @Test
+    fun battery_temperature_warn_high_warn_is_one_row_and_one_episode() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val c = component(repo, faultLingerSeconds = 60)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(58_000)
+        var n = 0L
+        // A StateFlow conflates, so each frame needs its own turn of the dispatcher.
+        suspend fun at(temp: Float) {
+            repeat(3) {
+                repo.activeVehicleData.value = VehicleData(
+                    aggregate = BmsData(soc = 80f, temperatures = listOf(temp), isConnected = true, timestamp = start + (n++ * 100).milliseconds)
+                )
+                advanceUntilIdle()
+            }
+        }
+        at(55f)   // warn
+        at(65f)   // high (a >20 C step needs its own three frames; 55 -> 65 is within 20)
+        at(55f)   // high released (below 57), warn still on
+        val row = c.state.value.faults.single()
+        assertEquals(1, row.occurrences, "warn -> high -> warn is one episode on one row")
+        assertEquals(alertRowKey(ru.sodovaya.volty.domain.usecase.AlertKind.TEMPERATURE_WARN), row.message)
+        assertEquals(ru.sodovaya.volty.domain.usecase.AlertSeverity.CRITICAL, row.alert?.severity, "worst level of the episode")
+        assertTrue(row.active)
+    }
+
+    @Test
     fun a_notify_switch_never_hides_a_row() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeBmsRepo()

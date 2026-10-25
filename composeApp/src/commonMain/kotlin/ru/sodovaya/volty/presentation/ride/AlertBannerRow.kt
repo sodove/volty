@@ -16,7 +16,12 @@ import kotlin.math.roundToInt
  * second episode of a kind counts on the same row instead of opening a new one. Prefixed so it can
  * never collide with a decoder's fault message.
  */
-internal fun alertRowKey(kind: AlertKind): String = "alert:${kind.name}"
+internal fun alertRowKey(kind: AlertKind): String = when (kind) {
+    // One row, "Battery N C", for the whole warn -> high escalation: two keys would show a lingering
+    // warn row beside the high one, and count warn again as a second episode when high released.
+    AlertKind.TEMPERATURE_WARN, AlertKind.TEMPERATURE_HIGH -> "alert:BATTERY_TEMP"
+    else -> "alert:${kind.name}"
+}
 
 /**
  * The number part of an alert row's label, ready to drop into the localized template.

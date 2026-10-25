@@ -385,8 +385,8 @@ fun RideDashboardScreen(
 @Composable
 internal fun RideFaultsBanner(
     faults: List<RideDashboardComponent.FaultEntry>,
+    units: UnitSystem,
     modifier: Modifier = Modifier,
-    units: UnitSystem = UnitSystem.METRIC,
 ) {
     // The container colour is the stack's worst severity (bannerTone): the same red as ever for
     // faults and CRITICAL alerts, the tertiary pair when only warnings are listed. Which is which

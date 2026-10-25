@@ -7,6 +7,7 @@ import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.usecase.AlertKind
 import ru.sodovaya.volty.domain.usecase.AlertSeverity
 import ru.sodovaya.volty.domain.usecase.resolveAlertConfig
+import ru.sodovaya.volty.domain.usecase.topEnabledLevel
 
 /**
  * One alert kind that is engaged **right now**, as the dashboard banner wants it.
@@ -46,10 +47,9 @@ fun worseOf(a: AlertSeverity, b: AlertSeverity): AlertSeverity = if (a.ordinal <
  *    fed with [armedRules] - exactly what sounds the alarm, so the banner can never claim an
  *    alarm that the sound path would not raise, and the temperature confirmation (three agreeing
  *    frames, a >20 C jump discarded - decision 1) is inherited rather than copied.
- *  - **Battery kinds** (cells, battery temperature, charge) re-use [TemperatureGate] and the
- *    engine's own trigger and release bands. Those bands are written out again here because the
- *    engine's are inline in a function that also posts notifications; the tests pin the release
- *    hysteresis so a drift between the two shows up. CHARGE_COMPLETE is not an alert and is not
+ *  - **Battery kinds** (cells, battery temperature, charge) use [TemperatureGate] and
+ *    [batteryConditions] - the one copy of the bands, guards and severities, shared with the
+ *    notification engine. CHARGE_COMPLETE is not an alert and is not
  *    shown; BMS and controller faults already have their own banner rows.
  *
  * The caller owns time: this class never decides an episode, it only says what is engaged per
@@ -62,6 +62,7 @@ class ActiveAlertTracker {
     // ---- battery side ----
     private val engaged = linkedSetOf<AlertKind>()
     private val lastValue = mutableMapOf<AlertKind, Float>()
+    private val lastSeverity = mutableMapOf<AlertKind, AlertSeverity>()
     private var temperatureGate = TemperatureGate()
 
     /** Forget everything (vehicle switch). The next samples are judged afresh. */
@@ -73,6 +74,7 @@ class ActiveAlertTracker {
     private fun resetBattery() {
         engaged.clear()
         lastValue.clear()
+        lastSeverity.clear()
         temperatureGate = TemperatureGate()
     }
 
@@ -86,7 +88,7 @@ class ActiveAlertTracker {
         val state = alarm.update(motion, rules)
         return state.contributors.map { contributor ->
             val rule = rules.rules.first { it.kind == contributor.kind }
-            val top = rule.levels.indexOfLast { it.enabled } + 1
+            val top = rule.topEnabledLevel
             ActiveAlert(
                 kind = contributor.kind.alertKind(),
                 peakValue = contributor.value,
@@ -102,65 +104,36 @@ class ActiveAlertTracker {
             return emptyList()
         }
         val cfg = resolveAlertConfig(vehicle.alertConfig, vehicle.chemistry)
-        val cells = data.cellVoltages
-        val maxCell = cells.maxOrNull() ?: 0f
-        val minCell = cells.minOrNull() ?: 0f
-        val deltaMv = ((maxCell - minCell) * 1000f).toInt()
         val temp = if (data.temperatures.isEmpty()) null else temperatureGate.confirm(data.temperatures.max())
 
-        condition(AlertKind.CELL_HIGH, cfg.cellHighEnabled, maxCell,
-            triggered = maxCell > cfg.cellHighV, recovered = maxCell < cfg.cellHighV - 0.05f)
-        if (minCell > 0.1f) {
-            condition(AlertKind.CELL_LOW, cfg.cellLowEnabled, minCell,
-                triggered = minCell < cfg.cellLowV, recovered = minCell > cfg.cellLowV + 0.05f)
-        }
-        if (cells.isNotEmpty()) {
-            condition(AlertKind.CELL_DELTA, cfg.cellDeltaEnabled, deltaMv.toFloat(),
-                triggered = deltaMv > cfg.cellDeltaMv, recovered = deltaMv < cfg.cellDeltaMv - 30)
-        }
-        // Unconfirmed temperature: hold what was decided, neither engage nor release.
-        if (temp != null) {
-            condition(AlertKind.TEMPERATURE_WARN, cfg.temperatureWarnEnabled, temp.latest,
-                triggered = temp.min > cfg.temperatureWarnC && temp.min < cfg.temperatureHighC,
-                recovered = temp.max < cfg.temperatureWarnC - 3f)
-            condition(AlertKind.TEMPERATURE_HIGH, cfg.temperatureHighEnabled, temp.latest,
-                triggered = temp.min > cfg.temperatureHighC, recovered = temp.max < cfg.temperatureHighC - 3f)
-        }
-        if (data.socKnown) {
-            condition(AlertKind.SOC_LOW, cfg.socLowEnabled, data.soc,
-                triggered = data.soc.toInt() < cfg.socLowPercent,
-                recovered = data.soc.toInt() > cfg.socLowPercent + 3)
-            val cutoff = cfg.socCutoffPercent
-            if (cutoff != null) {
-                condition(AlertKind.SOC_CUTOFF, cfg.socCutoffEnabled, data.soc,
-                    triggered = data.soc.toInt() < cutoff, recovered = data.soc.toInt() > cutoff + 2)
-            }
+        // Unconfirmed temperature: batteryConditions leaves those kinds out, so what was decided stands.
+        for (c in batteryConditions(data, cfg, temp)) {
+            condition(c.kind, c.enabled, c.value, c.severity, c.triggered, c.recovered)
         }
         // A rising battery temperature escalates warn -> high; one row, the higher one.
         val shown = AlertKind.entries.filter {
             it in engaged && !(it == AlertKind.TEMPERATURE_WARN && AlertKind.TEMPERATURE_HIGH in engaged)
         }
         return shown.map { kind ->
-            ActiveAlert(kind, lastValue.getValue(kind), batterySeverity(kind))
+            ActiveAlert(kind, lastValue.getValue(kind), lastSeverity.getValue(kind))
         }
     }
 
-    private fun condition(kind: AlertKind, enabled: Boolean, value: Float, triggered: Boolean, recovered: Boolean) {
+    private fun condition(
+        kind: AlertKind, enabled: Boolean, value: Float, severity: AlertSeverity,
+        triggered: Boolean, recovered: Boolean
+    ) {
         if (!enabled) {
             engaged.remove(kind)
             return
         }
         lastValue[kind] = value
+        lastSeverity[kind] = severity
         if (kind in engaged) {
             if (recovered) engaged.remove(kind)
         } else if (triggered) {
             engaged.add(kind)
         }
-    }
-
-    private fun batterySeverity(kind: AlertKind): AlertSeverity = when (kind) {
-        AlertKind.CELL_HIGH, AlertKind.CELL_LOW, AlertKind.TEMPERATURE_HIGH, AlertKind.SOC_CUTOFF -> AlertSeverity.CRITICAL
-        else -> AlertSeverity.WARNING
     }
 }
 

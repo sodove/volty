@@ -1233,4 +1233,39 @@ class AlertEngineTest {
         engine.bmsSample(listOf("OVP"), 1_010_000L, v)
         assertEquals(2, notifier.messages.size)
     }
+
+    /**
+     * The notification engine and the dashboard banner's tracker read ONE copy of the battery
+     * bands (batteryConditions); this pins that they still agree on a set of fixtures, so a
+     * future edit that forks one of them fails here. Compared per fixture: the kinds the engine
+     * notified are exactly the kinds the tracker ever showed.
+     */
+    @Test
+    fun `engine notifications and the banner tracker agree on the battery fixtures`() {
+        val v = vehicleWith(AlertConfig(socCutoffPercent = 8))
+        val fixtures: Map<String, List<BmsData>> = mapOf(
+            "healthy" to listOf(bmsData()),
+            "low charge, held inside the release band" to listOf(bmsData(soc = 40f), bmsData(soc = 14f), bmsData(soc = 17f), bmsData(soc = 20f)),
+            "cutoff" to listOf(bmsData(soc = 5f)),
+            "cell high" to listOf(bmsData(cells = listOf(4.21f, 4.25f))),
+            "cell low" to listOf(bmsData(cells = listOf(2.8f, 2.85f))),
+            "cell spread" to listOf(bmsData(cells = listOf(3.5f, 3.8f))),
+            "warm" to List(3) { bmsData(temps = listOf(55f)) },
+            "hot" to List(3) { bmsData(temps = listOf(65f)) },
+            "one corrupt hot frame" to List(3) { bmsData(temps = listOf(30f)) } + bmsData(temps = listOf(120f)),
+            "unknown charge" to listOf(bmsData(soc = 0f).copy(socKnown = false)),
+        )
+        for ((name, samples) in fixtures) {
+            val notifier = TestNotifier()
+            val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+            val tracker = ru.sodovaya.volty.domain.alert.ActiveAlertTracker()
+            val shown = mutableSetOf<AlertKind>()
+            for (sample in samples) {
+                engine.evaluateForTest(sample, v)
+                tracker.updateBattery(sample, v).mapTo(shown) { it.kind }
+            }
+            val notified = notifier.messages.map { it.first.kind }.toSet()
+            assertEquals(notified, shown, "fixture '$name'")
+        }
+    }
 }

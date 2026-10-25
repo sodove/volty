@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.alert.NotifyKind
 import ru.sodovaya.volty.domain.alert.TemperatureGate
 import ru.sodovaya.volty.domain.alert.armedRules
+import ru.sodovaya.volty.domain.alert.batteryConditions
 import ru.sodovaya.volty.domain.alert.startsNewEpisode
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
@@ -208,92 +209,21 @@ class AlertEngine(
         val cfg = resolveAlertConfig(vehicle.alertConfig, vehicle.chemistry)
         val now = clock()
 
-        val cells = data.cellVoltages
-        val maxCell = cells.maxOrNull() ?: 0f
-        val minCell = cells.minOrNull() ?: 0f
-        val deltaMv = ((maxCell - minCell) * 1000f).toInt()
-        // Confirmed, not raw: null means the gate has not (yet) believed this
-        // reading, and the temperature block below then holds its decisions.
+        // Confirmed, not raw: null means the gate has not (yet) believed this reading, and the
+        // temperature conditions are then left out, so their previous decisions stand.
         val temp = if (data.temperatures.isEmpty()) null
             else gate(vehicle, AlertKind.TEMPERATURE_HIGH).confirm(data.temperatures.max())
 
-        fire(AlertKind.CELL_HIGH, vehicle, now,
-            enabled = cfg.cellHighEnabled,
-            triggered = maxCell > cfg.cellHighV,
-            recovered = maxCell < cfg.cellHighV - 0.05f,
-            severity = AlertSeverity.CRITICAL,
-            message = AlertMessage(AlertKind.CELL_HIGH, vehicle.name, value = maxCell)
-        )
-
-        if (minCell > 0.1f) {
-            fire(AlertKind.CELL_LOW, vehicle, now,
-                enabled = cfg.cellLowEnabled,
-                triggered = minCell < cfg.cellLowV,
-                recovered = minCell > cfg.cellLowV + 0.05f,
-                severity = AlertSeverity.CRITICAL,
-                message = AlertMessage(AlertKind.CELL_LOW, vehicle.name, value = minCell)
+        // The bands, guards and severities live in ONE place, shared with the dashboard banner's
+        // ActiveAlertTracker (rider alerts Task 4, review I-1): see batteryConditions.
+        for (c in batteryConditions(data, cfg, temp)) {
+            fire(c.kind, vehicle, now,
+                enabled = c.enabled,
+                triggered = c.triggered,
+                recovered = c.recovered,
+                severity = c.severity,
+                message = AlertMessage(c.kind, vehicle.name, value = c.value)
             )
-        }
-
-        if (cells.isNotEmpty()) {
-            fire(AlertKind.CELL_DELTA, vehicle, now,
-                enabled = cfg.cellDeltaEnabled,
-                triggered = deltaMv > cfg.cellDeltaMv,
-                recovered = deltaMv < cfg.cellDeltaMv - 30,
-                severity = AlertSeverity.WARNING,
-                message = AlertMessage(AlertKind.CELL_DELTA, vehicle.name, value = deltaMv.toFloat())
-            )
-        }
-
-        if (temp != null) {
-            // Engage on the coolest of the last three, release on the hottest.
-            val engage = temp.min
-            val release = temp.max
-            val maxTemp = temp.latest
-            // Two tiers off the SAME max-sensor reading. WARN fires only in the
-            // band [warn, high) so a single rising trend escalates warn -> high
-            // instead of emitting both at once; HIGH owns everything at/above the
-            // critical threshold (which is also where the BMS trips its own
-            // protection, so WARN is the user's lead time before that).
-            fire(AlertKind.TEMPERATURE_WARN, vehicle, now,
-                enabled = cfg.temperatureWarnEnabled,
-                triggered = engage > cfg.temperatureWarnC && engage < cfg.temperatureHighC,
-                recovered = release < cfg.temperatureWarnC - 3f,
-                severity = AlertSeverity.WARNING,
-                message = AlertMessage(AlertKind.TEMPERATURE_WARN, vehicle.name, value = maxTemp)
-            )
-            fire(AlertKind.TEMPERATURE_HIGH, vehicle, now,
-                enabled = cfg.temperatureHighEnabled,
-                triggered = engage > cfg.temperatureHighC,
-                recovered = release < cfg.temperatureHighC - 3f,
-                severity = AlertSeverity.CRITICAL,
-                message = AlertMessage(AlertKind.TEMPERATURE_HIGH, vehicle.name, value = maxTemp)
-            )
-        }
-
-        // The SoC alerts are the ONLY ones gated on socKnown: a dumb Begode
-        // with no cell count publishes soc = 0 meaning "unknown", not "empty",
-        // and alarming on it every connect would train the user to ignore the
-        // one alert that matters. A genuine 0 % arrives with socKnown = true
-        // and still fires. Every other alert reads its own physical quantity
-        // and is untouched by an unknown SoC.
-        if (data.socKnown) {
-            fire(AlertKind.SOC_LOW, vehicle, now,
-                enabled = cfg.socLowEnabled,
-                triggered = data.soc.toInt() < cfg.socLowPercent,
-                recovered = data.soc.toInt() > cfg.socLowPercent + 3,
-                severity = AlertSeverity.WARNING,
-                message = AlertMessage(AlertKind.SOC_LOW, vehicle.name, value = data.soc)
-            )
-
-            cfg.socCutoffPercent?.takeIf { cfg.socCutoffEnabled }?.let { cutoff ->
-                fire(AlertKind.SOC_CUTOFF, vehicle, now,
-                    triggered = data.soc.toInt() < cutoff,
-                    recovered = data.soc.toInt() > cutoff + 2,
-                    severity = AlertSeverity.CRITICAL,
-                    message = AlertMessage(AlertKind.SOC_CUTOFF, vehicle.name, value = data.soc)
-                )
-            }
         }
 
         if (cfg.chargeCompleteNotify) {
@@ -527,4 +457,4 @@ private fun AlertRule.engagedLevel(value: Float): Int {
  * CRITICAL. 0 when every step is muted, which is unreachable as a severity
  * because [engagedLevel] then returns 0 too and nothing fires.
  */
-private val AlertRule.topEnabledLevel: Int get() = levels.indexOfLast { it.enabled } + 1
+internal val AlertRule.topEnabledLevel: Int get() = levels.indexOfLast { it.enabled } + 1
