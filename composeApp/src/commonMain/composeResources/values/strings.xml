@@ -150,6 +150,19 @@
     <string name="ride_speed_reason_mixed">Speed sources disagree</string>
     <string name="ride_speed_reason_unknown">Speed source is unavailable</string>
     <string name="ride_faults_title">VEHICLE FAULTS</string>
+    <!-- The app's own alerts in the ride banner (rider alerts, Task 4). %1$s is the episode's worst reading. -->
+    <string name="ride_alerts_title">ALERTS</string>
+    <string name="ride_alert_duty">Duty %1$s</string>
+    <string name="ride_alert_speed_kmh">Speed %1$s km/h</string>
+    <string name="ride_alert_speed_mph">Speed %1$s mph</string>
+    <string name="ride_alert_motor_temp">Motor %1$s °C</string>
+    <string name="ride_alert_esc_temp">Controller %1$s °C</string>
+    <string name="ride_alert_battery_temp">Battery %1$s °C</string>
+    <string name="ride_alert_soc_low">Charge %1$s</string>
+    <string name="ride_alert_soc_cutoff">Charge cutoff %1$s</string>
+    <string name="ride_alert_cell_high">Cell high %1$s V</string>
+    <string name="ride_alert_cell_low">Cell low %1$s V</string>
+    <string name="ride_alert_cell_delta">Cell spread %1$s mV</string>
     <!-- Classic dial face label only (Clean shows no standalone "Speed" label) -->
     <string name="ride_dial_speed">Speed</string>
     <string name="ride_odometer">Odometer</string>

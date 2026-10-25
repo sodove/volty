@@ -453,6 +453,7 @@ internal fun LightRideDashboard(
         if (faults.isNotEmpty() && navigationSurface != LightNavigationSurface.PLANNER) {
             RideFaultsBanner(
                 faults = faults,
+                units = state.units,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .statusBarsPadding()

@@ -237,6 +237,9 @@ class RideDashboardComponentTest {
         val appPrefs = AppPrefs(FakePreferencesDataStore(prefs))
         appPrefs.unitSystem.first { it == units }
         appPrefs.defaultDashboardStyle.first { it == style }
+        // The linger too: its eager collector is just as asynchronous, and a test that configures a
+        // non-default linger would otherwise race it (it did, under full-suite load).
+        appPrefs.faultDisplayDurationSec.first { it == faultLingerSeconds }
         return appPrefs
     }
 
@@ -496,14 +499,256 @@ class RideDashboardComponentTest {
         assertTrue(c.state.value.faults.single().active)
         repo.emitMotion(ControllerData(isConnected = true, timestamp = start + 1.seconds))
         advanceUntilIdle()
+        // Carried finding (Task 1 review): "while active" is judged by the episode rule, so the
+        // row is HELD (inactive) for the 2 s episode window instead of being dropped and recreated.
+        assertEquals(
+            listOf(RideDashboardComponent.FaultEntry("over-voltage", 1, false)), c.state.value.faults,
+            "a row absent for less than the episode gap is still the same episode"
+        )
+        repo.emitMotion(ControllerData(isConnected = true, timestamp = start + 3.seconds))
+        advanceUntilIdle()
         assertTrue(c.state.value.faults.isEmpty(), "zero is not never-show; it means active-only")
+    }
+
+    @Test
+    fun a_flickering_fault_with_zero_linger_does_not_blink_out_of_the_banner() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo, faultLingerSeconds = 0)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(31_000)
+        val seen = mutableListOf<Int>()
+        for ((atMs, faults) in listOf(
+            0L to listOf("over-voltage"), 300L to emptyList(), 600L to listOf("over-voltage"),
+            900L to emptyList(), 1_200L to listOf("over-voltage")
+        )) {
+            repo.emitMotion(controllerSample(start, atMs, faults)); advanceUntilIdle()
+            seen += c.state.value.faults.size
+        }
+        assertEquals(listOf(1, 1, 1, 1, 1), seen, "the row must be on screen after every sample")
+        assertEquals(RideDashboardComponent.FaultEntry("over-voltage", 1, true), c.state.value.faults.single())
+    }
+
+    // ---- our own alerts in the banner (rider alerts, Task 4) ----
+
+    private val dutyRules = listOf(
+        ru.sodovaya.volty.domain.alert.AlertRule(
+            ru.sodovaya.volty.domain.alert.MotionAlertKind.DUTY,
+            listOf(ru.sodovaya.volty.domain.alert.AlertLevel(80f), ru.sodovaya.volty.domain.alert.AlertLevel(90f))
+        ),
+        ru.sodovaya.volty.domain.alert.AlertRule(
+            ru.sodovaya.volty.domain.alert.MotionAlertKind.ESC_TEMP,
+            listOf(ru.sodovaya.volty.domain.alert.AlertLevel(80f))
+        ),
+    )
+
+    private fun alertVehicle(notify: Set<ru.sodovaya.volty.domain.alert.NotifyKind>? = null) =
+        vehicleWith(null, SecondaryGauge.DUTY).copy(motionAlerts = dutyRules, notifyKinds = notify)
+
+    private fun dutySample(start: Instant, atMs: Long, duty: Float, esc: Float = 30f, connected: Boolean = true) =
+        ControllerData(
+            dutyPercent = duty, escTempC = esc, isConnected = connected,
+            timestamp = start + atMs.milliseconds
+        )
+
+    private fun alertRows(c: DefaultRideDashboardComponent) =
+        c.state.value.faults.filter { it.alert != null }
+
+    private fun dutyRow(occurrences: Int, active: Boolean, peak: Float, severity: ru.sodovaya.volty.domain.usecase.AlertSeverity) =
+        RideDashboardComponent.FaultEntry(
+            alertRowKey(ru.sodovaya.volty.domain.usecase.AlertKind.DUTY_HIGH), occurrences, active,
+            ru.sodovaya.volty.domain.alert.ActiveAlert(ru.sodovaya.volty.domain.usecase.AlertKind.DUTY_HIGH, peak, severity)
+        )
+
+    @Test
+    fun a_duty_episode_is_one_row_with_its_peak_and_leaves_after_the_linger() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val c = component(repo, faultLingerSeconds = 10)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(50_000)
+        fun emit(atMs: Long, duty: Float) { repo.emitMotion(dutySample(start, atMs, duty)); }
+
+        emit(0, 85f); advanceUntilIdle()
+        assertEquals(listOf(dutyRow(1, true, 85f, ru.sodovaya.volty.domain.usecase.AlertSeverity.WARNING)), alertRows(c))
+        emit(500, 95f); advanceUntilIdle()
+        emit(1_000, 90f); advanceUntilIdle()
+        assertEquals(listOf(dutyRow(1, true, 95f, ru.sodovaya.volty.domain.usecase.AlertSeverity.CRITICAL)), alertRows(c))
+
+        emit(2_000, 50f); advanceUntilIdle()
+        emit(6_000, 50f); advanceUntilIdle()
+        assertEquals(
+            listOf(dutyRow(1, false, 95f, ru.sodovaya.volty.domain.usecase.AlertSeverity.CRITICAL)), alertRows(c),
+            "held after it ends, keeping the episode's peak"
+        )
+        emit(13_000, 50f); advanceUntilIdle()
+        assertTrue(alertRows(c).isEmpty(), "gone ten seconds after it cleared")
+    }
+
+    @Test
+    fun two_episodes_are_counted_on_one_row_and_the_peak_belongs_to_the_latest() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val c = component(repo, faultLingerSeconds = 60)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(51_000)
+        repo.emitMotion(dutySample(start, 0, 95f)); advanceUntilIdle()
+        repo.emitMotion(dutySample(start, 1_000, 50f)); advanceUntilIdle()
+        // 1.5 s absent: still the same episode, no second count
+        repo.emitMotion(dutySample(start, 2_500, 85f)); advanceUntilIdle()
+        assertEquals(1, alertRows(c).single().occurrences)
+        repo.emitMotion(dutySample(start, 3_000, 50f)); advanceUntilIdle()
+        repo.emitMotion(dutySample(start, 6_000, 85f)); advanceUntilIdle()
+        assertEquals(
+            listOf(dutyRow(2, true, 85f, ru.sodovaya.volty.domain.usecase.AlertSeverity.WARNING)), alertRows(c),
+            "two episodes on ONE row (identity is the kind, not the value text); the label shows this episode's peak"
+        )
+    }
+
+    @Test
+    fun zero_linger_removes_an_alert_row_two_seconds_after_recovery_and_never_blinks() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val c = component(repo, faultLingerSeconds = 0)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(52_000)
+        val seen = mutableListOf<Int>()
+        for ((atMs, duty) in listOf(0L to 85f, 300L to 50f, 600L to 85f, 900L to 50f, 1_200L to 85f)) {
+            repo.emitMotion(dutySample(start, atMs, duty)); advanceUntilIdle()
+            seen += alertRows(c).size
+        }
+        assertEquals(listOf(1, 1, 1, 1, 1), seen)
+        assertEquals(1, alertRows(c).single().occurrences)
+        repo.emitMotion(dutySample(start, 1_500, 50f)); advanceUntilIdle()
+        assertEquals(1, alertRows(c).size, "inside the episode window the row is held")
+        repo.emitMotion(dutySample(start, 3_600, 50f)); advanceUntilIdle()
+        assertTrue(alertRows(c).isEmpty(), "linger 0 means: gone once the episode is over")
+    }
+
+    @Test
+    fun a_low_charge_row_comes_from_the_battery_stream() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val c = component(repo, faultLingerSeconds = 60)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(53_000)
+        repo.activeVehicleData.value = VehicleData(
+            aggregate = BmsData(soc = 14f, socKnown = true, isConnected = true, timestamp = start)
+        )
+        advanceUntilIdle()
+        val row = c.state.value.faults.single()
+        assertEquals(
+            ru.sodovaya.volty.domain.alert.ActiveAlert(
+                ru.sodovaya.volty.domain.usecase.AlertKind.SOC_LOW, 14f,
+                ru.sodovaya.volty.domain.usecase.AlertSeverity.WARNING
+            ),
+            row.alert
+        )
+        // the lowest charge of the episode is its peak
+        repo.activeVehicleData.value = VehicleData(
+            aggregate = BmsData(soc = 12f, socKnown = true, isConnected = true, timestamp = start + 1.seconds)
+        )
+        advanceUntilIdle()
+        repo.activeVehicleData.value = VehicleData(
+            aggregate = BmsData(soc = 13f, socKnown = true, isConnected = true, timestamp = start + 2.seconds)
+        )
+        advanceUntilIdle()
+        assertEquals(12f, c.state.value.faults.single().alert?.peakValue)
+    }
+
+    @Test
+    fun an_alert_row_and_a_fault_share_one_stack_and_the_motion_sample_does_not_clear_the_battery_rows() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val c = component(repo, faultLingerSeconds = 60)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(54_000)
+        repo.activeVehicleData.value = VehicleData(
+            aggregate = BmsData(soc = 10f, socKnown = true, isConnected = true, timestamp = start)
+        )
+        advanceUntilIdle()
+        repo.emitMotion(
+            dutySample(start, 100, 85f).copy(faults = listOf("over-voltage"))
+        )
+        advanceUntilIdle()
+        // newest first; every motion sample leaves the battery's row alone
+        assertEquals(
+            listOf(
+                alertRowKey(ru.sodovaya.volty.domain.usecase.AlertKind.DUTY_HIGH),
+                "over-voltage",
+                alertRowKey(ru.sodovaya.volty.domain.usecase.AlertKind.SOC_LOW)
+            ).toSet(),
+            c.state.value.faults.map { it.message }.toSet()
+        )
+        assertEquals(3, c.state.value.faults.size)
+        assertTrue(c.state.value.faults.all { it.active })
+    }
+
+    @Test
+    fun a_notify_switch_never_hides_a_row() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        // notify nothing at all: no notification, but the banner shows everything regardless
+        repo.activeVehicle.value = alertVehicle(notify = emptySet())
+        val c = component(repo)
+        advanceUntilIdle()
+        repo.emitMotion(dutySample(Instant.fromEpochSeconds(55_000), 0, 95f)); advanceUntilIdle()
+        assertEquals(1, alertRows(c).size)
+    }
+
+    @Test
+    fun a_single_corrupt_temperature_frame_creates_no_row() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val c = component(repo)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(56_000)
+        for (i in 0 until 3) { repo.emitMotion(dutySample(start, i * 100L, 10f, esc = 40f)); advanceUntilIdle() }
+        repo.emitMotion(dutySample(start, 400, 10f, esc = 130f)); advanceUntilIdle()
+        assertTrue(alertRows(c).isEmpty(), "130 degrees from 40 is a jump, not a reading")
+        repo.emitMotion(dutySample(start, 500, 10f, esc = 41f)); advanceUntilIdle()
+        assertTrue(alertRows(c).isEmpty())
+    }
+
+    @Test
+    fun no_rows_while_disconnected_and_a_vehicle_switch_clears_them() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val vehicle = alertVehicle()
+        repo.activeVehicle.value = vehicle
+        repo.connectionState.value = ConnectionState.Connected(vehicle)
+        val c = component(repo)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(57_000)
+        // a sample that says it is not connected (deliberately incoherent: duty 95 while "offline")
+        repo.emitMotion(dutySample(start, 0, 95f, connected = false)); advanceUntilIdle()
+        assertTrue(alertRows(c).isEmpty())
+
+        repo.emitMotion(dutySample(start, 1_000, 95f)); advanceUntilIdle()
+        assertEquals(1, alertRows(c).size)
+        repo.connectionState.value = ConnectionState.Disconnected; advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "a dropped link clears the rows")
+
+        repo.connectionState.value = ConnectionState.Connected(vehicle)
+        repo.emitMotion(dutySample(start, 5_000, 95f)); advanceUntilIdle()
+        assertEquals(1, alertRows(c).size)
+        repo.activeVehicle.value = vehicle.copy(id = "other")
+        advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "rows of the previous vehicle must not leak")
     }
 
     private fun controllerSample(start: Instant, atMs: Long, faults: List<String>) =
         ControllerData(faults = faults, isConnected = true, timestamp = start + atMs.milliseconds)
 
     private fun bmsSample(start: Instant, atMs: Long, faults: List<String>) = VehicleData(
-        aggregate = BmsData(bmsFaults = faults, isConnected = true, timestamp = start + atMs.milliseconds)
+        // soc = 80: a default BmsData is a KNOWN 0 % charge, which is now (correctly) a banner row of its own
+        aggregate = BmsData(soc = 80f, bmsFaults = faults, isConnected = true, timestamp = start + atMs.milliseconds)
     )
 
     @Test
@@ -587,6 +832,7 @@ class RideDashboardComponentTest {
         val start = Instant.fromEpochSeconds(10)
         repo.activeVehicleData.value = VehicleData(
             aggregate = BmsData(
+                soc = 80f,
                 bmsFaults = listOf("cell-overvoltage"),
                 isConnected = true,
                 timestamp = start
@@ -599,7 +845,7 @@ class RideDashboardComponentTest {
         )
 
         repo.activeVehicleData.value = VehicleData(
-            aggregate = BmsData(isConnected = true, timestamp = start + 1.seconds)
+            aggregate = BmsData(soc = 80f, isConnected = true, timestamp = start + 1.seconds)
         )
         advanceUntilIdle()
         assertEquals(
@@ -608,7 +854,7 @@ class RideDashboardComponentTest {
         )
 
         repo.activeVehicleData.value = VehicleData(
-            aggregate = BmsData(isConnected = true, timestamp = start + 61.seconds)
+            aggregate = BmsData(soc = 80f, isConnected = true, timestamp = start + 61.seconds)
         )
         advanceUntilIdle()
         assertTrue(c.state.value.faults.isEmpty(), "a cleared BMS fault expires after the configured minute")

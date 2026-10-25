@@ -3,7 +3,11 @@ package ru.sodovaya.volty.presentation.ride
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.alert.ActiveAlert
+import ru.sodovaya.volty.domain.alert.ActiveAlertTracker
+import ru.sodovaya.volty.domain.alert.EPISODE_GAP
 import ru.sodovaya.volty.domain.alert.startsNewEpisode
+import ru.sodovaya.volty.domain.alert.worseOf
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ConnectionState
@@ -49,8 +53,18 @@ interface RideDashboardComponent {
     fun onEditVehicle()
     fun onDisconnect()
 
-    /** One controller/BMS fault in the dashboard's newest-first stack. */
-    data class FaultEntry(val message: String, val occurrences: Int = 1, val active: Boolean = true)
+    /**
+     * One row of the dashboard's newest-first stack: a controller/BMS fault, or - when [alert] is
+     * set - one of the app's own alerts (temperature, charge, cells, speed, duty). For an alert
+     * [message] is its row identity ([alertRowKey]), not text: the renderer words it from [alert].
+     * [alert].peakValue is the worst reading of the row's latest episode.
+     */
+    data class FaultEntry(
+        val message: String,
+        val occurrences: Int = 1,
+        val active: Boolean = true,
+        val alert: ActiveAlert? = null
+    )
 
     @OptIn(ExperimentalTime::class)
     data class State(
@@ -207,14 +221,23 @@ class DefaultRideDashboardComponent(
     private var appDefaultStyle: DashboardStyle = appPrefs.defaultDashboardStyle.value
     private var faultDisplayDurationSec: Int = appPrefs.faultDisplayDurationSec.value
 
-    private enum class FaultSource { CONTROLLER, BATTERY }
+    /**
+     * Who reported a row. The two alert sources are separate from the fault ones because each
+     * stream owns its own rows: a battery sample must not read the motion alerts as absent.
+     */
+    private enum class FaultSource { CONTROLLER, BATTERY, MOTION_ALERTS, BATTERY_ALERTS }
+
+    /** Our own alerts, graded and confirmed - see [ActiveAlertTracker]. One instance per component. */
+    private val alertTracker = ActiveAlertTracker()
 
     private data class FaultRecord(
         val message: String,
         val occurrences: Int,
         val activeSources: Set<FaultSource>,
         val clearedAt: Instant?,
-        val order: Long
+        val order: Long,
+        /** Set for our own alerts only: the kind, the episode's worst reading and severity. */
+        val alert: ActiveAlert? = null
     ) {
         val active: Boolean get() = activeSources.isNotEmpty()
     }
@@ -230,11 +253,16 @@ class DefaultRideDashboardComponent(
      * count a controller fault twice, and clearing one source must not clear a same-named fault
      * still reported by the other. The sample timestamp is the clock; there is deliberately no
      * delayed job here, so tests and a stopped stream cannot be wedged by a timer.
+     *
+     * Our own alerts ride the same path (one episode rule, one counter, one linger): their row key
+     * is [alertRowKey] and [alerts] carries the live reading per key, folded into the episode's
+     * worst value while the episode continues and restarted when a new one begins.
      */
     private fun observeFaults(
         source: FaultSource,
         messages: List<String>,
-        now: Instant
+        now: Instant,
+        alerts: Map<String, ActiveAlert> = emptyMap()
     ): List<RideDashboardComponent.FaultEntry> {
         val present = messages.toSet()
         val previousSource = sourceFaults[source].orEmpty()
@@ -250,19 +278,22 @@ class DefaultRideDashboardComponent(
         }
         present.forEach { message ->
             val previous = faultHistory[message]
+            val live = alerts[message]
             faultHistory[message] = when {
                 previous == null ->
-                    FaultRecord(message, 1, setOf(source), null, nextFaultOrder++)
+                    FaultRecord(message, 1, setOf(source), null, nextFaultOrder++, live)
                 // Still (or again, within EPISODE_GAP) the same episode: no new occurrence.
                 previous.active || !startsNewEpisode(previous.clearedAt, now) -> previous.copy(
                     activeSources = previous.activeSources + source,
-                    clearedAt = null
+                    clearedAt = null,
+                    alert = worstOf(previous.alert, live)
                 )
                 else -> previous.copy(
                     occurrences = previous.occurrences + 1,
                     activeSources = setOf(source),
                     clearedAt = null,
-                    order = nextFaultOrder++
+                    order = nextFaultOrder++,
+                    alert = live
                 )
             }
         }
@@ -274,17 +305,46 @@ class DefaultRideDashboardComponent(
         faultHistory.clear()
         sourceFaults.clear()
         nextFaultOrder = 0L
+        alertTracker.reset()
     }
 
-    /** Re-render/prune against a new duration without counting the current sample twice. */
+    /** The episode's worst reading and most urgent severity so far. */
+    private fun worstOf(episode: ActiveAlert?, live: ActiveAlert?): ActiveAlert? = when {
+        episode == null -> live
+        live == null -> episode
+        else -> ActiveAlert(
+            episode.kind,
+            worseOf(episode.kind, episode.peakValue, live.peakValue),
+            worseOf(episode.severity, live.severity)
+        )
+    }
+
+    /** Fold one alert list into the stack under [source]; see [observeFaults]. */
+    private fun observeAlerts(
+        source: FaultSource,
+        alerts: List<ActiveAlert>,
+        now: Instant
+    ): List<RideDashboardComponent.FaultEntry> {
+        val byKey = alerts.associateBy { alertRowKey(it.kind) }
+        return observeFaults(source, byKey.keys.toList(), now, byKey)
+    }
+
+    /**
+     * Re-render/prune against a new duration without counting the current sample twice.
+     *
+     * A cleared row is held for the linger **or the episode gap, whichever is longer**: with linger 0
+     * ("while active") the row used to be dropped at the first absent sample and recreated by the next
+     * present one, blinking inside the 2 s window in which the episode rule says nothing ended (Task 1
+     * review finding). It now leaves when the episode is over.
+     */
     private fun renderFaults(now: Instant): List<RideDashboardComponent.FaultEntry> {
-        val linger = faultDisplayDurationSec.seconds
+        val hold = maxOf(faultDisplayDurationSec.seconds, EPISODE_GAP)
         faultHistory.entries.removeIf { (_, record) ->
-            !record.active && (linger == 0.seconds || record.clearedAt?.let { now - it >= linger } == true)
+            !record.active && record.clearedAt?.let { now - it >= hold } != false
         }
         return faultHistory.values
             .sortedByDescending { it.order }
-            .map { RideDashboardComponent.FaultEntry(it.message, it.occurrences, it.active) }
+            .map { RideDashboardComponent.FaultEntry(it.message, it.occurrences, it.active, it.alert) }
     }
 
     /**
@@ -697,7 +757,12 @@ class DefaultRideDashboardComponent(
                 // derivation that the sweep showed nothing could tell from its
                 // absence — whichever collector ran second decided the state, and
                 // that was always the other one.
-                val faults = observeFaults(FaultSource.CONTROLLER, motion.faults, motion.timestamp)
+                observeFaults(FaultSource.CONTROLLER, motion.faults, motion.timestamp)
+                val faults = observeAlerts(
+                    FaultSource.MOTION_ALERTS,
+                    alertTracker.updateMotion(motion, _state.value.vehicle),
+                    motion.timestamp
+                )
                 _state.update { current ->
                     current.copy(
                         motion = motion,
@@ -755,7 +820,12 @@ class DefaultRideDashboardComponent(
 
         scope.launch {
             bmsRepository.activeVehicleData.collect { vd ->
-                val faults = observeFaults(FaultSource.BATTERY, vd.aggregate.bmsFaults, vd.aggregate.timestamp)
+                observeFaults(FaultSource.BATTERY, vd.aggregate.bmsFaults, vd.aggregate.timestamp)
+                val faults = observeAlerts(
+                    FaultSource.BATTERY_ALERTS,
+                    alertTracker.updateBattery(vd.aggregate, _state.value.vehicle),
+                    vd.aggregate.timestamp
+                )
                 _state.update { current ->
                     current.copy(
                         battery = vd.aggregate,

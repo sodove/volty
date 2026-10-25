@@ -38,6 +38,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.sodovaya.volty.domain.alert.ActiveAlert
+import ru.sodovaya.volty.domain.usecase.AlertKind
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
@@ -88,6 +90,18 @@ import volty.composeapp.generated.resources.ride_speed_reason_unknown
 import volty.composeapp.generated.resources.ride_trip
 import volty.composeapp.generated.resources.ride_uptime
 import volty.composeapp.generated.resources.ride_faults_title
+import volty.composeapp.generated.resources.ride_alerts_title
+import volty.composeapp.generated.resources.ride_alert_duty
+import volty.composeapp.generated.resources.ride_alert_speed_kmh
+import volty.composeapp.generated.resources.ride_alert_speed_mph
+import volty.composeapp.generated.resources.ride_alert_motor_temp
+import volty.composeapp.generated.resources.ride_alert_esc_temp
+import volty.composeapp.generated.resources.ride_alert_battery_temp
+import volty.composeapp.generated.resources.ride_alert_soc_low
+import volty.composeapp.generated.resources.ride_alert_soc_cutoff
+import volty.composeapp.generated.resources.ride_alert_cell_high
+import volty.composeapp.generated.resources.ride_alert_cell_low
+import volty.composeapp.generated.resources.ride_alert_cell_delta
 import volty.composeapp.generated.resources.secondary_gauge_battery
 import volty.composeapp.generated.resources.secondary_gauge_consumption
 import volty.composeapp.generated.resources.secondary_gauge_current
@@ -262,7 +276,7 @@ fun RideDashboardScreen(
         }
 
         if (state.faults.isNotEmpty() && rideFaultPlacement(state.style) == RideFaultPlacement.INLINE) {
-            RideFaultsBanner(state.faults)
+            RideFaultsBanner(state.faults, units = state.units)
         }
 
             when (state.style) {
@@ -372,36 +386,70 @@ fun RideDashboardScreen(
 internal fun RideFaultsBanner(
     faults: List<RideDashboardComponent.FaultEntry>,
     modifier: Modifier = Modifier,
+    units: UnitSystem = UnitSystem.METRIC,
 ) {
+    // The container colour is the stack's worst severity (bannerTone): the same red as ever for
+    // faults and CRITICAL alerts, the tertiary pair when only warnings are listed. Which is which
+    // is decided in AlertBannerRow.kt; this only paints it.
+    val (container, onContainer) = when (bannerTone(faults)) {
+        BannerTone.ERROR -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
+        BannerTone.WARNING -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+    }
     Column(
         modifier = Modifier
             .then(modifier)
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.errorContainer)
+            .background(container)
             .padding(horizontal = 12.dp, vertical = 8.dp)
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("!", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+            Text("!", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = onContainer)
             Text(
-                stringResource(Res.string.ride_faults_title),
+                stringResource(
+                    if (bannerTitleIsFaults(faults)) Res.string.ride_faults_title else Res.string.ride_alerts_title
+                ),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+                color = onContainer.copy(alpha = 0.85f)
             )
         }
         Spacer(Modifier.height(4.dp))
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
             faults.forEach { fault ->
+                val label = fault.alert?.let { alertRowLabel(it, units) } ?: fault.message
                 Text(
-                    text = if (fault.occurrences > 1) "${fault.message} ×${fault.occurrences}" else fault.message,
+                    text = if (fault.occurrences > 1) "$label ×${fault.occurrences}" else label,
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.onErrorContainer
+                    color = onContainer
                 )
             }
         }
     }
+}
+
+/** "ШИМ 87 %", "Скорость 52 км/ч", "Заряд 14 %" ... - the template per kind, the number from [alertBannerNumber]. */
+@Composable
+private fun alertRowLabel(alert: ActiveAlert, units: UnitSystem): String {
+    val number = alertBannerNumber(alert.kind, alert.peakValue, units)
+    val template = when (alert.kind) {
+        AlertKind.DUTY_HIGH -> Res.string.ride_alert_duty
+        AlertKind.SPEED_HIGH ->
+            if (units == UnitSystem.IMPERIAL) Res.string.ride_alert_speed_mph else Res.string.ride_alert_speed_kmh
+        AlertKind.MOTOR_TEMP_HIGH -> Res.string.ride_alert_motor_temp
+        AlertKind.ESC_TEMP_HIGH -> Res.string.ride_alert_esc_temp
+        AlertKind.TEMPERATURE_WARN, AlertKind.TEMPERATURE_HIGH -> Res.string.ride_alert_battery_temp
+        AlertKind.SOC_LOW -> Res.string.ride_alert_soc_low
+        AlertKind.SOC_CUTOFF -> Res.string.ride_alert_soc_cutoff
+        AlertKind.CELL_HIGH -> Res.string.ride_alert_cell_high
+        AlertKind.CELL_LOW -> Res.string.ride_alert_cell_low
+        AlertKind.CELL_DELTA -> Res.string.ride_alert_cell_delta
+        // Not alerts the tracker ever reports; faults have their own rows.
+        AlertKind.DISCONNECT, AlertKind.CHARGE_COMPLETE, AlertKind.CONTROLLER_FAULT, AlertKind.BMS_FAULT ->
+            return alert.kind.name
+    }
+    return stringResource(template, number)
 }
 
 @Composable

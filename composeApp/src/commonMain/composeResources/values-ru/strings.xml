@@ -150,6 +150,19 @@
     <string name="ride_speed_reason_mixed">Источники скорости расходятся</string>
     <string name="ride_speed_reason_unknown">Источник скорости недоступен</string>
     <string name="ride_faults_title">ОШИБКИ ТРАНСПОРТА</string>
+    <!-- Собственные предупреждения приложения в баннере поездки. %1$s - худшее значение эпизода. -->
+    <string name="ride_alerts_title">ПРЕДУПРЕЖДЕНИЯ</string>
+    <string name="ride_alert_duty">ШИМ %1$s</string>
+    <string name="ride_alert_speed_kmh">Скорость %1$s км/ч</string>
+    <string name="ride_alert_speed_mph">Скорость %1$s mph</string>
+    <string name="ride_alert_motor_temp">Мотор %1$s °C</string>
+    <string name="ride_alert_esc_temp">Контроллер %1$s °C</string>
+    <string name="ride_alert_battery_temp">Батарея %1$s °C</string>
+    <string name="ride_alert_soc_low">Заряд %1$s</string>
+    <string name="ride_alert_soc_cutoff">Отсечка по заряду %1$s</string>
+    <string name="ride_alert_cell_high">Банка высоко %1$s В</string>
+    <string name="ride_alert_cell_low">Банка низко %1$s В</string>
+    <string name="ride_alert_cell_delta">Разброс банок %1$s мВ</string>
     <!-- Classic dial face label only (Clean shows no standalone "Speed" label) -->
     <string name="ride_dial_speed">Скорость</string>
     <string name="ride_odometer">Одометр</string>
