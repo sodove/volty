@@ -495,14 +495,14 @@
     <string name="alerts_preview_level">Уровень %1$d</string>
     <string name="alerts_section_thresholds">Пороги алертов</string>
     <string name="alerts_notify_section">Уведомлять о</string>
-    <string name="alerts_notify_subtitle">Присылать ли уведомление при каждом алерте. Звуковой сигнал настраивается отдельно, ниже. У батарейных алертов свои переключатели.</string>
+    <string name="alerts_notify_subtitle">Присылать ли уведомление при каждом алерте. Звуковой сигнал настраивается отдельно, выше. У батарейных алертов свои переключатели.</string>
     <string name="alerts_notify_motor_temp">Температура мотора</string>
     <string name="alerts_notify_esc_temp">Температура контроллера</string>
     <string name="alerts_notify_speed">Скорость</string>
     <string name="alerts_notify_duty">ШИМ</string>
     <string name="alerts_notify_controller_fault">Ошибки контроллера</string>
     <string name="alerts_notify_bms_fault">Ошибки батареи</string>
-    <string name="alerts_section_thresholds_subtitle">До трёх уровней на алерт. Уровень 1 — самый мягкий. В отличие от переключателей выше, пороги сохраняются только по кнопке «Сохранить».</string>
+    <string name="alerts_section_thresholds_subtitle">До трёх уровней на алерт. Уровень 1 — самый мягкий. В отличие от переключателей звука вверху, пороги и переключатели уведомлений сохраняются только по кнопке «Сохранить».</string>
     <string name="alerts_level">Уровень %1$d</string>
     <string name="alerts_level_muted">Заглушен</string>
     <string name="alerts_add_level">+ Добавить уровень</string>
@@ -511,7 +511,7 @@
     <string name="alerts_kind_off">Выключено</string>
     <string name="alerts_save">Сохранить</string>
     <string name="alerts_discard_title">Выйти без сохранения?</string>
-    <string name="alerts_discard_text">Изменённые пороги будут потеряны. Переключатели звука уже сохранены.</string>
+    <string name="alerts_discard_text">Изменённые пороги и переключатели уведомлений будут потеряны. Переключатели звука уже сохранены.</string>
     <string name="alerts_discard_confirm">Не сохранять</string>
     <string name="alerts_discard_keep">Продолжить правку</string>
     <string name="vehicle_discard_title">Выйти без сохранения?</string>

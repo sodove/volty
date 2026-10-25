@@ -134,14 +134,16 @@ interface VehicleAlertsComponent {
         val discardPrompt: Boolean = false
     ) {
         /**
-         * Has the rider changed a threshold since the last write?
+         * Has the rider changed a threshold, battery setting or notify switch
+         * since the last write?
          *
          * **This screen has two commit models and this covers exactly one of
          * them.** The three sound switches at the top are written to prefs the
          * instant they move (a rider reaching for "tone off" mid-alarm means
          * now), so they are never outstanding and never make this true. The
-         * per-vehicle thresholds below are written on Save, and those are what
-         * can be lost by backing out — which is what this exists to prevent.
+         * per-vehicle thresholds, battery settings and per-kind notify switches
+         * are written on Save, and those are what can be lost by backing out —
+         * which is what this exists to prevent.
          * The captions on both sections say which is which.
          *
          * Availability is deliberately not part of the comparison: a link coming

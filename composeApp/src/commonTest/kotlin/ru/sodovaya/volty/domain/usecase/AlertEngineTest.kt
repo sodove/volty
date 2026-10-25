@@ -505,7 +505,8 @@ class AlertEngineTest {
         faults: List<String> = emptyList(),
         dutyPercent: Float = 0f,
         speedKmh: Float = 0f,
-        isConnected: Boolean = true
+        isConnected: Boolean = true,
+        atMillis: Long = 1_000_000L
     ) = ControllerData(
         speedKmh = speedKmh,
         speedSource = SpeedSource.REPORTED,
@@ -514,7 +515,8 @@ class AlertEngineTest {
         motorTempC = motorTempC,
         hasMotorTemp = hasMotorTemp,
         faults = faults,
-        isConnected = isConnected
+        isConnected = isConnected,
+        timestamp = Instant.fromEpochMilliseconds(atMillis)
     )
 
     /** One rule for [kind], thresholds ascending, all enabled. */
@@ -575,8 +577,9 @@ class AlertEngineTest {
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = motionVehicle()
         engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
-        engine.evaluateMotionForTest(motion(faults = emptyList()), v)
-        engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
+        engine.evaluateMotionForTest(motion(faults = emptyList(), atMillis = 1_001_000L), v)
+        engine.evaluateMotionForTest(motion(faults = emptyList(), atMillis = 1_003_000L), v)
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV"), atMillis = 1_004_000L), v)
         assertEquals(2, notifier.alerts.size)
     }
 
@@ -822,9 +825,10 @@ class AlertEngineTest {
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = motionVehicle()
         engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)   // fires
-        engine.evaluateMotionForTest(motion(faults = emptyList()), v)     // genuinely cleared — re-armed
+        engine.evaluateMotionForTest(motion(faults = emptyList(), atMillis = 1_001_000L), v)     // cleared
+        engine.evaluateMotionForTest(motion(faults = emptyList(), atMillis = 1_003_000L), v)     // 2 s absent - re-armed
         engine.evaluateMotionForTest(motion(faults = listOf("DRV"), isConnected = false), v) // gap
-        engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)   // faulted again, on a real sample
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV"), atMillis = 1_004_000L), v)   // faulted again, on a real sample
         assertEquals(
             2, notifier.alerts.size,
             "a gap must leave the arming alone — muting through one would silence the next real episode"
@@ -1184,5 +1188,49 @@ class AlertEngineTest {
             setOf(NotifyKind.MOTOR_TEMP, NotifyKind.ESC_TEMP, NotifyKind.CONTROLLER_FAULT, NotifyKind.BMS_FAULT),
             NotifyKind.DEFAULTS
         )
+    }
+
+    @Test
+    fun `a controller fault flickering every frame notifies once`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle()
+        repeat(50) { i ->
+            val faults = if (i % 2 == 0) listOf("DRV") else emptyList()
+            engine.evaluateMotionForTest(motion(faults = faults, atMillis = 1_000_000L + i * 100L), v)
+        }
+        assertEquals(1, notifier.messages.size, "50 frames of flicker are one episode")
+    }
+
+    @Test
+    fun `a controller fault absent for two seconds then present is a second episode`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle()
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV"), atMillis = 1_000_000L), v)
+        engine.evaluateMotionForTest(motion(faults = emptyList(), atMillis = 1_000_500L), v)
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV"), atMillis = 1_002_500L), v)
+        assertEquals(2, notifier.messages.size, "absent exactly 2 s, then back, even with no absent sample after the gap")
+    }
+
+    @Test
+    fun `a fault list that grows within an episode does not notify again`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle()
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV"), atMillis = 1_000_000L), v)
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV", "OVP"), atMillis = 1_000_100L), v)
+        assertEquals(1, notifier.messages.size)
+    }
+
+    @Test
+    fun `a bms fault returning after a long silence with no absent sample is a new episode`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        engine.bmsSample(listOf("OVP"), 1_000_000L, v)
+        engine.bmsSample(emptyList(), 1_000_500L, v)
+        engine.bmsSample(listOf("OVP"), 1_010_000L, v)
+        assertEquals(2, notifier.messages.size)
     }
 }

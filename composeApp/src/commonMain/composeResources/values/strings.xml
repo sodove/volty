@@ -497,14 +497,14 @@
     <string name="alerts_preview_level">Level %1$d</string>
     <string name="alerts_section_thresholds">Alert thresholds</string>
     <string name="alerts_notify_section">Notify about</string>
-    <string name="alerts_notify_subtitle">Whether each alert also posts a notification. The sound alarm below is set separately. Battery alerts have their own switches.</string>
+    <string name="alerts_notify_subtitle">Whether each alert also posts a notification. The sound alarm is set separately, above. Battery alerts have their own switches.</string>
     <string name="alerts_notify_motor_temp">Motor temperature</string>
     <string name="alerts_notify_esc_temp">Controller temperature</string>
     <string name="alerts_notify_speed">Speed</string>
     <string name="alerts_notify_duty">Duty</string>
     <string name="alerts_notify_controller_fault">Controller faults</string>
     <string name="alerts_notify_bms_fault">Battery faults</string>
-    <string name="alerts_section_thresholds_subtitle">Up to three levels per alert. Level 1 is the mildest. Unlike the switches above, thresholds are kept only when you press Save.</string>
+    <string name="alerts_section_thresholds_subtitle">Up to three levels per alert. Level 1 is the mildest. Unlike the sound switches at the top, thresholds and the notify switches are kept only when you press Save.</string>
     <string name="alerts_level">Level %1$d</string>
     <string name="alerts_level_muted">Muted</string>
     <string name="alerts_add_level">+ Add level</string>
@@ -513,7 +513,7 @@
     <string name="alerts_kind_off">Off</string>
     <string name="alerts_save">Save</string>
     <string name="alerts_discard_title">Leave without saving?</string>
-    <string name="alerts_discard_text">The thresholds you edited will be lost. The sound switches are already saved.</string>
+    <string name="alerts_discard_text">The thresholds and notify switches you changed will be lost. The sound switches are already saved.</string>
     <string name="alerts_discard_confirm">Discard</string>
     <string name="alerts_discard_keep">Keep editing</string>
     <string name="vehicle_discard_title">Leave without saving?</string>

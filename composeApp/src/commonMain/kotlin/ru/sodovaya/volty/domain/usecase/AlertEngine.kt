@@ -93,6 +93,27 @@ class AlertEngine(
      */
     private val bmsFaultClearedAt = mutableMapOf<String, Instant>()
 
+    /** The same, for the controller fault list ([evaluateMotion]). */
+    private val controllerFaultClearedAt = mutableMapOf<String, Instant>()
+
+    /**
+     * Advances one fault stream's episode bookkeeping by one sample and says whether the previous
+     * episode is **over** (absent for the shared [startsNewEpisode] gap, by [at] the sample's own
+     * timestamp). Evaluated on present samples too, so a fault that comes back after a long
+     * silence is a new episode even if no absent sample happened to land after the gap.
+     *
+     * A fault list that grows or changes while it stays present is the same episode and does not
+     * notify again: only presence matters here, never which faults are listed.
+     */
+    private fun faultEpisodeOver(
+        clearedAt: MutableMap<String, Instant>, vehicleId: String, present: Boolean, at: Instant
+    ): Boolean {
+        val cleared = clearedAt[vehicleId]
+        val over = startsNewEpisode(cleared, at)
+        if (present) clearedAt.remove(vehicleId) else if (cleared == null) clearedAt[vehicleId] = at
+        return over
+    }
+
     /**
      * One [TemperatureGate] per (vehicle, kind). The battery's WARN and HIGH
      * tiers read the same max-sensor value, so they share the one keyed
@@ -300,12 +321,11 @@ class AlertEngine(
      */
     private fun evaluateBmsFaults(data: BmsData, vehicle: Vehicle, now: Instant) {
         val present = data.bmsFaults.isNotEmpty()
-        if (present) bmsFaultClearedAt.remove(vehicle.id)
-        else bmsFaultClearedAt.getOrPut(vehicle.id) { data.timestamp }
+        val over = faultEpisodeOver(bmsFaultClearedAt, vehicle.id, present, data.timestamp)
         fire(AlertKind.BMS_FAULT, vehicle, now,
             enabled = vehicle.notifies(NotifyKind.BMS_FAULT),
             triggered = present,
-            recovered = !present && startsNewEpisode(bmsFaultClearedAt[vehicle.id], data.timestamp),
+            recovered = over,
             severity = AlertSeverity.CRITICAL,
             message = AlertMessage(AlertKind.BMS_FAULT, vehicle.name, details = data.bmsFaults)
         )
@@ -355,10 +375,14 @@ class AlertEngine(
         // list can only be non-empty because a controller decoder put something
         // in it, and `isConnected` above is true only when a controller is
         // actually online (MotionAggregator sets it).
+        // Once per episode, like a BMS fault (2026-10-25): a VESC rebuilds `faults` from every
+        // frame and a checksum-less Begode frame can flip it, so "armed until the list is empty"
+        // re-notified on every flicker. The shared 2 s rule judges it by the sample's timestamp.
+        val faultPresent = motion.faults.isNotEmpty()
         fire(AlertKind.CONTROLLER_FAULT, vehicle, now,
             enabled = vehicle.notifies(NotifyKind.CONTROLLER_FAULT),
-            triggered = motion.faults.isNotEmpty(),
-            recovered = motion.faults.isEmpty(),
+            triggered = faultPresent,
+            recovered = faultEpisodeOver(controllerFaultClearedAt, vehicle.id, faultPresent, motion.timestamp),
             severity = AlertSeverity.CRITICAL,
             message = AlertMessage(AlertKind.CONTROLLER_FAULT, vehicle.name, details = motion.faults)
         )
@@ -461,8 +485,11 @@ class AlertEngine(
             return
         }
         val key = vehicle.id to kind
-        val isArmed = armed.getOrPut(key) { true }
-        if (recovered && !isArmed) armed[key] = true
+        var isArmed = armed.getOrPut(key) { true }
+        // A sample can both end the previous episode and start the next (a fault episode is
+        // judged over by timestamp, so it can be over on the very sample that returns), hence
+        // the local is updated too. The other kinds' recovered/triggered bands never overlap.
+        if (recovered && !isArmed) { armed[key] = true; isArmed = true }
         if (!triggered || !isArmed) return
         val last = lastFired[key]
         if (last != null && (now - last) < debounce) return

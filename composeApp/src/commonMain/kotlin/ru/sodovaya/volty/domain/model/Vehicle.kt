@@ -67,7 +67,7 @@ data class Vehicle(
     val batteryCapacity: BatteryCapacity? = null,
     /**
      * Which alert kinds may raise a **notification** on this vehicle, or **null when the rider has
-     * never chosen** — then [NotifyKind.DEFAULTS] apply (use [notifies]). Null is not a second way
+     * never chosen** â€” then [NotifyKind.DEFAULTS] apply (use [notifies]). Null is not a second way
      * to say "none": an empty set is the explicit "notify nothing".
      *
      * Gates the notification only; the live sound alarm and its rules are independent of it.

@@ -37,7 +37,7 @@ enum class AlertKind {
  * the message structured also lets tests assert on what was *decided* rather than on a rendering.
  *
  * Units are canonical, as everywhere in the domain: [value] is volts for the cell kinds, millivolts
- * for [AlertKind.CELL_DELTA], °C for temperatures, percent for state of charge and duty, km/h for
+ * for [AlertKind.CELL_DELTA], Â°C for temperatures, percent for state of charge and duty, km/h for
  * speed. The formatter converts for display. [details] carries the fault names for the two fault
  * kinds (decoder strings, shown as the decoder wrote them).
  */
