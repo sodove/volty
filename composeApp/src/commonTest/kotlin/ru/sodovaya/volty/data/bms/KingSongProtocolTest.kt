@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.data.bms
 
 import kotlin.test.Test
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -381,6 +383,24 @@ class KingSongProtocolTest {
         protocol.onNotification(frame.copyOfRange(4, frame.size))
         assertNull(protocol.latestData())
         assertNull(protocol.latestMotion(0))
+    }
+
+    // KingSong decodes nothing the common sections lack: A9 voltage/current/speed/distance/board temperature,
+    // B9 controller temperature, F5 duty and the F1/F2 smart-BMS pages (SoC, cycles, cells, temperatures)
+    // all reach ControllerData / BmsData. The remaining/factory capacity words only feed the SoC, and
+    // their unit is not established by this decoder, so they are not facts. Hence: an empty list.
+    @Test
+    fun `device facts stay empty after live ride-stats output and the S22 BMS sweep`() {
+        val protocol = KingSongProtocol()
+        assertTrue(protocol is ProtocolFacts)
+        assertEquals(emptyList(), protocol.deviceFacts())
+        protocol.onNotification(liveFrame(voltageCv = 12_600, speedCentiKmh = 500, distanceMeters = 123_456))
+        protocol.onNotification(frame(0xB9, 0x14).apply { putLe(14, 2_800) })
+        protocol.onNotification(frame(0xF5, 0x14).apply { this[15] = 44 })
+        s22F1Sweep().forEach(protocol::onNotification)
+        assertNotNull(protocol.latestMotion(0), "precondition: telemetry was decoded")
+        assertEquals(32, assertNotNull(protocol.latestData(0)).numCycles, "precondition: the sweep was decoded")
+        assertEquals(emptyList(), protocol.deviceFacts())
     }
 
     private fun liveFrame(

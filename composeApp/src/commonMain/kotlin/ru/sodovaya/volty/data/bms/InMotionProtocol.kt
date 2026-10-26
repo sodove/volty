@@ -2,6 +2,8 @@ package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryMetric
 import kotlin.math.abs
@@ -24,7 +26,7 @@ import kotlin.math.abs
  * - https://github.com/Wheellog/Wheellog.Android/blob/master/app/src/main/java/com/cooper/wheellog/utils/InmotionAdapterV2.java
  * - https://github.com/Tritbool/euc_ble_library/blob/main/euc-ble-core/src/main/kotlin/io/github/tritbool/euc/ble/protocols/InMotionProtocol.kt
  */
-class InMotionProtocol : BmsProtocol(), MotionSource {
+class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
@@ -54,6 +56,33 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
     val model: String get() = modelValue
     val serial: String? get() = serialValue
     val firmware: String? get() = firmwareValue
+
+    private var factsInputs: List<String?>? = null
+    private var cachedFacts: List<DeviceFact> = emptyList()
+
+    /**
+     * The identity pages InMotion answers on the main-info command: model, serial and firmware, in
+     * that order, each listed only once its page has been decoded. The model is the decoder's
+     * name for the (series, type) pair the wheel sent - the placeholder InMotion that stands in
+     * before any model page is NOT a fact - and the firmware is the Main:/Drv:/BLE: text exactly
+     * as decoded. InMotion has no [ProtocolDiagnostics], so no other section shows these.
+     *
+     * Everything in the realtime page (voltage, current, speed, duty, power, SoC, trip, board /
+     * motor / battery temperatures) is already in [BmsData] / [ControllerData] and is not repeated.
+     *
+     * Cached: the same list instance is returned until model, serial or firmware changes.
+     */
+    override fun deviceFacts(): List<DeviceFact> {
+        val inputs = listOf(if (modelId != null) modelValue else null, serialValue, firmwareValue)
+        if (inputs == factsInputs) return cachedFacts
+        factsInputs = inputs
+        cachedFacts = buildList {
+            inputs[0]?.let { add(DeviceFact(DeviceFactKey.MODEL_NAME, it)) }
+            inputs[1]?.let { add(DeviceFact(DeviceFactKey.SERIAL_NUMBER, it)) }
+            inputs[2]?.let { add(DeviceFact(DeviceFactKey.FIRMWARE, it)) }
+        }
+        return cachedFacts
+    }
 
     override fun onNotification(data: ByteArray) {
         if (data.isEmpty()) return

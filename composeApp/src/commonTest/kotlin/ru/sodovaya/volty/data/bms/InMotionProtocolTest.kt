@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.data.bms
 
 import kotlin.test.Test
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
@@ -393,6 +395,64 @@ class InMotionProtocolTest {
         assertNull(protocol.latestMotion(0))
     }
 
+    // ---- device facts: InMotion's model, serial and firmware are decoded from the main-info pages
+    // (command 0x02) but no common section shows them (InMotion has no ProtocolDiagnostics). Everything
+    // in the realtime page is already in BmsData / ControllerData. The model frame is the file's real
+    // V11 reply; no capture carries a serial or firmware page, so those two are minimal synthetic frames.
+
+    @Test
+    fun deviceFactsAreEmptyUntilAMainInfoPageArrives() {
+        val protocol = InMotionProtocol()
+        assertTrue(protocol is ProtocolFacts)
+        assertEquals(emptyList(), protocol.deviceFacts())
+        protocol.onNotification(V9_REALTIME)
+        assertNotNull(protocol.latestMotion(0), "precondition: realtime was decoded")
+        assertEquals(emptyList(), protocol.deviceFacts(), "the placeholder model name is not a fact")
+    }
+
+    @Test
+    fun modelSerialAndFirmwareAreListedVerbatimInThatOrder() {
+        val protocol = InMotionProtocol()
+        protocol.onNotification(hex("aaaa110882010206010201009c"))
+        assertEquals(
+            listOf(DeviceFact(DeviceFactKey.MODEL_NAME, "InMotion V11")),
+            protocol.deviceFacts(),
+        )
+        protocol.onNotification(buildFrame(0x11, 0x02, byteArrayOf(2) + "ABC123456789XYZ".encodeToByteArray() + byteArrayOf(0)))
+        protocol.onNotification(buildFrame(0x11, 0x02, ByteArray(24).apply {
+            this[0] = 6
+            putInt16Le(2, 3); this[4] = 2; this[5] = 1        // Drv 1.2.3
+            putInt16Le(11, 6); this[13] = 5; this[14] = 4     // Main 4.5.6
+            putInt16Le(20, 9); this[22] = 8; this[23] = 7     // BLE 7.8.9
+        }))
+        assertEquals(
+            listOf(
+                DeviceFact(DeviceFactKey.MODEL_NAME, "InMotion V11"),
+                DeviceFact(DeviceFactKey.SERIAL_NUMBER, "ABC123456789XYZ"),
+                DeviceFact(DeviceFactKey.FIRMWARE, "Main:4.5.6 Drv:1.2.3 BLE:7.8.9"),
+            ),
+            protocol.deviceFacts(),
+        )
+    }
+
+    @Test
+    fun anUnlistedModelIdIsShownAsTheDecoderNamesIt() {
+        val protocol = InMotionProtocol()
+        protocol.onNotification(modelFrame(99))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.MODEL_NAME, "InMotion 9.9")), protocol.deviceFacts())
+    }
+
+    @Test
+    fun factsAreCachedAcrossRealtimeFramesAndResetForgetsThem() {
+        val protocol = InMotionProtocol()
+        protocol.onNotification(modelFrame(120 + 1))
+        val first = protocol.deviceFacts()
+        assertEquals("InMotion V9", first.single().value)
+        protocol.onNotification(V9_REALTIME)
+        assertTrue(first === protocol.deviceFacts(), "unchanged inputs must return the cached list")
+        protocol.reset()
+        assertEquals(emptyList(), protocol.deviceFacts())
+    }
     private companion object {
         /** Authentic V9 V2 realtime frame from Tritbool/euc_ble_library's WheelLog fixture. */
         val V9_REALTIME = hex(

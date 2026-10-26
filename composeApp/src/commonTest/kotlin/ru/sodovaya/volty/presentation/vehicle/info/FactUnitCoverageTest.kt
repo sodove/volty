@@ -4,6 +4,11 @@ import ru.sodovaya.volty.data.bms.BegodeDumpFixture
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BegodeT4Fixture
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
+import ru.sodovaya.volty.data.bms.InMotionProtocol
+import ru.sodovaya.volty.data.bms.KingSongProtocol
+import ru.sodovaya.volty.data.bms.NinebotLegacyProtocol
+import ru.sodovaya.volty.data.bms.NinebotProtocol
+import ru.sodovaya.volty.data.bms.VeteranProtocol
 import ru.sodovaya.volty.data.bms.JkBmsProtocol
 import ru.sodovaya.volty.data.bms.SmartBmsFactsCache
 import ru.sodovaya.volty.data.bms.checksumSum
@@ -73,5 +78,55 @@ class FactUnitCoverageTest {
             facts.map { it.key }.toSet(),
         )
         assertEquals(emptyList(), facts.mapNotNull { it.unit })
+    }
+
+    /** One CRC-32 (IEEE, as the Veteran frame uses it) trailer appended to [len] payload bytes. */
+    private fun withCrc32(frame: ByteArray, len: Int) {
+        var crc = 0xFFFF_FFFFL
+        for (i in 0 until len) {
+            crc = crc xor (frame[i].toLong() and 0xFF)
+            repeat(8) { crc = if (crc and 1L != 0L) (crc ushr 1) xor 0xEDB88320L else crc ushr 1 }
+        }
+        crc = crc.inv() and 0xFFFF_FFFFL
+        for (k in 0 until 4) frame[len + k] = (crc ushr (24 - 8 * k)).toByte()
+    }
+
+    private fun inMotionFrame(data: ByteArray): ByteArray {
+        val body = byteArrayOf(0x82.toByte()) + data
+        val payload = byteArrayOf(0x11, body.size.toByte()) + body
+        return byteArrayOf(0xAA.toByte(), 0xAA.toByte()) + payload +
+            byteArrayOf(payload.fold(0) { acc, b -> acc xor (b.toInt() and 0xFF) }.toByte())
+    }
+
+    /**
+     * The wheel facts (Veteran declared cells, InMotion identity) are text and counts: none carries a
+     * unit symbol. KingSong and both Ninebots emit nothing at all (their KDoc says why). Veteran is
+     * driven with one minimal synthetic page-1 frame, InMotion with a model, a serial and a firmware
+     * page; the empty protocols are driven through their own tests.
+     */
+    @Test fun wheelFactsCarryNoUnitSymbol() {
+        val veteran = VeteranProtocol().also { p ->
+            val f = ByteArray(87)
+            f[0] = 0xDC.toByte(); f[1] = 0x5A; f[2] = 0x5C; f[3] = 83
+            // version 5001 -> major 5, a smart-BMS wheel; page 1 declares 36 series cells
+            f[28] = (5001 ushr 8).toByte(); f[29] = 5001.toByte()
+            f[46] = 1; f[52] = 36
+            withCrc32(f, 83)
+            p.onNotification(f)
+        }
+        val inMotion = InMotionProtocol().also { p ->
+            p.onNotification(inMotionFrame(byteArrayOf(1, 2, 6, 1)))
+            p.onNotification(inMotionFrame(byteArrayOf(2) + "SN0123456789ABCD".encodeToByteArray() + byteArrayOf(0)))
+            p.onNotification(inMotionFrame(ByteArray(24).apply { this[0] = 6; this[5] = 1 }))
+        }
+        val facts = veteran.deviceFacts() + inMotion.deviceFacts()
+        // Precondition: the drivers really emitted every wheel key, or this could pass vacuously.
+        assertEquals(
+            setOf(DeviceFactKey.BMS_DECLARED_CELLS, DeviceFactKey.MODEL_NAME, DeviceFactKey.SERIAL_NUMBER, DeviceFactKey.FIRMWARE),
+            facts.map { it.key }.toSet(),
+        )
+        assertEquals(emptyList(), facts.mapNotNull { it.unit })
+        listOf(KingSongProtocol().deviceFacts(), NinebotProtocol().deviceFacts(), NinebotLegacyProtocol().deviceFacts())
+            .forEach { assertEquals(emptyList(), it) }
     }
 }

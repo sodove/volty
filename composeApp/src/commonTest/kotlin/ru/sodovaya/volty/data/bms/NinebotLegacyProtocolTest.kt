@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.data.bms
 
 import kotlin.test.Test
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -161,6 +163,18 @@ class NinebotLegacyProtocolTest {
         assertTrue(protocol.latestData() != null)
         protocol.reset()
         assertNull(protocol.latestData())
+    }
+
+    // The B0 page's battery percent, distance, speed, voltage, current and temperature are all in
+    // BmsData / ControllerData; the decoder reads no model, serial or firmware. Empty list.
+    @Test
+    fun `device facts stay empty after a B0 live page`() {
+        val protocol = NinebotLegacyProtocol()
+        assertTrue(protocol is ProtocolFacts)
+        assertEquals(emptyList(), protocol.deviceFacts())
+        protocol.onNotification(liveFrame(batteryPercent = 78, distanceMeters = 2_660_251))
+        assertEquals(78f, requireNotNull(protocol.latestData()).soc, 0.001f)
+        assertEquals(emptyList(), protocol.deviceFacts())
     }
 
     private fun liveFrame(

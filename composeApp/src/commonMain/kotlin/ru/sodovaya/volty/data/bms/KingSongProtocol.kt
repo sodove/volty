@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryMetric
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
@@ -49,7 +50,7 @@ import kotlin.math.abs
  * and the lifetime distance.  Those values stay out of [BmsData] and are
  * exposed only through [latestMotion].
  */
-class KingSongProtocol : BmsProtocol(), MotionSource {
+class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -124,6 +125,16 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
             )
         }
     }
+
+    /**
+     * Nothing: every field this decoder reads already reaches [ControllerData] / [BmsData] - A9
+     * voltage, current, speed, lifetime distance and board temperature, B9 controller temperature,
+     * F5 duty, and the F1/F2 smart-BMS pages (SoC, cycles, cells, temperatures). The BMS
+     * remaining/factory capacity words only feed that SoC and their unit is not established here,
+     * so they are not offered as facts; A9 byte 15 (E0) is a mode marker the decoder does not
+     * interpret, and name, serial, speed-limit and alarm records are not decoded at all.
+     */
+    override fun deviceFacts(): List<DeviceFact> = emptyList()
 
     override fun onNotification(data: ByteArray) {
         buffer.append(data)

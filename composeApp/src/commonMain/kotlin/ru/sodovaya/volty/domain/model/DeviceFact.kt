@@ -29,6 +29,10 @@ enum class DeviceFactKey {
     HARDWARE_VERSION,
     BMS_DECLARED_CELLS,
     BMS_DECLARED_TEMP_SENSORS,
+
+    // Wheels (InMotion identity pages)
+    MODEL_NAME,
+    SERIAL_NUMBER,
 }
 
 /**

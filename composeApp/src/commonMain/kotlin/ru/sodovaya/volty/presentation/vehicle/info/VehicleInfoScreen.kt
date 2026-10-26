@@ -138,7 +138,8 @@ private fun rowLabel(row: InfoRow): String {
     val fact = row.fact
     if (row.label != InfoLabel.DEVICE_FACT || fact == null) return stringResource(row.label.stringRes())
     val base = stringResource(fact.stringRes())
-    val numbered = fact == DeviceFactKey.BRANCH_VOLTAGE_V || fact == DeviceFactKey.BRANCH_CURRENT_A
+    val numbered = fact == DeviceFactKey.BRANCH_VOLTAGE_V || fact == DeviceFactKey.BRANCH_CURRENT_A ||
+        fact == DeviceFactKey.BMS_DECLARED_CELLS
     return if (numbered && row.index != null) "$base ${row.index}" else base
 }
 

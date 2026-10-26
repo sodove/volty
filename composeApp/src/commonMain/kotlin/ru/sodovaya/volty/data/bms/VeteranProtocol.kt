@@ -2,6 +2,8 @@ package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryRole
@@ -66,7 +68,7 @@ private val SmartBmsAeroTable = intArrayOf(
 )
 
 
-class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics {
+class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -109,6 +111,34 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics {
     override val diagnosticHardwareCode: String? get() = hardwareCode
     override val diagnosticModel: String? get() = hardwareCode?.let { model }
     override val diagnosticFirmwareVersion: String? get() = firmwareVersion
+
+    private var factsCounts = intArrayOf(0, 0)
+    private var cachedFacts: List<DeviceFact> = emptyList()
+
+    /**
+     * The one thing Veteran decodes that no common section shows: the series-cell count each smart
+     * BMS declares about itself (page 1 / page 5, byte 52), as BMS_DECLARED_CELLS at
+     * index = pack + 1. Listed only once a pack has sent a count in 1..42; a later out-of-range
+     * count never erases a valid one (the decoder keeps the last valid count, as history does).
+     *
+     * Deliberately NOT facts: model, firmware and hardware code (already in the Connections
+     * section through [ProtocolDiagnostics]), and speed, duty, voltage, currents, temperatures,
+     * SoC, odometer and trip (all in [ControllerData] / [BmsData]). The count the app *expects*
+     * from the hardware-code table is app knowledge, not something the wheel said.
+     *
+     * Cached: the same list instance is returned until a declared count changes.
+     */
+    override fun deviceFacts(): List<DeviceFact> {
+        val a = bms[0].reportedCellCount ?: 0
+        val b = bms[1].reportedCellCount ?: 0
+        if (a == factsCounts[0] && b == factsCounts[1]) return cachedFacts
+        factsCounts = intArrayOf(a, b)
+        cachedFacts = buildList {
+            if (a > 0) add(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, a.toString(), index = 1))
+            if (b > 0) add(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, b.toString(), index = 2))
+        }
+        return cachedFacts
+    }
 
     override fun onNotification(data: ByteArray) {
         if (data.isEmpty()) return

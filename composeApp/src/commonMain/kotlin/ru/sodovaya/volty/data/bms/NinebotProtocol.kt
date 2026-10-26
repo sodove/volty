@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryMetric
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
@@ -40,7 +41,7 @@ import kotlin.math.abs
  *  - NootNooot/segway-ninebot-ble, “Frame Formats” and “BLE Transport”
  *    (Protocol-2 framing, Nordic UART UUIDs, and fragmentation).
  */
-class NinebotProtocol : BmsProtocol(), MotionSource {
+class NinebotProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "6e400001-b5a3-f393-e0a9-e50e24dcca9e",
@@ -62,6 +63,14 @@ class NinebotProtocol : BmsProtocol(), MotionSource {
     private val buffer = ByteArrayAccumulator()
     private val packs = Array(2) { PackState() }
     private var motion: ControllerData? = null
+
+    /**
+     * Nothing: the BMS life status bits are already chargeEnabled / dischargeEnabled on
+     * [BmsData], and every other decoded field (SoC, current, voltage, temperatures, cells, and the
+     * controller's speed, distance, board temperature and input voltage) is in [BmsData] /
+     * [ControllerData]. The decoder reads no model, serial or firmware register.
+     */
+    override fun deviceFacts(): List<DeviceFact> = emptyList()
 
     override fun onNotification(data: ByteArray) {
         buffer.append(data)

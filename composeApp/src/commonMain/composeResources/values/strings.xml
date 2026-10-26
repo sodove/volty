@@ -1532,6 +1532,8 @@
     <string name="info_fact_hardware_version">Hardware version</string>
     <string name="info_fact_bms_declared_cells">Cells declared by the BMS</string>
     <string name="info_fact_bms_declared_temp_sensors">Temperature sensors declared by the BMS</string>
+    <string name="info_fact_model_name">Model</string>
+    <string name="info_fact_serial_number">Serial number</string>
     <string name="info_title">About the vehicle</string>
     <string name="info_hub_summary">Everything the app knows and has measured</string>
     <string name="info_persisted">remembered from earlier rides</string>

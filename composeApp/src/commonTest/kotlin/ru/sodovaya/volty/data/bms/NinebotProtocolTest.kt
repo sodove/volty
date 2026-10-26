@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.data.bms
 
 import kotlin.test.Test
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -402,6 +404,25 @@ class NinebotProtocolTest {
         assertTrue(!motion.hasBatteryCurrent)
         assertEquals(0f, motion.powerW)
         assertTrue(!motion.hasPower)
+    }
+
+    // The Z-series decoder's BMS life status bits are already BmsData.chargeEnabled/dischargeEnabled and
+    // every other decoded field (SoC, current, voltage, temperatures, cells, speed, distance, board
+    // temperature, input voltage) is in BmsData / ControllerData. Nothing extra: an empty list.
+    @Test
+    fun device_facts_stay_empty_after_life_cells_and_live_pages() {
+        val protocol = NinebotProtocol()
+        assertTrue(protocol is ProtocolFacts)
+        assertEquals(emptyList(), protocol.deviceFacts())
+        val life = ByteArray(24).apply {
+            putU16(0, 0x0020); putU16(4, 73); putI16(6, -1234); putU16(8, 5120); this[10] = 45; this[11] = 50
+        }
+        val live = ByteArray(32).apply { putI16(10, -1234); putU32(14, 12_345); putI16(22, 385); putU16(24, 5120) }
+        protocol.onNotification(frame(source = 0x11, destination = 0x3e, parameter = 0x30, data = life))
+        protocol.onNotification(frame(source = 0x14, destination = 0x3e, parameter = 0xB0, data = live))
+        assertNotNull(protocol.latestData(0), "precondition: the pack was decoded")
+        assertNotNull(protocol.latestMotion(0), "precondition: the controller was decoded")
+        assertEquals(emptyList(), protocol.deviceFacts())
     }
 
     private fun frame(

@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryMetric
 
@@ -35,7 +36,7 @@ import ru.sodovaya.volty.domain.model.TelemetryMetric
  * packet cannot accidentally become telemetry unless it also matches the
  * strict B0 page shape and plausibility checks below.
  */
-class NinebotLegacyProtocol : BmsProtocol(), MotionSource {
+class NinebotLegacyProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -56,6 +57,13 @@ class NinebotLegacyProtocol : BmsProtocol(), MotionSource {
     private var tripBaselineMeters: Long? = null
 
     override val controllerCount: Int get() = 1
+
+    /**
+     * Nothing: the only decoded page is B0, whose battery percent, distance, speed, voltage,
+     * current and temperature are all in [BmsData] / [ControllerData]. The decoder reads no model,
+     * serial, firmware or setting register.
+     */
+    override fun deviceFacts(): List<DeviceFact> = emptyList()
 
     override fun onNotification(data: ByteArray) {
         buffer.append(data)

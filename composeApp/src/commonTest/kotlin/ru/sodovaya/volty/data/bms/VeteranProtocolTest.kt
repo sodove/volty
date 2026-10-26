@@ -360,6 +360,64 @@ class VeteranProtocolTest {
         assertNull(protocol.firmwareVersion)
     }
 
+    // ---- device facts: the only thing Veteran decodes that no common section shows is the BMS's
+    // own declared series-cell count per pack (page 1 / page 5, byte 52). Model, firmware and hardware
+    // code reach the Connections section through ProtocolDiagnostics; speed, duty, odometer, trip,
+    // temperatures and SoC are in ControllerData / BmsData. No capture carries page 1, so these use
+    // the file's own synthetic bmsFrame helper.
+
+    @Test fun deviceFactsAreEmptyForRealControllerAndBmsCaptures() {
+        val protocol = VeteranProtocol()
+        assertTrue(protocol is ProtocolFacts)
+        assertEquals(emptyList(), protocol.deviceFacts())
+        listOf(LYNX_S_PAGE_0, LYNX_S_PAGE_2, PATTON_PAGE_2).forEach { protocol.onNotification(it.hexBytes()) }
+        assertNotNull(protocol.latestMotion(0), "precondition: the captures were really decoded")
+        assertEquals(emptyList(), protocol.deviceFacts(), "no page 1/5 seen: no declared count")
+    }
+
+    @Test fun declaredCellCountIsListedPerPackAtIndexPackPlusOne() {
+        val protocol = VeteranProtocol()
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4100 }, reportedCellCount = 36))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "36", index = 1)), protocol.deviceFacts())
+        protocol.onNotification(bmsFrame(packet = 5, cells = IntArray(15) { 4100 }, reportedCellCount = 30))
+        assertEquals(
+            listOf(
+                DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "36", index = 1),
+                DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "30", index = 2),
+            ),
+            protocol.deviceFacts(),
+        )
+    }
+
+    @Test fun secondPackAloneKeepsItsOwnIndex() {
+        val protocol = VeteranProtocol()
+        protocol.onNotification(bmsFrame(packet = 5, cells = IntArray(15) { 4100 }, reportedCellCount = 42))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "42", index = 2)), protocol.deviceFacts())
+    }
+
+    @Test fun outOfRangeCountIsNotAFactAndNeverErasesAValidOne() {
+        val protocol = VeteranProtocol()
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4100 }, reportedCellCount = 0))
+        assertEquals(emptyList(), protocol.deviceFacts(), "0 is not a count")
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4100 }, reportedCellCount = 43))
+        assertEquals(emptyList(), protocol.deviceFacts(), "43 is above the 42-cell maximum")
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4100 }, reportedCellCount = 36))
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4100 }, reportedCellCount = 99))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "36", index = 1)), protocol.deviceFacts())
+    }
+
+    @Test fun factsAreTheSameInstanceUntilACountChangesAndResetForgetsThem() {
+        val protocol = VeteranProtocol()
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4100 }, reportedCellCount = 36))
+        val first = protocol.deviceFacts()
+        protocol.onNotification(controllerFrame(voltageRaw = 12_400))
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4150 }, reportedCellCount = 36))
+        assertTrue(first === protocol.deviceFacts(), "unchanged inputs must return the cached list")
+        protocol.onNotification(bmsFrame(packet = 1, cells = IntArray(15) { 4150 }, reportedCellCount = 30))
+        assertEquals("30", protocol.deviceFacts().single().value)
+        protocol.reset()
+        assertEquals(emptyList(), protocol.deviceFacts())
+    }
     private companion object {
         fun controllerFrame(
             len: Int = 32,
