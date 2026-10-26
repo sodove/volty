@@ -13,6 +13,7 @@ enum class DeviceFactKey {
     BOARD_TEMP_C,
     LIVE_PWM_RAW,
     MOTION_DUTY_RAW,
+    SERIES_CELLS,
     SERIES_CELLS_PROOF,
     SMART_BMS_SEEN,
     BRANCH_VOLTAGE_V,

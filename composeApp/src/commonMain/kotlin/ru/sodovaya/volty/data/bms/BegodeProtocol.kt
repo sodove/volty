@@ -2,6 +2,8 @@ package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
@@ -69,7 +71,7 @@ import kotlin.math.abs
  */
 class BegodeProtocol(
     private val cellCount: Int? = null
-) : BmsProtocol(), MotionSource {
+) : BmsProtocol(), MotionSource, ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -171,6 +173,40 @@ class BegodeProtocol(
 
     /** Last decoded hardware duty, percent — see [dutyPercent]. */
     private var dutyPercentValue: Float = 0f
+
+    // --- Facts-only state: surfaced by [deviceFacts], feeds nothing else ---
+
+    /**
+     * Live-frame bytes 14..15 as the wheel sent them (signed word), from the last GENUINE live
+     * frame; null until one. Never read by [dutyPercent] or any alarm — see [parseLiveFrame].
+     */
+    private var livePwmRawValue: Int? = null
+
+    /** Last 0x07 duty word, raw and signed (the wheel's own number), null until a genuine 0x07. */
+    private var motionDutyRawValue: Int? = null
+
+    /**
+     * The board temperature of the last GENUINE live frame. [boardTempC] itself is overwritten by
+     * a later zero-padded live frame (its assignment sits outside the genuineness gate), and a
+     * fact must not show that artefact (36.5 C from an all-zero payload) as a measurement.
+     */
+    private var boardTempFactC: Float? = null
+
+    /** True once any framed notification was decoded; before it nothing is known, not even "no". */
+    private var sawAnyFrame = false
+
+    /** How [derivedCellCountValue] was proven; null while it is not. */
+    private var seriesCellsProof: SeriesCellsProof? = null
+
+    private enum class SeriesCellsProof(val token: String) {
+        CELLS("cells"),
+        BRANCH_RATIO("branch_ratio"),
+    }
+
+    /** [deviceFacts]'s cache: rebuilt only when [factsStamp] differs from [cachedStamp]. */
+    private var cachedFacts: List<DeviceFact> = emptyList()
+    private var cachedStamp = LongArray(FACTS_STAMP_SIZE) { Long.MAX_VALUE }
+    private var factsStamp = LongArray(FACTS_STAMP_SIZE)
 
     /**
      * Whether this connection has proved that the 0x07 duty field is present.
@@ -892,6 +928,7 @@ class BegodeProtocol(
         if (count == voltageRatioCandidate) voltageRatioStreak++ else { voltageRatioCandidate = count; voltageRatioStreak = 1 }
         if (voltageRatioStreak < BRANCH_RATIO_STREAK) return
         derivedCellCountValue = count
+        seriesCellsProof = SeriesCellsProof.BRANCH_RATIO
         branchVoltageCertified = true
     }
 
@@ -941,6 +978,7 @@ class BegodeProtocol(
         val impliedFullCellV = avgCellV * LIVE_VOLTAGE_REFERENCE_V / liveVoltageV
         if (abs(impliedFullCellV - FULL_CELL_V) > FULL_CELL_V * LIVE_FRAME_CONVENTION_TOLERANCE) return
         derivedCellCountValue = count
+        seriesCellsProof = SeriesCellsProof.CELLS
     }
 
     /**
@@ -1070,6 +1108,81 @@ class BegodeProtocol(
         return match
     }
 
+    /**
+     * What this wheel has said, as keys and raw values - see [DeviceFactKey]. A fact is listed
+     * only once the wire has said it: a wheel that has sent nothing reports an empty list.
+     *
+     * Per fact: odometer and power-on distance in km (exact metres, three decimals); tiltback
+     * only when set (the wheel's "unset" marker is not a speed); alerts only when a bit is up
+     * (the labels of [wheelAlerts], comma-joined); board temperature of the last genuine live
+     * frame; `LIVE_PWM_RAW` as the raw integer plus, at `index = 1`, raw x 0.1 as percent;
+     * `MOTION_DUTY_RAW` the signed 0x07 word as sent (the shared duty is its magnitude);
+     * `SERIES_CELLS_PROOF` is `cells` (branch 0's own cell pages summed against the frame),
+     * `branch_ratio` (the 0x01 branch voltage against the live frame, no cell pages), or `none`;
+     * `SERIES_CELLS` the proven count, absent while the proof is `none` (a profile's configured
+     * count is not a proof); `SMART_BMS_SEEN` `true`/`false`; per decoded branch
+     * `BRANCH_VOLTAGE_V` / `BRANCH_CURRENT_A` at `index = branch + 1` (current: + = charging).
+     *
+     * **Cached.** This is read after every notification, so the list is rebuilt only when the
+     * rounded values that would be listed differ from the ones it was built from; an unchanged
+     * wheel returns the very same instance. Not thread-safe, like the rest of this decoder.
+     */
+    override fun deviceFacts(): List<DeviceFact> {
+        val s = factsStamp
+        fun tenths(v: Float?): Long = if (v == null) Long.MIN_VALUE else kotlin.math.round(v * 10f).toLong()
+        s[0] = if (sawOdometer) odometerMetersValue else Long.MIN_VALUE
+        s[1] = if (sawLiveMotion) powerOnMetersValue else Long.MIN_VALUE
+        s[2] = tiltbackSpeedValue?.toLong() ?: Long.MIN_VALUE
+        s[3] = if (sawOdometer) alertBitmap.toLong() else Long.MIN_VALUE
+        s[4] = tenths(boardTempFactC)
+        s[5] = livePwmRawValue?.toLong() ?: Long.MIN_VALUE
+        s[6] = motionDutyRawValue?.toLong() ?: Long.MIN_VALUE
+        s[7] = seriesCellsProof?.ordinal?.toLong() ?: Long.MIN_VALUE
+        s[8] = derivedCellCountValue?.toLong() ?: Long.MIN_VALUE
+        s[9] = if (smartBmsSeen) 1L else 0L
+        s[10] = if (sawAnyFrame) 1L else 0L
+        for (i in 0 until 2) {
+            val data = branches[i].lastData
+            s[11 + i * 2] = tenths(data?.voltage)
+            s[12 + i * 2] = tenths(data?.current)
+        }
+        if (s.contentEquals(cachedStamp)) return cachedFacts
+        cachedFacts = buildFacts()
+        factsStamp = cachedStamp
+        cachedStamp = s
+        return cachedFacts
+    }
+
+    private fun buildFacts(): List<DeviceFact> = buildList {
+        if (sawOdometer) add(DeviceFact(DeviceFactKey.ODOMETER_KM, kmText(odometerMetersValue), "km"))
+        if (sawLiveMotion) add(DeviceFact(DeviceFactKey.POWER_ON_DISTANCE_KM, kmText(powerOnMetersValue), "km"))
+        tiltbackSpeedValue?.let { add(DeviceFact(DeviceFactKey.TILTBACK_SPEED_KMH, factNumber(it, 0), "km/h")) }
+        if (sawOdometer) {
+            val labels = alertLabels(alertBitmap)
+            if (labels.isNotEmpty()) add(DeviceFact(DeviceFactKey.WHEEL_ALERTS, labels.joinToString(", ")))
+        }
+        boardTempFactC?.let { add(DeviceFact(DeviceFactKey.BOARD_TEMP_C, factNumber(it, 1), "\u00B0C")) }
+        livePwmRawValue?.let {
+            add(DeviceFact(DeviceFactKey.LIVE_PWM_RAW, it.toString()))
+            add(DeviceFact(DeviceFactKey.LIVE_PWM_RAW, factNumber(it * 0.1f, 1), "%", index = 1))
+        }
+        motionDutyRawValue?.let { add(DeviceFact(DeviceFactKey.MOTION_DUTY_RAW, it.toString())) }
+        if (sawAnyFrame) {
+            add(DeviceFact(DeviceFactKey.SERIES_CELLS_PROOF, seriesCellsProof?.token ?: "none"))
+            derivedCellCountValue?.let { add(DeviceFact(DeviceFactKey.SERIES_CELLS, it.toString())) }
+            add(DeviceFact(DeviceFactKey.SMART_BMS_SEEN, smartBmsSeen.toString()))
+        }
+        for (i in 0 until 2) {
+            val data = branches[i].lastData ?: continue
+            add(DeviceFact(DeviceFactKey.BRANCH_VOLTAGE_V, factNumber(data.voltage, 1), "V", index = i + 1))
+            add(DeviceFact(DeviceFactKey.BRANCH_CURRENT_A, factNumber(data.current, 1), "A", index = i + 1))
+        }
+    }
+
+    /** Exact kilometres from metres, three decimals ("8565.341"). */
+    private fun kmText(meters: Long): String =
+        (meters / 1000).toString() + "." + (meters % 1000).toString().padStart(3, '0')
+
     override fun reset() {
         buffer.reset()
         branches.forEach { it.reset() }
@@ -1116,6 +1229,11 @@ class BegodeProtocol(
         // mis-scale the new wheel's live frame instead of re-deriving it (or
         // honestly reporting no voltage until it proves itself again).
         derivedCellCountValue = null
+        seriesCellsProof = null
+        livePwmRawValue = null
+        motionDutyRawValue = null
+        boardTempFactC = null
+        sawAnyFrame = false
         branchVoltageCertified = false
         voltageRatioCandidate = null
         voltageRatioStreak = 0
@@ -1216,6 +1334,7 @@ class BegodeProtocol(
     }
 
     private fun parseFrame(frame: ByteArray) {
+        sawAnyFrame = true
         when (frame.u8(18)) {
             0x00 -> parseLiveFrame(frame)
             0x01 -> parseBmsTelemetry(frame)
@@ -1264,6 +1383,10 @@ class BegodeProtocol(
      *   the 0x07 field of the same seconds reads 2 %. On this wheel the
      *   fallback is not a duty at all, and duty must be real or absent
      *   (spec §7.2). See [dutyPercent].
+     *   **Surfaced, still not decoded as duty:** the device-facts screen keeps the word RAW
+     *   (`LIVE_PWM_RAW`: the integer, and the integer x 0.1 as percent) so a rider with an older
+     *   wheel can watch whether it moves with load. It is stored in [livePwmRawValue], which
+     *   [dutyPercent], [rebuildMotion] and every alarm never read.
      * - bytes 16..17: unknown, `0x0001` throughout the capture.
      */
     private fun parseLiveFrame(frame: ByteArray) {
@@ -1296,6 +1419,12 @@ class BegodeProtocol(
             // [signedSpeedKmh].
             speedKmhValue = abs(signedSpeedKmhValue)
             powerOnMetersValue = powerOnMeters
+            // Bytes 14..15, RAW and only for [deviceFacts]: not [dutyPercentValue], not [motion].
+            // On the ET Max capture this word is a constant 0x00a9 (16.9 %) on a standing wheel,
+            // so it is not a duty there; whether an older wheel's tracks load is exactly what the
+            // facts screen is for. Same genuineness gate as the rest of the frame.
+            livePwmRawValue = frame.i16BE(14)
+            boardTempFactC = boardTempC
             sawLiveMotion = true
             // Rebuilt INSIDE the gate, not after it on `sawLiveMotion`. Those
             // two differ only mid-stream, and that is exactly where it matters:
@@ -1464,6 +1593,7 @@ class BegodeProtocol(
         // on what the shared field means. See [dutyPercent] for the negative
         // case (a silent ШИМ alarm) and for why the upper clamp fails loud.
         dutyPercentValue = abs(dutyRaw).toFloat().coerceAtMost(DUTY_MAX_PERCENT)
+        motionDutyRawValue = dutyRaw
         sawMotionFrame = true
         // NOTE: this frame must never write [phaseCurrentA] or [boardTempC].
         // That used to be a dead store — [parseLiveFrame] reassigns both from
@@ -1688,6 +1818,8 @@ class BegodeProtocol(
     }
 
     companion object {
+        /** Slots of the cache stamp in [deviceFacts]: eleven scalars and two per branch. */
+        private const val FACTS_STAMP_SIZE = 15
         private const val FRAME_SIZE = 24
         private const val TAIL_OFFSET = 20
 

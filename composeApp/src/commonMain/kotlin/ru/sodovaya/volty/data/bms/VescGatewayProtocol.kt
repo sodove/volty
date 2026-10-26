@@ -17,6 +17,7 @@ import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
@@ -374,7 +375,7 @@ class VescGatewayProtocol(
      * In production they are the same clock, microseconds apart.
      */
     private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() }
-) : BmsProtocol(), MotionSource, ControllerConfigSource, SerialPollSource, CanBusScanner {
+) : BmsProtocol(), MotionSource, ControllerConfigSource, SerialPollSource, CanBusScanner, ProtocolFacts {
 
     companion object {
         const val DEFAULT_POLL_INTERVAL_MS: Long = 50L
@@ -730,6 +731,22 @@ class VescGatewayProtocol(
     /** One-shot setup replies, keyed by the vehicle-global controller index. */
     @Volatile private var controllerConfigs: Map<Int, VescSetupConfig> = emptyMap()
 
+    // --- Facts-only state, see [deviceFacts]. Immutable maps replaced on change, so the cache can
+    // --- compare them by identity without allocating.
+    @Volatile private var controllerIds: Map<Int, Int> = emptyMap()
+    @Volatile private var faultCodes: Map<Int, Int> = emptyMap()
+    @Volatile private var canIdsValue: List<Int>? = null
+    private var cachedFacts: List<DeviceFact> = emptyList()
+    private var cachedFromIds: Map<Int, Int>? = null
+    private var cachedFromFaults: Map<Int, Int>? = null
+    private var cachedFromCanIds: List<Int>? = null
+
+    /** Records what a decoded values reply said about WHO answered and its raw fault byte. */
+    private fun recordReplyFacts(global: Int, payload: ByteArray) {
+        VescValues.rawFaultCode(payload)?.let { if (faultCodes[global] != it) faultCodes = faultCodes + (global to it) }
+        VescValues.controllerId(payload)?.let { if (controllerIds[global] != it) controllerIds = controllerIds + (global to it) }
+    }
+
     /** Armed after notifications are subscribed, then consumed once by the serial loop. */
     @Volatile private var configRequestsArmed = false
     @Volatile private var configRequests: List<Request> = emptyList()
@@ -991,6 +1008,7 @@ class VescGatewayProtocol(
         expectedOpcode = VescValues.OPCODE_GET_VALUES_SETUP,
         consume = { payload ->
             VescValues.decodeSetupValues(payload)?.let {
+                recordReplyFacts(c.globalIndex, payload)
                 val attributed = observeControllerReply(c, payload, it, setup = true)
                 applySetup(c.globalIndex, it, historyEligible = attributed)
             }
@@ -1029,6 +1047,7 @@ class VescGatewayProtocol(
         expectedOpcode = VescValues.OPCODE_GET_VALUES,
         consume = { payload ->
             VescValues.decodeValues(payload, c.motor)?.let {
+                recordReplyFacts(c.globalIndex, payload)
                 val attributed = observeControllerReply(c, payload, it, setup = false)
                 applyValues(c.globalIndex, it, historyEligible = attributed)
             }
@@ -1056,6 +1075,9 @@ class VescGatewayProtocol(
         // annotate it. A future reader who wants to consult the age map on its
         // own has to drop it here first.
         onSilence = {
+            // A fault code is a live reading like the rest of the sample: a silent controller must
+            // not keep showing its last one. Its id is who it is, and stays.
+            faultCodes = faultCodes - c.globalIndex
             perUnit = perUnit - c.globalIndex
             motion = motion - c.globalIndex
         },
@@ -1587,7 +1609,7 @@ class VescGatewayProtocol(
             Request(
                 frame = VescPacket.frame(byteArrayOf(VescCan.OPCODE_PING_CAN.toByte())),
                 expectedOpcode = VescCan.OPCODE_PING_CAN,
-                consume = { payload -> ids = VescCan.parsePingCan(payload) },
+                consume = { payload -> ids = VescCan.parsePingCan(payload)?.also { canIdsValue = it } },
                 // Nothing cached, nothing to forget — the silence IS the result,
                 // and it is reported below as a null completion.
                 onSilence = {}
@@ -1842,6 +1864,30 @@ class VescGatewayProtocol(
     override fun latestData(packIndex: Int): BmsData? =
         packs.getOrNull(packIndex)?.let { packData[it.globalIndex] }
 
+    /**
+     * Read-only facts of a gateway link: per owned controller (`index` = its 1-based place in the
+     * link's controller list) the controller id and raw fault code its last values reply carried,
+     * and the CAN ids the last scan found - see [vescFacts]; no firmware, none is decoded.
+     * Cached on the identity of the three immutable inputs, so an unchanged link returns the very
+     * same list.
+     */
+    override fun deviceFacts(): List<DeviceFact> {
+        val ids = controllerIds
+        val faults = faultCodes
+        val can = canIdsValue
+        if (ids === cachedFromIds && faults === cachedFromFaults && can === cachedFromCanIds) return cachedFacts
+        cachedFacts = vescFacts(
+            controllers.mapIndexed { i, c ->
+                VescControllerFacts(index = i + 1, controllerId = ids[c.globalIndex], faultCode = faults[c.globalIndex])
+            },
+            can,
+        )
+        cachedFromIds = ids
+        cachedFromFaults = faults
+        cachedFromCanIds = can
+        return cachedFacts
+    }
+
     override fun reset() {
         accumulator.reset()
         pending = null
@@ -1863,6 +1909,9 @@ class VescGatewayProtocol(
         derivedReceiptSnapshots = emptyMap()
         pendingDerivedHistory = emptySet()
         controllerConfigs = emptyMap()
+        controllerIds = emptyMap()
+        faultCodes = emptyMap()
+        canIdsValue = null
         configRequests = emptyList()
         configRequestsArmed = false
         // Every "how long since" this protocol holds is about THIS connection.

@@ -4,6 +4,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class NotificationRateMeterTest {
     private var nowMs = 1_000_000L
@@ -48,5 +49,44 @@ class NotificationRateMeterTest {
         notifyEvery(100L, 20)
         nowMs += 20_000L
         assertNull(meter.onNotification(), "one notification after a long silence is not a rate")
+    }
+
+    @Test
+    fun aClockGoingBackwardsNeverGrowsTheWindow() {
+        // A wall clock stepping back (NTP, a manual change): with pruning relative to the newest
+        // stamp alone, every earlier stamp would stay "in the window" and the deque would grow forever.
+        nowMs = 1_000_000L
+        meter.onNotification()
+        repeat(20_000) {
+            nowMs -= 1L
+            meter.onNotification()
+            assertTrue(meter.windowSize <= NotificationRateMeter.MAX_STAMPS, "window ${meter.windowSize}")
+        }
+        assertTrue(meter.windowSize <= 1, "a backwards step restarts the measurement: ${meter.windowSize}")
+    }
+
+    @Test
+    fun aClockSteppedBackOnceRestartsTheRateInsteadOfInventingOne() {
+        notifyEvery(100L, 30)
+        nowMs -= 60_000L
+        assertNull(meter.onNotification(), "one notification after a step back is not a rate")
+        assertEquals(10f, assertNotNull(notifyEvery(100L, 10)), 0.01f)
+    }
+
+    @Test
+    fun aStuckClockIsStillBounded() {
+        repeat(3 * NotificationRateMeter.MAX_STAMPS) { meter.onNotification() }
+        assertEquals(NotificationRateMeter.MAX_STAMPS, meter.windowSize)
+    }
+
+    @Test
+    fun theMonotonicClockNeverReadsBackwards() {
+        val clock = monotonicClockMs()
+        var last = clock()
+        repeat(10_000) {
+            val now = clock()
+            assertTrue(now >= last)
+            last = now
+        }
     }
 }

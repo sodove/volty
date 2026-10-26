@@ -10,6 +10,7 @@ import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryRole
@@ -32,7 +33,7 @@ class VescProtocol(
     private val deriveBattery: Boolean = true,
     private val motor: MotorConfig = MotorConfig(),
     private val useSetupFrame: Boolean = true
-) : BmsProtocol(), MotionSource, ControllerConfigSource, CanBusScanner {
+) : BmsProtocol(), MotionSource, ControllerConfigSource, CanBusScanner, ProtocolFacts {
 
     companion object {
         const val NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -56,6 +57,14 @@ class VescProtocol(
     @Volatile private var selectedValuesOpcode: Int? =
         if (useSetupFrame) null else VescValues.OPCODE_GET_VALUES
     @Volatile private var valueOpcodeProbePolls = 0
+
+    // --- Facts-only state, see [deviceFacts] ---
+    @Volatile private var controllerIdValue: Int? = null
+    @Volatile private var faultCodeValue: Int? = null
+    @Volatile private var canIdsValue: List<Int>? = null
+
+    /** [deviceFacts]'s cache; dropped (set null) by the setters below when a value changes. */
+    @Volatile private var cachedFacts: List<DeviceFact>? = null
 
     /**
      * Session baseline for [ControllerData.tripKm]: the absolute odometer reading
@@ -180,6 +189,7 @@ class VescProtocol(
                     // mutant V8), and two owners of one field is how they come
                     // to disagree.
                     scan.complete(ids)
+                    if (ids != canIdsValue) { canIdsValue = ids; cachedFacts = null }
                     // A short-circuit, not a guard: a payload `parsePingCan`
                     // accepted begins with opcode 62, which both value decoders
                     // below reject on their own first byte. Kept for the reader;
@@ -209,6 +219,14 @@ class VescProtocol(
                 else -> null
             }
             if (decoded != null) {
+                val faultCode = VescValues.rawFaultCode(payload)
+                val controllerId = VescValues.controllerId(payload)
+                // A reply too short to carry the id keeps the last one rather than forgetting it.
+                if (faultCode != faultCodeValue || (controllerId != null && controllerId != controllerIdValue)) {
+                    faultCodeValue = faultCode
+                    if (controllerId != null) controllerIdValue = controllerId
+                    cachedFacts = null
+                }
                 val baseline = tripBaselineKm ?: decoded.odometerKm.also { tripBaselineKm = it }
                 val withSessionTrip = decoded.copy(tripKm = (decoded.odometerKm - baseline).coerceAtLeast(0f))
                 motion = withSessionTrip
@@ -240,6 +258,21 @@ class VescProtocol(
     override fun latestData(packIndex: Int): BmsData? =
         if (packIndex == 0) battery else null
 
+    /**
+     * Read-only facts of a plain VESC link: the controller id, the raw fault code of the last values
+     * reply and the CAN ids the last scan found - see [vescFacts] for what is listed and why there
+     * is no firmware. Cached; rebuilt only after one of those three values changed.
+     */
+    override fun deviceFacts(): List<DeviceFact> {
+        cachedFacts?.let { return it }
+        val built = vescFacts(
+            listOf(VescControllerFacts(index = null, controllerId = controllerIdValue, faultCode = faultCodeValue)),
+            canIdsValue,
+        )
+        cachedFacts = built
+        return built
+    }
+
     override fun reset() {
         accumulator.reset()
         motion = null
@@ -250,6 +283,10 @@ class VescProtocol(
         valueOpcodeProbePolls = 0
         tripBaselineKm = null
         observedTripBaselineKm = null
+        controllerIdValue = null
+        faultCodeValue = null
+        canIdsValue = null
+        cachedFacts = null
         // Answered with null — silence — rather than dropped: a scan on a
         // session being torn down can never be answered, and
         // [CanBusScanner.REPLY_TIMEOUT_MS] is a long time to make a rider watch

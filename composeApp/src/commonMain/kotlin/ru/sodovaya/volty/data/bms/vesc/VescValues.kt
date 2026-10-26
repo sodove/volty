@@ -227,6 +227,32 @@ object VescValues {
             I32_BYTES + I32_BYTES +
             I8_BYTES
 
+    /**
+     * The RAW `mc_fault_code` byte of a values reply (signed, as [decodeSetupValues] and
+     * [decodeValues] read it), or null for any other payload or one too short to carry it.
+     * [ControllerData.faults] keeps only the label, and "Fault 99" is not a code a device-facts
+     * screen can show. SETUP has the fault last of its 55-byte body (payload index 55);
+     * `GET_VALUES` last of its 53-byte body (index 53).
+     */
+    fun rawFaultCode(payload: ByteArray): Int? = when (payload.firstOrNull()?.toInt()) {
+        OPCODE_GET_VALUES_SETUP -> payload.getOrNull(SETUP_BODY_BYTES)?.toInt()
+        OPCODE_GET_VALUES -> payload.getOrNull(VALUES_BODY_BYTES)?.toInt()
+        else -> null
+    }
+
+    /**
+     * The `controller_id` the replying node appends to a values reply, or null when the payload is
+     * not one or is too short to carry it. The same offsets [VescGatewayProtocol] already attributes
+     * replies by: right after the SETUP body (index 56), and after the `GET_VALUES` body plus its
+     * 4-byte position (index 58). A `GET_VALUES` reply without the optional position has no id at
+     * that offset and reads null rather than a guess.
+     */
+    fun controllerId(payload: ByteArray): Int? = when (payload.firstOrNull()?.toInt()) {
+        OPCODE_GET_VALUES_SETUP -> payload.getOrNull(SETUP_BODY_BYTES + 1)
+        OPCODE_GET_VALUES -> payload.getOrNull(VALUES_BODY_BYTES + I32_BYTES + 1)
+        else -> null
+    }?.let { it.toInt() and 0xFF }
+
     fun decodeSetupValues(payload: ByteArray): ControllerData? {
         val r = VescReader(payload)
         if (!r.has(1) || r.u8() != OPCODE_GET_VALUES_SETUP) return null

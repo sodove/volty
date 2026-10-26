@@ -75,8 +75,11 @@ internal class ConnectionSession(
      */
     private val onLinkStats: (framesPerSecond: Float?, facts: List<DeviceFact>) -> Unit = { _, _ -> },
     private val onProtocolDiagnostics: (ProtocolDiagnosticValues?) -> Unit = {},
-    /** Wall clock for [onLinkStats]'s notification rate; tests inject a fake. */
-    private val notificationClockMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
+    /**
+     * Clock for [onLinkStats]'s notification rate. MONOTONIC by default: a wall clock stepping
+     * backwards (NTP, a manual change) stops the rate window pruning. Tests inject a fake.
+     */
+    private val notificationClockMs: () -> Long = monotonicClockMs(),
     /**
      * Called for every parsed sample. The session does not own where samples
      * go: with more than one pack behind a link there is no single
