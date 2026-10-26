@@ -383,6 +383,13 @@ class DalyBmsProtocolTest {
     }
 
     @Test
+    fun `a zero sensor count is not a fact`() {
+        val proto = DalyBmsProtocol()
+        proto.onNotification(countsFrame(cells = 16, temps = 0))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "16")), proto.deviceFacts())
+    }
+
+    @Test
     fun `facts list is cached while nothing changes, follows a change and is cleared by reset`() {
         val proto = DalyBmsProtocol()
         proto.onNotification(countsFrame(cells = 16, temps = 3))

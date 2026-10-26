@@ -290,6 +290,18 @@ class JkBmsProtocolTest {
     }
 
     @Test
+    fun `a later invalid settings reply keeps the last valid count and a 0x110 is not 16`() {
+        val proto = JkBmsProtocol()
+        proto.onNotification(synthesizeSettingsFrame(cells = 16))
+        proto.onNotification(synthesizeSettingsFrame(cells = 0x110))
+        proto.onNotification(synthesizeSettingsFrame(cells = 0))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "16")), proto.deviceFacts())
+        val fresh = JkBmsProtocol()
+        fresh.onNotification(synthesizeSettingsFrame(cells = 0x110))
+        assertEquals(emptyList(), fresh.deviceFacts())
+    }
+
+    @Test
     fun `facts list is cached while nothing changes and cleared by reset`() {
         val proto = JkBmsProtocol()
         proto.onNotification(synthesizeDeviceInfoFrame("11.26"))

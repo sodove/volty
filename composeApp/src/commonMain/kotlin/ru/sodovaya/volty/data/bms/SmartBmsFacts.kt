@@ -22,8 +22,8 @@ internal class SmartBmsFactsCache {
         cached = buildList {
             firmware?.let { add(DeviceFact(DeviceFactKey.FIRMWARE, it)) }
             hardware?.let { add(DeviceFact(DeviceFactKey.HARDWARE_VERSION, it)) }
-            declaredCells?.let { add(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, it.toString())) }
-            declaredTempSensors?.let { add(DeviceFact(DeviceFactKey.BMS_DECLARED_TEMP_SENSORS, it.toString())) }
+            declaredCells?.takeIf { it > 0 }?.let { add(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, it.toString())) }
+            declaredTempSensors?.takeIf { it > 0 }?.let { add(DeviceFact(DeviceFactKey.BMS_DECLARED_TEMP_SENSORS, it.toString())) }
         }
         return cached
     }

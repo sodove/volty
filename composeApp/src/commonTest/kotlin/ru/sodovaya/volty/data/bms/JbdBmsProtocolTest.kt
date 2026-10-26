@@ -205,6 +205,13 @@ class JbdBmsProtocolTest {
     }
 
     @Test
+    fun `a zero declared sensor count is not a fact`() {
+        val proto = JbdBmsProtocol()
+        proto.onNotification(jbdFrame(0x03, mainDataPayload(numTemp = 0, temps = emptyList()).also { it[21] = 14 }))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "14")), proto.deviceFacts())
+    }
+
+    @Test
     fun `facts list is cached while nothing changes and cleared by reset`() {
         val proto = JbdBmsProtocol()
         val payload = mainDataPayload().also { it[21] = 14 }

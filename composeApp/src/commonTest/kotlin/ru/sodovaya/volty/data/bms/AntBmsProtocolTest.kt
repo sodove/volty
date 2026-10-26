@@ -339,6 +339,13 @@ class AntBmsProtocolTest {
     }
 
     @Test
+    fun `a zero declared sensor count is not a fact`() {
+        val proto = AntBmsProtocol()
+        proto.onNotification(synthesizeStatusFrame(numTemp = 0, tempsCelsius = intArrayOf()))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "4")), proto.deviceFacts())
+    }
+
+    @Test
     fun `facts list is cached while nothing changes, follows a change and is cleared by reset`() {
         val proto = AntBmsProtocol()
         proto.onNotification(synthesizeStatusFrame())

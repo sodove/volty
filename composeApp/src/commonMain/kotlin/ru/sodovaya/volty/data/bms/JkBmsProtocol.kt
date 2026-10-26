@@ -206,7 +206,9 @@ class JkBmsProtocol(
         // num_cells at offset 114
         val nc = buf.u8(114)
         if (nc in 1..32) numCells = nc
-        declaredCells = nc.takeIf { it in 1..32 }
+        // Same u32 and validity rule as the history path below; an invalid later reply keeps the
+        // last valid count rather than erasing it.
+        buf.u32LE(114).takeIf { it in 1L..32L }?.let { declaredCells = it.toInt() }
 
         // Switch states
         chargeSwitch = buf.u8(118) != 0
