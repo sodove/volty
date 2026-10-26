@@ -82,10 +82,11 @@ enum class InfoUnit {
     SPEED, DISTANCE, CONSUMPTION, KILOMETER, KMH,
 }
 
-private fun factUnit(symbol: String?): InfoUnit? = when (symbol) {
+internal fun factUnit(symbol: String?): InfoUnit? = when (symbol) {
     "V" -> InfoUnit.VOLT
     "A" -> InfoUnit.AMP
     "%" -> InfoUnit.PERCENT
+    "°C" -> InfoUnit.CELSIUS
     "km" -> InfoUnit.KILOMETER
     "km/h" -> InfoUnit.KMH
     else -> null
