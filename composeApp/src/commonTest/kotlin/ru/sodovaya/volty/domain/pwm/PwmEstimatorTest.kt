@@ -255,11 +255,51 @@ class PwmEstimatorTest {
     }
 
     @Test
-    fun `a learned R takes the phase current from the aggregate`() {
+    fun `a learned R uses the phase current as a magnitude, whatever its sign`() {
         val withR = measured.copy(r = 0.05f)
-        val r = Rig(memory = PwmMemory(withR, PwmEvidence.NEVER_REPORTED))
-        r.step(speed = 60f, phase = 40f)
-        assertEquals((withR.k * 60f + 0.05f * 40f) / 96f * 100f, r.motion.dutyPercent, 0.05f)
+        val expected = (withR.k * 60f + 0.05f * 40f) / 96f * 100f
+        // The T4 decodes a NEGATIVE phase current while driving forward; the term must still ADD.
+        val driving = Rig(memory = PwmMemory(withR, PwmEvidence.NEVER_REPORTED))
+        driving.step(speed = 60f, phase = -40f)
+        assertEquals(expected, driving.motion.dutyPercent, 0.05f)
+        val other = Rig(memory = PwmMemory(withR, PwmEvidence.NEVER_REPORTED))
+        other.step(speed = 60f, phase = 40f)
+        assertEquals(expected, other.motion.dutyPercent, 0.05f)
+    }
+
+    @Test
+    fun `R is learned positive from onsets taken under a negative phase current, stored as magnitudes`() {
+        // Truth: k = 1.0, R = 0.05, alarm at 80 % of 96 V = 76.8 V = k*speed + R*|I|.
+        val r = Rig(memory = neverReported)
+        for ((speed, amps) in listOf(75.8f to -20f, 74.8f to -40f, 73.8f to -60f)) {
+            r.step(speed = speed - 3f, alarm = false, phase = amps)
+            r.step(speed = speed, alarm = true, phase = amps)
+        }
+        val cal = r.est.memory().calibration!!
+        assertEquals(PwmBasis.ONSET, cal.basis)
+        assertTrue(cal.r > 0.04f && cal.r < 0.06f, "R learned positive, got ${cal.r}")
+        assertTrue(cal.onsets.all { it.phaseA != null && it.phaseA >= 0f }, "onsets keep the magnitude")
+    }
+
+    @Test
+    fun `editing the manual value after an onset moves the estimate, because manual is never promoted into the store`() {
+        val r = Rig(vehicle = wheel(PwmManual(81.6f, 96.5f)), memory = neverReported)
+        r.step(speed = 66f, alarm = false)
+        r.step(speed = 68.4f, alarm = true)
+        val stored = r.est.memory().calibration!!
+        assertEquals(PwmCalibrationSource.MANUAL, stored.source, "only the onset history is kept behind the manual value")
+        assertEquals(1, stored.onsets.size)
+        r.step(speed = 60f)
+        val before = r.motion.dutyPercent
+        assertEquals(96.5f / 81.6f * 60f / 96f * 100f, before, 0.05f)
+        // The rider corrects the typed free-spin point.
+        r.est.updateVehicle(wheel(PwmManual(70f, 96.5f)))
+        r.step(speed = 60f)
+        assertEquals(96.5f / 70f * 60f / 96f * 100f, r.motion.dutyPercent, 0.05f, "the estimate follows the new manual value")
+        // Clearing it removes the estimate (no model remains).
+        r.est.updateVehicle(wheel(null))
+        r.step(speed = 60f)
+        assertFalse(r.motion.hasDuty)
     }
 
     @Test

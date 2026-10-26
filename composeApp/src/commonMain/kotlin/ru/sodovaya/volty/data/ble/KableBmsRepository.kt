@@ -320,6 +320,9 @@ class KableBmsRepository private constructor(
         /** The energy memory is written at most this often while connected (and once more on disconnect). */
         const val ENERGY_SAVE_INTERVAL_MS = 30_000L
 
+        /** After a FAILED PWM save, the next prompt retry waits this long (a disconnect still tries at once). */
+        const val PWM_RETRY_MS = 30_000L
+
         /**
          * Reason stamped on a link re-raised after the head unit it was
          * yielded to went away (Part C §5). Surfaces through the fold as the
@@ -1708,7 +1711,8 @@ class KableBmsRepository private constructor(
                     val owner = orchestrator()
                     scope.launch {
                         val loaded = try {
-                            store.load(v.id)
+                            // Behind any pending save of the previous connection (R4): one ordered path.
+                            pwmSaveMutex.withLock { store.load(v.id) }
                         } catch (e: kotlinx.coroutines.CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -1725,14 +1729,58 @@ class KableBmsRepository private constructor(
         return estimator
     }
 
+    /**
+     * The ONE ordered path for everything that touches the PWM rows (ruling R4): saves, the reset and the loads
+     * all run under this mutex (FIFO), and a save captures the estimator's memory only once it holds it. So a
+     * capture taken before [resetPwmCalibration] cannot write back after it, an older save cannot land after a
+     * newer one, and a new connection's load queues behind the previous connection's pending save (prompt saves
+     * are launched UNDISPATCHED from the funnel so they are already queued by the time anything else asks).
+     * Lock order: [pwmSaveMutex] then [sessionLock]; the funnel (holding [sessionLock]) never waits on this mutex.
+     */
     private val pwmSaveMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** Guarded by [sessionLock]: a prompt save is queued and has not captured yet (avoids one launch per publish). */
+    private var pwmSaveQueued = false
+
+    /** Guarded by [sessionLock]: no prompt retry of a FAILED save before this time; the disconnect save always tries. */
+    private var pwmRetryNotBeforeMs = Long.MIN_VALUE
 
     /** Persist promptly whenever the estimator's evidence or calibration changed. Called on the funnel, under sessionLock. */
     private fun maybeSavePwm(orchestrator: VehicleConnection) {
-        val store = pwmStore ?: return
         val estimator = orchestrator.pwm ?: return
-        val save = pwmSaveOf(estimator) ?: return
-        scope.launch { savePwmLogged(store, estimator, save) }
+        if (pwmStore == null || pwmSaveQueued || !estimator.memoryReady || !estimator.dirty) return
+        if (nowMs() < pwmRetryNotBeforeMs) return
+        pwmSaveQueued = true
+        scope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) { persistPwm(estimator, prompt = true) }
+    }
+
+    /**
+     * Writes [estimator]'s unsaved state, if any. The memory is captured INSIDE the ordered section, under
+     * [sessionLock] (the estimator belongs to the funnel). A failed write re-marks the state dirty and holds off
+     * prompt retries for [PWM_RETRY_MS]; cancellation is never swallowed.
+     */
+    private suspend fun persistPwm(estimator: PwmEstimator, prompt: Boolean) {
+        val store = pwmStore ?: return
+        var memory: PwmMemory? = null
+        try {
+            pwmSaveMutex.withLock {
+                memory = sessionLock.withLock {
+                    if (prompt) pwmSaveQueued = false
+                    pwmSaveOf(estimator)
+                }
+                val m = memory ?: return@withLock
+                store.save(estimator.vehicleId, m)
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            if (memory != null) estimator.markDirty()
+            throw e
+        } catch (e: Exception) {
+            if (memory != null) {
+                estimator.markDirty()
+                sessionLock.withLock { pwmRetryNotBeforeMs = nowMs() + PWM_RETRY_MS }
+            }
+            println("[VOLTY-BLE] pwm memory save failed: $e")
+        }
     }
 
     /** What to save now, or null when nothing changed, memory is not loaded, or the vehicle is a guest/demo. Clears the dirty flag. */
@@ -1744,25 +1792,18 @@ class KableBmsRepository private constructor(
         return estimator.memory()
     }
 
-    /** A failed write is logged and the state marked dirty again (retried on the next change and on disconnect). */
-    private suspend fun savePwmLogged(store: VehiclePwmStore, estimator: PwmEstimator, memory: PwmMemory) {
-        try {
-            pwmSaveMutex.withLock { store.save(estimator.vehicleId, memory) }
-        } catch (e: kotlinx.coroutines.CancellationException) {
-            estimator.markDirty()
-            throw e
-        } catch (e: Exception) {
-            estimator.markDirty()
-            println("[VOLTY-BLE] pwm memory save failed: $e")
-        }
-    }
-
+    /**
+     * The wizard / editor wiped the calibration: forget it in the live estimator AND the row, in one ordered
+     * section, so no save captured earlier can write it back.
+     */
     suspend fun resetPwmCalibration(vehicleId: String) {
-        sessionLock.withLock {
-            val estimator = vehicleConnection?.pwm
-            if (estimator != null && estimator.vehicleId == vehicleId) estimator.resetCalibration()
+        pwmSaveMutex.withLock {
+            sessionLock.withLock {
+                val estimator = vehicleConnection?.pwm
+                if (estimator != null && estimator.vehicleId == vehicleId) estimator.resetCalibration()
+            }
+            pwmStore?.resetCalibration(vehicleId)
         }
-        pwmSaveMutex.withLock { pwmStore?.resetCalibration(vehicleId) }
     }
 
     /**
@@ -3285,7 +3326,7 @@ class KableBmsRepository private constructor(
         // negative is either already accepted with its original resources, or
         // joins shutdown without independently releasing its BLE service early.
         var energySave: (suspend (VehicleEnergyStore) -> Unit)? = null
-        var pwmSave: Pair<PwmEstimator, PwmMemory>? = null
+        var pwmEstimator: PwmEstimator? = null
         val accepted = sessionLock.withLock {
             if (recordingShutdownRequested && !allowDuringShutdown) return@withLock null
             val disconnectIntent = Any()
@@ -3297,7 +3338,7 @@ class KableBmsRepository private constructor(
                 tracker.finish()
                 energySaveOf(tracker)
             }
-            pwmSave = vehicleConnection?.pwm?.let { e -> pwmSaveOf(e)?.let { e to it } }
+            pwmEstimator = vehicleConnection?.pwm
             val current = links
             val sessionsToTear = current.mapNotNull { it.session }
             val reconnectsToCancel = current.mapNotNull { it.reconnectJob }
@@ -3331,9 +3372,7 @@ class KableBmsRepository private constructor(
                 val store = energyStore
                 val save = energySave
                 if (store != null && save != null) saveEnergyLogged(store, save)
-                val pwmStoreNow = pwmStore
-                val pwmNow = pwmSave
-                if (pwmStoreNow != null && pwmNow != null) savePwmLogged(pwmStoreNow, pwmNow.first, pwmNow.second)
+                pwmEstimator?.let { persistPwm(it, prompt = false) }
                 val outcome = runCatching { releaseAcceptedDisconnect(accepted) }
                 accepted.receipt.complete(outcome) // Outside sessionLock.
                 outcome.getOrThrow()
@@ -3954,6 +3993,9 @@ class KableBmsRepository private constructor(
      * pack / controller index.
      */
     internal fun sampleFunnelChannelForTest(): SendChannel<Sample>? = sampleChannel
+
+    /** Test-only: the orchestrator that currently owns the pipeline (its [VehicleConnection.pwm] is the live estimator). */
+    internal fun vehicleConnectionForTest(): VehicleConnection? = vehicleConnection
 
     /**
      * Test-only: prime a "stuck Connected" state — as if the app had been

@@ -25,7 +25,12 @@ import kotlin.time.Instant
  *
  * **Inputs of the estimate:** speed = the fold's known speed; voltage = the pack aggregate's voltage when
  * connected and > 0, else the fold's measured input voltage; phase current = the fold's `motorCurrentA` when
- * finite. There is no has-flag for phase current (no producer can tell an unreported one from zero; Begode's is
+ * finite, **as a magnitude** (`abs`) in both the estimate and the onsets the learner stores.
+ * Retraction: the first revision fed the signed current. The T4 reports a NEGATIVE decoded phase current while
+ * driving forward (BegodeProtocol publishes `-phaseCurrentA`, but `abs(speed)`), so a signed term would have
+ * made a least-squares R come out negative (clamped to 0, i.e. never learnable) and any positive R would
+ * have been SUBTRACTED under drive load, under-reading exactly when a cutout is nearest. A magnitude
+ * over-reads only during regen, which is the safe direction. There is no has-flag for phase current (no producer can tell an unreported one from zero; Begode's is
  * the live-frame value, published as 0 until its first live frame), so it matters only once a calibration has
  * learned R > 0, which needs >= 3 onsets with >= 10 A of spread.
  *
@@ -34,8 +39,14 @@ import kotlin.time.Instant
  *
  * **Learning:** each false -> true edge of the wheel's alarm bit at >= 10 km/h teaches one onset
  * ([PwmCalibrationLearner.merge]). A first sample that is already true teaches nothing (the edge was not
- * seen); a held bit does not re-teach. A stored calibration wins over [Vehicle.pwmManual]; a manual
- * entry converts with [PwmCalibrationLearner.fromFreeSpin].
+ * seen); a held bit does not re-teach.
+ *
+ * **Manual entry is never promoted into the store as a model.** [Vehicle.pwmManual] converts live with
+ * [PwmCalibrationLearner.fromFreeSpin] (source MANUAL, FREE_SPIN basis). Onsets learned on top of it are kept
+ * (the stored calibration then carries source MANUAL + the onset history), but its k is IGNORED on read: the
+ * live manual k is used, so editing the manual value takes effect at once, and clearing it removes the
+ * estimate. After 3 usable onsets the learner replaces it with an ONSET fit (RIDING), which is a learned
+ * result and does persist. A stored WIZARD / RIDING calibration wins over manual.
  *
  * **Memory:** like the energy tracker, the owner loads it off the funnel and calls [installMemory]. Until then
  * ([memoryReady] false) the snapshot passes through and nothing is saved. Not thread-safe: the sample funnel.
@@ -99,7 +110,7 @@ class PwmEstimator(
         if (progress.evidence != PwmEvidence.NEVER_REPORTED) { prevAlarm = motion.wheelPwmAlarm; return snapshot }
 
         val packV = packVoltage(snapshot)
-        val phaseA = motion.motorCurrentA.takeIf { it.isFinite() }
+        val phaseA = motion.motorCurrentA.takeIf { it.isFinite() }?.let { kotlin.math.abs(it) }
         learn(motion, packV, phaseA, now)
 
         val est = effectiveCalibration()?.let { cal ->
@@ -132,7 +143,13 @@ class PwmEstimator(
         return m.inputVoltageV.takeIf { m.hasInputVoltage && it.isFinite() && it > 0f }
     }
 
-    private fun effectiveCalibration(): PwmCalibration? = calibration ?: manualCalibration()
+    private fun effectiveCalibration(): PwmCalibration? {
+        val stored = calibration
+        if (stored == null) return manualCalibration()
+        // A MANUAL-sourced stored calibration is only the onset history behind the rider's typed value.
+        if (stored.source == PwmCalibrationSource.MANUAL) return manualCalibration()?.copy(onsets = stored.onsets)
+        return stored
+    }
 
     private fun manualCalibration(): PwmCalibration? {
         val m = vehicle.pwmManual ?: return null

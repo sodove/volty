@@ -55,6 +55,7 @@ internal fun bleRepositoryTest(
     historyStartup: (suspend () -> HistoryTelemetryIngress)? = null,
     historyShutdown: (suspend () -> Unit)? = null,
     energyStore: ru.sodovaya.volty.domain.energy.VehicleEnergyStore? = null,
+    pwmStore: ru.sodovaya.volty.domain.pwm.VehiclePwmStore? = null,
     body: suspend TestScope.(KableBmsRepository) -> Unit
 ): TestResult = runTest {
     val repo = KableBmsRepository.forTesting(
@@ -67,6 +68,7 @@ internal fun bleRepositoryTest(
         historyStartup = historyStartup,
         historyShutdown = historyShutdown,
         energyStore = energyStore,
+        pwmStore = pwmStore,
     )
     try {
         body(repo)
