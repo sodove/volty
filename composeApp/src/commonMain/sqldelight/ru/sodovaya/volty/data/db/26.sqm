@@ -1,0 +1,20 @@
+-- The wheel's PWM alarm threshold (percent) and the rider's typed free-spin point (km/h at volts).
+-- All three are plain nullable columns: NULL = "never set", which reads as the default (80 %) and as
+-- no manual point. See Vehicle.pwmAlarmThresholdPercent / Vehicle.pwmManual.
+ALTER TABLE VehicleRow ADD COLUMN pwmAlarmThresholdPercent INTEGER;
+ALTER TABLE VehicleRow ADD COLUMN pwmManualKmh REAL;
+ALTER TABLE VehicleRow ADD COLUMN pwmManualVolts REAL;
+
+-- Per-wheel PWM calibration and the evidence that the wheel reports no PWM (see VehiclePwmRow.sq).
+CREATE TABLE VehiclePwmRow (
+    vehicleId TEXT NOT NULL PRIMARY KEY,
+    evidence  TEXT NOT NULL DEFAULT 'UNKNOWN',
+    k         REAL,
+    r         REAL,
+    points    INTEGER NOT NULL DEFAULT 0,
+    source    TEXT,
+    spread    REAL,
+    basis     TEXT,
+    onsets    TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);

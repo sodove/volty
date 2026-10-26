@@ -1,0 +1,35 @@
+-- What the app has learned about one wheel's PWM: whether the wheel is PROVEN not to report it
+-- (evidence) and, separately, the per-wheel calibration that makes an estimate possible.
+--
+-- A separate table from VehicleEnergyRow on purpose: PWM is not energy, and this row is not keyed by the
+-- pack shape (seriesCells, chemistry) - changing a pack does not unlearn a motor.
+--
+-- evidence is the PwmEvidence enum name. k/r/source/basis are NULL together when there is no calibration
+-- (evidence can exist alone); `onsets` is the bounded alarm-onset history as compact text, one onset per
+-- `;`-separated entry `speedKmh,packV,phaseA|-,atMillis` ('-' = no phase current), because the history is what
+-- makes R learnable and must round-trip.
+--
+-- The declared cascade is documentation of intent only (foreign keys are off in both drivers);
+-- SqlDelightVehicleRepository.delete removes this row explicitly.
+CREATE TABLE VehiclePwmRow (
+    vehicleId TEXT NOT NULL PRIMARY KEY,
+    evidence  TEXT NOT NULL DEFAULT 'UNKNOWN',
+    k         REAL,
+    r         REAL,
+    points    INTEGER NOT NULL DEFAULT 0,
+    source    TEXT,
+    spread    REAL,
+    basis     TEXT,
+    onsets    TEXT NOT NULL DEFAULT '',
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+
+selectByVehicle:
+SELECT * FROM VehiclePwmRow WHERE vehicleId = :vehicleId;
+
+upsert:
+INSERT OR REPLACE INTO VehiclePwmRow(vehicleId, evidence, k, r, points, source, spread, basis, onsets)
+VALUES (:vehicleId, :evidence, :k, :r, :points, :source, :spread, :basis, :onsets);
+
+deleteByVehicle:
+DELETE FROM VehiclePwmRow WHERE vehicleId = :vehicleId;

@@ -215,6 +215,17 @@ data class ControllerData(
      * BMS is present, always wins.
      */
     val batteryLevelFraction: Float? = null,
+    /**
+     * The wheel's OWN high-power (PWM) alarm, as it reports it: true while the alarm is sounding,
+     * false while the device says it is not, **null when the device has no such signal** (every
+     * protocol except Begode, and a Begode until its first 0x04 frame — the bit lives in that frame,
+     * so before it the answer is "unknown", not "off").
+     *
+     * It is a fact about the wheel, not a derived number: it is what the per-wheel PWM calibration
+     * learns its onset points from, and it is surfaced even when no calibration exists.
+     * Folded across controllers with `any` over the non-null contributors.
+     */
+    val wheelPwmAlarm: Boolean? = null,
     val isConnected: Boolean = false,
     val timestamp: Instant = Clock.System.now()
 ) {

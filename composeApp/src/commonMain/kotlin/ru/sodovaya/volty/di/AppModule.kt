@@ -51,6 +51,7 @@ val appModule = module {
     single { AppPrefs(get<DataStoreFactory>().create()) }
     singleOf(::SqlDelightVehicleRepository) bind VehicleRepository::class
     single<ru.sodovaya.volty.domain.energy.VehicleEnergyStore> { ru.sodovaya.volty.data.db.SqlDelightVehicleEnergyStore(get()) }
+    single<ru.sodovaya.volty.domain.pwm.VehiclePwmStore> { ru.sodovaya.volty.data.db.SqlDelightVehiclePwmStore(get()) }
     singleOf(::SqlDelightRideHistoryRepository) bind RideHistoryRepository::class
     single { SqlDelightHistoryStore(get()) } bind HistoryStore::class
     single { SqlDelightHistoryReadRepository(get()) } bind HistoryReadRepository::class

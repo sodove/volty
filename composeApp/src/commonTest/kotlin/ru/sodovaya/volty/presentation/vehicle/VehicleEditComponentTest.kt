@@ -31,6 +31,7 @@ import ru.sodovaya.volty.domain.model.MotorConfigProvenance
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.PwmManual
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.renderedBody
@@ -328,7 +329,10 @@ class VehicleEditComponentTest {
         batteryCapacity = BatteryCapacity(1800f, CapacityUnit.WH),
         // Owned by the alerts screen; the edit form must carry it through a save untouched.
         // Non-default on purpose (the defaults are null).
-        notifyKinds = setOf(NotifyKind.SPEED, NotifyKind.BMS_FAULT)
+        notifyKinds = setOf(NotifyKind.SPEED, NotifyKind.BMS_FAULT),
+        // Non-default PWM fields (defaults: 80 and null); the form does not expose them, so a save must carry them.
+        pwmAlarmThresholdPercent = 90,
+        pwmManual = PwmManual(81.5f, 96.5f)
         // G §9.2's learned dial widths are NOT here, and cannot be: since `8.sqm`
         // they are not fields of a Vehicle at all. Tests that need a vehicle
         // which has been ridden seed [learnedRanges] into the fake instead.

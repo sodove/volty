@@ -675,6 +675,14 @@ class BegodeProtocol(
      * `calculatePwm()` fallback needs rider-configured rotation-speed,
      * rotation-voltage and power-factor constants that Volty does not have,
      * and a guess in this field is worse than an honest absence.
+     *
+     * **Retraction (2026-10-27): "no derivation is offered" is superseded for the one wheel that proved
+     * it.** A T4 reports no PWM at all (bytes 14..15 of its live frame stay `0x0080` from 0 to 81 km/h; the
+     * 0x07 duty field stays 0). For a wheel proven never to report duty, the app now offers a per-wheel
+     * ESTIMATE ("~PWM", `domain/pwm`): calibrated on that wheel by a free-spin wizard or by the wheel's own
+     * alarm onsets - never WheelLog's rider-typed constants, never a constant per model. It is a SEPARATE
+     * value: this field and [ControllerData.hasDuty] stay exactly what the wheel measured, and an estimate
+     * is never written into them.
      */
     fun dutyPercent(): Float? = if (sawTrueDuty) dutyPercentValue else null
 
@@ -832,6 +840,9 @@ class BegodeProtocol(
             // counter moves, for the whole ride (G §9.1).
             hasEnergyCounters = false,
             faults = faultsValue,
+            // Bit 0 of the 0x04 alert byte is the wheel's own PWM alarm (see [alertLabels]). Null until a
+            // 0x04 frame has been seen: before it the bit is unknown, which is not the same as false.
+            wheelPwmAlarm = if (sawOdometer) (alertBitmap and PWM_ALARM_BIT) != 0 else null,
             isConnected = true
         )
     }
@@ -1973,11 +1984,20 @@ class BegodeProtocol(
          * oversight waiting to be tidied into one of VESC's two strings.
          *
          * **This is the whole byte. [FAULT_BITS] is the part that is a fault.**
+         *
+         * ### Retraction: bit 0 used to be labelled "Wheel alarm"
+         *
+         * An earlier revision named bit 0 "Wheel alarm" and said we did not know what it meant. Wrong
+         * about the meaning: the rider's two T4 free-spin dumps (2026-10-26/27) showed it switching on at
+         * 68.4 km/h at 96.8 V, off again at 67.0, flickering around the threshold, with the settings word
+         * `0x2800` (alarm mode 2, which WheelLog's adapter labels "80% PWM only"). It is the wheel's own
+         * high-power alarm (WheelLog's "HighPower" -> `setWheelAlarm`), i.e. the wheel saying its PWM
+         * crossed the alarm threshold. Hence "PWM alarm", and [ControllerData.wheelPwmAlarm].
          */
         private fun alertLabels(bits: Int): List<String> {
             if (bits == 0) return emptyList()
             return buildList {
-                if (bits and 0x01 != 0) add("Wheel alarm")
+                if (bits and PWM_ALARM_BIT != 0) add("PWM alarm")
                 if (bits and 0x02 != 0) add("Speed alarm 2")
                 if (bits and 0x04 != 0) add("Speed alarm 1")
                 if (bits and 0x08 != 0) add("Low voltage")
@@ -2015,8 +2035,10 @@ class BegodeProtocol(
          *    firing and re-arms it only when `faults` goes EMPTY, so a wheel
          *    left in transport mode would hold the list non-empty indefinitely
          *    and the next genuine fault would raise nothing at all.
-         *  - **bit 0, the general wheel alarm, says nothing a rider can act
-         *    on.** WheelLog routes it to its own flag and leaves its only
+         *  - **bit 0, the wheel's PWM alarm** (see the retraction on [alertLabels]; this bullet
+         *    used to call it "the general wheel alarm", whose meaning nobody knew), **says nothing a
+         *    rider can act on as a fault** - it is published separately, as
+         *    [ControllerData.wheelPwmAlarm]. WheelLog routes it to its own flag and leaves its only
          *    proposed label ("HighPower") commented out, so we do not know what
          *    it means. A CRITICAL notification reading *"Wheel alarm on ET Max"*
          *    teaches the rider nothing and cannot be acted on — that, not any
@@ -2048,6 +2070,9 @@ class BegodeProtocol(
          * unannounced.
          */
         private const val FAULT_BITS = 0x78
+
+        /** Bit 0 of the 0x04 alert byte: the wheel's own PWM (high-power) alarm. */
+        private const val PWM_ALARM_BIT = 0x01
 
         /** Plausible battery temperature range, degrees Celsius. */
         private val TEMP_SANITY = -39..150

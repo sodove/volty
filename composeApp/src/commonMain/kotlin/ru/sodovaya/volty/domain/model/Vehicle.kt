@@ -72,7 +72,16 @@ data class Vehicle(
      *
      * Gates the notification only; the live sound alarm and its rules are independent of it.
      */
-    val notifyKinds: Set<NotifyKind>? = null
+    val notifyKinds: Set<NotifyKind>? = null,
+    /**
+     * The duty percentage at which THIS wheel's own PWM alarm sounds (default 80, the T4's mode 2,
+     * "80% PWM only"). Read by the per-wheel PWM calibration: an alarm onset satisfies
+     * `threshold / 100 * packV = k * speed + R * current`. A per-vehicle setting because the alarm mode is
+     * the rider's wheel setting, not a property of the model.
+     */
+    val pwmAlarmThresholdPercent: Int = DEFAULT_PWM_ALARM_THRESHOLD_PERCENT,
+    /** The rider's typed free-spin point (see [PwmManual]), or null when none was typed. */
+    val pwmManual: PwmManual? = null
 ) {
     init {
         require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }
@@ -85,6 +94,16 @@ data class Vehicle(
         }
     }
 }
+
+/** The wheel's alarm threshold when the rider never set one (the T4's alarm mode 2). */
+const val DEFAULT_PWM_ALARM_THRESHOLD_PERCENT: Int = 80
+
+/**
+ * A free-spin point the rider typed instead of running the wizard: the wheel's top speed [freeSpinKmh]
+ * with the pack at [atVoltage]. Seeds a calibration with `k = atVoltage / freeSpinKmh` (100 % at the
+ * plateau). No per-model value exists anywhere in the app - this is always the rider's own number.
+ */
+data class PwmManual(val freeSpinKmh: Float, val atVoltage: Float)
 
 /**
  * This vehicle's motion alert rules with "never configured" already resolved to

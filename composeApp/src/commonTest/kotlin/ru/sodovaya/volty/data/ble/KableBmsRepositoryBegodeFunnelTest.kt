@@ -695,6 +695,8 @@ class KableBmsRepositoryBegodeFunnelTest {
         // the fold, so it is non-default now like every other field — and the
         // default-guard above is what stops the next such field repeating it.
         batteryLevelFraction = 0.62f,
+        // The wheel's own PWM alarm: non-null (the default is null) so a dropped fold line is visible.
+        wheelPwmAlarm = true,
         isConnected = true,
         // Pinned rather than left at `Clock.System.now()`: the guard above has
         // to compare this against a default-constructed sample, and two `now()`

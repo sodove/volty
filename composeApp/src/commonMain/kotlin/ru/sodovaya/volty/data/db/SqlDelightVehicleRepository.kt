@@ -19,6 +19,8 @@ import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.DEFAULT_PWM_ALARM_THRESHOLD_PERCENT
+import ru.sodovaya.volty.domain.model.PwmManual
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.GaugePeaks
@@ -42,6 +44,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     private val alertLevelQueries = provider.database.alertLevelRowQueries
     private val gaugePeakQueries = provider.database.gaugePeakRowQueries
     private val energyQueries = provider.database.vehicleEnergyRowQueries
+    private val pwmQueries = provider.database.vehiclePwmRowQueries
     private val deviceTypeMemoryQueries = provider.database.deviceTypeMemoryRowQueries
 
     private val vehicleRows: Flow<List<VehicleRow>> = queries.selectAll()
@@ -167,7 +170,10 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 autoVolumeDeadbandKmh = vehicle.autoVolume.deadbandKmh.toLong(),
                 capacityValue = vehicle.batteryCapacity?.value?.toDouble(),
                 capacityUnit = vehicle.batteryCapacity?.unit?.name,
-                notifyKinds = vehicle.notifyKinds?.let(::encodeNotifyKinds)
+                notifyKinds = vehicle.notifyKinds?.let(::encodeNotifyKinds),
+                pwmAlarmThresholdPercent = vehicle.pwmAlarmThresholdPercent.toLong(),
+                pwmManualKmh = vehicle.pwmManual?.freeSpinKmh?.takeIf { it.isFinite() }?.toDouble(),
+                pwmManualVolts = vehicle.pwmManual?.atVoltage?.takeIf { it.isFinite() }?.toDouble()
             )
             // GaugePeakRow is deliberately NOT touched here — not written, and
             // not deleted either. It is not part of a vehicle's description; a
@@ -264,6 +270,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
             alertLevelQueries.deleteByVehicle(id)
             gaugePeakQueries.deleteByVehicle(id)
             energyQueries.deleteByVehicle(id)
+            pwmQueries.deleteByVehicle(id)
             queries.delete(id)
         }
     }
@@ -397,7 +404,17 @@ private fun VehicleRow.toDomain(
     batteryCapacity = capacityValue?.toFloat()?.takeIf { it.isFinite() }?.let { v ->
         capacityUnit?.let { u -> runCatching { CapacityUnit.valueOf(u) }.getOrNull() }?.let { BatteryCapacity(v, it) }
     },
-    notifyKinds = notifyKinds?.let(::decodeNotifyKinds)
+    notifyKinds = notifyKinds?.let(::decodeNotifyKinds),
+    // NULL (an old row) and an out-of-range value both read as the default: a threshold of 0 or 500 %
+    // would make every onset impossible or meaningless.
+    pwmAlarmThresholdPercent = pwmAlarmThresholdPercent?.toInt()?.takeIf { it in 1..100 }
+        ?: DEFAULT_PWM_ALARM_THRESHOLD_PERCENT,
+    // Both halves, finite and positive, or no manual point at all.
+    pwmManual = run {
+        val kmh = pwmManualKmh?.toFloat()?.takeIf { it.isFinite() && it > 0f }
+        val volts = pwmManualVolts?.toFloat()?.takeIf { it.isFinite() && it > 0f }
+        if (kmh != null && volts != null) PwmManual(kmh, volts) else null
+    }
 )
 
 /** Enum names in declaration order, comma-separated: stable bytes for equal sets. "" = the empty set. */

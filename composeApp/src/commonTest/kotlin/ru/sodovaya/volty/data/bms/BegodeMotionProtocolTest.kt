@@ -946,7 +946,7 @@ class BegodeMotionProtocolTest {
         //
         // Not a vacuous assertion despite the empty expectation — the bytes
         // either side of 14 are NOT zero, so an off-by-one lands somewhere
-        // visible: byte 13 (LED mode) is 0x01 -> "Wheel alarm", byte 17 is 0x12
+        // visible: byte 13 (LED mode) is 0x01 -> "PWM alarm", byte 17 is 0x12
         // -> "Speed alarm 2" + "Over voltage". Byte 15 is 0, so this cannot see
         // a slip in that direction; the synthetic tests below pin the offset
         // exactly.
@@ -967,7 +967,7 @@ class BegodeMotionProtocolTest {
         // Bit order and meanings are WheelLog's GotwayAdapter; the wording is
         // VescFaults' register — sentence case, no bit indices, no enum names.
         val expected = listOf(
-            0x01 to "Wheel alarm",
+            0x01 to "PWM alarm",
             0x02 to "Speed alarm 2",
             0x04 to "Speed alarm 1",
             0x08 to "Low voltage",
@@ -993,9 +993,9 @@ class BegodeMotionProtocolTest {
         // SYNTHETIC and deliberately hostile: every byte around 14 carries a
         // DIFFERENT non-zero value, so each candidate offset produces a
         // different, recognisable answer —
-        //   byte 13 (LED mode, 0x03)   -> "Wheel alarm" + "Speed alarm 2"
+        //   byte 13 (LED mode, 0x03)   -> "PWM alarm" + "Speed alarm 2"
         //   byte 14 (correct, 0x20)    -> "Over temperature"
-        //   byte 15 (light mode, 0x01) -> "Wheel alarm"
+        //   byte 15 (light mode, 0x01) -> "PWM alarm"
         val protocol = BegodeProtocol()
         protocol.onNotification(
             odometerFrame(
@@ -1061,7 +1061,7 @@ class BegodeMotionProtocolTest {
             odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x01 or 0x02 or 0x04 or 0x80)
         )
         assertEquals(
-            listOf("Wheel alarm", "Speed alarm 2", "Speed alarm 1", "Transport mode"),
+            listOf("PWM alarm", "Speed alarm 2", "Speed alarm 1", "Transport mode"),
             protocol.wheelAlerts(),
             "all four are decoded"
         )
