@@ -36,6 +36,12 @@ data class BleDiagnosticLink(
     val framesPerSecond: Float? = null,
     /** Reconnect episodes of this link since the vehicle connected. */
     val reconnects: Int = 0,
+    /**
+     * When [framesPerSecond] and [facts] were last refreshed (epoch millis), or null if never. They update only
+     * on a notification, so a stalled-but-ONLINE link keeps its last values: a reader must treat stats older
+     * than a few seconds as unknown rather than current.
+     */
+    val statsAtEpochMillis: Long? = null,
 )
 
 /** Latest decoded battery sample attributed to one pack on this BLE link. */

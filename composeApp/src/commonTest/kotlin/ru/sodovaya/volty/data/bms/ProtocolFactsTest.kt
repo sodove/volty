@@ -37,5 +37,6 @@ class ProtocolFactsTest {
         assertTrue(link.facts.isEmpty())
         assertNull(link.framesPerSecond)
         assertEquals(0, link.reconnects)
+        assertNull(link.statsAtEpochMillis)
     }
 }

@@ -257,7 +257,7 @@ class KableBmsRepository private constructor(
             protocol, checkNotNull(links.find { it.spec.address == address }), ownership, checkNotNull(sampleChannel))
     private val protocolDiagnosticsByAddress = mutableMapOf<String, ProtocolDiagnosticValues>()
     /** Per-link notification rate and protocol facts, stored by the session, published with the diagnostics. */
-    private class LinkStats(val framesPerSecond: Float?, val facts: List<DeviceFact>)
+    private class LinkStats(val framesPerSecond: Float?, val facts: List<DeviceFact>, val atEpochMillis: Long)
     private val linkStatsByAddress = mutableMapOf<String, LinkStats>()
     private val diagnosticBatteriesByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticBatterySample>>()
     private val diagnosticControllersByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticControllerSample>>()
@@ -2422,7 +2422,8 @@ class KableBmsRepository private constructor(
                     link.spec.protocolKind.name, identity, decoded?.hardwareCode, decoded?.model, decoded?.firmwareVersion,
                     diagnosticBatteriesByAddress[link.spec.address]?.values?.sortedBy { it.localPackIndex }.orEmpty(),
                     diagnosticControllersByAddress[link.spec.address]?.values?.sortedBy { it.localControllerIndex }.orEmpty(),
-                    facts = stats?.facts.orEmpty(), framesPerSecond = stats?.framesPerSecond, reconnects = link.reconnects)
+                    facts = stats?.facts.orEmpty(), framesPerSecond = stats?.framesPerSecond, reconnects = link.reconnects,
+                    statsAtEpochMillis = stats?.atEpochMillis)
             }
         }
         diagnosticBuffer.updateActiveLinks(snapshots)
@@ -2865,7 +2866,7 @@ class KableBmsRepository private constructor(
                 },
                 onLinkStats = { framesPerSecond, facts ->
                     synchronized(linkStateLock) {
-                        if (links.any { it === link }) linkStatsByAddress[address] = LinkStats(framesPerSecond, facts)
+                        if (links.any { it === link }) linkStatsByAddress[address] = LinkStats(framesPerSecond, facts, Clock.System.now().toEpochMilliseconds())
                     }
                 },
                 onProtocolDiagnostics = { values ->
