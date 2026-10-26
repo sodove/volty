@@ -848,6 +848,7 @@
 <string name="debug_stop_capture">Stop</string>
 <string name="debug_clear">Clear</string>
 <string name="debug_copy">Copy diagnostics</string>
+<string name="debug_share_file">Send as file</string>
 <string name="debug_empty">No data yet</string>
 <string name="debug_links">Active BLE links</string>
 <string name="debug_battery">Battery aggregate</string>

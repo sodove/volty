@@ -8,9 +8,18 @@ import ru.sodovaya.volty.domain.model.BleDiagnosticsState
 
 private const val HEX_DIGITS = "0123456789ABCDEF"
 
-/** Small synchronized in-memory ring; append never suspends or waits on consumers. */
+/**
+ * Synchronized in-memory ring; append never suspends or waits on consumers.
+ *
+ * The ring keeps up to [MAX_RECORDS] notifications - minutes of a ride at a wheel's frame rate, for
+ * a dump the rider shares as a file - while the published [state] carries only the newest
+ * [UI_RECORDS] plus the total count, so a long capture does not copy thousands of records into the
+ * UI on every notification. An earlier revision kept just 200 records in total, which a free-spin
+ * test outruns in seconds (rider, 2026-10-26). [snapshot] returns the whole ring.
+ */
 internal class BleDiagnosticBuffer {
     private val lock = Any()
+    private val ring = ArrayDeque<BleDiagnosticRecord>()
     private val mutableState = MutableStateFlow(BleDiagnosticsState())
     val state: StateFlow<BleDiagnosticsState> = mutableState.asStateFlow()
 
@@ -23,8 +32,12 @@ internal class BleDiagnosticBuffer {
     }
 
     fun clear() = synchronized(lock) {
-        mutableState.value = mutableState.value.copy(records = emptyList())
+        ring.clear()
+        mutableState.value = mutableState.value.copy(records = emptyList(), recordCount = 0)
     }
+
+    /** Every retained record, oldest first. */
+    fun snapshot(): List<BleDiagnosticRecord> = synchronized(lock) { ring.toList() }
 
     /** Returns before reading or copying [bytes] when capture is off. */
     fun appendNotification(
@@ -53,8 +66,10 @@ internal class BleDiagnosticBuffer {
             payloadLength = bytes.size,
             payloadHex = hex,
         )
-        val updated = (current.records + record).takeLast(MAX_RECORDS)
-        mutableState.value = current.copy(records = updated)
+        ring.addLast(record)
+        while (ring.size > MAX_RECORDS) ring.removeFirst()
+        val newest = (current.records + record).takeLast(UI_RECORDS)
+        mutableState.value = current.copy(records = newest, recordCount = ring.size)
     }
 
     fun updateActiveLinks(links: List<ru.sodovaya.volty.domain.model.BleDiagnosticLink>) = synchronized(lock) {
@@ -62,6 +77,10 @@ internal class BleDiagnosticBuffer {
     }
 
     companion object {
-        const val MAX_RECORDS = 200
+        /** About 15-30 minutes of one wheel link at 10-20 notifications/s; a few MB of text. */
+        const val MAX_RECORDS = 20_000
+
+        /** What the debug screen lists and copies to the clipboard. */
+        const val UI_RECORDS = 200
     }
 }

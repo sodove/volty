@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.domain.repository
 
 import kotlinx.coroutines.flow.StateFlow
+import ru.sodovaya.volty.domain.model.BleDiagnosticRecord
 import ru.sodovaya.volty.domain.model.BleDiagnosticsState
 
 /** Volatile, user-controlled BLE notification capture. */
@@ -9,4 +10,7 @@ interface BleDiagnosticsRepository {
     fun startCapture()
     fun stopCapture()
     fun clearCapture()
+
+    /** The whole capture, oldest first - more than [BleDiagnosticsState.records] carries. */
+    fun captureSnapshot(): List<BleDiagnosticRecord> = state.value.records
 }

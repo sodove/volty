@@ -14,7 +14,9 @@ data class BleDiagnosticRecord(
 
 data class BleDiagnosticsState(
     val isCapturing: Boolean = false,
+    /** The newest records only (see BleDiagnosticBuffer.UI_RECORDS); [recordCount] counts the whole capture. */
     val records: List<BleDiagnosticRecord> = emptyList(),
+    val recordCount: Int = records.size,
     val activeLinks: List<BleDiagnosticLink> = emptyList(),
 )
 

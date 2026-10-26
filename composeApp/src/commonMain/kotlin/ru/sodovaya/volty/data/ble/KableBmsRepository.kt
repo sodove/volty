@@ -261,6 +261,7 @@ class KableBmsRepository private constructor(
     override fun startCapture() = diagnosticBuffer.start()
     override fun stopCapture() = diagnosticBuffer.stop()
     override fun clearCapture() = diagnosticBuffer.clear()
+    override fun captureSnapshot() = diagnosticBuffer.snapshot()
 
     /** Legacy compatibility constructor. Production Koin uses the native runtime overload below. */
     constructor(

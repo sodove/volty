@@ -77,6 +77,9 @@ interface SettingsComponent {
     fun onStopBleCapture()
     fun onClearBleCapture()
 
+    /** Shares the whole BLE capture as a text file. */
+    fun onShareBleCapture() {}
+
     data class State(
         val themeMode: String = "system",
         val dynamicColor: Boolean = true,
@@ -255,4 +258,14 @@ class DefaultSettingsComponent(
     override fun onStartBleCapture() = bleDiagnosticsRepository.startCapture()
     override fun onStopBleCapture() = bleDiagnosticsRepository.stopCapture()
     override fun onClearBleCapture() = bleDiagnosticsRepository.clearCapture()
+    override fun onShareBleCapture() {
+        val snapshot = _state.value
+        // Building a few MB of text stays off the main thread; the exporter does its own IO.
+        scope.launch(Dispatchers.Default) {
+            logExporter.exportText(BLE_DUMP_FILE_NAME, bleCaptureFile(snapshot, bleDiagnosticsRepository.captureSnapshot()))
+        }
+    }
 }
+
+/** One fixed name: each share overwrites the previous dump in the cache. */
+private const val BLE_DUMP_FILE_NAME = "volty-ble-dump.txt"
