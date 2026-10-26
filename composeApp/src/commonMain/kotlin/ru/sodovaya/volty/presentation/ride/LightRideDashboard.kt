@@ -288,7 +288,8 @@ internal fun LightRideDashboard(
                 duty = dutyHistory,
                 speedPeak = rideMaxSpeedKmh,
                 dutyPeak = rideMaxDutyPercent.takeIf { it > 0f },
-                dutyEstimated = state.motion.hasDuty && state.motion.dutySource == DutySource.ESTIMATED,
+                dutyEstimated = LightDashboardMapper.dutyIsEstimated(state.motion),
+                dutyAtCeiling = LightDashboardMapper.dutyIsAtCeiling(state.motion),
                 layoutMode = layoutMode,
             )
 
@@ -540,6 +541,7 @@ private fun LightTopGraphs(
     speedPeak: Float,
     dutyPeak: Float?,
     dutyEstimated: Boolean,
+    dutyAtCeiling: Boolean,
     layoutMode: LightLayoutMode,
 ) {
     // These labels describe observed samples, not the minimum scale used by
@@ -561,7 +563,7 @@ private fun LightTopGraphs(
             modifier = Modifier.weight(1f),
         )
         LightTopGraph(
-            label = LightDashboardMapper.dutyPeakLabel(observedDutyPeak, dutyEstimated),
+            label = LightDashboardMapper.dutyPeakLabel(observedDutyPeak, dutyEstimated, dutyAtCeiling),
             values = duty,
             color = LocalLightHudPalette.current.green,
             layoutMode = layoutMode,

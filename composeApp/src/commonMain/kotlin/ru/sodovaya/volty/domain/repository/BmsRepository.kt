@@ -147,6 +147,9 @@ interface BmsRepository {
      * What is known about [vehicleId]'s PWM: the PROVEN evidence and the calibration, from the live estimator when
      * that vehicle is connected and its memory is loaded, else from the store. Read on the ordered PWM path so a
      * pending save is never missed. [PwmMemory.EMPTY] for a repository without a PWM model.
+     *
+     * **Answers from memory (no I/O) while the vehicle is connected**: the vehicle-info screen reads it on every
+     * 500 ms tick. Only an idle vehicle is answered from the store, and callers must not poll that case.
      */
     suspend fun pwmMemory(vehicleId: String): PwmMemory = PwmMemory.EMPTY
 

@@ -196,4 +196,10 @@ class VehicleInfoPwmTest {
         assertEquals("0.0", controllerDuty(info(PwmMemory(null, PwmEvidence.UNKNOWN), d = data(motion(duty = 0f)))).value)
         assertEquals("12.8", controllerDuty(info(PwmMemory(null, PwmEvidence.REPORTS), d = data(motion(duty = 12.8f)))).value)
     }
+
+    @Test fun `a battery-only vehicle has no PWM section`() {
+        val packOnly = wheel.copy(controllers = emptyList())
+        val i = info(PwmMemory.EMPTY, vehicle = packOnly, d = null)
+        assertEquals(false, i.sections.any { it.kind == InfoSectionKind.PWM })
+    }
 }

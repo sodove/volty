@@ -247,7 +247,8 @@ fun vehicleInfoOf(
             addAll(ctx.connectionSections())
             addAll(ctx.batterySections())
             addAll(ctx.controllerSections())
-            add(ctx.pwmSection())
+            // PWM is a motor-controller question: a battery-only vehicle has no duty to estimate.
+            if (vehicle.controllers.isNotEmpty()) add(ctx.pwmSection())
             add(ctx.energySection())
             add(ctx.rangeSection())
             add(ctx.alertsSection())

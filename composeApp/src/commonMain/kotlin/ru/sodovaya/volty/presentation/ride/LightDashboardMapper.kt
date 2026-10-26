@@ -116,8 +116,16 @@ object LightDashboardMapper {
     }
 
     /** The graph's peak caption; an estimated peak keeps the "~" so the graph cannot read as a measurement. */
-    fun dutyPeakLabel(peakPercent: Float, estimated: Boolean): String =
-        "max ${if (estimated) "~" else ""}${peakPercent.roundToInt()}%"
+    fun dutyPeakLabel(peakPercent: Float, estimated: Boolean, atCeiling: Boolean = false): String =
+        if (estimated && atCeiling) "max ≥100%"
+        else "max ${if (estimated) "~" else ""}${peakPercent.roundToInt()}%"
+
+    /** Whether the live duty is the model estimate - connected samples only, like [values]. */
+    fun dutyIsEstimated(motion: ControllerData): Boolean =
+        motion.isConnected && motion.hasDuty && motion.dutySource == DutySource.ESTIMATED
+
+    /** Whether the live estimate is at its ceiling (same connected + estimated gate). */
+    fun dutyIsAtCeiling(motion: ControllerData): Boolean = dutyIsEstimated(motion) && motion.dutyAtCeiling
 
     fun dutyFraction(motion: ControllerData): Float =
         (MotionReadings.dutyPercent(motion)?.takeIf { motion.isConnected }?.div(100f) ?: 0f)

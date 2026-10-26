@@ -94,4 +94,14 @@ class DutyEstimateReadoutTest {
         assertEquals("—", dial(motion(has = false, source = DutySource.ESTIMATED)).valueTextOverride)
         assertEquals(72.4f, dial(motion(source = DutySource.ESTIMATED)).value)
     }
+
+    @Test fun `the Light peak caption uses the ceiling wording, and only for a connected estimate`() {
+        assertEquals("max ≥100%", LightDashboardMapper.dutyPeakLabel(100f, estimated = true, atCeiling = true))
+        assertEquals("max 100%", LightDashboardMapper.dutyPeakLabel(100f, estimated = false, atCeiling = true))
+        val est = motion(duty = 100f, source = DutySource.ESTIMATED, ceiling = true)
+        assertEquals(true, LightDashboardMapper.dutyIsAtCeiling(est))
+        assertEquals(false, LightDashboardMapper.dutyIsEstimated(est.copy(isConnected = false)))
+        assertEquals(false, LightDashboardMapper.dutyIsAtCeiling(est.copy(isConnected = false)))
+        assertEquals(false, LightDashboardMapper.dutyIsEstimated(est.copy(hasDuty = false)))
+    }
 }
