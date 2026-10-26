@@ -138,14 +138,16 @@ class RootNavigationTest {
     @Test
     fun a_dashboard_buried_under_settings_becomes_the_summary_so_back_reaches_the_card() {
         val card = Config.VehicleOverview("v")
-        // On top: covered, as before.
-        assertEquals(listOf(Config.Ride, card), stackAfterAbsence(listOf(Config.Ride), "v"))
-        // Buried: the rider's screen stays on top, and back now lands on the card.
-        assertEquals(listOf(card, Config.Settings), stackAfterAbsence(listOf(Config.Ride, Config.Settings), "v"))
+        val garage = Config.Picker("cold")
+        // On top: the dead dashboard is replaced, and the garage lies under the card so back leaves
+        // it (field report 2026-10-26: [Ride, card] sent back to a frozen dashboard, then nowhere).
+        assertEquals(listOf(garage, card), stackAfterAbsence(listOf(Config.Ride), "v"))
+        // Buried: the rider's screen stays on top, back lands on the card, and back again on the garage.
+        assertEquals(listOf(garage, card, Config.Settings), stackAfterAbsence(listOf(Config.Ride, Config.Settings), "v"))
         assertEquals(listOf(Config.Picker("cold"), card, Config.Nearby),
             stackAfterAbsence(listOf(Config.Picker("cold"), Config.Dashboard, Config.Nearby), "v"))
         // Never a duplicate entry: a card already in the stack absorbs the dashboard.
-        assertEquals(listOf(card, Config.Settings), stackAfterAbsence(listOf(card, Config.Ride, Config.Settings), "v"))
+        assertEquals(listOf(garage, card, Config.Settings), stackAfterAbsence(listOf(card, Config.Ride, Config.Settings), "v"))
         assertNull(stackAfterAbsence(listOf(Config.Picker("cold"), Config.Settings), "v"), "no dashboard, nothing to replace")
     }
 
@@ -153,7 +155,8 @@ class RootNavigationTest {
     fun a_returning_vehicle_gets_its_dashboard_back_where_the_card_stood_in() {
         val card = Config.VehicleOverview("v")
         assertEquals(listOf(Config.Ride, Config.Settings), stackAfterReturn(listOf(card, Config.Settings), "v", Config.Ride))
-        assertNull(stackAfterReturn(listOf(Config.Ride, card), "v", Config.Ride), "a card on top is popped by the caller")
+        // A card on top becomes the dashboard; nothing under it is a dead dashboard any more.
+        assertEquals(listOf(Config.Picker("cold"), Config.Ride), stackAfterReturn(listOf(Config.Picker("cold"), card), "v", Config.Ride))
         assertNull(stackAfterReturn(listOf(Config.Ride, card, Config.Settings), "v", Config.Ride), "never a duplicate dashboard")
         assertNull(stackAfterReturn(listOf(Config.Settings), "v", Config.Ride))
     }

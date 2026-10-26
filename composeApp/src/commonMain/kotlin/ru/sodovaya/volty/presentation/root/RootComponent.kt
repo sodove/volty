@@ -238,29 +238,37 @@ internal fun absentSummaryApplies(active: Config): Boolean = active is Config.Ri
 
 /**
  * The stack once an absent vehicle's summary is due, or null when no dashboard is in it.
- * A dashboard on top is covered by the summary. One buried under a screen the rider chose is
- * swapped for the summary in place: that screen stays, and back lands on the card instead of
- * frozen numbers. An earlier revision only looked at the top entry, so a rider in Settings swiped
- * back into a dead dashboard.
+ * Every dashboard is swapped for the summary in place: a screen the rider chose stays on top, and
+ * back lands on the card instead of frozen numbers. An earlier revision only looked at the top
+ * entry, so a rider in Settings swiped back into a dead dashboard.
+ *
+ * Retraction: a dashboard on top used to be COVERED ([Ride] -> [Ride, card]). Back from the card
+ * revealed the frozen dashboard, and back from that one-entry stack went nowhere, so the rider had
+ * to restart the app (field report 2026-10-26). The dead dashboard is now replaced there too, and
+ * a card left at the bottom gets the garage under it - where a disconnect lands anyway.
  */
 internal fun stackAfterAbsence(stack: List<Config>, vehicleId: String): List<Config>? {
     if (stack.none(::absentSummaryApplies)) return null
     val summary = Config.VehicleOverview(vehicleId)
-    if (absentSummaryApplies(stack.last())) return stackAfterGoTo(stack, summary)
     var placed = summary in stack
-    return stack.flatMap { config ->
+    val swapped = stack.flatMap { config ->
         when {
             !absentSummaryApplies(config) -> listOf(config)
             placed -> emptyList()
             else -> { placed = true; listOf(summary) }
         }
     }
+    return if (swapped.first() == summary) listOf(configAfterDisconnect()) + swapped else swapped
 }
 
-/** The vehicle is back: a summary that stood in for a buried dashboard gives its place back to [home]. */
+/**
+ * The vehicle is back: the summary that stood in for its dashboard gives its place back to [home],
+ * on top or buried. (A card on top used to be popped, revealing the dashboard it covered; it no
+ * longer covers one.)
+ */
 internal fun stackAfterReturn(stack: List<Config>, vehicleId: String, home: Config): List<Config>? {
     val summary = Config.VehicleOverview(vehicleId)
-    if (summary !in stack || stack.last() == summary || home in stack) return null
+    if (summary !in stack || home in stack) return null
     return stack.map { if (it == summary) home else it }
 }
 
@@ -571,7 +579,6 @@ class DefaultRootComponent(
     private fun leaveAbsentSummary() {
         val id = absentSummaryVehicleId ?: return
         absentSummaryVehicleId = null
-        if (stack.value.active.configuration == Config.VehicleOverview(id) && stack.value.items.size > 1) { nav.pop(); return }
         val home = homeConfigFor(bmsRepository.activeVehicle.value)
         nav.navigate { current -> stackAfterReturn(current, id, home) ?: current }
     }
