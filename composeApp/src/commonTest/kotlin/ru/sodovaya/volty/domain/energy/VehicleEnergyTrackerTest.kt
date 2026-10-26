@@ -113,6 +113,24 @@ class VehicleEnergyTrackerTest {
         assertTrue(after.soc <= before.soc + 0.01f, "a discharge never ticks the readout up")
     }
 
+    /**
+     * Field report 2026-10-26: after 6 km the Energy block showed no resistance. Voltage (pack sample)
+     * and battery current (motion sample) arrive as SEPARATE publishes, so neighbouring samples never
+     * carry a voltage step and a current step together. The rig's step() has exactly that shape.
+     */
+    @Test
+    fun resistanceIsFoundWhenVoltageAndCurrentArriveInSeparateSamples() {
+        val rig = Rig(wheel(capacity = entered30Ah))
+        rig.run(28, 90f, 0f)
+        repeat(6) {
+            rig.run(4, 90f - 0.1f * 120f, 120f) // pull: 120 A sags 12 V at 0.1 ohm
+            rig.run(4, 90f, 0f) // release
+        }
+        val ohm = rig.last.energy!!.resistanceOhm
+        assertNotNull(ohm, "interleaved voltage and current must still pair into a resistance")
+        assertEquals(0.1f, ohm, 0.02f)
+    }
+
     @Test
     fun alertsSeeTheSmoothedSoc() {
         val rig = Rig(wheel(capacity = entered30Ah))
