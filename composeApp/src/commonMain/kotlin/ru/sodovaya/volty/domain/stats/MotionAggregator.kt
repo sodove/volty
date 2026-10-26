@@ -2,6 +2,7 @@ package ru.sodovaya.volty.domain.stats
 
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerState
+import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import kotlin.time.Clock
@@ -112,6 +113,10 @@ object MotionAggregator {
             wheelPwmAlarm = d.mapNotNull { it.wheelPwmAlarm }.let { signals ->
                 if (signals.isEmpty()) null else signals.any { it }
             },
+            // No producer emits ESTIMATED (the PWM estimator rewrites the fold AFTER it), but the aggregate is itself a
+            // ControllerData: carried with `any` so the one-controller fold stays the identity on every field.
+            dutySource = if (d.any { it.dutySource == DutySource.ESTIMATED }) DutySource.ESTIMATED else DutySource.MEASURED,
+            dutyAtCeiling = d.any { it.dutyAtCeiling },
             motorCurrentA = d.sumOf { it.motorCurrentA.toDouble() }.toFloat(),
             batteryCurrentA = d.measuring { it.hasBatteryCurrent }
                 .sumOf { it.batteryCurrentA.toDouble() }.toFloat(),

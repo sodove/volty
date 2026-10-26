@@ -11,7 +11,18 @@ import kotlin.time.ExperimentalTime
  * [REPORTS] is a one-way latch; the `hasDuty` flag alone is never evidence (the T4 publishes
  * `hasDuty = true` with a constant 0).
  */
-enum class PwmEvidence { UNKNOWN, NEVER_REPORTED, REPORTS }
+enum class PwmEvidence {
+    UNKNOWN, NEVER_REPORTED, REPORTS;
+
+    companion object {
+        /**
+         * The persisted evidence is monotone: REPORTS > NEVER_REPORTED > UNKNOWN, so a save (or a memory
+         * installed late) can only move it up, never down. A save with UNKNOWN over a stored REPORTS would
+         * otherwise erase the one-way latch. (Ruling R3.)
+         */
+        fun monotone(a: PwmEvidence, b: PwmEvidence): PwmEvidence = if (a.ordinal >= b.ordinal) a else b
+    }
+}
 
 /**
  * The evidence plus the transient bookkeeping needed to advance it. Only [evidence] is persisted

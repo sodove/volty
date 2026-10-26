@@ -72,7 +72,12 @@ internal class VehicleConnection(
      * [submitMotion] and [emit] — against this connection's own [clock]. Applying it anywhere else would
      * integrate a step twice. [snapshot] stays the raw, unmodelled view.
      */
-    val energy: ru.sodovaya.volty.domain.energy.VehicleEnergyTracker? = null
+    val energy: ru.sodovaya.volty.domain.energy.VehicleEnergyTracker? = null,
+    /**
+     * The per-wheel PWM estimator, or null (the default: off). Applied EXACTLY ONCE per published snapshot in
+     * [publish], AFTER [energy], for the same reason: it is a stateful reducer over the funnel's samples.
+     */
+    val pwm: ru.sodovaya.volty.domain.pwm.PwmEstimator? = null
 ) {
 
     private val states: MutableList<PackState> = packs
@@ -316,7 +321,8 @@ internal class VehicleConnection(
     /** Build, model (once) and publish one snapshot; returns the very instance that was published. */
     private fun publish(): VehicleData {
         val raw = snapshot()
-        val snap = energy?.apply(raw, clock()) ?: raw
+        val modelled = energy?.apply(raw, clock()) ?: raw
+        val snap = pwm?.apply(modelled, clock()) ?: modelled
         onVehicleData(snap)
         return snap
     }

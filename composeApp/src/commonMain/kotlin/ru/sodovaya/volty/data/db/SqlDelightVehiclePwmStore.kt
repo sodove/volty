@@ -35,12 +35,33 @@ class SqlDelightVehiclePwmStore(provider: VoltyDatabaseProvider) : VehiclePwmSto
     }
 
     override suspend fun save(vehicleId: String, memory: PwmMemory) {
+        // Ruling R3, in one transaction (read-modify-write): the stored row is a floor, not a slate.
+        queries.transaction {
+            val row = queries.selectByVehicle(vehicleId).executeAsOneOrNull()
+            val storedEvidence = row?.let { r -> runCatching { PwmEvidence.valueOf(r.evidence) }.getOrDefault(PwmEvidence.UNKNOWN) }
+                ?: PwmEvidence.UNKNOWN
+            val storedCal = row?.let(::calibrationOf)
+            write(vehicleId, PwmEvidence.monotone(storedEvidence, memory.evidence), memory.calibration.takeIfFinite() ?: storedCal)
+        }
+    }
+
+    private fun PwmCalibration?.takeIfFinite(): PwmCalibration? = this?.takeIf { it.k.isFinite() && it.r.isFinite() }
+
+    override suspend fun resetCalibration(vehicleId: String) {
+        queries.transaction {
+            val row = queries.selectByVehicle(vehicleId).executeAsOneOrNull() ?: return@transaction
+            val evidence = runCatching { PwmEvidence.valueOf(row.evidence) }.getOrDefault(PwmEvidence.UNKNOWN)
+            write(vehicleId, evidence, null)
+        }
+    }
+
+    private fun write(vehicleId: String, evidence: PwmEvidence, calibration: PwmCalibration?) {
         // A calibration with a non-finite k or r is dropped whole (it would poison every estimate); the
         // evidence is kept - it is a separate fact.
-        val cal = memory.calibration?.takeIf { it.k.isFinite() && it.r.isFinite() }
+        val cal = calibration
         queries.upsert(
             vehicleId = vehicleId,
-            evidence = memory.evidence.name,
+            evidence = evidence.name,
             k = cal?.k?.toDouble(),
             r = cal?.r?.toDouble(),
             points = cal?.points?.toLong() ?: 0L,

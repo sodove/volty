@@ -14,6 +14,14 @@ data class PwmMemory(val calibration: PwmCalibration?, val evidence: PwmEvidence
 interface VehiclePwmStore {
     /** [PwmMemory.EMPTY] for a vehicle with no row. */
     suspend fun load(vehicleId: String): PwmMemory
+    /**
+     * Ruling R3: a save never lowers the stored evidence (REPORTS > NEVER_REPORTED > UNKNOWN) and never
+     * replaces a stored calibration with null (an evidence-only save keeps the calibration). Wiping a
+     * calibration is [resetCalibration]'s job alone.
+     */
     suspend fun save(vehicleId: String, memory: PwmMemory)
+
+    /** Drops the calibration (wizard re-run / editor reset) and keeps the evidence. */
+    suspend fun resetCalibration(vehicleId: String)
     suspend fun reset(vehicleId: String)
 }

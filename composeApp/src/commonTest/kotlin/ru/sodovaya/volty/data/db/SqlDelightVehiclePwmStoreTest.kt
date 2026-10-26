@@ -219,4 +219,46 @@ class SqlDelightVehiclePwmStoreTest {
         db.driver.execute(null, "UPDATE VehicleRow SET pwmAlarmThresholdPercent = 65", 0)
         assertEquals(65, db.repo.get("v")!!.pwmAlarmThresholdPercent)
     }
+
+    @Test
+    fun `a REPORTS row survives saving UNKNOWN, and NEVER_REPORTED cannot lower it either`() = runTest {
+        val db = Db()
+        db.store.save("v1", PwmMemory(null, PwmEvidence.REPORTS))
+        db.store.save("v1", PwmMemory(null, PwmEvidence.UNKNOWN))
+        assertEquals(PwmEvidence.REPORTS, db.store.load("v1").evidence)
+        db.store.save("v1", PwmMemory(riding, PwmEvidence.NEVER_REPORTED))
+        assertEquals(PwmEvidence.REPORTS, db.store.load("v1").evidence, "the latch is one-way")
+        assertEquals(riding, db.store.load("v1").calibration, "a calibration is still storable under REPORTS (kept, inert)")
+    }
+
+    @Test
+    fun `evidence only moves up on save`() = runTest {
+        val db = Db()
+        db.store.save("v1", PwmMemory(null, PwmEvidence.NEVER_REPORTED))
+        db.store.save("v1", PwmMemory(null, PwmEvidence.UNKNOWN))
+        assertEquals(PwmEvidence.NEVER_REPORTED, db.store.load("v1").evidence)
+        db.store.save("v1", PwmMemory(null, PwmEvidence.REPORTS))
+        assertEquals(PwmEvidence.REPORTS, db.store.load("v1").evidence)
+    }
+
+    @Test
+    fun `a calibration survives an evidence-only save`() = runTest {
+        val db = Db()
+        db.store.save("v1", PwmMemory(riding, PwmEvidence.NEVER_REPORTED))
+        db.store.save("v1", PwmMemory(null, PwmEvidence.NEVER_REPORTED))
+        assertEquals(PwmMemory(riding, PwmEvidence.NEVER_REPORTED), db.store.load("v1"))
+        // A broken (non-finite) calibration is dropped, and must not wipe the stored good one either.
+        db.store.save("v1", PwmMemory(riding.copy(k = Float.NaN), PwmEvidence.NEVER_REPORTED))
+        assertEquals(riding, db.store.load("v1").calibration)
+    }
+
+    @Test
+    fun `resetCalibration clears the calibration and keeps the evidence`() = runTest {
+        val db = Db()
+        db.store.save("v1", PwmMemory(riding, PwmEvidence.NEVER_REPORTED))
+        db.store.resetCalibration("v1")
+        assertEquals(PwmMemory(null, PwmEvidence.NEVER_REPORTED), db.store.load("v1"))
+        db.store.resetCalibration("never-stored")
+        assertEquals(0L, db.rows("never-stored"), "resetting a vehicle with no row creates none")
+    }
 }

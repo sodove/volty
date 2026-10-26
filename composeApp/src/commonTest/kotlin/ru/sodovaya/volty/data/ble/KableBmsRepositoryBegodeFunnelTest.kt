@@ -20,6 +20,7 @@ import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
+import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -697,6 +698,9 @@ class KableBmsRepositoryBegodeFunnelTest {
         batteryLevelFraction = 0.62f,
         // The wheel's own PWM alarm: non-null (the default is null) so a dropped fold line is visible.
         wheelPwmAlarm = true,
+        // The estimated-duty provenance: non-default so a dropped fold line is visible.
+        dutySource = DutySource.ESTIMATED,
+        dutyAtCeiling = true,
         isConnected = true,
         // Pinned rather than left at `Clock.System.now()`: the guard above has
         // to compare this against a default-constructed sample, and two `now()`

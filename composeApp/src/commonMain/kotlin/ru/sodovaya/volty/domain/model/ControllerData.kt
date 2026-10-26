@@ -6,6 +6,12 @@ import kotlin.time.Instant
 
 enum class SpeedSource { REPORTED, DERIVED, NONE }
 
+/**
+ * Where [ControllerData.dutyPercent] came from: [MEASURED] (the controller reported it, the default) or
+ * [ESTIMATED] (the per-wheel PWM model - only ever for a wheel proven not to report PWM).
+ */
+enum class DutySource { MEASURED, ESTIMATED }
+
 /** Why a controller could not provide speed. Null is kept for legacy/unknown causes. */
 enum class SpeedUnknownReason {
     /** The decoder has eRPM but no positive wheel diameter/pole/gear geometry. */
@@ -226,6 +232,10 @@ data class ControllerData(
      * Folded across controllers with `any` over the non-null contributors.
      */
     val wheelPwmAlarm: Boolean? = null,
+    /** [DutySource.ESTIMATED] only on the vehicle-level motion, and only while the estimator publishes [dutyPercent]. */
+    val dutySource: DutySource = DutySource.MEASURED,
+    /** With [DutySource.ESTIMATED]: the model reached 100 % (field weakening beyond), shown as "at least 100 %". */
+    val dutyAtCeiling: Boolean = false,
     val isConnected: Boolean = false,
     val timestamp: Instant = Clock.System.now()
 ) {

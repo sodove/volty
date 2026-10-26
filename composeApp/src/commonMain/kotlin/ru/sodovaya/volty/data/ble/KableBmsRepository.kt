@@ -47,6 +47,9 @@ import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.energy.EnergyMemory
 import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
 import ru.sodovaya.volty.domain.energy.VehicleEnergyTracker
+import ru.sodovaya.volty.domain.pwm.PwmEstimator
+import ru.sodovaya.volty.domain.pwm.PwmMemory
+import ru.sodovaya.volty.domain.pwm.VehiclePwmStore
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
@@ -162,6 +165,11 @@ class KableBmsRepository private constructor(
      * construction site and test keeps its behaviour). Koin binds the SQLDelight store.
      */
     private val energyStore: VehicleEnergyStore? = null,
+    /**
+     * Where the per-wheel PWM evidence and calibration live. **Null = the PWM estimator is off** (the default, so
+     * every existing construction site keeps its behaviour). Koin binds the SQLDelight store.
+     */
+    private val pwmStore: VehiclePwmStore? = null,
 ) : BmsRepository, CanDiscovery, ControllerConfigSource, LearnedCellCountSource, BleDiagnosticsRepository {
 
     private val diagnosticBuffer = BleDiagnosticBuffer()
@@ -290,10 +298,11 @@ class KableBmsRepository private constructor(
         bleAdapterStateProvider: BleAdapterStateProvider,
         historyRuntime: ru.sodovaya.volty.data.history.HistoryRecordingRuntime,
         energyStore: VehicleEnergyStore? = null,
+        pwmStore: VehiclePwmStore? = null,
     ) : this(vehicleRepository, { serviceController.start() }, { serviceController.stop() },
         Dispatchers.Default, rideHistoryRepository, bleAdapterStateProvider,
         historyStartup = { historyRuntime.prepare().ingress }, historyShutdown = historyRuntime::close,
-        energyStore = energyStore)
+        energyStore = energyStore, pwmStore = pwmStore)
 
     internal companion object {
         /**
@@ -474,6 +483,7 @@ class KableBmsRepository private constructor(
             historyStartup: (suspend () -> HistoryTelemetryIngress)? = null,
             historyShutdown: (suspend () -> Unit)? = null,
             energyStore: VehicleEnergyStore? = null,
+            pwmStore: VehiclePwmStore? = null,
         ): KableBmsRepository = KableBmsRepository(
             vehicleRepository = vehicleRepository,
             serviceStart = serviceStart,
@@ -484,6 +494,7 @@ class KableBmsRepository private constructor(
             historyStartup = historyStartup,
             historyShutdown = historyShutdown,
             energyStore = energyStore,
+            pwmStore = pwmStore,
         )
     }
 
@@ -812,6 +823,7 @@ class KableBmsRepository private constructor(
                     _activeVehicle.value = updated
                 }
                 refreshEnergyVehicle(list)
+                refreshPwmVehicle(list)
             }
         }
         scope.launch {
@@ -1580,6 +1592,7 @@ class KableBmsRepository private constructor(
         val expanded = expandedVehiclePacks(vehicle, address, type)
         lateinit var orchestrator: VehicleConnection
         val energy = buildEnergyTracker(vehicle, address, type) { orchestrator }
+        val pwm = buildPwmEstimator(vehicle) { orchestrator }
         orchestrator = VehicleConnection(
             packs = stored,
             // Protocol-synthesised slots stay invisible until they report:
@@ -1605,9 +1618,11 @@ class KableBmsRepository private constructor(
                 _activeMotion.value = vd.motion
                 vehicleDataTapForTest?.invoke(vd)
                 maybeSaveEnergy(orchestrator)
+                maybeSavePwm(orchestrator)
             },
             clock = orchestratorClockForTest ?: { Clock.System.now() },
-            energy = energy
+            energy = energy,
+            pwm = pwm
         )
         return orchestrator
     }
@@ -1672,6 +1687,85 @@ class KableBmsRepository private constructor(
     }
 
     /**
+     * The PWM estimator for one connection, or null when it is off (no [pwmStore], no vehicle). Same rules as
+     * the energy tracker: the (suspend) memory load runs off the funnel and installs under [sessionLock] only for
+     * the connection that still owns the active pipeline; a FAILED load never becomes empty memory (the estimator
+     * stays not-ready, so it publishes nothing and saves nothing, and the stored row is never overwritten).
+     * The load is started by the first sample ([PwmEstimator.apply]'s hook), i.e. once the pipeline is active.
+     * Guests and demos run it with empty memory and persist nothing.
+     */
+    private fun buildPwmEstimator(vehicle: Vehicle?, orchestrator: () -> VehicleConnection): PwmEstimator? {
+        val store = pwmStore ?: return null
+        val v = vehicle ?: return null
+        val persisted = !v.isGuest && !v.isDemo
+        lateinit var estimator: PwmEstimator
+        estimator = PwmEstimator(
+            vehicle = v,
+            memory = PwmMemory.EMPTY,
+            awaitMemory = persisted,
+            onFirstApply = {
+                if (persisted) {
+                    val owner = orchestrator()
+                    scope.launch {
+                        val loaded = try {
+                            store.load(v.id)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            println("[VOLTY-BLE] pwm memory load failed for ${v.id}: $e")
+                            return@launch
+                        }
+                        sessionLock.withLock {
+                            if (ownsActivePipeline(owner)) estimator.installMemory(loaded)
+                        }
+                    }
+                }
+            },
+        )
+        return estimator
+    }
+
+    private val pwmSaveMutex = kotlinx.coroutines.sync.Mutex()
+
+    /** Persist promptly whenever the estimator's evidence or calibration changed. Called on the funnel, under sessionLock. */
+    private fun maybeSavePwm(orchestrator: VehicleConnection) {
+        val store = pwmStore ?: return
+        val estimator = orchestrator.pwm ?: return
+        val save = pwmSaveOf(estimator) ?: return
+        scope.launch { savePwmLogged(store, estimator, save) }
+    }
+
+    /** What to save now, or null when nothing changed, memory is not loaded, or the vehicle is a guest/demo. Clears the dirty flag. */
+    private fun pwmSaveOf(estimator: PwmEstimator): PwmMemory? {
+        val id = estimator.vehicleId
+        if (id.startsWith(GUEST_VEHICLE_ID_PREFIX) || id == DEMO_VEHICLE_ID || id == DEMO_WHEEL_VEHICLE_ID) return null
+        if (!estimator.memoryReady || !estimator.dirty) return null
+        estimator.markSaved()
+        return estimator.memory()
+    }
+
+    /** A failed write is logged and the state marked dirty again (retried on the next change and on disconnect). */
+    private suspend fun savePwmLogged(store: VehiclePwmStore, estimator: PwmEstimator, memory: PwmMemory) {
+        try {
+            pwmSaveMutex.withLock { store.save(estimator.vehicleId, memory) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            estimator.markDirty()
+            throw e
+        } catch (e: Exception) {
+            estimator.markDirty()
+            println("[VOLTY-BLE] pwm memory save failed: $e")
+        }
+    }
+
+    suspend fun resetPwmCalibration(vehicleId: String) {
+        sessionLock.withLock {
+            val estimator = vehicleConnection?.pwm
+            if (estimator != null && estimator.vehicleId == vehicleId) estimator.resetCalibration()
+        }
+        pwmSaveMutex.withLock { pwmStore?.resetCalibration(vehicleId) }
+    }
+
+    /**
      * Hand the live tracker the edited profile, so a capacity typed in the editor takes effect now and
      * not at the next connect. Under [sessionLock]: the tracker is single-threaded and its owner is the
      * sample funnel, which holds that lock for each transaction.
@@ -1680,6 +1774,12 @@ class KableBmsRepository private constructor(
         val tracker = vehicleConnection?.energy ?: return@withLock
         val updated = list.firstOrNull { it.id == tracker.vehicleId } ?: return@withLock
         tracker.updateVehicle(updated)
+    }
+
+    private suspend fun refreshPwmVehicle(list: List<Vehicle>) = sessionLock.withLock {
+        val estimator = vehicleConnection?.pwm ?: return@withLock
+        val updated = list.firstOrNull { it.id == estimator.vehicleId } ?: return@withLock
+        estimator.updateVehicle(updated)
     }
 
     override suspend fun resetLearnedEnergy(vehicleId: String) {
@@ -3185,6 +3285,7 @@ class KableBmsRepository private constructor(
         // negative is either already accepted with its original resources, or
         // joins shutdown without independently releasing its BLE service early.
         var energySave: (suspend (VehicleEnergyStore) -> Unit)? = null
+        var pwmSave: Pair<PwmEstimator, PwmMemory>? = null
         val accepted = sessionLock.withLock {
             if (recordingShutdownRequested && !allowDuringShutdown) return@withLock null
             val disconnectIntent = Any()
@@ -3196,6 +3297,7 @@ class KableBmsRepository private constructor(
                 tracker.finish()
                 energySaveOf(tracker)
             }
+            pwmSave = vehicleConnection?.pwm?.let { e -> pwmSaveOf(e)?.let { e to it } }
             val current = links
             val sessionsToTear = current.mapNotNull { it.session }
             val reconnectsToCancel = current.mapNotNull { it.reconnectJob }
@@ -3229,6 +3331,9 @@ class KableBmsRepository private constructor(
                 val store = energyStore
                 val save = energySave
                 if (store != null && save != null) saveEnergyLogged(store, save)
+                val pwmStoreNow = pwmStore
+                val pwmNow = pwmSave
+                if (pwmStoreNow != null && pwmNow != null) savePwmLogged(pwmStoreNow, pwmNow.first, pwmNow.second)
                 val outcome = runCatching { releaseAcceptedDisconnect(accepted) }
                 accepted.receipt.complete(outcome) // Outside sessionLock.
                 outcome.getOrThrow()
