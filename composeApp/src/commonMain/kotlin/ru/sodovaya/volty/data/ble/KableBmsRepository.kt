@@ -47,7 +47,9 @@ import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.energy.EnergyMemory
 import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
 import ru.sodovaya.volty.domain.energy.VehicleEnergyTracker
+import ru.sodovaya.volty.domain.pwm.PwmCalibration
 import ru.sodovaya.volty.domain.pwm.PwmEstimator
+import ru.sodovaya.volty.domain.pwm.PwmEvidence
 import ru.sodovaya.volty.domain.pwm.PwmMemory
 import ru.sodovaya.volty.domain.pwm.VehiclePwmStore
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -1796,7 +1798,7 @@ class KableBmsRepository private constructor(
      * The wizard / editor wiped the calibration: forget it in the live estimator AND the row, in one ordered
      * section, so no save captured earlier can write it back.
      */
-    suspend fun resetPwmCalibration(vehicleId: String) {
+    override suspend fun resetPwmCalibration(vehicleId: String) {
         pwmSaveMutex.withLock {
             sessionLock.withLock {
                 val estimator = vehicleConnection?.pwm
@@ -1804,6 +1806,42 @@ class KableBmsRepository private constructor(
             }
             pwmStore?.resetCalibration(vehicleId)
         }
+    }
+
+    /**
+     * The wizard's result: installed in the live estimator (when [vehicleId] is the connected vehicle) and written to
+     * the row in ONE ordered section, so a save captured earlier cannot overwrite it and the estimator and the row
+     * cannot disagree. Guests and demos are never persisted. The evidence written is the estimator's own (UNKNOWN when
+     * not connected: R3 makes that a no-op for the stored evidence).
+     */
+    override suspend fun applyPwmCalibration(vehicleId: String, calibration: PwmCalibration) {
+        pwmSaveMutex.withLock {
+            val evidence = sessionLock.withLock {
+                val estimator = vehicleConnection?.pwm
+                if (estimator != null && estimator.vehicleId == vehicleId) {
+                    estimator.installCalibration(calibration)
+                    estimator.evidence
+                } else PwmEvidence.UNKNOWN
+            }
+            if (vehicleId.startsWith(GUEST_VEHICLE_ID_PREFIX) || vehicleId == DEMO_VEHICLE_ID || vehicleId == DEMO_WHEEL_VEHICLE_ID) return
+            pwmStore?.save(vehicleId, PwmMemory(calibration, evidence))
+        }
+    }
+
+    /** See [BmsRepository.pwmMemory]. A failed store read is no information, not an empty row: the live memory (or EMPTY) is returned. */
+    override suspend fun pwmMemory(vehicleId: String): PwmMemory = pwmSaveMutex.withLock {
+        val live = sessionLock.withLock {
+            vehicleConnection?.pwm?.takeIf { it.vehicleId == vehicleId && it.memoryReady }?.memory()
+        }
+        val stored = try {
+            pwmStore?.load(vehicleId)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("[VOLTY-BLE] pwm memory read failed for $vehicleId: $e")
+            null
+        } ?: PwmMemory.EMPTY
+        PwmMemory(live?.calibration ?: stored.calibration, PwmEvidence.monotone(stored.evidence, live?.evidence ?: PwmEvidence.UNKNOWN))
     }
 
     /**

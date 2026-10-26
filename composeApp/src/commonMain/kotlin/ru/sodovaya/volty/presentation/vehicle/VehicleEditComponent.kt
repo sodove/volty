@@ -44,6 +44,20 @@ import ru.sodovaya.volty.presentation.picker.addBmsType
 import ru.sodovaya.volty.presentation.picker.addControllerType
 import ru.sodovaya.volty.presentation.picker.withScanHit
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.withContext
+import kotlin.coroutines.CoroutineContext
+import com.arkivanov.essenty.lifecycle.doOnResume
+import ru.sodovaya.volty.domain.model.DEFAULT_PWM_ALARM_THRESHOLD_PERCENT
+import ru.sodovaya.volty.domain.model.PwmManual
+import ru.sodovaya.volty.domain.pwm.PwmEvidence
+import ru.sodovaya.volty.presentation.vehicle.pwm.ManualParse
+import ru.sodovaya.volty.presentation.vehicle.pwm.PwmCalibrationSummary
+import ru.sodovaya.volty.presentation.vehicle.pwm.PwmEntry
+import ru.sodovaya.volty.presentation.vehicle.pwm.parsePwmManual
+import ru.sodovaya.volty.presentation.vehicle.pwm.parsePwmThreshold
+import ru.sodovaya.volty.presentation.vehicle.pwm.pwmEntryOf
+import ru.sodovaya.volty.presentation.vehicle.pwm.pwmNumberText
+import ru.sodovaya.volty.presentation.vehicle.pwm.pwmSummaryOf
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -99,6 +113,25 @@ interface VehicleEditComponent : DraftExitComponent {
 
     /** Forget what the app learned about this pack (capacity, resistance). Entered capacity stays. */
     fun onResetLearnedEnergy()
+
+    // ----- Estimated PWM -----
+
+    /** The wheel's alarm threshold as typed; valid only as a whole percent in 1..100 ([State.pwmThresholdError]). */
+    fun onPwmThresholdChanged(text: String)
+
+    /** The rider's own free-spin point: km/h at V, both or neither ([State.pwmManualError]). Never a per-model value. */
+    fun onPwmManualKmhChanged(text: String)
+    fun onPwmManualVoltsChanged(text: String)
+
+    /**
+     * Open the calibration wizard. **Refused unless the wheel is proven not to report PWM**
+     * ([State.pwmEntry] == [PwmEntry.WIZARD]) and the typed threshold has been saved (the wizard fits against the
+     * stored one), so a stale or contradicting entry point cannot start a calibration the app would never use.
+     */
+    fun onOpenPwmWizard()
+
+    /** Forget the stored calibration (live estimator and row); the evidence and the typed manual point stay. */
+    fun onResetPwmCalibration()
     fun onDisconnectNotifyChanged(enabled: Boolean)
     fun onChargeCompleteNotifyChanged(enabled: Boolean)
     fun onDashboardStyleChanged(style: DashboardStyle?)
@@ -346,6 +379,8 @@ interface VehicleEditComponent : DraftExitComponent {
         val topology: PackTopology,
         val yieldBmsToHeadUnit: Boolean?,
         val batteryCapacity: BatteryCapacity?,
+        val pwmThresholdPercent: Int?,
+        val pwmManual: PwmManual?,
         val draft: PersistableVehicleDraft
     )
 
@@ -488,8 +523,36 @@ interface VehicleEditComponent : DraftExitComponent {
         val capacityText: String = "",
         val capacityUnit: CapacityUnit = CapacityUnit.WH,
         /** Null while creating: a vehicle that does not exist yet has learned nothing. */
-        val energy: EnergySummary? = null
+        val energy: EnergySummary? = null,
+
+        // ----- Estimated PWM -----
+
+        /** The alarm threshold as typed, percent. Seeded from [Vehicle.pwmAlarmThresholdPercent]. */
+        val pwmThresholdText: String = DEFAULT_PWM_ALARM_THRESHOLD_PERCENT.toString(),
+        /** The manual free-spin point as typed (km/h, then V). Seeded from [Vehicle.pwmManual]. */
+        val pwmManualKmhText: String = "",
+        val pwmManualVoltsText: String = "",
+        /** What the app has PROVEN about whether this wheel reports PWM; loaded off the main thread, UNKNOWN until then. */
+        val pwmEvidence: PwmEvidence = PwmEvidence.UNKNOWN,
+        /**
+         * The learned or wizard calibration, or null. NEVER a MANUAL-sourced stored row: that row's k is stale (the
+         * estimator replaces it on read with the typed manual value), so showing it as the calibration would be a lie.
+         */
+        val pwmCalibration: PwmCalibrationSummary? = null,
+        /** Any stored calibration row at all (a MANUAL-sourced one included): what the reset would wipe. */
+        val pwmHasStoredCalibration: Boolean = false
     ) {
+        val pwmThresholdPercent: Int? get() = parsePwmThreshold(pwmThresholdText)
+        val pwmThresholdError: Boolean get() = pwmThresholdPercent == null
+        private val pwmManualParse: ManualParse get() = parsePwmManual(pwmManualKmhText, pwmManualVoltsText)
+        val pwmManual: PwmManual? get() = (pwmManualParse as? ManualParse.Value)?.manual
+        val pwmManualError: Boolean get() = pwmManualParse == ManualParse.Invalid
+        val pwmEntry: PwmEntry get() = pwmEntryOf(pwmEvidence)
+
+        /** The typed threshold differs from the saved one: the wizard would fit against the wrong number. */
+        val pwmWizardNeedsSave: Boolean
+            get() = savedValues != null && pwmThresholdPercent != savedValues.pwmThresholdPercent
+
         /** The typed capacity, or null for blank and for anything that is not a positive number. */
         val batteryCapacity: BatteryCapacity?
             get() = parseCapacity(capacityText, capacityUnit)
@@ -539,6 +602,8 @@ interface VehicleEditComponent : DraftExitComponent {
                 topology = topology,
                 yieldBmsToHeadUnit = yieldBmsToHeadUnit,
                 batteryCapacity = batteryCapacity,
+                pwmThresholdPercent = pwmThresholdPercent,
+                pwmManual = pwmManual,
                 draft = draft.persistableValues()
             )
 
@@ -583,7 +648,7 @@ interface VehicleEditComponent : DraftExitComponent {
          * it concerns ([issuesBySource]). This property is the same fact for
          * anything that wants to ask *before* the tap; nothing does today.
          */
-        val canSave: Boolean get() = name.isNotBlank() && !capacityError && issues.none { it.blocksSave(isEditing) }
+        val canSave: Boolean get() = name.isNotBlank() && !capacityError && !pwmThresholdError && !pwmManualError && issues.none { it.blocksSave(isEditing) }
 
         /**
          * Whether the "yield BMS to head unit while riding" toggle applies at
@@ -722,6 +787,10 @@ class DefaultVehicleEditComponent(
     private val onOpenUnitsRequested: () -> Unit = {},
     /** Defaulted for the same reason: navigation only («Всё о ТС»). */
     private val onOpenInfoRequested: () -> Unit = {},
+    /** Defaulted for the same reason: navigation only (the PWM calibration wizard). */
+    private val onOpenPwmWizardRequested: () -> Unit = {},
+    /** Where the PWM store reads and writes run: off Main, as every store call here must. */
+    private val pwmIoContext: CoroutineContext = Dispatchers.Default,
     /**
      * CAN discovery (G2 Task 5), or null when this build has none.
      *
@@ -799,6 +868,9 @@ class DefaultVehicleEditComponent(
         backHandler.register(backCallback)
         backHandler.register(sectionBackCallback)
         scope.launch { initialize() }
+        // Back from the wizard (or any screen above): the evidence and the calibration may have moved. Skipped until
+        // the form has loaded, because initialize() replaces the whole state and would erase an earlier refresh.
+        lifecycle.doOnResume { if (_state.value.savedValues != null) scope.launch { refreshPwm() } }
         // A CAN scan needs a live link, and whether there is one changes under
         // the form: the rider can arrive here connected, drop, or reconnect. The
         // button follows, rather than being decided once at load.
@@ -977,7 +1049,10 @@ class DefaultVehicleEditComponent(
                     canScanTarget = canScanTarget(draftOf(v), liveAddresses),
                     learnedCellCount = learnedNow(bmsRepository.activeVehicle.value, bmsRepository.connectionState.value),
                     capacityText = capacityText(v.batteryCapacity),
-                    capacityUnit = v.batteryCapacity?.unit ?: CapacityUnit.WH
+                    capacityUnit = v.batteryCapacity?.unit ?: CapacityUnit.WH,
+                    pwmThresholdText = v.pwmAlarmThresholdPercent.toString(),
+                    pwmManualKmhText = pwmNumberText(v.pwmManual?.freeSpinKmh),
+                    pwmManualVoltsText = pwmNumberText(v.pwmManual?.atVoltage)
                 )
                 loadedAlert = v.alertConfig
                 storedRecord = energyStore?.peek(v.id)
@@ -985,6 +1060,7 @@ class DefaultVehicleEditComponent(
                     savedValues = loaded.editableValues,
                     energy = if (energyStore != null) energySummaryOf(storedRecord, loadedAlert, liveWhPerKm) else null
                 )
+                refreshPwm()
                 return
             }
         }
@@ -1095,6 +1171,50 @@ class DefaultVehicleEditComponent(
             publishEnergy()
         }
     }
+
+    override fun onPwmThresholdChanged(text: String) { _state.update { it.copy(pwmThresholdText = text) } }
+    override fun onPwmManualKmhChanged(text: String) { _state.update { it.copy(pwmManualKmhText = text) } }
+    override fun onPwmManualVoltsChanged(text: String) { _state.update { it.copy(pwmManualVoltsText = text) } }
+
+    override fun onOpenPwmWizard() {
+        val s = _state.value
+        if (!s.isEditing || s.pwmEntry != PwmEntry.WIZARD || s.pwmWizardNeedsSave) return
+        onOpenPwmWizardRequested()
+    }
+
+    override fun onResetPwmCalibration() {
+        val id = vehicleId ?: return
+        scope.launch {
+            try {
+                withContext(pwmIoContext) { bmsRepository.resetPwmCalibration(id) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                println("[VOLTY] pwm reset failed: $e")
+            }
+            refreshPwm()
+        }
+    }
+
+    /** Evidence and calibration, as the repository holds them now. A failed read leaves the screen as it was. */
+    private suspend fun refreshPwm() {
+        val id = vehicleId ?: return
+        val memory = try {
+            withContext(pwmIoContext) { bmsRepository.pwmMemory(id) }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            return
+        }
+        _state.update {
+            it.copy(
+                pwmEvidence = memory.evidence,
+                pwmCalibration = pwmSummaryOf(memory.calibration),
+                pwmHasStoredCalibration = memory.calibration != null
+            )
+        }
+    }
+
     override fun onDisconnectNotifyChanged(enabled: Boolean) { _state.update { it.copy(disconnectNotify = enabled) } }
     override fun onChargeCompleteNotifyChanged(enabled: Boolean) { _state.update { it.copy(chargeCompleteNotify = enabled) } }
     override fun onDashboardStyleChanged(style: DashboardStyle?) { _state.update { it.copy(dashboardStyle = style) } }
@@ -1420,6 +1540,12 @@ class DefaultVehicleEditComponent(
             onOpenSection(VehicleEditSection.BATTERY)
             return
         }
+        // Same treatment for the PWM fields: a threshold outside 1..100 or half a manual point would resolve to
+        // nothing typed and silently overwrite the stored value, so refuse and show the field.
+        if (s.pwmThresholdError || s.pwmManualError) {
+            onOpenSection(VehicleEditSection.PWM)
+            return
+        }
         // A blocking issue is a self-contradictory config: conflicting protocol
         // kinds at one address or two sources claiming one CAN id (both of
         // which `planLinks` throws on), or two sources on one gateway link both
@@ -1617,7 +1743,11 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
         secondaryGauge = s.secondaryGauge,
         yieldBmsToHeadUnit = s.yieldBmsToHeadUnit,
         autoVolume = s.autoVolume,
-        batteryCapacity = s.batteryCapacity
+        batteryCapacity = s.batteryCapacity,
+        // Like the alert fields: a value the rider did not touch keeps whatever the row holds now.
+        pwmAlarmThresholdPercent = s.alertValue(s.pwmThresholdPercent, pwmAlarmThresholdPercent) { it.pwmThresholdPercent }
+            ?: pwmAlarmThresholdPercent,
+        pwmManual = s.alertValue(s.pwmManual, pwmManual) { it.pwmManual }
     )
 }
 

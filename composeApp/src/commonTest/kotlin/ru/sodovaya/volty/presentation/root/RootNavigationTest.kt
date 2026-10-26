@@ -480,4 +480,19 @@ class RootNavigationTest {
         nav.pop()
         assertEquals(Config.VehicleEdit(vehicleId = "v1"), stack.value.active.configuration)
     }
+
+    // ---- the PWM calibration wizard, reached from the saved vehicle's editor ----
+
+    @Test
+    fun the_pwm_wizard_opens_for_a_saved_vehicle_only_and_returns_to_the_same_editor() {
+        assertEquals(Config.PwmCalibration("v1"), configForPwmCalibration("v1"))
+        assertNull(configForPwmCalibration(null), "an unsaved vehicle has no row to calibrate")
+        val (nav, stack) = buildStack(Config.Dashboard)
+        nav.navigate { stackAfterGoTo(it, Config.VehicleEdit(vehicleId = "v1")) }
+        nav.navigate { stackAfterGoTo(it, configForPwmCalibration("v1")!!) }
+        assertEquals(Config.PwmCalibration("v1"), stack.value.active.configuration)
+        assertTrue(shouldPopOnBack(Config.PwmCalibration("v1"), stackSize = 3))
+        nav.pop()
+        assertEquals(Config.VehicleEdit(vehicleId = "v1"), stack.value.active.configuration, "the form kept beneath it")
+    }
 }

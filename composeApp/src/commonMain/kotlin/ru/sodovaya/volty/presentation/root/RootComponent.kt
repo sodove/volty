@@ -124,6 +124,7 @@ interface RootComponent {
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
         data class VehicleInfo(val component: ru.sodovaya.volty.presentation.vehicle.info.VehicleInfoComponent) : Child
+        data class PwmCalibration(val component: ru.sodovaya.volty.presentation.vehicle.pwm.PwmCalibrationComponent) : Child
         data class VehicleOverview(val component: ru.sodovaya.volty.presentation.vehicle.VehicleOverviewComponent) : Child
         data class History(val component: ru.sodovaya.volty.presentation.history.HistoryComponent,
             val vehicleNames: kotlinx.coroutines.flow.Flow<Map<String, String>> = kotlinx.coroutines.flow.flowOf(emptyMap())) : Child
@@ -178,6 +179,8 @@ sealed class Config {
     @Serializable data class VehicleAlerts(val vehicleId: String) : Config()
     /** «Всё о ТС»: everything the app knows about one saved vehicle. Pushed from [VehicleEdit]. */
     @Serializable data class VehicleInfo(val vehicleId: String) : Config()
+    /** The PWM calibration wizard for one saved vehicle. Pushed from [VehicleEdit], whose form stays alive beneath it. */
+    @Serializable data class PwmCalibration(val vehicleId: String) : Config()
     /** A saved vehicle seen without connecting: last recorded state, rides, settings. */
     @Serializable data class VehicleOverview(val vehicleId: String) : Config()
     /** History, opened on [rideId] when given, else on the ride being recorded or the newest. */
@@ -189,6 +192,9 @@ sealed class Config {
 
 /** The info screen reads a SAVED vehicle; an editor that is still creating one has no id to open it on. */
 internal fun configForVehicleInfo(vehicleId: String?): Config? = vehicleId?.let { Config.VehicleInfo(it) }
+
+/** Same rule for the PWM wizard: it calibrates a SAVED vehicle's row, so a form still creating one has no id to open it on. */
+internal fun configForPwmCalibration(vehicleId: String?): Config? = vehicleId?.let { Config.PwmCalibration(it) }
 
 /** The three root surfaces whose create action opens the same retained wizard. */
 internal enum class CreateVehicleEntry { RIDE, DASHBOARD, SETTINGS }
@@ -908,6 +914,8 @@ class DefaultRootComponent(
                         onOpenUnitsRequested = { goTo(Config.Settings) },
                         // «Всё о ТС», pushed like the alerts screen; saved vehicles only.
                         onOpenInfoRequested = { configForVehicleInfo(config.vehicleId)?.let(::goTo) },
+                        // The PWM calibration wizard, pushed like the info screen so the form keeps its edits.
+                        onOpenPwmWizardRequested = { configForPwmCalibration(config.vehicleId)?.let(::goTo) },
                         // The SAME instance the connection runs on — `appModule`
                         // binds KableBmsRepository to both interfaces, because a
                         // second one would have no live links to scan (G2 Task 5).
@@ -929,6 +937,16 @@ class DefaultRootComponent(
                     alarmPreview = get(),
                     onSaved = { nav.pop() },
                     onBackRequested = { nav.pop() }
+                )
+            )
+            is Config.PwmCalibration -> RootComponent.Child.PwmCalibration(
+                ru.sodovaya.volty.presentation.vehicle.pwm.DefaultPwmCalibrationComponent(
+                    componentContext = context,
+                    parentScope = scope,
+                    vehicleId = config.vehicleId,
+                    vehicles = get(),
+                    bms = get(),
+                    onBackRequested = { nav.pop() },
                 )
             )
             is Config.VehicleInfo -> RootComponent.Child.VehicleInfo(

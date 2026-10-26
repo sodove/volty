@@ -100,6 +100,11 @@ class PwmEstimator(
         calibration = null
     }
 
+    /** The wizard's result, installed live. Persisting it is the repository's job (one ordered path). */
+    fun installCalibration(c: PwmCalibration) {
+        calibration = c
+    }
+
     fun apply(snapshot: VehicleData, now: Instant): VehicleData {
         if (!started) { started = true; onFirstApply() }
         val motion = snapshot.motion

@@ -9,6 +9,8 @@ import com.arkivanov.decompose.router.stack.push
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.backhandler.BackDispatcher
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import com.arkivanov.essenty.lifecycle.pause
+import com.arkivanov.essenty.lifecycle.resume
 import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.alert.AlertLevel
 import ru.sodovaya.volty.domain.alert.AlertRule
@@ -143,6 +145,15 @@ class VehicleEditComponentTest {
         override suspend fun disconnect() {}
         val learnedResets = mutableListOf<String>()
         override suspend fun resetLearnedEnergy(vehicleId: String) { learnedResets += vehicleId }
+        /** What the repository says about the PWM evidence and calibration; the editor reads it, never the store. */
+        var pwmMemoryAnswer: ru.sodovaya.volty.domain.pwm.PwmMemory = ru.sodovaya.volty.domain.pwm.PwmMemory.EMPTY
+        var pwmMemoryReads = 0
+        val pwmResets = mutableListOf<String>()
+        override suspend fun pwmMemory(vehicleId: String): ru.sodovaya.volty.domain.pwm.PwmMemory { pwmMemoryReads++; return pwmMemoryAnswer }
+        override suspend fun resetPwmCalibration(vehicleId: String) {
+            pwmResets += vehicleId
+            pwmMemoryAnswer = pwmMemoryAnswer.copy(calibration = null)
+        }
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())
         override fun motionSamples(window: Duration): Flow<List<ControllerData>> = flowOf(emptyList())
@@ -400,9 +411,11 @@ class VehicleEditComponentTest {
         rangeSource: RangeSource? = null,
         onSaved: () -> Unit = {},
         onCancelled: () -> Unit = {},
-        backDispatcher: BackDispatcher? = null
+        backDispatcher: BackDispatcher? = null,
+        onOpenPwmWizard: () -> Unit = {},
+        lifecycle: LifecycleRegistry = LifecycleRegistry()
     ): DefaultVehicleEditComponent {
-        val ctx = DefaultComponentContext(LifecycleRegistry(), backHandler = backDispatcher)
+        val ctx = DefaultComponentContext(lifecycle, backHandler = backDispatcher)
         return DefaultVehicleEditComponent(
             componentContext = ctx,
             vehicleId = vehicleId,
@@ -411,6 +424,9 @@ class VehicleEditComponentTest {
             onSaved = onSaved,
             onCancelled = onCancelled,
             onDeleted = {},
+            onOpenPwmWizardRequested = onOpenPwmWizard,
+            // Run the PWM store calls in the caller's context: a hop to a real thread would escape the test clock.
+            pwmIoContext = kotlin.coroutines.EmptyCoroutineContext,
             canDiscovery = canDiscovery,
             controllerConfigSource = controllerConfigSource,
             learnedCellCountSource = learnedCellCountSource,
@@ -3894,6 +3910,182 @@ class VehicleEditComponentTest {
         assertFalse(c.state.value.canSave, "save() refuses it, so canSave must say so")
         c.onCapacityChanged("")
         assertTrue(c.state.value.canSave, "blank is a clear, not a mistake")
+    }
+
+
+    // ----- Estimated PWM (the wizard entry, the threshold and the manual point) -----
+
+    private fun pwmCal(source: ru.sodovaya.volty.domain.pwm.PwmCalibrationSource, k: Float = 1.13f) =
+        ru.sodovaya.volty.domain.pwm.PwmCalibration(
+            k = k, r = 0f, points = 1, source = source, spread = null,
+            basis = ru.sodovaya.volty.domain.pwm.PwmBasis.FREE_SPIN, onsets = emptyList(),
+        )
+
+    @Test
+    fun `the PWM fields are seeded from the vehicle and shown as typed`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        assertEquals("90", c.state.value.pwmThresholdText)
+        assertEquals("81.5", c.state.value.pwmManualKmhText)
+        assertEquals("96.5", c.state.value.pwmManualVoltsText)
+        assertFalse(c.state.value.isDirty, "loading them is not an edit")
+    }
+
+    @Test
+    fun `an out of range threshold or half a manual point refuses the save and shows the page`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        for (bad in listOf("0", "101", "", "x", "8.5")) {
+            c.onPwmThresholdChanged(bad)
+            assertTrue(c.state.value.pwmThresholdError, "'$bad'")
+            assertFalse(c.state.value.canSave)
+        }
+        c.onSave(); advanceUntilIdle()
+        assertTrue(repo.upserts.isEmpty(), "nothing written")
+        assertEquals(VehicleEditSection.PWM, c.section.value)
+        c.onPwmThresholdChanged("85")
+        c.onPwmManualVoltsChanged("")
+        assertTrue(c.state.value.pwmManualError, "km/h without volts is half a point")
+        assertFalse(c.state.value.canSave)
+        c.onPwmManualKmhChanged("")
+        assertFalse(c.state.value.pwmManualError, "both blank clears it")
+        assertNull(c.state.value.pwmManual)
+        assertTrue(c.state.value.canSave)
+    }
+
+    @Test
+    fun `an edited threshold and manual point are saved, and an untouched one keeps a newer row`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        c.onPwmThresholdChanged("85")
+        c.onPwmManualKmhChanged("82,5"); c.onPwmManualVoltsChanged("97")
+        assertTrue(c.state.value.isDirty)
+        c.onSave(); advanceUntilIdle()
+        val saved = repo.upserts.single()
+        assertEquals(85, saved.pwmAlarmThresholdPercent)
+        assertEquals(PwmManual(82.5f, 97f), saved.pwmManual)
+
+        // An untouched threshold must not clobber what another screen wrote underneath this form.
+        val repo2 = FakeVehicleRepo(listOf(existingVehicle()))
+        val c2 = component(repo2)
+        advanceUntilIdle()
+        repo2.replaceStored(existingVehicle().copy(pwmAlarmThresholdPercent = 70))
+        c2.onNameChanged("Renamed")
+        c2.onSave(); advanceUntilIdle()
+        assertEquals(70, repo2.upserts.single().pwmAlarmThresholdPercent)
+        assertEquals(PwmManual(81.5f, 96.5f), repo2.upserts.single().pwmManual)
+    }
+
+    @Test
+    fun `clearing both manual fields clears the stored manual point`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        c.onPwmManualKmhChanged(""); c.onPwmManualVoltsChanged("")
+        c.onSave(); advanceUntilIdle()
+        assertNull(repo.upserts.single().pwmManual)
+    }
+
+    @Test
+    fun `the wizard opens only for a wheel proven not to report PWM`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        for ((evidence, expected) in listOf(
+            ru.sodovaya.volty.domain.pwm.PwmEvidence.UNKNOWN to 0,
+            ru.sodovaya.volty.domain.pwm.PwmEvidence.REPORTS to 0,
+            ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED to 1,
+        )) {
+            var opened = 0
+            val bms = FakeBmsRepo().apply { pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, evidence) }
+            val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms, onOpenPwmWizard = { opened++ })
+            advanceUntilIdle()
+            assertEquals(evidence, c.state.value.pwmEvidence)
+            c.onOpenPwmWizard()
+            assertEquals(expected, opened, "$evidence")
+        }
+    }
+
+    @Test
+    fun `the wizard is refused while the typed threshold is unsaved, and for an editor still creating`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var opened = 0
+        val bms = FakeBmsRepo().apply {
+            pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED)
+        }
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms, onOpenPwmWizard = { opened++ })
+        advanceUntilIdle()
+        c.onPwmThresholdChanged("85")
+        assertTrue(c.state.value.pwmWizardNeedsSave)
+        c.onOpenPwmWizard()
+        assertEquals(0, opened, "the wizard fits against the STORED threshold")
+        c.onPwmThresholdChanged("90")
+        assertFalse(c.state.value.pwmWizardNeedsSave)
+        c.onOpenPwmWizard()
+        assertEquals(1, opened)
+
+        val creating = component(FakeVehicleRepo(emptyList()), vehicleId = null, bmsRepo = bms, onOpenPwmWizard = { opened++ })
+        advanceUntilIdle()
+        creating.onOpenPwmWizard()
+        assertEquals(1, opened, "a vehicle that does not exist has no row to calibrate")
+    }
+
+    @Test
+    fun `a stored MANUAL calibration is never shown as the calibration but is still resettable`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val manual = ru.sodovaya.volty.domain.pwm.PwmMemory(
+            pwmCal(ru.sodovaya.volty.domain.pwm.PwmCalibrationSource.MANUAL, k = 9.99f), ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED,
+        )
+        val bms = FakeBmsRepo().apply { pwmMemoryAnswer = manual }
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms)
+        advanceUntilIdle()
+        assertNull(c.state.value.pwmCalibration, "its k is stale; the typed manual point is the model")
+        assertTrue(c.state.value.pwmHasStoredCalibration)
+        assertEquals(PwmManual(81.5f, 96.5f), c.state.value.pwmManual)
+
+        bms.pwmMemoryAnswer = manual.copy(calibration = pwmCal(ru.sodovaya.volty.domain.pwm.PwmCalibrationSource.WIZARD, k = 1.13f))
+        val c2 = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms)
+        advanceUntilIdle()
+        assertEquals(1.13f, assertNotNull(c2.state.value.pwmCalibration).k)
+    }
+
+    @Test
+    fun `reset goes through the repository and refreshes, keeping the evidence and the typed point`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo().apply {
+            pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(
+                pwmCal(ru.sodovaya.volty.domain.pwm.PwmCalibrationSource.WIZARD), ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED,
+            )
+        }
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms)
+        advanceUntilIdle()
+        assertNotNull(c.state.value.pwmCalibration)
+        c.onResetPwmCalibration(); advanceUntilIdle()
+        assertEquals(listOf("v1"), bms.pwmResets)
+        assertNull(c.state.value.pwmCalibration)
+        assertFalse(c.state.value.pwmHasStoredCalibration)
+        assertEquals(ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED, c.state.value.pwmEvidence)
+        assertEquals("81.5", c.state.value.pwmManualKmhText)
+    }
+
+    @Test
+    fun `coming back to the editor re-reads the PWM memory, but only once the form has loaded`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo()
+        val lifecycle = LifecycleRegistry()
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms, lifecycle = lifecycle)
+        lifecycle.resume()   // before the load finished: must not refresh into a state initialize() will replace
+        assertEquals(0, bms.pwmMemoryReads)
+        advanceUntilIdle()
+        assertEquals(1, bms.pwmMemoryReads, "the load's own refresh")
+        bms.pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED)
+        lifecycle.pause(); lifecycle.resume()
+        advanceUntilIdle()
+        assertEquals(ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED, c.state.value.pwmEvidence)
     }
 
     @Test

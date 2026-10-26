@@ -140,6 +140,23 @@ interface BmsRepository {
     suspend fun resetLearnedEnergy(vehicleId: String) {}
 
     /**
+     * What is known about [vehicleId]'s PWM: the PROVEN evidence and the calibration, from the live estimator when
+     * that vehicle is connected and its memory is loaded, else from the store. Read on the ordered PWM path so a
+     * pending save is never missed. [PwmMemory.EMPTY] for a repository without a PWM model.
+     */
+    suspend fun pwmMemory(vehicleId: String): ru.sodovaya.volty.domain.pwm.PwmMemory = ru.sodovaya.volty.domain.pwm.PwmMemory.EMPTY
+
+    /** Forget [vehicleId]'s PWM calibration (live estimator AND row, one ordered section); the evidence stays. */
+    suspend fun resetPwmCalibration(vehicleId: String) {}
+
+    /**
+     * Install [calibration] (the wizard's result) in the live estimator when [vehicleId] is connected, and persist it
+     * through the same ordered path as every other PWM write, so the estimator and the row cannot disagree.
+     */
+    suspend fun applyPwmCalibration(vehicleId: String, calibration: ru.sodovaya.volty.domain.pwm.PwmCalibration) {}
+
+
+    /**
      * Called when the dashboard leaves the foreground. Implementations may
      * lower transport costs while retaining the live link; the default keeps
      * older test and platform implementations source-compatible.

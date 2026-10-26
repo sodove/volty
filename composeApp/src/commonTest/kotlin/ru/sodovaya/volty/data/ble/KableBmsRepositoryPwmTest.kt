@@ -266,6 +266,81 @@ class KableBmsRepositoryPwmTest {
         }
     }
 
+    private val wizard = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)!!
+
+    @Test
+    fun `applyPwmCalibration installs the calibration live and writes the row, keeping the evidence`() {
+        val store = FakeStore(mapOf("v-pwm" to proven))
+        repoTest(store) { repo ->
+            val ride = Ride(repo, { advanceUntilIdle() }); ride.connect()
+            ride.send(60f); ride.send(60f)
+            assertFalse(repo.activeMotion.value.hasDuty, "precondition: nothing to estimate from")
+            repo.applyPwmCalibration("v-pwm", wizard); advanceUntilIdle()
+            ride.send(60f)
+            assertEquals(DutySource.ESTIMATED, repo.activeMotion.value.dutySource, "the live estimator uses it at once")
+            assertEquals(wizard, store.rows["v-pwm"]!!.calibration)
+            assertEquals(PwmEvidence.NEVER_REPORTED, store.rows["v-pwm"]!!.evidence)
+            assertEquals(wizard, assertNotNull(repo.vehicleConnectionForTest()?.pwm).memory().calibration)
+        }
+    }
+
+    @Test
+    fun `applyPwmCalibration for a vehicle that is not connected writes the row only`() {
+        val store = FakeStore(mapOf("other" to proven))
+        repoTest(store) { repo ->
+            repo.applyPwmCalibration("other", wizard); advanceUntilIdle()
+            assertEquals(wizard, store.rows["other"]!!.calibration)
+            assertEquals(PwmEvidence.NEVER_REPORTED, store.rows["other"]!!.evidence, "an UNKNOWN save never lowers it (R3)")
+            assertEquals(listOf("save-start", "save"), store.log)
+        }
+    }
+
+    @Test
+    fun `applyPwmCalibration queues behind an in-flight save and is the last write`() {
+        val gate = CompletableDeferred<Unit>()
+        val store = FakeStore(mapOf("v-pwm" to proven), saveGate = gate)
+        repoTest(store) { repo ->
+            val ride = Ride(repo, { advanceUntilIdle() }); ride.connect()
+            ride.cruise(1); ride.onset(68f)
+            assertEquals(listOf("load", "save-start"), store.log)
+            val apply = launch { repo.applyPwmCalibration("v-pwm", wizard) }
+            advanceUntilIdle()
+            assertEquals(listOf("load", "save-start"), store.log, "waits behind the in-flight save")
+            gate.complete(Unit); store.saveGate = null
+            advanceUntilIdle()
+            assertTrue(apply.isCompleted)
+            assertEquals(wizard, store.rows["v-pwm"]!!.calibration, "the wizard's write is the last one")
+        }
+    }
+
+    @Test
+    fun `applyPwmCalibration never persists a guest`() {
+        val store = FakeStore()
+        repoTest(store) { repo ->
+            repo.applyPwmCalibration("guest:AA", wizard); advanceUntilIdle()
+            assertTrue(store.log.isEmpty())
+        }
+    }
+
+    @Test
+    fun `pwmMemory reads the row when not connected and prefers the live estimator when connected`() {
+        val store = FakeStore(mapOf("v-pwm" to PwmMemory(measured, PwmEvidence.NEVER_REPORTED)))
+        repoTest(store) { repo ->
+            assertEquals(PwmMemory(measured, PwmEvidence.NEVER_REPORTED), repo.pwmMemory("v-pwm"))
+            assertEquals(PwmMemory.EMPTY, repo.pwmMemory("nobody"))
+            val ride = Ride(repo, { advanceUntilIdle() }); ride.connect()
+            ride.send(60f); ride.send(60f)
+            repo.applyPwmCalibration("v-pwm", wizard); advanceUntilIdle()
+            assertEquals(wizard, repo.pwmMemory("v-pwm").calibration)
+        }
+    }
+
+    @Test
+    fun `pwmMemory with an unreadable row is empty information, never a crash`() {
+        val store = FakeStore(failLoad = true)
+        repoTest(store) { repo -> assertEquals(PwmMemory.EMPTY, repo.pwmMemory("v-pwm")) }
+    }
+
     private fun TestScope.launchReset(repo: KableBmsRepository) =
         launch { repo.resetPwmCalibration("v-pwm") }
 }

@@ -101,6 +101,8 @@ import volty.composeapp.generated.resources.vehicle_hub_issue_prefix
 import volty.composeapp.generated.resources.vehicle_hub_layout
 import volty.composeapp.generated.resources.vehicle_hub_layout_summary
 import volty.composeapp.generated.resources.vehicle_hub_motor
+import volty.composeapp.generated.resources.vehicle_hub_pwm
+import androidx.compose.material.icons.filled.Tune
 import volty.composeapp.generated.resources.vehicle_hub_motor_summary
 import volty.composeapp.generated.resources.vehicle_hub_motor_summary_no_diameter
 import volty.composeapp.generated.resources.vehicle_hub_motor_unset
@@ -288,6 +290,17 @@ private fun VehicleEditHub(
             },
             onClick = { component.onOpenSection(VehicleEditSection.MOTOR) }
         )
+        // Estimated PWM needs a saved vehicle: the wizard reads and writes that vehicle's row.
+        if (state.isEditing) {
+            SettingsRowDivider()
+            SettingsNavRow(
+                icon = Icons.Filled.Tune,
+                tint = SettingsTint.VEHICLE,
+                title = stringResource(Res.string.vehicle_hub_pwm),
+                summary = pwmHubLine(state),
+                onClick = { component.onOpenSection(VehicleEditSection.PWM) }
+            )
+        }
         SettingsRowDivider()
         SettingsNavRow(
             icon = Icons.Filled.AccountTree,

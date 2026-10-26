@@ -95,6 +95,7 @@ import volty.composeapp.generated.resources.vehicle_hub_dashboard
 import volty.composeapp.generated.resources.vehicle_hub_identity
 import volty.composeapp.generated.resources.vehicle_hub_layout
 import volty.composeapp.generated.resources.vehicle_hub_motor
+import volty.composeapp.generated.resources.vehicle_hub_pwm
 import volty.composeapp.generated.resources.vehicle_hub_speed_volume
 import volty.composeapp.generated.resources.vehicle_section_sources
 import volty.composeapp.generated.resources.vehicle_source_add_controller
@@ -135,6 +136,7 @@ internal fun VehicleEditPage(
         VehicleEditSection.LAYOUT -> LayoutPage(state, component)
         VehicleEditSection.DASHBOARD -> DashboardPage(state, component)
         VehicleEditSection.SPEED_VOLUME -> SpeedVolumePage(state, component)
+        VehicleEditSection.PWM -> PwmPage(state, component)
     }
 }
 
@@ -154,6 +156,7 @@ private fun PageHeader(section: VehicleEditSection, onBack: () -> Unit) {
                     VehicleEditSection.LAYOUT -> Res.string.vehicle_hub_layout
                     VehicleEditSection.DASHBOARD -> Res.string.vehicle_hub_dashboard
                     VehicleEditSection.SPEED_VOLUME -> Res.string.vehicle_hub_speed_volume
+                    VehicleEditSection.PWM -> Res.string.vehicle_hub_pwm
                 }
             ),
             fontSize = 20.sp,

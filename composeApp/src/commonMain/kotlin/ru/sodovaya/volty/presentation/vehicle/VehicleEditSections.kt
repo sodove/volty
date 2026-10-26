@@ -8,7 +8,7 @@ import ru.sodovaya.volty.domain.model.ControllerType
  * the SAME [VehicleDraft]/[VehicleEditComponent.State] the hub does, so leaving a page writes
  * nothing and loses nothing — only Save persists.
  */
-enum class VehicleEditSection { IDENTITY, CONTROLLER, BATTERY, MOTOR, LAYOUT, DASHBOARD, SPEED_VOLUME }
+enum class VehicleEditSection { IDENTITY, CONTROLLER, BATTERY, MOTOR, LAYOUT, DASHBOARD, SPEED_VOLUME, PWM }
 
 /** Where the vehicle's battery comes from, as the hub row and the battery page name it. */
 enum class BatterySource {
