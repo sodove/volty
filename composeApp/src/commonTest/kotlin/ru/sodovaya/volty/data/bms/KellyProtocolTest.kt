@@ -412,6 +412,25 @@ class KellyProtocolTest {
         }
     }
 
+    // Kelly decodes B+ voltage, motor/controller temperature, RPM, phase current and the error word:
+    // every one reaches ControllerData (the error word as its fault labels). The CODE_VERSION reply is
+    // requested but never parsed (only an armed monitor request accepts a response), so there is no
+    // model or version to show. Hence: an empty list, even after a full monitor cycle.
+    @Test
+    fun `device facts stay empty after a full monitor cycle`() = runTest {
+        val protocol = KellyProtocol()
+        assertTrue(protocol is ProtocolFacts)
+        assertEquals(emptyList(), protocol.deviceFacts())
+        val harness = PollHarness(protocol, backgroundScope)
+        try {
+            harness.completeCycle(monitorData())
+            assertEquals(listOf("Over Volt", "Motor OverTemp Err"), requireNotNull(protocol.latestMotion(0)).faults)
+            assertEquals(emptyList(), protocol.deviceFacts())
+        } finally {
+            harness.stop()
+        }
+    }
+
     private fun monitorData(voltage: Int = 72): IntArray = IntArray(48).also { data ->
         data[9] = voltage
         data[10] = 52

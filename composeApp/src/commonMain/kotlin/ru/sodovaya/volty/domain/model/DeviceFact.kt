@@ -33,6 +33,10 @@ enum class DeviceFactKey {
     // Wheels (InMotion identity pages)
     MODEL_NAME,
     SERIAL_NUMBER,
+
+    // Controllers (FarDriver)
+    PHASE_C_CURRENT_A,
+    VCU_CHARGE_PERCENT,
 }
 
 /**

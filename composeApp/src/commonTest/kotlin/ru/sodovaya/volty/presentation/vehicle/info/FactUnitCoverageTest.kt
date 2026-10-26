@@ -4,7 +4,9 @@ import ru.sodovaya.volty.data.bms.BegodeDumpFixture
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BegodeT4Fixture
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
+import ru.sodovaya.volty.data.bms.FarDriverProtocol
 import ru.sodovaya.volty.data.bms.InMotionProtocol
+import ru.sodovaya.volty.data.bms.KellyProtocol
 import ru.sodovaya.volty.data.bms.KingSongProtocol
 import ru.sodovaya.volty.data.bms.NinebotLegacyProtocol
 import ru.sodovaya.volty.data.bms.NinebotProtocol
@@ -78,6 +80,34 @@ class FactUnitCoverageTest {
             facts.map { it.key }.toSet(),
         )
         assertEquals(emptyList(), facts.mapNotNull { it.unit })
+    }
+
+    /**
+     * The controller facts: Kelly emits none; FarDriver emits the phase C current (A) and the VCU
+     * charge (%). Driven with minimal synthetic register frames (CRC-16 as the controller's new frames
+     * use it), since FarDriver has no capture; both symbols must map to an [InfoUnit].
+     */
+    @Test fun controllerFactsCarryMappedUnitSymbols() {
+        fun newFrame(id: Int, fill: (ByteArray) -> Unit): ByteArray {
+            val body = ByteArray(12).also(fill)
+            val head = byteArrayOf(0xAA.toByte(), (0x80 or id).toByte()) + body
+            var crc = 0x7F3C
+            for (b in head) {
+                crc = crc xor (b.toInt() and 0xFF)
+                repeat(8) { crc = if (crc and 1 != 0) (crc ushr 1) xor 0xA001 else crc ushr 1 }
+            }
+            return head + byteArrayOf(crc.toByte(), (crc ushr 8).toByte())
+        }
+        val farDriver = FarDriverProtocol().also { p ->
+            p.onNotification(newFrame(2) { it[8] = 0x04 }) // phase C raw 1024 (frame bytes 9..11, big-endian)
+            p.onNotification(newFrame(53) { it[3] = 80 }) // VCU charge byte 80
+        }
+        val facts = farDriver.deviceFacts() + KellyProtocol().deviceFacts()
+        // Precondition: the driver really emitted both keys, or the symbols below could be vacuous.
+        assertEquals(setOf(DeviceFactKey.PHASE_C_CURRENT_A, DeviceFactKey.VCU_CHARGE_PERCENT), facts.map { it.key }.toSet())
+        val symbols = facts.mapNotNull { it.unit }.toSet()
+        assertEquals(setOf("A", "%"), symbols)
+        for (s in symbols) assertNotNull(factUnit(s), "unit symbol '$s' has no InfoUnit")
     }
 
     /** One CRC-32 (IEEE, as the Veteran frame uses it) trailer appended to [len] payload bytes. */

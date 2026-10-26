@@ -2,6 +2,8 @@ package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
@@ -25,7 +27,7 @@ import kotlin.math.sqrt
 class FarDriverProtocol(
     private val deriveBattery: Boolean = true,
     private val motor: MotorConfig = MotorConfig()
-) : BmsProtocol(), MotionSource {
+) : BmsProtocol(), MotionSource, ProtocolFacts {
 
     companion object {
         const val FARDRIVER_SERVICE = "0000ffe0-0000-1000-8000-00805f9b34fb"
@@ -88,6 +90,31 @@ class FarDriverProtocol(
     private var batteryLevelFraction: Float? = null
     private var faultByteA: Int? = null
     private var faultByteB: Int? = null
+
+    private var factsInputs: List<Float?>? = null
+    private var cachedFacts: List<DeviceFact> = emptyList()
+
+    /**
+     * The two registers' fields the common controller section does not show: the phase C current
+     * (that section shows phase A, as [ControllerData.motorCurrentA]) and the charge byte of
+     * register 244, which the decoder keeps as the controller's own VCU level - NOT a verified
+     * smart-BMS gauge, which is why it is labelled by who reported it. Each is listed only once its
+     * register has been decoded; the phase current is the original app's conversion of the raw
+     * register, exactly as phase A. Voltage, battery current, speed, temperatures and the fault bits
+     * already reach [ControllerData] and are not repeated.
+     *
+     * Cached: the same list instance is returned until one of the two values changes.
+     */
+    override fun deviceFacts(): List<DeviceFact> {
+        val inputs = listOf(phaseCCurrentA, batteryLevelFraction)
+        if (inputs == factsInputs) return cachedFacts
+        factsInputs = inputs
+        cachedFacts = buildList {
+            phaseCCurrentA?.let { add(DeviceFact(DeviceFactKey.PHASE_C_CURRENT_A, factNumber(it, 1), "A")) }
+            batteryLevelFraction?.let { add(DeviceFact(DeviceFactKey.VCU_CHARGE_PERCENT, factNumber(it * 100f, 0), "%")) }
+        }
+        return cachedFacts
+    }
 
     override val controllerCount: Int get() = 1
     override val packCount: Int get() = if (deriveBattery) 1 else 0

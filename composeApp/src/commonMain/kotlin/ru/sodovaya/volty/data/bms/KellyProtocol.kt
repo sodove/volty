@@ -14,6 +14,7 @@ import ru.sodovaya.volty.data.controller.kelly.ParamType
 import ru.sodovaya.volty.data.controller.kelly.ParameterCodec
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
@@ -34,7 +35,7 @@ class KellyProtocol(
     private val deriveBattery: Boolean = false,
     private val motor: MotorConfig = MotorConfig(),
     private val replyTimeoutMs: Long = DEFAULT_REPLY_TIMEOUT_MS
-) : BmsProtocol(), MotionSource, SerialPollSource {
+) : BmsProtocol(), MotionSource, SerialPollSource, ProtocolFacts {
 
     companion object {
         const val NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -276,6 +277,15 @@ class KellyProtocol(
         // wheel turns slower than the motor.
         return mechanicalRpm * circumferenceKm * 60f / motor.gearRatio
     }
+
+    /**
+     * Nothing: every field this decoder reads already reaches [ControllerData] - B+ voltage, motor
+     * and controller temperature, RPM and phase current directly, and the error word as its fault
+     * labels. The CODE_VERSION request is sent as a handshake, but its reply is never parsed (only an
+     * armed monitor request accepts a response), so no model or firmware version is decoded; the
+     * other monitor parameters (throttle, brake, switches) are not read at all.
+     */
+    override fun deviceFacts(): List<DeviceFact> = emptyList()
 
     override fun latestMotion(controllerIndex: Int): ControllerData? =
         if (controllerIndex == 0) motion else null

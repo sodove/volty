@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.TelemetryMetric
 import ru.sodovaya.volty.domain.model.TelemetryObservation
@@ -10,6 +12,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class FarDriverProtocolTest {
@@ -314,6 +317,46 @@ class FarDriverProtocolTest {
 
         assertNull(protocol.latestMotion(0))
         assertNull(protocol.latestData(0))
+    }
+
+    // FarDriver decodes two things the common controller section lacks: the third phase current (the
+    // section shows phase A) and the controller's own charge byte. Everything else reaches ControllerData.
+    @Test
+    fun `device facts list phase C current and VCU charge only once their registers were decoded`() {
+        val protocol = FarDriverProtocol()
+        assertTrue(protocol is ProtocolFacts)
+        assertEquals(emptyList(), protocol.deviceFacts())
+
+        // Voltage/current and speed registers decode neither fact.
+        protocol.onNotification(newFrame(1) { u16(2, 720); i16(6, 200) })
+        protocol.onNotification(newFrame(0) { u16(8, 1200) })
+        assertEquals(emptyList(), protocol.deviceFacts())
+
+        // Register 238: phase A raw 256 (31.25 A, already in the common section), phase C raw 1024.
+        protocol.onNotification(newFrame(2) { u24(6, 256); u24(9, 1024) })
+        val phaseOnly = protocol.deviceFacts()
+        assertEquals(listOf(DeviceFact(DeviceFactKey.PHASE_C_CURRENT_A, "62.5", "A")), phaseOnly)
+        assertSame(phaseOnly, protocol.deviceFacts(), "unchanged inputs return the cached list")
+
+        // Register 244: the VCU charge byte (80) rides next to the motor temperature.
+        protocol.onNotification(newFrame(53) { u16(2, 52); bytes[3] = 80 })
+        val both = protocol.deviceFacts()
+        assertEquals(
+            listOf(
+                DeviceFact(DeviceFactKey.PHASE_C_CURRENT_A, "62.5", "A"),
+                DeviceFact(DeviceFactKey.VCU_CHARGE_PERCENT, "80", "%")
+            ),
+            both
+        )
+        assertSame(both, protocol.deviceFacts())
+
+        // A legacy phase frame (command 2) moves phase C: raw 4096 -> 125 A, and rebuilds the list.
+        protocol.onNotification(legacyFrame(2) { u24(2, 256); u24(9, 4096) })
+        assertEquals("125.0", protocol.deviceFacts().first().value)
+        assertEquals("80", protocol.deviceFacts().last().value)
+
+        protocol.reset()
+        assertEquals(emptyList(), protocol.deviceFacts())
     }
 
     private fun newFrame(index: Int, fill: FrameBuilder.() -> Unit = {}): ByteArray =
