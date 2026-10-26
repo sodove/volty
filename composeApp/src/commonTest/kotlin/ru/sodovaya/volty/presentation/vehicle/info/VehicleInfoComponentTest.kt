@@ -28,6 +28,8 @@ import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
+import com.arkivanov.essenty.lifecycle.start
+import com.arkivanov.essenty.lifecycle.stop
 import ru.sodovaya.volty.util.UnitSystem
 import kotlin.test.*
 import kotlin.time.Duration
@@ -94,10 +96,10 @@ class VehicleInfoComponentTest {
 
     private class Rig(val bms: FakeBms, val diagnostics: Diagnostics, val store: Store, val component: VehicleInfoComponent)
 
-    private fun TestScope.rig(record: EnergyRecord? = null): Rig {
+    private fun TestScope.rig(record: EnergyRecord? = null, lifecycle: LifecycleRegistry = LifecycleRegistry(Lifecycle.State.RESUMED)): Rig {
         val bms = FakeBms(); val diagnostics = Diagnostics(); val store = Store(record)
         val component = DefaultVehicleInfoComponent(
-            DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, "wheel",
+            DefaultComponentContext(lifecycle), backgroundScope, "wheel",
             Vehicles(listOf(wheel)), bms, diagnostics, store, Range(), MutableStateFlow(UnitSystem.METRIC),
             onBackRequested = {}, refreshMillis = 500L, nowEpochMillis = { currentTime },
         )
@@ -113,6 +115,8 @@ class VehicleInfoComponentTest {
         r.bms.connectionState.value = ConnectionState.Connected(wheel)
     }
 
+    private fun InfoRow.vu() = value to unit
+
     private fun VehicleInfo?.row(kind: InfoSectionKind, label: InfoLabel) =
         checkNotNull(this).sections.first { it.kind == kind }.rows.first { it.label == label }
 
@@ -121,7 +125,7 @@ class VehicleInfoComponentTest {
         assertEquals(1, r.store.peeks)
         assertEquals("T4", r.component.vehicleName.value)
         val resistance = r.component.info.value.row(InfoSectionKind.ENERGY, InfoLabel.RESISTANCE)
-        assertEquals("90.0 mΩ", resistance.value); assertTrue(resistance.persisted)
+        assertEquals("90.0" to InfoUnit.MILLIOHM, resistance.vu()); assertTrue(resistance.persisted)
         assertEquals(InfoAbsence.NOT_CONNECTED, r.component.info.value.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).reason)
         advanceTimeBy(5_000)
         assertEquals(1, r.store.peeks, "ticking does not re-read the store")
@@ -138,7 +142,7 @@ class VehicleInfoComponentTest {
         r.bms.connectionState.value = ConnectionState.Disconnected
         advanceTimeBy(600)
         assertEquals(2, r.store.peeks)
-        assertEquals("90.0 mΩ", r.component.info.value.row(InfoSectionKind.ENERGY, InfoLabel.RESISTANCE).value)
+        assertEquals("90.0" to InfoUnit.MILLIOHM, r.component.info.value.row(InfoSectionKind.ENERGY, InfoLabel.RESISTANCE).vu())
     }
 
     @Test fun aBurstOfSamplesIsFoldedIntoAtMostTwoUpdatesASecond() = runTest {
@@ -157,7 +161,7 @@ class VehicleInfoComponentTest {
         }
         advanceTimeBy(800)
         assertTrue(seen.size in 1..2, "20 changes in 1 s must publish at most 2 updates, got ${seen.size}")
-        assertEquals("29 km/h", seen.last().row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).value, "the last value wins")
+        assertEquals("29" to InfoUnit.SPEED, seen.last().row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).vu(), "the last value wins")
     }
 
     @Test fun aStalledButOnlineLinkGoesStaleWithoutAnyEmission() = runTest {
@@ -169,6 +173,23 @@ class VehicleInfoComponentTest {
         // Nothing upstream changes; only the clock does.
         advanceTimeBy(3_600)
         assertEquals(InfoAbsence.STALE, r.component.info.value.row(InfoSectionKind.CONNECTIONS, InfoLabel.FRAMES_PER_SECOND).reason)
+    }
+
+    @Test fun noRebuildHappensWhileTheScreenIsStoppedAndItResumesOnStart() = runTest {
+        val lifecycle = LifecycleRegistry(Lifecycle.State.RESUMED)
+        val r = rig(lifecycle = lifecycle); connect(r); runCurrent()
+        fun speed(v: Float) {
+            val motion = ControllerData(speedKmh = v, speedSource = SpeedSource.REPORTED, isConnected = true)
+            r.bms.activeVehicleData.value = VehicleData(controllers = listOf(ControllerState(wheel.controllers.single(), motion, isOnline = true)), motion = motion)
+            r.bms.activeMotion.value = motion
+        }
+        speed(10f); advanceTimeBy(600)
+        assertEquals("10" to InfoUnit.SPEED, r.component.info.value.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).vu())
+        lifecycle.stop()
+        speed(50f); advanceTimeBy(5_000)
+        assertEquals("10", r.component.info.value.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).value, "stopped: no rebuild")
+        lifecycle.start(); advanceTimeBy(100)
+        assertEquals("50", r.component.info.value.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).value, "started again: rebuilt at once")
     }
 
     @Test fun anUnknownVehicleHasNoInfo() = runTest {

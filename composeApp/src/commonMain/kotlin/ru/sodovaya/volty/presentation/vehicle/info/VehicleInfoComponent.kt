@@ -2,6 +2,8 @@ package ru.sodovaya.volty.presentation.vehicle.info
 
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
+import com.arkivanov.essenty.lifecycle.doOnStart
+import com.arkivanov.essenty.lifecycle.doOnStop
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -76,6 +78,7 @@ class DefaultVehicleInfoComponent(
     private val mutableInfo = MutableStateFlow<VehicleInfo?>(null)
     private val mutableName = MutableStateFlow<String?>(null)
     private var peeked = false
+    private var tick: Job? = null
 
     override val info: StateFlow<VehicleInfo?> = mutableInfo.asStateFlow()
     override val vehicleName: StateFlow<String?> = mutableName.asStateFlow()
@@ -89,12 +92,18 @@ class DefaultVehicleInfoComponent(
                 .distinctUntilChanged()
                 .collect { connected -> if (!connected || !peeked) { peeked = true; refreshStored(); rebuild() } }
         }
-        scope.launch {
-            while (isActive) {
-                rebuild()
-                delay(refreshMillis)
+        // The tick runs only while the screen is STARTED: a screen under another one in the stack, or the
+        // app in the background, is not looked at and must not rebuild ~100 rows twice a second.
+        lifecycle.doOnStart {
+            tick?.cancel()
+            tick = scope.launch {
+                while (isActive) {
+                    rebuild()
+                    delay(refreshMillis)
+                }
             }
         }
+        lifecycle.doOnStop { tick?.cancel(); tick = null }
     }
 
     private fun isLinkTo(active: Vehicle?, state: ConnectionState): Boolean =

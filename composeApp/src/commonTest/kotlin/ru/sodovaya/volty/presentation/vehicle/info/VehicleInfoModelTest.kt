@@ -53,6 +53,7 @@ class VehicleInfoModelTest {
     private fun VehicleInfo.section(kind: InfoSectionKind) = sections.filter { it.kind == kind }
     private fun VehicleInfo.row(kind: InfoSectionKind, label: InfoLabel, title: String? = null) =
         sections.first { it.kind == kind && (title == null || it.title == title) }.rows.first { it.label == label }
+    private fun InfoRow.vu() = value to unit
     private fun VehicleInfo.allValues() = sections.flatMap { it.rows }.mapNotNull { it.value }
 
     private fun packState(pack: Pack, data: BmsData, online: Boolean = true) = PackState(pack, data, isOnline = online)
@@ -81,10 +82,10 @@ class VehicleInfoModelTest {
         val i = info(wheel, connected = false, data = stale, stored = record)
 
         val resistance = i.row(InfoSectionKind.ENERGY, InfoLabel.RESISTANCE)
-        assertEquals("90.0 mΩ", resistance.value); assertTrue(resistance.persisted)
+        assertEquals("90.0" to InfoUnit.MILLIOHM, resistance.vu()); assertTrue(resistance.persisted)
         val learned = i.row(InfoSectionKind.ENERGY, InfoLabel.LEARNED_CAPACITY)
-        assertEquals("18.5 Ah", learned.value); assertTrue(learned.persisted)
-        assertEquals("61.0 %", i.row(InfoSectionKind.ENERGY, InfoLabel.STORED_COUNTER).value)
+        assertEquals("18.5" to InfoUnit.AMP_HOUR, learned.vu()); assertTrue(learned.persisted)
+        assertEquals("61.0" to InfoUnit.PERCENT, i.row(InfoSectionKind.ENERGY, InfoLabel.STORED_COUNTER).vu())
 
         assertEquals(InfoAbsence.NOT_CONNECTED, i.row(InfoSectionKind.ENERGY, InfoLabel.ENERGY_SOC).reason)
         assertEquals(InfoAbsence.NOT_CONNECTED, i.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).reason)
@@ -135,7 +136,7 @@ class VehicleInfoModelTest {
         assertEquals(InfoAbsence.NOT_REPORTED, i.row(InfoSectionKind.CONTROLLERS, InfoLabel.CONSUMED_WH).reason)
         val shown = i.allValues().joinToString("|")
         for (fabricated in listOf("37", "66", "4200", "777")) assertFalse(fabricated in shown, "$fabricated leaked into: $shown")
-        assertEquals("21 km/h", i.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).value)
+        assertEquals("21" to InfoUnit.SPEED, i.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).vu())
     }
 
     @Test fun anIncoherentHasDutyFalseNeverShows37() {
@@ -147,7 +148,7 @@ class VehicleInfoModelTest {
         // And when the flag says it was measured, the number is shown.
         val measured = c.copy(hasDuty = true)
         val shown = info(vehicle, data = data.copy(controllers = listOf(controllerState(vehicle.controllers.single(), measured)), motion = measured))
-        assertEquals("37.0 %", shown.row(InfoSectionKind.CONTROLLERS, InfoLabel.DUTY).value)
+        assertEquals("37.0" to InfoUnit.PERCENT, shown.row(InfoSectionKind.CONTROLLERS, InfoLabel.DUTY).vu())
     }
 
     @Test fun aProtocolThatCannotReportDutySaysSoAtTheProtocolLevel() {
@@ -165,10 +166,10 @@ class VehicleInfoModelTest {
         val antData = VehicleData(packs = listOf(packState(ant, BmsData(voltage = 72f, soc = 55f, socKnown = true, isConnected = true))),
             energy = EnergyState(55f, 20f, 72f, 1000f, CapacitySource.REPORTED, null, null, modelled = false))
         val antRow = info(bike, data = antData).row(InfoSectionKind.BATTERIES, InfoLabel.SOC)
-        assertEquals(InfoChoice.SOC_BY_BMS, antRow.choice); assertEquals("55.0 %", antRow.value)
+        assertEquals(InfoChoice.SOC_BY_BMS, antRow.choice); assertEquals("55.0" to InfoUnit.PERCENT, antRow.vu())
 
         val t4Row = info(wheel, data = t4Data()).row(InfoSectionKind.BATTERIES, InfoLabel.SOC)
-        assertEquals(InfoChoice.SOC_BY_MODEL, t4Row.choice); assertEquals("80.6 %", t4Row.value)
+        assertEquals(InfoChoice.SOC_BY_MODEL, t4Row.choice); assertEquals("80.6" to InfoUnit.PERCENT, t4Row.vu())
     }
 
     @Test fun aModelledSocThatIsNotSeededYetIsNotEarnedNotZero() {
@@ -196,7 +197,7 @@ class VehicleInfoModelTest {
 
     @Test fun theModelsWorkingShowsOnlyWhileTheModelOwnsTheSoc() {
         val modelled = info(wheel, data = t4Data())
-        assertEquals("80.6 %", modelled.row(InfoSectionKind.ENERGY, InfoLabel.COUNTER_SOC).value)
+        assertEquals("80.6" to InfoUnit.PERCENT, modelled.row(InfoSectionKind.ENERGY, InfoLabel.COUNTER_SOC).vu())
         assertEquals(InfoChoice.CURRENT_FROM_CONTROLLER, modelled.row(InfoSectionKind.ENERGY, InfoLabel.CURRENT_SOURCE).choice)
         val smart = info(bike, data = VehicleData(energy = EnergyState(55f, 20f, 72f, 1000f, CapacitySource.REPORTED, null, null, modelled = false)))
         assertTrue(smart.section(InfoSectionKind.ENERGY).single().rows.none { it.label == InfoLabel.COUNTER_SOC })
@@ -229,7 +230,7 @@ class VehicleInfoModelTest {
         )
         val sections = info(wheel, data = t4Data(), links = listOf(link(facts))).section(InfoSectionKind.DEVICE_FACTS)
         val rows = sections.single().rows
-        assertEquals("1234.500 km", rows[0].value)
+        assertEquals("1234.500" to InfoUnit.KILOMETER, rows[0].vu())
         assertEquals("Overspeed, Low voltage", rows[1].value)
         assertEquals(DeviceFactKey.WHEEL_ALERTS, rows[1].fact)
         assertEquals(1, rows[2].index)
@@ -271,7 +272,7 @@ class VehicleInfoModelTest {
         val i = info(wheel, data = t4Data(), range = r)
         assertEquals(InfoAbsence.RANGE_TOO_SHORT, i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_STATUS).reason)
         assertEquals(InfoAbsence.RANGE_TOO_SHORT, i.row(InfoSectionKind.RANGE, InfoLabel.BLENDED_CONSUMPTION).reason)
-        assertEquals("0.40 km", i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_TRIP_KM).value)
+        assertEquals("0.40" to InfoUnit.DISTANCE, i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_TRIP_KM).vu())
         assertEquals(InfoAbsence.NOT_CONNECTED, info(wheel, connected = false).row(InfoSectionKind.RANGE, InfoLabel.RANGE_STATUS).reason)
     }
 
@@ -279,9 +280,9 @@ class VehicleInfoModelTest {
         val r = RangeDetail(20.0, 25.0, 22.0, tripKm = 16.09344, unearnedReason = null)
         val i = info(wheel, data = t4Data(), range = r, units = UnitSystem.IMPERIAL)
         assertEquals(InfoChoice.RANGE_EARNED, i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_STATUS).choice)
-        assertEquals("10.00 mi", i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_TRIP_KM).value)
-        assertEquals("35.4 Wh/mi", i.row(InfoSectionKind.RANGE, InfoLabel.BLENDED_CONSUMPTION).value)
-        assertEquals("13 mph", i.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).value)
+        assertEquals("10.00" to InfoUnit.DISTANCE, i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_TRIP_KM).vu())
+        assertEquals("35.4" to InfoUnit.CONSUMPTION, i.row(InfoSectionKind.RANGE, InfoLabel.BLENDED_CONSUMPTION).vu())
+        assertEquals("13" to InfoUnit.SPEED, i.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).vu())
     }
 
     @Test fun alertsAreArmedUnavailableWithReasonOrActive() {
@@ -314,6 +315,28 @@ class VehicleInfoModelTest {
         val i = info(packOnly, connected = false)
         assertTrue(i.section(InfoSectionKind.CONTROLLERS).isEmpty())
         assertEquals(InfoAbsence.NO_CONTROLLER, i.row(InfoSectionKind.ALERTS, InfoLabel.ALERT_DUTY).reason)
+    }
+
+    @Test fun unitsAreEnumsAndTheValueIsDigitsOnly() {
+        val i = info(wheel, data = t4Data())
+        for (row in i.sections.flatMap { it.rows }.filter { it.unit != null }) {
+            assertTrue(row.value!!.all { it.isDigit() || it in "-.," || it == ' ' }, "${row.label} value has words: ${row.value}")
+        }
+        val v = i.row(InfoSectionKind.BATTERIES, InfoLabel.VOLTAGE)
+        assertEquals("84.00" to InfoUnit.VOLT, v.vu())
+    }
+
+    @Test fun aNewPackReportsZeroCyclesAsZeroAndAntKeepsItsAhUnderItsOwnLabel() {
+        val newPack = bike.copy(packs = listOf(Pack(0, "P", BmsType.JBD_BMS, "BB")))
+        val d = VehicleData(packs = listOf(packState(newPack.packs.single(), BmsData(voltage = 72f, numCycles = 0, capacity = 0f, isConnected = true))))
+        val i = info(newPack, data = d)
+        assertEquals("0" to null, i.row(InfoSectionKind.BATTERIES, InfoLabel.CYCLES).vu())
+        assertEquals("0.0" to InfoUnit.AMP_HOUR, i.row(InfoSectionKind.BATTERIES, InfoLabel.CAPACITY).vu())
+
+        val ant = VehicleData(packs = listOf(packState(bike.packs.single(), BmsData(voltage = 72f, cycleCapacityAh = 123f, isConnected = true))))
+        val a = info(bike, data = ant)
+        assertEquals(InfoAbsence.PROTOCOL_LACKS, a.row(InfoSectionKind.BATTERIES, InfoLabel.CYCLES).reason)
+        assertEquals("123" to InfoUnit.AMP_HOUR, a.row(InfoSectionKind.BATTERIES, InfoLabel.CYCLE_CAPACITY).vu())
     }
 
     @Test fun sectionsComeInTheDocumentedOrder() {
