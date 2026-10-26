@@ -30,38 +30,49 @@ object PwmCalibrationLearner {
         val currentSpread = if (withI.size < MIN_ONSETS_FOR_R) 0.0
         else (withI.maxOf { it.phaseA!! } - withI.minOf { it.phaseA!! }).toDouble()
 
-        var k: Double
-        var r = 0.0
         if (withI.size >= MIN_ONSETS_FOR_R && currentSpread >= MIN_CURRENT_SPREAD_A) {
-            var ss = 0.0; var si = 0.0; var ii = 0.0; var sy = 0.0; var iy = 0.0
-            for (o in withI) {
-                val s = o.speedKmh.toDouble(); val i = o.phaseA!!.toDouble(); val y = target(o)
-                ss += s * s; si += s * i; ii += i * i; sy += s * y; iy += i * y
+            leastSquares(withI, target)?.let { (k, r) ->
+                val ks = withI.map { (target(it) - r * it.phaseA!!) / it.speedKmh }
+                return PwmCalibration(k.toFloat(), r.toFloat(), withI.size, PwmCalibrationSource.RIDING, relStdDev(ks), PwmBasis.ONSET, good)
             }
-            val det = ss * ii - si * si
-            var solved = false
-            k = 0.0
-            if (det > 1e-9 * ss * ii) {
-                val rr = (ss * iy - si * sy) / det
-                k = (sy - rr * si) / ss
-                r = rr
-                solved = true
-            }
-            if (!solved || r < 0.0 || r > MAX_R) {
-                r = if (!solved || r < 0.0) 0.0 else MAX_R
-                k = (sy - r * si) / ss
-            }
-            val ks = withI.map { (target(it) - r * it.phaseA!!) / it.speedKmh }
-            return PwmCalibration(k.toFloat(), r.toFloat(), withI.size, PwmCalibrationSource.RIDING, relStdDev(ks), PwmBasis.ONSET, good)
         }
         val ks = good.map { target(it) / it.speedKmh }
-        k = median(ks)
-        return PwmCalibration(k.toFloat(), 0f, good.size, PwmCalibrationSource.RIDING, relStdDev(ks), PwmBasis.ONSET, good)
+        return PwmCalibration(median(ks).toFloat(), 0f, good.size, PwmCalibrationSource.RIDING, relStdDev(ks), PwmBasis.ONSET, good)
     }
 
-    /** Free-spin plateau: the wheel is at its limit, so 100 % there. r = 0. */
-    fun fromFreeSpin(plateauKmh: Float, packV: Float): PwmCalibration =
-        PwmCalibration(packV / plateauKmh, 0f, 1, PwmCalibrationSource.WIZARD, null, PwmBasis.FREE_SPIN, emptyList())
+    /**
+     * Least squares for (k, R) over the onsets that carry a phase current (onsets without one are not
+     * used in this mode, so `points` counts only those). R is constrained to [0, 0.5]: outside it is
+     * clamped and k refitted. Returns null when the result is unusable (k non-finite or <= 0, e.g. large
+     * currents against low speeds), so the caller falls back to median k with R = 0.
+     */
+    private fun leastSquares(withI: List<AlarmOnset>, target: (AlarmOnset) -> Double): Pair<Double, Double>? {
+        var ss = 0.0; var si = 0.0; var ii = 0.0; var sy = 0.0; var iy = 0.0
+        for (o in withI) {
+            val s = o.speedKmh.toDouble(); val i = o.phaseA!!.toDouble(); val y = target(o)
+            ss += s * s; si += s * i; ii += i * i; sy += s * y; iy += i * y
+        }
+        var r = 0.0
+        var k = 0.0
+        var solved = false
+        val det = ss * ii - si * si
+        if (det > 1e-9 * ss * ii) {
+            r = (ss * iy - si * sy) / det
+            k = (sy - r * si) / ss
+            solved = true
+        }
+        if (!solved || r < 0.0 || r > MAX_R) {
+            r = if (!solved || r < 0.0) 0.0 else MAX_R
+            k = (sy - r * si) / ss
+        }
+        return if (k.isFinite() && r.isFinite() && k > 0.0) k to r else null
+    }
+
+    /** Free-spin plateau: the wheel is at its limit, so 100 % there. r = 0. Null for a non-finite or non-positive plateau or voltage. */
+    fun fromFreeSpin(plateauKmh: Float, packV: Float): PwmCalibration? {
+        if (!plateauKmh.isFinite() || plateauKmh <= 0f || !packV.isFinite() || packV <= 0f) return null
+        return PwmCalibration(packV / plateauKmh, 0f, 1, PwmCalibrationSource.WIZARD, null, PwmBasis.FREE_SPIN, emptyList())
+    }
 
     /**
      * Folds one new onset in. Always records it in the bounded history; then:
@@ -76,7 +87,8 @@ object PwmCalibrationLearner {
         if (!usable(onset)) return current
         val history = (current.onsets + onset).takeLast(MAX_ONSETS)
         return when (current.basis) {
-            PwmBasis.ONSET -> fromOnsets(history, thresholdPercent)?.copy(source = current.source) ?: current
+            PwmBasis.ONSET ->
+                fromOnsets(history, thresholdPercent)?.copy(source = current.source) ?: current.copy(onsets = history)
             PwmBasis.FREE_SPIN ->
                 if (history.size >= MIN_ONSETS_FOR_R) fromOnsets(history, thresholdPercent) ?: current.copy(onsets = history)
                 else current.copy(onsets = history)

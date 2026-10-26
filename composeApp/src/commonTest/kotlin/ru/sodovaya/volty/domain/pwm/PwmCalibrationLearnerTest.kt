@@ -34,7 +34,7 @@ class PwmCalibrationLearnerTest {
 
     @Test
     fun `free spin calibration maps the plateau to exactly 100 percent without ceiling`() {
-        val cal = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)
+        val cal = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)!!
         assertEquals(1.1812f, cal.k, 0.001f)
         assertEquals(0f, cal.r)
         assertEquals(PwmCalibrationSource.WIZARD, cal.source)
@@ -45,7 +45,7 @@ class PwmCalibrationLearnerTest {
 
     @Test
     fun `above the plateau is at the ceiling and never extrapolates`() {
-        val cal = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)
+        val cal = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)!!
         val est = assertNotNull(PwmModel.estimatePercent(cal, 90f, 96.5f, null))
         assertTrue(est.atCeiling)
         assertEquals(100f, est.percent)
@@ -87,6 +87,8 @@ class PwmCalibrationLearnerTest {
             ),
         )
         assertEquals(0f, cal.r)
+        // median of 0.8*90/60=1.2 and 0.8*90/40=1.8
+        assertEquals(1.5f, cal.k, 1e-3f)
     }
 
     @Test
@@ -148,7 +150,7 @@ class PwmCalibrationLearnerTest {
     }
 
     @Test
-    fun `merge averages k running over points`() {
+    fun `merge refits k from the history of two onsets`() {
         val first = assertNotNull(PwmCalibrationLearner.merge(null, onset(60f, 90f), 80f))
         val second = assertNotNull(PwmCalibrationLearner.merge(first, onset(60f, 100f), 80f))
         assertEquals(2, second.points)
@@ -189,7 +191,7 @@ class PwmCalibrationLearnerTest {
 
     @Test
     fun `free spin calibration is untouched by two onsets and replaced by the third`() {
-        val wizard = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)
+        val wizard = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)!!
         assertEquals(PwmBasis.FREE_SPIN, wizard.basis)
         val one = assertNotNull(PwmCalibrationLearner.merge(wizard, onset(68.4f, 96.8f, null, 1), 80f))
         val two = assertNotNull(PwmCalibrationLearner.merge(one, onset(67f, 96f, null, 2), 80f))
@@ -206,7 +208,7 @@ class PwmCalibrationLearnerTest {
 
     @Test
     fun `manual free spin calibration is kept below three onsets`() {
-        val manual = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f).copy(source = PwmCalibrationSource.MANUAL)
+        val manual = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)!!.copy(source = PwmCalibrationSource.MANUAL)
         val m = assertNotNull(PwmCalibrationLearner.merge(manual, onset(68.4f, 96.8f), 80f))
         assertEquals(manual.k, m.k)
         assertEquals(PwmCalibrationSource.MANUAL, m.source)
@@ -214,7 +216,67 @@ class PwmCalibrationLearnerTest {
 
     @Test
     fun `slow onset leaves a free spin calibration unchanged`() {
-        val wizard = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)
+        val wizard = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)!!
         assertEquals(wizard, PwmCalibrationLearner.merge(wizard, onset(4f, 96f), 80f))
+    }
+
+    @Test
+    fun `least squares yielding non positive k falls back to median k with R zero`() {
+        // Exact fit y = -10 s + 1.0 I: unconstrained R = 1 > 0.5, and with R clamped k = (sy - 0.5 si)/ss < 0.
+        val pts = listOf(20f to 300f, 25f to 400f, 30f to 500f)
+        val onsets = pts.map { (s, i) -> onset(s, (-10f * s + i) / 0.8f, i) }
+        val cal = assertNotNull(PwmCalibrationLearner.fromOnsets(onsets, 80f))
+        assertEquals(0f, cal.r)
+        assertEquals(6f, cal.k, 1e-2f) // median of 5, 6, 6.667
+        assertTrue(cal.k > 0f)
+    }
+
+    @Test
+    fun `colinear currents keep R at zero with positive k`() {
+        val onsets = listOf(onset(20f, 40f, 40f), onset(30f, 60f, 60f), onset(40f, 80f, 80f))
+        val cal = assertNotNull(PwmCalibrationLearner.fromOnsets(onsets, 80f))
+        assertEquals(0f, cal.r)
+        assertTrue(cal.k > 0f)
+    }
+
+    @Test
+    fun `null phase with a learned R gives no estimate`() {
+        val cal = PwmCalibration(1.1f, 0.2f, 3, PwmCalibrationSource.RIDING, null, PwmBasis.ONSET, emptyList())
+        assertNull(PwmModel.estimatePercent(cal, 50f, 90f, null))
+        assertNotNull(PwmModel.estimatePercent(cal, 50f, 90f, 10f))
+        val noR = cal.copy(r = 0f)
+        assertNotNull(PwmModel.estimatePercent(noR, 50f, 90f, null))
+    }
+
+    @Test
+    fun `free spin rejects bad plateau or voltage`() {
+        assertNull(PwmCalibrationLearner.fromFreeSpin(0f, 96f))
+        assertNull(PwmCalibrationLearner.fromFreeSpin(-5f, 96f))
+        assertNull(PwmCalibrationLearner.fromFreeSpin(Float.NaN, 96f))
+        assertNull(PwmCalibrationLearner.fromFreeSpin(80f, 0f))
+        assertNull(PwmCalibrationLearner.fromFreeSpin(80f, Float.POSITIVE_INFINITY))
+    }
+
+    @Test
+    fun `merge ignores an onset with non positive voltage`() {
+        val first = assertNotNull(t4)
+        assertEquals(first, PwmCalibrationLearner.merge(first, onset(60f, 0f), 80f))
+        assertEquals(first, PwmCalibrationLearner.merge(first, onset(60f, -5f), 80f))
+    }
+
+    @Test
+    fun `NaN or non positive threshold yields no calibration`() {
+        assertNull(PwmCalibrationLearner.fromOnsets(listOf(onset(60f, 90f)), Float.NaN))
+        assertNull(PwmCalibrationLearner.fromOnsets(listOf(onset(60f, 90f)), 0f))
+        assertNull(PwmCalibrationLearner.fromOnsets(listOf(onset(60f, 90f)), -80f))
+        assertNull(PwmCalibrationLearner.merge(null, onset(60f, 90f), Float.NaN))
+    }
+
+    @Test
+    fun `onset calibration still records an onset when the refit is impossible`() {
+        val first = assertNotNull(t4)
+        val m = assertNotNull(PwmCalibrationLearner.merge(first, onset(60f, 90f, null, 9), Float.NaN))
+        assertEquals(first.k, m.k)
+        assertEquals(2, m.onsets.size)
     }
 }
