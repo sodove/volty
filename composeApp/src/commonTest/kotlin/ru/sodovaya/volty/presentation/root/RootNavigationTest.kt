@@ -457,4 +457,27 @@ class RootNavigationTest {
             "including the entry at the bottom — the Dashboard a tab would bring forward"
         )
     }
+
+    // ---- «Всё о ТС» (vehicle info), reached from the saved vehicle's editor ----
+
+    @Test
+    fun the_info_entry_opens_the_screen_for_a_saved_vehicle_only() {
+        assertEquals(Config.VehicleInfo("v1"), configForVehicleInfo("v1"))
+        assertNull(configForVehicleInfo(null), "an unsaved vehicle has no id to read about")
+    }
+
+    @Test
+    fun info_is_pushed_over_the_editor_and_back_returns_to_the_same_editor() {
+        val (nav, stack) = buildStack(Config.Dashboard)
+        nav.navigate { stackAfterGoTo(it, Config.VehicleEdit(vehicleId = "v1")) }
+        nav.navigate { stackAfterGoTo(it, configForVehicleInfo("v1")!!) }
+        assertEquals(
+            listOf(Config.Dashboard, Config.VehicleEdit(vehicleId = "v1"), Config.VehicleInfo("v1")),
+            stack.value.items.map { it.configuration },
+        )
+        assertTrue(shouldPopOnBack(Config.VehicleInfo("v1"), stackSize = 3), "system back pops, it does not collapse")
+
+        nav.pop()
+        assertEquals(Config.VehicleEdit(vehicleId = "v1"), stack.value.active.configuration)
+    }
 }

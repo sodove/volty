@@ -2730,6 +2730,29 @@ class VehicleEditComponentTest {
         assertEquals(before, c.state.value, "a link must not touch the form")
     }
 
+    /** «Всё о ТС» is navigation only, exactly like the alerts and units links. */
+    @Test
+    fun `the info link navigates and touches no state`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var opened = 0
+        val c = DefaultVehicleEditComponent(
+            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            vehicleId = "v1",
+            vehicleRepository = FakeVehicleRepo(listOf(existingVehicle())),
+            bmsRepository = FakeBmsRepo(),
+            onSaved = {},
+            onCancelled = {},
+            onDeleted = {},
+            onOpenInfoRequested = { opened++ }
+        )
+        advanceUntilIdle()
+        val before = c.state.value
+
+        c.onOpenInfo()
+        assertEquals(1, opened)
+        assertEquals(before, c.state.value, "a link must not touch the form")
+    }
+
     // =====================================================================
     // Discovery (G2 Task 5) — the composer learns an address
     //

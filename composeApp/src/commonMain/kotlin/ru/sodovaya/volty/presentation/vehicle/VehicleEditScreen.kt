@@ -27,6 +27,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.AccountTree
 import androidx.compose.material.icons.filled.BatteryChargingFull
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Settings
@@ -86,6 +87,8 @@ import volty.composeapp.generated.resources.vehicle_edit_edit
 import volty.composeapp.generated.resources.vehicle_edit_new
 import volty.composeapp.generated.resources.vehicle_field_name_required
 import volty.composeapp.generated.resources.vehicle_hub_alerts
+import volty.composeapp.generated.resources.info_hub_summary
+import volty.composeapp.generated.resources.info_title
 import volty.composeapp.generated.resources.vehicle_hub_battery
 import volty.composeapp.generated.resources.vehicle_hub_controller
 import volty.composeapp.generated.resources.vehicle_hub_controller_more
@@ -314,6 +317,15 @@ private fun VehicleEditHub(
                 title = stringResource(Res.string.vehicle_hub_alerts),
                 summary = stringResource(Res.string.alerts_open_subtitle),
                 onClick = component::onOpenAlerts
+            )
+            // Read-only, and about a vehicle that exists: same gate as the alerts.
+            SettingsRowDivider()
+            SettingsNavRow(
+                icon = Icons.Filled.Info,
+                tint = SettingsTint.NEUTRAL,
+                title = stringResource(Res.string.info_title),
+                summary = stringResource(Res.string.info_hub_summary),
+                onClick = component::onOpenInfo
             )
         }
         SettingsRowDivider()

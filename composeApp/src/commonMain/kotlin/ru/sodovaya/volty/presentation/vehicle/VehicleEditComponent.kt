@@ -129,6 +129,12 @@ interface VehicleEditComponent : DraftExitComponent {
      * on this form's state moves, so nothing here can go stale.
      */
     fun onOpenUnits()
+
+    /**
+     * Open «Всё о ТС» for this vehicle, pushed on top of this form like [onOpenAlerts]. Navigation
+     * only; the screen is read-only and only offered for a saved vehicle.
+     */
+    fun onOpenInfo()
     fun onSave()
 
     /**
@@ -714,6 +720,8 @@ class DefaultVehicleEditComponent(
     private val onOpenAlertsRequested: () -> Unit = {},
     /** Defaulted for the same reason as [onOpenAlertsRequested]: navigation only. */
     private val onOpenUnitsRequested: () -> Unit = {},
+    /** Defaulted for the same reason: navigation only («Всё о ТС»). */
+    private val onOpenInfoRequested: () -> Unit = {},
     /**
      * CAN discovery (G2 Task 5), or null when this build has none.
      *
@@ -1113,6 +1121,7 @@ class DefaultVehicleEditComponent(
     }
     override fun onOpenAlerts() { onOpenAlertsRequested() }
     override fun onOpenUnits() { onOpenUnitsRequested() }
+    override fun onOpenInfo() { onOpenInfoRequested() }
 
     // ----- The composer -----
 

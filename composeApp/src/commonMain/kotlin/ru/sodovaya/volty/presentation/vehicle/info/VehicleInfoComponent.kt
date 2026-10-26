@@ -34,6 +34,9 @@ interface VehicleInfoComponent {
 
     /** The vehicle's name for the title bar; null while it is unknown. */
     val vehicleName: StateFlow<String?>
+
+    /** The rider's unit system: the model already converted the numbers, the screen picks the unit word. */
+    val units: StateFlow<UnitSystem>
     fun onBack()
 }
 
@@ -82,6 +85,7 @@ class DefaultVehicleInfoComponent(
 
     override val info: StateFlow<VehicleInfo?> = mutableInfo.asStateFlow()
     override val vehicleName: StateFlow<String?> = mutableName.asStateFlow()
+    override val units: StateFlow<UnitSystem> get() = unitSystem
 
     init {
         lifecycle.doOnDestroy { lifetime.cancel() }
