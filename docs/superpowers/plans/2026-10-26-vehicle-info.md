@@ -56,3 +56,24 @@ Sections (in order): VEHICLE (type, topology, chemistry, cell bounds, series cel
 - Grouped list with section headers using the redesigned settings row styles; absent values «—» with the reason as a caption; Device-facts labels from resources by `DeviceFactKey`.
 - [ ] Component/navigation tests (entry opens the screen for a saved vehicle; back returns to the editor); suite; commit `feat(info): «Всё о ТС» screen`.
 - [ ] Report plainly: layout unverified on a device.
+
+---
+
+## Extension (rider, 2026-10-26): device facts for every other protocol
+
+Same contract as Task 2 for each protocol below: implement `ProtocolFacts` with a CACHED list rebuilt only on change; surface only what the decoder ACTUALLY decodes but does not already publish through BmsData/ControllerData (read the decoder; never invent a field, never re-decode a value the common sections already show); new `DeviceFactKey` entries get en + ru strings through the exhaustive mappings in `presentation/vehicle/info/VehicleInfoText.kt`, and unit symbols must map in `factUnit` (FactUnitCoverageTest must keep covering every emitted symbol); tests from the protocol's existing fixtures/captures assert exact values; a protocol with nothing extra returns an empty list (and says why in KDoc). Text a device sends as labels (fault names, model strings) is data, shown verbatim.
+
+### Task 5: Smart BMS — ANT, JK, JBD, Daly
+**Files:** `data/bms/AntBmsProtocol.kt`, `JkBmsProtocol.kt`, `JbdBmsProtocol.kt`, `DalyBmsProtocol.kt`, `domain/model/DeviceFact.kt`, `VehicleInfoText.kt`, strings, tests.
+Candidates (only if decoded): balancing state/current, MOSFET temperature, design/nominal capacity, protection/warning bitmask raw, hardware/software version strings, cell-count reported by the BMS, state of health.
+- [ ] Failing tests per protocol; implement; suite; commit `feat(info): smart BMS device facts`.
+
+### Task 6: Wheels — Veteran/LeaperKim, KingSong, InMotion, Ninebot, Ninebot legacy
+**Files:** `VeteranProtocol.kt` (also serves LeaperKim; already implements ProtocolDiagnostics), `KingSongProtocol.kt`, `InMotionProtocol.kt`, `NinebotProtocol.kt`, `NinebotLegacyProtocol.kt`, DeviceFact keys, `VehicleInfoText.kt`, strings, tests.
+Candidates (only if decoded): lifetime odometer, tiltback/max-speed setting, pedal/ride mode, wheel alarm/state flags, board temperature, PWM raw, firmware/model already in ProtocolDiagnostics (don't duplicate).
+- [ ] Failing tests per protocol; implement; suite; commit `feat(info): wheel device facts`.
+
+### Task 7: Controllers — Kelly, FarDriver
+**Files:** `KellyProtocol.kt`, `FarDriverProtocol.kt`, keys, text, strings, tests.
+Candidates (only if decoded): controller model/version, throttle/brake raw, gear/mode, error code raw, motor RPM/eRPM if not already shown.
+- [ ] Failing tests per protocol; implement; suite; commit `feat(info): controller device facts`.
