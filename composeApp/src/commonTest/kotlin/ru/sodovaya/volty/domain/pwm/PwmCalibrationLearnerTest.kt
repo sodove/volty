@@ -163,8 +163,58 @@ class PwmCalibrationLearnerTest {
     }
 
     @Test
-    fun `merge never overwrites a wizard or manual calibration`() {
+    fun `onset history is bounded at 20`() {
+        var cal: PwmCalibration? = null
+        for (n in 0 until 25) cal = PwmCalibrationLearner.merge(cal, onset(60f + n, 90f, null, n.toLong()), 80f)
+        val c = assertNotNull(cal)
+        assertEquals(20, c.onsets.size)
+        assertEquals(24L, c.onsets.last().atMillis)
+        assertEquals(5L, c.onsets.first().atMillis)
+        assertEquals(PwmBasis.ONSET, c.basis)
+    }
+
+    @Test
+    fun `R is learned through merge from onsets with distinct currents`() {
+        val k = 1.1f
+        val r = 0.2f
+        var cal: PwmCalibration? = null
+        for ((s, i) in listOf(60f to 0f, 50f to 30f, 40f to 60f)) {
+            cal = PwmCalibrationLearner.merge(cal, onset(s, (k * s + r * i) / 0.8f, i), 80f)
+        }
+        val c = assertNotNull(cal)
+        assertEquals(r, c.r, 0.005f)
+        assertEquals(k, c.k, 0.005f)
+        assertEquals(3, c.points)
+    }
+
+    @Test
+    fun `free spin calibration is untouched by two onsets and replaced by the third`() {
         val wizard = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)
-        assertEquals(wizard, PwmCalibrationLearner.merge(wizard, onset(68.4f, 96.8f), 80f))
+        assertEquals(PwmBasis.FREE_SPIN, wizard.basis)
+        val one = assertNotNull(PwmCalibrationLearner.merge(wizard, onset(68.4f, 96.8f, null, 1), 80f))
+        val two = assertNotNull(PwmCalibrationLearner.merge(one, onset(67f, 96f, null, 2), 80f))
+        assertEquals(wizard.k, two.k)
+        assertEquals(PwmCalibrationSource.WIZARD, two.source)
+        assertEquals(PwmBasis.FREE_SPIN, two.basis)
+        assertEquals(2, two.onsets.size)
+        val three = assertNotNull(PwmCalibrationLearner.merge(two, onset(69f, 97f, null, 3), 80f))
+        assertEquals(PwmBasis.ONSET, three.basis)
+        assertEquals(PwmCalibrationSource.RIDING, three.source)
+        assertEquals(3, three.points)
+        assertEquals(1.1322f, three.k, 0.02f)
+    }
+
+    @Test
+    fun `manual free spin calibration is kept below three onsets`() {
+        val manual = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f).copy(source = PwmCalibrationSource.MANUAL)
+        val m = assertNotNull(PwmCalibrationLearner.merge(manual, onset(68.4f, 96.8f), 80f))
+        assertEquals(manual.k, m.k)
+        assertEquals(PwmCalibrationSource.MANUAL, m.source)
+    }
+
+    @Test
+    fun `slow onset leaves a free spin calibration unchanged`() {
+        val wizard = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)
+        assertEquals(wizard, PwmCalibrationLearner.merge(wizard, onset(4f, 96f), 80f))
     }
 }

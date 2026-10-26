@@ -3,6 +3,9 @@ package ru.sodovaya.volty.domain.pwm
 /** Where a [PwmCalibration] came from. WIZARD and MANUAL are never overwritten by riding. */
 enum class PwmCalibrationSource { WIZARD, RIDING, MANUAL }
 
+/** How a calibration was obtained: from alarm onsets (refit on every new onset) or a free-spin plateau / manual entry. */
+enum class PwmBasis { ONSET, FREE_SPIN }
+
 /**
  * Per-wheel constants of `pwm = (k * speedKmh + R * phaseCurrentA) / packV`.
  *
@@ -17,6 +20,9 @@ data class PwmCalibration(
     val points: Int,
     val source: PwmCalibrationSource,
     val spread: Float?,
+    val basis: PwmBasis,
+    /** The last [PwmCalibrationLearner.MAX_ONSETS] onsets seen; the history an ONSET fit is refit from. */
+    val onsets: List<AlarmOnset>,
 )
 
 /** An estimated duty. [atCeiling] means the model reached 100 % (field weakening beyond); [percent] never exceeds 100. */

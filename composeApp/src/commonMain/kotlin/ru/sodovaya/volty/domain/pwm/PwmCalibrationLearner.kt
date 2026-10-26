@@ -11,6 +11,7 @@ data class AlarmOnset(val speedKmh: Float, val packV: Float, val phaseA: Float?,
  */
 object PwmCalibrationLearner {
     const val MIN_SPEED_KMH = 10f
+    const val MAX_ONSETS = 20
     private const val MIN_ONSETS_FOR_R = 3
     private const val MIN_CURRENT_SPREAD_A = 10f
     private const val MAX_R = 0.5
@@ -21,7 +22,7 @@ object PwmCalibrationLearner {
 
     fun fromOnsets(onsets: List<AlarmOnset>, thresholdPercent: Float): PwmCalibration? {
         if (!thresholdPercent.isFinite() || thresholdPercent <= 0f) return null
-        val good = onsets.filter(::usable)
+        val good = onsets.filter(::usable).takeLast(MAX_ONSETS)
         if (good.isEmpty()) return null
         val target = { o: AlarmOnset -> thresholdPercent / 100.0 * o.packV }
 
@@ -51,36 +52,35 @@ object PwmCalibrationLearner {
                 k = (sy - r * si) / ss
             }
             val ks = withI.map { (target(it) - r * it.phaseA!!) / it.speedKmh }
-            return PwmCalibration(k.toFloat(), r.toFloat(), withI.size, PwmCalibrationSource.RIDING, relStdDev(ks))
+            return PwmCalibration(k.toFloat(), r.toFloat(), withI.size, PwmCalibrationSource.RIDING, relStdDev(ks), PwmBasis.ONSET, good)
         }
         val ks = good.map { target(it) / it.speedKmh }
         k = median(ks)
-        return PwmCalibration(k.toFloat(), 0f, good.size, PwmCalibrationSource.RIDING, relStdDev(ks))
+        return PwmCalibration(k.toFloat(), 0f, good.size, PwmCalibrationSource.RIDING, relStdDev(ks), PwmBasis.ONSET, good)
     }
 
     /** Free-spin plateau: the wheel is at its limit, so 100 % there. r = 0. */
     fun fromFreeSpin(plateauKmh: Float, packV: Float): PwmCalibration =
-        PwmCalibration(packV / plateauKmh, 0f, 1, PwmCalibrationSource.WIZARD, null)
+        PwmCalibration(packV / plateauKmh, 0f, 1, PwmCalibrationSource.WIZARD, null, PwmBasis.FREE_SPIN, emptyList())
 
     /**
-     * Folds one new onset into a riding calibration as a running mean of k at the current R.
-     * A WIZARD or MANUAL calibration is returned unchanged (measured/typed values are authoritative;
-     * an alarm onset sits near 83 % of the plateau, so blending them would contradict both).
+     * Folds one new onset in. Always records it in the bounded history; then:
+     * - ONSET basis: refit from the whole history with [fromOnsets] (k only below 3 onsets or < 10 A of
+     *   current spread, else k and R), keeping the calibration's source. Not a running mean: that is what makes R learnable.
+     * - FREE_SPIN basis (manual or plateau-only wizard): never blended with onsets; kept, with onsets
+     *   accumulating, until 3 usable onsets exist, then replaced by the onset fit (RIDING, ONSET).
      * An unusable onset returns [current].
      */
     fun merge(current: PwmCalibration?, onset: AlarmOnset, thresholdPercent: Float): PwmCalibration? {
         if (current == null) return fromOnsets(listOf(onset), thresholdPercent)
-        if (current.source != PwmCalibrationSource.RIDING) return current
-        if (!usable(onset) || !thresholdPercent.isFinite() || thresholdPercent <= 0f) return current
-        val ki = (thresholdPercent / 100.0 * onset.packV - current.r * (onset.phaseA ?: 0f)) / onset.speedKmh
-        val n = current.points
-        val mean = current.k.toDouble()
-        val newMean = (mean * n + ki) / (n + 1)
-        val sd = (current.spread ?: 0f) * mean
-        val meanSq = (sd * sd + mean * mean) * n
-        val newVar = ((meanSq + ki * ki) / (n + 1) - newMean * newMean).coerceAtLeast(0.0)
-        val spread = if (newMean > 0.0) (sqrt(newVar) / newMean).toFloat() else null
-        return current.copy(k = newMean.toFloat(), points = n + 1, spread = spread)
+        if (!usable(onset)) return current
+        val history = (current.onsets + onset).takeLast(MAX_ONSETS)
+        return when (current.basis) {
+            PwmBasis.ONSET -> fromOnsets(history, thresholdPercent)?.copy(source = current.source) ?: current
+            PwmBasis.FREE_SPIN ->
+                if (history.size >= MIN_ONSETS_FOR_R) fromOnsets(history, thresholdPercent) ?: current.copy(onsets = history)
+                else current.copy(onsets = history)
+        }
     }
 
     private fun median(xs: List<Double>): Double {
