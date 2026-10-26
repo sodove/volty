@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.ride
 
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.domain.stats.DutyBands
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.domain.stats.GaugeScale
@@ -513,7 +514,8 @@ object ClassicDialSpecs {
                 unit = "%",                           // QML :98
                 // G §9: a wheel whose firmware has never reported a PWM used to show a confident
                 // 0 % here while the alarm correctly refused to arm on the same sample.
-                valueTextOverride = if (duty == null) UNKNOWN else null,
+                // An estimate is marked on the dial's own readout ("~72", "≥100"); the needle keeps the number.
+                valueTextOverride = if (duty == null) UNKNOWN else MotionReadings.dutyText(motion)?.takeIf { motion.dutySource == DutySource.ESTIMATED },
                 // OURS WINS: VESC gives duty a fixed accent (:100) and no threshold at all.
                 // An unobserved duty gets no band: an absent number is not an alarming one, the
                 // same call consumptionLevel and batteryLevel already make.

@@ -61,6 +61,9 @@ class VehicleInfoComponentTest {
         override fun motionSamples(window: Duration): Flow<List<ControllerData>> = flowOf(emptyList())
         override fun movingAverage(window: Duration): Flow<MovingAvg> = emptyFlow()
         override suspend fun onAppResumed() {}
+        var pwmAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory.EMPTY
+        var pwmReads = 0
+        override suspend fun pwmMemory(vehicleId: String): ru.sodovaya.volty.domain.pwm.PwmMemory { pwmReads++; return pwmAnswer }
     }
 
     private class Vehicles(list: List<Vehicle>) : VehicleRepository {
@@ -199,5 +202,31 @@ class VehicleInfoComponentTest {
         )
         advanceTimeBy(1_000)
         assertNull(c.info.value); assertNull(c.vehicleName.value)
+    }
+
+    @Test fun readsThePwmMemoryOnOpenAndWhileConnectedButNotWhileIdle() = runTest {
+        val r = rig(); runCurrent()
+        assertEquals(1, r.bms.pwmReads, "read once on open")
+        r.bms.pwmAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED)
+        advanceTimeBy(5_000)
+        assertEquals(1, r.bms.pwmReads, "idle ticks do not poll the store")
+        assertEquals(InfoChoice.PWM_EVIDENCE_UNKNOWN, r.component.info.value.row(InfoSectionKind.PWM, InfoLabel.PWM_EVIDENCE).choice)
+
+        connect(r); advanceTimeBy(1_100)
+        assertTrue(r.bms.pwmReads > 1, "connected: the live estimator is read on the tick")
+        assertEquals(InfoChoice.PWM_EVIDENCE_NEVER_REPORTED, r.component.info.value.row(InfoSectionKind.PWM, InfoLabel.PWM_EVIDENCE).choice)
+        // A latch while the screen is open shows up without reopening it.
+        r.bms.pwmAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.REPORTS)
+        advanceTimeBy(600)
+        assertEquals(InfoChoice.PWM_EVIDENCE_REPORTS, r.component.info.value.row(InfoSectionKind.PWM, InfoLabel.PWM_EVIDENCE).choice)
+    }
+
+    @Test fun aWeakerPwmReadNeverLowersTheEvidenceTheScreenHolds() = runTest {
+        val r = rig(); connect(r)
+        r.bms.pwmAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.REPORTS)
+        advanceTimeBy(1_100)
+        r.bms.pwmAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.UNKNOWN)
+        advanceTimeBy(1_100)
+        assertEquals(InfoChoice.PWM_EVIDENCE_REPORTS, r.component.info.value.row(InfoSectionKind.PWM, InfoLabel.PWM_EVIDENCE).choice)
     }
 }

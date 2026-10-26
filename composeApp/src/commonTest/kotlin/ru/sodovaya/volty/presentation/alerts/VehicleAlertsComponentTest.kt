@@ -932,4 +932,28 @@ class VehicleAlertsComponentTest {
         assertTrue(c.state.value.discardPrompt)
         assertFalse(left)
     }
+
+    @Test
+    fun `an estimated duty is on offer with its caption and the caption goes when the duty is measured again`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(vehicle()), bms)
+        advanceUntilIdle()
+        fun duty() = c.state.value.kinds.single { it.kind == MotionAlertKind.DUTY }
+        assertFalse(duty().estimated, "nothing observed yet")
+
+        bms.activeMotion.value = ControllerData(
+            isConnected = true, hasDuty = true, dutyPercent = 55f,
+            dutySource = ru.sodovaya.volty.domain.model.DutySource.ESTIMATED
+        )
+        advanceUntilIdle()
+        assertIs<AlertAvailability.Available>(duty().availability)
+        assertTrue(duty().estimated)
+        assertTrue(duty().showsEstimateCaption)
+
+        bms.activeMotion.value = ControllerData(isConnected = true, hasDuty = true, dutyPercent = 55f)
+        advanceUntilIdle()
+        assertIs<AlertAvailability.Available>(duty().availability)
+        assertFalse(duty().estimated)
+    }
 }

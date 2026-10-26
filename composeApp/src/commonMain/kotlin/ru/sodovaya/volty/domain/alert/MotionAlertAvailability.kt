@@ -3,6 +3,7 @@ package ru.sodovaya.volty.domain.alert
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
 import kotlin.jvm.JvmInline
@@ -236,6 +237,20 @@ fun availabilityFor(
     return MotionAlertKind.entries.associateWith { kind ->
         availabilityOf(kind, controllers, observedSample)
     }
+}
+
+/**
+ * The kinds whose number the rider is looking at is the app's ESTIMATE, not a measurement: today only
+ * [MotionAlertKind.DUTY], and only while the estimate is actually being published - an observed sample with
+ * [ControllerData.hasDuty] true AND [ControllerData.dutySource] ESTIMATED. An estimate that is not being published
+ * (an unproven or uncalibrated wheel publishes `hasDuty = false`) is not on offer, so it carries no caption, and
+ * [availabilityFor] has already refused to arm it: availability follows `hasDuty`, never the source label.
+ *
+ * Disconnected placeholders are discarded exactly as [availabilityFor] does.
+ */
+fun estimatedKinds(latestMotion: ControllerData?): Set<MotionAlertKind> {
+    val sample = latestMotion?.takeIf { it.isConnected } ?: return emptySet()
+    return if (sample.hasDuty && sample.dutySource == DutySource.ESTIMATED) setOf(MotionAlertKind.DUTY) else emptySet()
 }
 
 private fun availabilityOf(

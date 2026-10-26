@@ -50,8 +50,9 @@ class MotionAlertEditingTest {
         kind: MotionAlertKind = MotionAlertKind.DUTY,
         availability: AlertAvailability = AlertAvailability.Available,
         levels: List<AlertLevelDraft> = emptyList(),
-        stashed: List<AlertLevelDraft> = emptyList()
-    ) = AlertKindDraft(kind, availability, levels, stashed)
+        stashed: List<AlertLevelDraft> = emptyList(),
+        estimated: Boolean = false
+    ) = AlertKindDraft(kind, availability, levels, stashed, estimated)
 
     // ---------------------------------------------------------------- parsing
 
@@ -424,5 +425,31 @@ class MotionAlertEditingTest {
 
         assertEquals(v.motionAlertRules, committed)
         assertNotNull(committed.singleOrNull { it.kind == MotionAlertKind.SPEED })
+    }
+
+    // ---------------------------------------------------------------- the estimate caption
+
+    @Test
+    fun `only an available duty row that is an estimate carries the caption`() {
+        assertTrue(draft(availability = AlertAvailability.Available, estimated = true).showsEstimateCaption)
+        assertFalse(draft(availability = AlertAvailability.Available, estimated = false).showsEstimateCaption)
+        // Incoherent on purpose: flagged estimated beside Unavailable / Unknown is a state nothing produces.
+        assertFalse(draft(availability = AlertAvailability.Unknown, estimated = true).showsEstimateCaption)
+        assertFalse(
+            draft(
+                availability = AlertAvailability.Unavailable(AlertUnavailableReason.ControllerHasNotReportedDuty),
+                estimated = true
+            ).showsEstimateCaption
+        )
+    }
+
+    @Test
+    fun `alertDraftsFor marks only the kinds it is told are estimated`() {
+        val drafts = alertDraftsFor(
+            vehicle(),
+            availability = MotionAlertKind.entries.associateWith { AlertAvailability.Available },
+            estimated = setOf(MotionAlertKind.DUTY)
+        )
+        assertEquals(listOf(MotionAlertKind.DUTY), drafts.filter { it.estimated }.map { it.kind })
     }
 }

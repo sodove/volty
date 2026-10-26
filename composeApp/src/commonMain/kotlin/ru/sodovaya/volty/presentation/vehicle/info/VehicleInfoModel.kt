@@ -22,6 +22,11 @@ import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
+import ru.sodovaya.volty.domain.model.DutySource
+import ru.sodovaya.volty.domain.pwm.PwmBasis
+import ru.sodovaya.volty.domain.pwm.PwmCalibrationSource
+import ru.sodovaya.volty.domain.pwm.PwmEvidence
+import ru.sodovaya.volty.domain.pwm.PwmMemory
 import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
 import ru.sodovaya.volty.util.UnitFormatter
@@ -80,6 +85,10 @@ data class InfoRow(
 enum class InfoUnit {
     VOLT, MILLIVOLT, AMP, WATT, AMP_HOUR, WATT_HOUR, MILLIOHM, CELSIUS, PERCENT, HERTZ,
     SPEED, DISTANCE, CONSUMPTION, KILOMETER, KMH,
+    /** The PWM model's k. */
+    VOLT_PER_KMH,
+    /** The PWM model's R. */
+    OHM,
 }
 
 internal fun factUnit(symbol: String?): InfoUnit? = when (symbol) {
@@ -92,7 +101,7 @@ internal fun factUnit(symbol: String?): InfoUnit? = when (symbol) {
     else -> null
 }
 
-enum class InfoSectionKind { VEHICLE, CONNECTIONS, BATTERIES, CONTROLLERS, ENERGY, RANGE, ALERTS, DEVICE_FACTS }
+enum class InfoSectionKind { VEHICLE, CONNECTIONS, BATTERIES, CONTROLLERS, PWM, ENERGY, RANGE, ALERTS, DEVICE_FACTS }
 
 enum class InfoLabel {
     // VEHICLE
@@ -108,6 +117,10 @@ enum class InfoLabel {
     // CONTROLLERS
     CONTROLLER_TYPE, SPEED, DUTY, PHASE_CURRENT, BATTERY_CURRENT, INPUT_VOLTAGE, POWER, ERPM, MOTOR_TEMP, ESC_TEMP,
     CONSUMED_AH, CONSUMED_WH, REGEN_AH, REGEN_WH, ODOMETER, TRIP, CONTROLLER_FAULTS,
+
+    // PWM: what is known about this wheel's PWM and the estimate built on it
+    PWM_EVIDENCE, PWM_THRESHOLD, PWM_SOURCE, PWM_BASIS, PWM_K, PWM_R, PWM_POINTS, PWM_SPREAD,
+    PWM_MANUAL_KMH, PWM_MANUAL_VOLTS, PWM_ESTIMATE, PWM_WHEEL_ALARM,
 
     // ENERGY
     ENERGY_SOC, USABLE_AH, NOMINAL_PACK_V, REMAINING_WH, CAPACITY_SOURCE, RESISTANCE, LEARNED_CAPACITY, LEARNED_RIDES,
@@ -154,6 +167,10 @@ enum class InfoAbsence {
     NOT_SET,
     /** The pack reports no state of charge yet. */
     SOC_UNKNOWN,
+    /** No estimate because the wheel reports its own PWM. */
+    PWM_WHEEL_REPORTS,
+    /** No estimate because it is not yet proven that the wheel reports no PWM. */
+    PWM_NOT_PROVEN,
 
     // RANGE: why the estimate is withheld (mirrors RangeUnearnedReason)
     RANGE_NO_CAPACITY, RANGE_TOO_SHORT, RANGE_TOO_FEW_SAMPLES, RANGE_SOC_UNKNOWN, RANGE_NO_CONSUMPTION,
@@ -179,6 +196,11 @@ enum class InfoChoice {
     CURRENT_FROM_CONTROLLER, CURRENT_FROM_PACKS, CURRENT_NONE,
     // range
     RANGE_EARNED,
+    // PWM evidence (each carries its reason in its words), calibration source and basis, the estimate ceiling, the wheel alarm
+    PWM_EVIDENCE_UNKNOWN, PWM_EVIDENCE_NEVER_REPORTED, PWM_EVIDENCE_REPORTS,
+    PWM_SOURCE_WIZARD, PWM_SOURCE_RIDING, PWM_SOURCE_MANUAL,
+    PWM_BASIS_ONSET, PWM_BASIS_FREE_SPIN,
+    PWM_ESTIMATE_CEILING, PWM_ALARM_SOUNDING, PWM_ALARM_QUIET,
     // links / alerts
     LINK_ONLINE, LINK_OFFLINE,
     ALERT_ARMED, ALERT_OFF, ALERT_ACTIVE,
@@ -211,18 +233,21 @@ fun vehicleInfoOf(
     availability: Map<MotionAlertKind, AlertAvailability>,
     units: UnitSystem,
     nowEpochMillis: Long,
+    /** What the repository knows about this vehicle PWM: the proven evidence and the calibration. */
+    pwm: PwmMemory = PwmMemory.EMPTY,
 ): VehicleInfo {
     val live = connected
     val d = if (live) data else null
     val m = if (live) motion else null
     val l = if (live) links else emptyList()
-    val ctx = Ctx(vehicle, live, d, m, l, stored, range, availability, units, nowEpochMillis)
+    val ctx = Ctx(vehicle, live, d, m, l, stored, range, availability, units, nowEpochMillis, pwm)
     return VehicleInfo(
         buildList {
             add(ctx.vehicleSection())
             addAll(ctx.connectionSections())
             addAll(ctx.batterySections())
             addAll(ctx.controllerSections())
+            add(ctx.pwmSection())
             add(ctx.energySection())
             add(ctx.rangeSection())
             add(ctx.alertsSection())
@@ -242,6 +267,7 @@ private class Ctx(
     val availability: Map<MotionAlertKind, AlertAvailability>,
     val units: UnitSystem,
     val now: Long,
+    val pwm: PwmMemory,
 ) {
     private val noLive get() = if (live) InfoAbsence.NOT_YET else InfoAbsence.NOT_CONNECTED
 
@@ -408,6 +434,9 @@ private class Ctx(
             })
             rows += when {
                 !controller.controllerType.reportsDuty -> InfoRow(InfoLabel.DUTY, reason = InfoAbsence.PROTOCOL_LACKS)
+                // A wheel PROVEN not to report PWM (the T4) still publishes hasDuty = true with a constant: that is a
+                // placeholder, not a reading. The estimate lives in the PWM section and on the vehicle-level dials.
+                pwm.evidence == PwmEvidence.NEVER_REPORTED -> InfoRow(InfoLabel.DUTY, reason = InfoAbsence.NOT_REPORTED)
                 !c.hasDuty -> InfoRow(InfoLabel.DUTY, reason = InfoAbsence.NOT_REPORTED)
                 else -> InfoRow(InfoLabel.DUTY, value = "${formatFixed(c.dutyPercent, 1)}", unit = InfoUnit.PERCENT)
             }
@@ -443,6 +472,79 @@ private class Ctx(
             else InfoRow(InfoLabel.CONTROLLER_FAULTS, value = c.faults.joinToString(", "))
         }
         InfoSection(InfoSectionKind.CONTROLLERS, title = controller.label, rows = rows)
+    }
+
+    // ---- PWM ----------------------------------------------------------------------------------
+
+    /**
+     * Everything the estimated PWM rests on, in one block. The evidence and the threshold are configuration and show
+     * with no link; the estimate and the wheel alarm are live.
+     *
+     * **A stored MANUAL calibration k is never shown as the calibration.** The live estimator replaces it on read
+     * with the rider typed point ([Vehicle.pwmManual]), so the stored number is stale by construction; the typed
+     * point is shown instead, and the source says MANUAL. A kept calibration is shown even when the wheel
+     * REPORTS (it is inert, not erased), but the estimate row then says it is not needed.
+     */
+    fun pwmSection(): InfoSection {
+        val rows = mutableListOf<InfoRow>()
+        rows += InfoRow(InfoLabel.PWM_EVIDENCE, choice = when (pwm.evidence) {
+            PwmEvidence.UNKNOWN -> InfoChoice.PWM_EVIDENCE_UNKNOWN
+            PwmEvidence.NEVER_REPORTED -> InfoChoice.PWM_EVIDENCE_NEVER_REPORTED
+            PwmEvidence.REPORTS -> InfoChoice.PWM_EVIDENCE_REPORTS
+        })
+        rows += InfoRow(InfoLabel.PWM_THRESHOLD, value = vehicle.pwmAlarmThresholdPercent.toString(), unit = InfoUnit.PERCENT)
+
+        val stored = pwm.calibration
+        val manual = vehicle.pwmManual
+        val learned = stored?.takeIf { it.source != PwmCalibrationSource.MANUAL && it.k.isFinite() && it.k > 0f }
+        val manualInUse = learned == null && (manual != null || stored?.source == PwmCalibrationSource.MANUAL)
+        when {
+            learned != null -> {
+                rows += InfoRow(InfoLabel.PWM_SOURCE, choice = if (learned.source == PwmCalibrationSource.WIZARD) InfoChoice.PWM_SOURCE_WIZARD else InfoChoice.PWM_SOURCE_RIDING)
+                rows += InfoRow(InfoLabel.PWM_BASIS, choice = if (learned.basis == PwmBasis.ONSET) InfoChoice.PWM_BASIS_ONSET else InfoChoice.PWM_BASIS_FREE_SPIN)
+                rows += InfoRow(InfoLabel.PWM_K, value = formatFixed(learned.k, 3), unit = InfoUnit.VOLT_PER_KMH)
+                rows += InfoRow(InfoLabel.PWM_R, value = formatFixed(learned.r, 4), unit = InfoUnit.OHM)
+                rows += InfoRow(InfoLabel.PWM_POINTS, value = learned.points.toString())
+                rows += learned.spread?.takeIf { it.isFinite() }
+                    ?.let { InfoRow(InfoLabel.PWM_SPREAD, value = formatFixed(it * 100f, 1), unit = InfoUnit.PERCENT) }
+                    ?: InfoRow(InfoLabel.PWM_SPREAD, reason = InfoAbsence.NOT_EARNED)
+            }
+            manualInUse -> {
+                rows += InfoRow(InfoLabel.PWM_SOURCE, choice = InfoChoice.PWM_SOURCE_MANUAL)
+                rows += InfoRow(InfoLabel.PWM_BASIS, choice = InfoChoice.PWM_BASIS_FREE_SPIN)
+                rows += if (manual != null) {
+                    InfoRow(InfoLabel.PWM_MANUAL_KMH, value = formatFixed(manual.freeSpinKmh, 1), unit = InfoUnit.KMH)
+                } else InfoRow(InfoLabel.PWM_MANUAL_KMH, reason = InfoAbsence.NOT_SET)
+                rows += if (manual != null) {
+                    InfoRow(InfoLabel.PWM_MANUAL_VOLTS, value = formatFixed(manual.atVoltage, 1), unit = InfoUnit.VOLT)
+                } else InfoRow(InfoLabel.PWM_MANUAL_VOLTS, reason = InfoAbsence.NOT_SET)
+                // The stored row points (onsets learned on top of the typed point) are real; its k, R and spread are not shown.
+                stored?.let { rows += InfoRow(InfoLabel.PWM_POINTS, value = it.points.toString()) }
+            }
+            else -> for (label in listOf(InfoLabel.PWM_SOURCE, InfoLabel.PWM_BASIS, InfoLabel.PWM_K, InfoLabel.PWM_R, InfoLabel.PWM_POINTS, InfoLabel.PWM_SPREAD))
+                rows += InfoRow(label, reason = InfoAbsence.NOT_EARNED)
+        }
+
+        val m = motion
+        val calibrated = learned != null || manualInUse
+        rows += when {
+            !live || m == null -> InfoRow(InfoLabel.PWM_ESTIMATE, reason = InfoAbsence.NOT_CONNECTED)
+            pwm.evidence == PwmEvidence.REPORTS -> InfoRow(InfoLabel.PWM_ESTIMATE, reason = InfoAbsence.PWM_WHEEL_REPORTS)
+            pwm.evidence == PwmEvidence.UNKNOWN -> InfoRow(InfoLabel.PWM_ESTIMATE, reason = InfoAbsence.PWM_NOT_PROVEN)
+            m.hasDuty && m.dutySource == DutySource.ESTIMATED ->
+                if (m.dutyAtCeiling) InfoRow(InfoLabel.PWM_ESTIMATE, choice = InfoChoice.PWM_ESTIMATE_CEILING)
+                else InfoRow(InfoLabel.PWM_ESTIMATE, value = m.dutyPercent.roundToInt().toString(), unit = InfoUnit.PERCENT)
+            !calibrated -> InfoRow(InfoLabel.PWM_ESTIMATE, reason = InfoAbsence.NOT_EARNED)
+            else -> InfoRow(InfoLabel.PWM_ESTIMATE, reason = InfoAbsence.NOT_YET)
+        }
+        val alarm = m?.wheelPwmAlarm
+        rows += when {
+            !live || m == null -> InfoRow(InfoLabel.PWM_WHEEL_ALARM, reason = InfoAbsence.NOT_CONNECTED)
+            alarm == null -> InfoRow(InfoLabel.PWM_WHEEL_ALARM, reason = InfoAbsence.NOT_REPORTED)
+            alarm -> InfoRow(InfoLabel.PWM_WHEEL_ALARM, choice = InfoChoice.PWM_ALARM_SOUNDING)
+            else -> InfoRow(InfoLabel.PWM_WHEEL_ALARM, choice = InfoChoice.PWM_ALARM_QUIET)
+        }
+        return InfoSection(InfoSectionKind.PWM, rows = rows)
     }
 
     // ---- ENERGY -----------------------------------------------------------------------------

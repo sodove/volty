@@ -4,6 +4,10 @@ package ru.sodovaya.volty.presentation.ride
 internal data class LightTelemetryValues(
     val speedKmh: Float? = null,
     val dutyPercent: Float? = null,
+    /** The duty is the per-wheel model's estimate (shown with "~"), not a measurement. */
+    val dutyEstimated: Boolean = false,
+    /** The estimate is at its 100 % ceiling (shown as "≥100"). */
+    val dutyAtCeiling: Boolean = false,
     val motorCurrentA: Float? = null,
     val batteryCurrentA: Float? = null,
     val controllerTemperatureC: Float? = null,
@@ -30,6 +34,9 @@ internal class LightTelemetrySmoother(
         return LightTelemetryValues(
             speedKmh = interpolate(previous.speedKmh, target.speedKmh, alpha),
             dutyPercent = interpolate(previous.dutyPercent, target.dutyPercent, alpha),
+            // Provenance is never interpolated: it is the target's, so the marker cannot lag the number.
+            dutyEstimated = target.dutyEstimated,
+            dutyAtCeiling = target.dutyAtCeiling,
             motorCurrentA = interpolate(previous.motorCurrentA, target.motorCurrentA, alpha),
             batteryCurrentA = interpolate(previous.batteryCurrentA, target.batteryCurrentA, alpha),
             controllerTemperatureC = interpolate(previous.controllerTemperatureC, target.controllerTemperatureC, alpha),

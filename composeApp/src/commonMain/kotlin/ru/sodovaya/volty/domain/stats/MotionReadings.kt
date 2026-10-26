@@ -1,7 +1,9 @@
 package ru.sodovaya.volty.domain.stats
 
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
+import kotlin.math.roundToInt
 
 /**
  * **The unknown-vs-zero contract for motion telemetry** (`G §9`, `§9.1`, `§9.3`).
@@ -67,6 +69,24 @@ object MotionReadings {
     /** Duty/ШИМ, or null when this firmware has never reported a PWM (`D §7.2`). */
     fun dutyPercent(motion: ControllerData): Float? =
         if (motion.hasDuty) motion.dutyPercent else null
+
+    /**
+     * The duty as a DASHBOARD writes it, or null when [dutyPercent] is null. One function for every face, so the
+     * estimate cannot be dressed as a measurement on one of them: a MEASURED duty is its rounded number; an
+     * ESTIMATED one gets a "~" prefix, and at the model's ceiling it says "≥100" (field weakening), never a number.
+     * Only an estimate can be "at its ceiling": the flag beside a MEASURED duty is ignored.
+     */
+    fun dutyText(motion: ControllerData): String? {
+        val duty = dutyPercent(motion) ?: return null
+        return dutyText(duty, motion.dutySource == DutySource.ESTIMATED, motion.dutyAtCeiling)
+    }
+
+    /** The text rule behind [dutyText], for the HUD whose smoother carries the three parts separately. */
+    fun dutyText(percent: Float, estimated: Boolean, atCeiling: Boolean): String = when {
+        !estimated -> percent.roundToInt().toString()
+        atCeiling -> "≥100"
+        else -> "~${percent.roundToInt()}"
+    }
 
     /** Input-side battery current, or null when the controller only reports phase current. */
     fun batteryCurrentA(motion: ControllerData): Float? =

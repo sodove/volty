@@ -92,7 +92,7 @@ object SecondaryGaugeMapper {
             // alarm refuses to arm on — showed a confident 0 %.
             val duty = MotionReadings.dutyPercent(motion)
             SecondaryReadout(
-                labels.duty, duty.readoutOr { it.roundToInt().toString() }, "%",
+                labels.duty, MotionReadings.dutyText(motion) ?: UNKNOWN_READOUT, "%",
                 duty?.let { frac(it, 100f) } ?: 0f,
                 duty?.let { DutyBands.level(it) } ?: DutyLevel.NORMAL
             )

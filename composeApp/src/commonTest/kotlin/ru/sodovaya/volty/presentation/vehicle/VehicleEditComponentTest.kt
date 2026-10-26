@@ -4095,6 +4095,31 @@ class VehicleEditComponentTest {
     }
 
     @Test
+    fun `a memory read answered before a REPORTS latch cannot put the evidence back when it lands after`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo().apply { pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED) }
+        val lifecycle = LifecycleRegistry()
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms, lifecycle = lifecycle)
+        advanceUntilIdle()
+        bms.evidenceLive.value = ru.sodovaya.volty.domain.pwm.PwmEvidence.REPORTS
+        advanceUntilIdle()
+        assertEquals(ru.sodovaya.volty.domain.pwm.PwmEvidence.REPORTS, c.state.value.pwmEvidence)
+        // The resume's read still answers with the pre-latch memory: it must not overwrite the latch.
+        lifecycle.pause(); lifecycle.resume()
+        advanceUntilIdle()
+        assertEquals(ru.sodovaya.volty.domain.pwm.PwmEvidence.REPORTS, c.state.value.pwmEvidence, "REPORTS is a one-way latch")
+        // The weaker order too: UNKNOWN read later never beats a NEVER_REPORTED already held.
+        val bms2 = FakeBmsRepo().apply { pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED) }
+        val lifecycle2 = LifecycleRegistry()
+        val c2 = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms2, lifecycle = lifecycle2)
+        advanceUntilIdle()
+        bms2.pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.UNKNOWN)
+        lifecycle2.pause(); lifecycle2.resume()
+        advanceUntilIdle()
+        assertEquals(ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED, c2.state.value.pwmEvidence)
+    }
+
+    @Test
     fun `the editor follows the live evidence, so a wheel that latches REPORTS stops offering the wizard without a resume`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var opened = 0

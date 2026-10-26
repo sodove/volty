@@ -76,7 +76,8 @@ object AlertNotificationFormatter {
             AlertKind.ESC_TEMP_HIGH -> pair(AlertString.ESC_TEMP_TITLE, AlertString.ESC_TEMP_TEXT, value.toInt().toString(), name)
             AlertKind.SOC_LOW -> pair(AlertString.SOC_LOW_TITLE, AlertString.SOC_LOW_TEXT, value.toInt().toString(), name)
             AlertKind.SOC_CUTOFF -> pair(AlertString.SOC_CUTOFF_TITLE, AlertString.SOC_CUTOFF_TEXT, value.toInt().toString(), name)
-            AlertKind.DUTY_HIGH -> pair(AlertString.DUTY_TITLE, AlertString.DUTY_TEXT, value.roundToInt().toString(), name)
+            // WHEEL_PWM_ALARM is banner-only (the engine never emits it); the duty wording keeps the `when` exhaustive.
+            AlertKind.DUTY_HIGH, AlertKind.WHEEL_PWM_ALARM -> pair(AlertString.DUTY_TITLE, AlertString.DUTY_TEXT, value.roundToInt().toString(), name)
             AlertKind.CHARGE_COMPLETE -> pair(AlertString.CHARGE_COMPLETE_TITLE, AlertString.CHARGE_COMPLETE_TEXT, name)
             AlertKind.DISCONNECT -> pair(AlertString.DISCONNECT_TITLE, AlertString.DISCONNECT_TEXT, name)
             AlertKind.CONTROLLER_FAULT -> pair(AlertString.CONTROLLER_FAULT_TITLE, AlertString.CONTROLLER_FAULT_TEXT, message.details.joinToString(", "), name)

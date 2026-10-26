@@ -115,8 +115,16 @@ data class AlertKindDraft(
     val availability: AlertAvailability,
     val levels: List<AlertLevelDraft>,
     /** See the file header: an undo buffer for the switch, never an "off" flag. */
-    val stashed: List<AlertLevelDraft> = emptyList()
+    val stashed: List<AlertLevelDraft> = emptyList(),
+    /**
+     * The number this kind compares against is the app's per-wheel ESTIMATE ([estimatedKinds]), which under load
+     * can read LOWER than the truth. Display-only: never part of [editedLevels] or of what is saved.
+     */
+    val estimated: Boolean = false
 )
+
+/** The «оценка: под нагрузкой может занижать» caption: an estimate that is actually on offer ([AlertAvailability.Available]). */
+val AlertKindDraft.showsEstimateCaption: Boolean get() = estimated && availability == AlertAvailability.Available
 
 /**
  * May the rider touch this kind at all?
@@ -228,13 +236,15 @@ fun defaultLevelDrafts(kind: MotionAlertKind): List<AlertLevelDraft> =
  */
 fun alertDraftsFor(
     vehicle: Vehicle,
-    availability: Map<MotionAlertKind, AlertAvailability>
+    availability: Map<MotionAlertKind, AlertAvailability>,
+    estimated: Set<MotionAlertKind> = emptySet()
 ): List<AlertKindDraft> {
     val configured = vehicle.motionAlertRules.associateBy { it.kind }
     return MotionAlertKind.entries.map { kind ->
         AlertKindDraft(
             kind = kind,
             availability = availability[kind] ?: AlertAvailability.Unknown,
+            estimated = kind in estimated,
             levels = configured[kind]?.levels.orEmpty().map {
                 AlertLevelDraft(formatThreshold(it.thresholdValue), it.enabled)
             }

@@ -23,6 +23,7 @@ import ru.sodovaya.volty.domain.alert.alarmPreviewCommand
 import ru.sodovaya.volty.domain.audio.AlertSoundKind
 import ru.sodovaya.volty.domain.audio.AlertSoundSettings
 import ru.sodovaya.volty.domain.alert.availabilityFor
+import ru.sodovaya.volty.domain.alert.estimatedKinds
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -342,7 +343,7 @@ class DefaultVehicleAlertsComponent(
         scope.launch {
             val vehicle = vehicleRepository.get(vehicleId) ?: return@launch
             loadedVehicle = vehicle
-            val drafts = alertDraftsFor(vehicle, availabilityFor(vehicle, lastObservedMotion))
+            val drafts = alertDraftsFor(vehicle, availabilityFor(vehicle, lastObservedMotion), estimatedKinds(lastObservedMotion))
             val battery = BatteryAlertDraft.from(vehicle.alertConfig)
             _state.update {
                 it.copy(
@@ -386,10 +387,14 @@ class DefaultVehicleAlertsComponent(
     private fun refreshAvailability() {
         val vehicle = loadedVehicle ?: return
         val availability = availabilityFor(vehicle, lastObservedMotion)
+        val estimated = estimatedKinds(lastObservedMotion)
         _state.update { s ->
             s.copy(
                 kinds = s.kinds.map { draft ->
-                    draft.copy(availability = availability[draft.kind] ?: draft.availability)
+                    draft.copy(
+                        availability = availability[draft.kind] ?: draft.availability,
+                        estimated = draft.kind in estimated
+                    )
                 }
             )
         }

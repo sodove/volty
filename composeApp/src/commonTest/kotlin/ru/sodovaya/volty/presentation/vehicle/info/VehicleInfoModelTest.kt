@@ -343,7 +343,7 @@ class VehicleInfoModelTest {
         val facts = listOf(DeviceFact(DeviceFactKey.ODOMETER_KM, "1", "km"))
         val kinds = info(wheel, data = t4Data(), links = listOf(link(facts))).sections.map { it.kind }
         assertEquals(
-            listOf(InfoSectionKind.VEHICLE, InfoSectionKind.CONNECTIONS, InfoSectionKind.BATTERIES, InfoSectionKind.CONTROLLERS,
+            listOf(InfoSectionKind.VEHICLE, InfoSectionKind.CONNECTIONS, InfoSectionKind.BATTERIES, InfoSectionKind.CONTROLLERS, InfoSectionKind.PWM,
                 InfoSectionKind.ENERGY, InfoSectionKind.RANGE, InfoSectionKind.ALERTS, InfoSectionKind.DEVICE_FACTS),
             kinds,
         )

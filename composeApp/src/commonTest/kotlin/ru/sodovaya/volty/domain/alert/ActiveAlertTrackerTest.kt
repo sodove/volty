@@ -183,4 +183,37 @@ class ActiveAlertTrackerTest {
         assertEquals(95f, worseOf(AlertKind.DUTY_HIGH, 95f, 85f))
         assertEquals(95f, worseOf(AlertKind.DUTY_HIGH, 85f, 95f))
     }
+
+    // ---- the wheel's own PWM alarm -----------------------------------------------------
+
+    private val wheelAlarm = ActiveAlert(AlertKind.WHEEL_PWM_ALARM, 80f, AlertSeverity.WARNING)
+
+    @Test
+    fun `the wheel's own alarm is its own row, carrying the threshold, whatever the duty rules say`() {
+        // Deliberately incoherent: no duty reported (hasDuty = false, a stray 4200-ish number), the duty rule switched
+        // off, and still the wheel's bit is a fact that gets its row.
+        val noRules = vehicle(rules = listOf(AlertRule(MotionAlertKind.DUTY, emptyList())))
+        val sample = motion(duty = 0f).copy(hasDuty = false, wheelPwmAlarm = true)
+        assertEquals(listOf(wheelAlarm), ActiveAlertTracker().updateMotion(sample, noRules))
+        assertEquals(
+            listOf(wheelAlarm.copy(peakValue = 75f)),
+            ActiveAlertTracker().updateMotion(sample, noRules.copy(pwmAlarmThresholdPercent = 75))
+        )
+    }
+
+    @Test
+    fun `the wheel's row sits beside a duty row and neither hides the other`() {
+        val rows = ActiveAlertTracker().updateMotion(motion(duty = 85f).copy(wheelPwmAlarm = true), vehicle())
+        assertEquals(setOf(AlertKind.DUTY_HIGH, AlertKind.WHEEL_PWM_ALARM), rows.map { it.kind }.toSet())
+    }
+
+    @Test
+    fun `no wheel alarm, or an alarm the wheel does not report, is no row`() {
+        val t = ActiveAlertTracker()
+        assertEquals(emptyList(), t.updateMotion(motion().copy(wheelPwmAlarm = false), vehicle()))
+        assertEquals(emptyList(), t.updateMotion(motion().copy(wheelPwmAlarm = null), vehicle()))
+        // A disconnected placeholder carrying the bit is not an observation.
+        assertEquals(emptyList(), t.updateMotion(motion().copy(wheelPwmAlarm = true, isConnected = false), vehicle()))
+        assertEquals(emptyList(), t.updateMotion(motion().copy(wheelPwmAlarm = true), null))
+    }
 }

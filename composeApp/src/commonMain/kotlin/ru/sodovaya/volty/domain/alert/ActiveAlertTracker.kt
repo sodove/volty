@@ -86,7 +86,7 @@ class ActiveAlertTracker {
         }
         val rules = armedRules(vehicle, motion, vehicle.motionAlertRules)
         val state = alarm.update(motion, rules)
-        return state.contributors.map { contributor ->
+        val engaged = state.contributors.map { contributor ->
             val rule = rules.rules.first { it.kind == contributor.kind }
             val top = rule.topEnabledLevel
             ActiveAlert(
@@ -95,6 +95,12 @@ class ActiveAlertTracker {
                 severity = if (contributor.level >= top) AlertSeverity.CRITICAL else AlertSeverity.WARNING
             )
         }
+        // The wheel's own PWM alarm is a fact the wheel reports, not a rule of ours: it needs no armed rule, no
+        // duty availability and no notify switch (those gate sound and notifications, not what the banner tells the
+        // rider). Its row carries the configured threshold, the number the wheel's alarm stands for.
+        return if (motion.wheelPwmAlarm == true) {
+            engaged + ActiveAlert(AlertKind.WHEEL_PWM_ALARM, vehicle.pwmAlarmThresholdPercent.toFloat(), AlertSeverity.WARNING)
+        } else engaged
     }
 
     /** The battery kinds engaged by [data]. A disconnected sample or no vehicle: none. */

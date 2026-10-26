@@ -68,6 +68,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.stringResource
+import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
@@ -287,6 +288,7 @@ internal fun LightRideDashboard(
                 duty = dutyHistory,
                 speedPeak = rideMaxSpeedKmh,
                 dutyPeak = rideMaxDutyPercent.takeIf { it > 0f },
+                dutyEstimated = state.motion.hasDuty && state.motion.dutySource == DutySource.ESTIMATED,
                 layoutMode = layoutMode,
             )
 
@@ -537,6 +539,7 @@ private fun LightTopGraphs(
     duty: List<Float>,
     speedPeak: Float,
     dutyPeak: Float?,
+    dutyEstimated: Boolean,
     layoutMode: LightLayoutMode,
 ) {
     // These labels describe observed samples, not the minimum scale used by
@@ -558,7 +561,7 @@ private fun LightTopGraphs(
             modifier = Modifier.weight(1f),
         )
         LightTopGraph(
-            label = "max ${observedDutyPeak.roundToInt()}%",
+            label = LightDashboardMapper.dutyPeakLabel(observedDutyPeak, dutyEstimated),
             values = duty,
             color = LocalLightHudPalette.current.green,
             layoutMode = layoutMode,

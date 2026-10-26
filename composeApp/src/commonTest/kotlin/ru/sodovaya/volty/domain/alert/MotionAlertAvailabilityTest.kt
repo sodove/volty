@@ -438,4 +438,34 @@ class MotionAlertAvailabilityTest {
         val availability = availabilityFor(vehicle(ControllerType.VESC), fullSample())
         assertEquals(MotionAlertKind.entries, availability.keys.toList())
     }
+
+    // ---------------------------------------------------------------- estimated duty (PWM calibration)
+
+    @Test fun an_estimated_duty_is_available_only_while_the_estimate_is_actually_published() {
+        val v = vehicle(ControllerType.BEGODE)
+        val published = ControllerData(
+            isConnected = true, hasDuty = true, dutyPercent = 61f,
+            dutySource = ru.sodovaya.volty.domain.model.DutySource.ESTIMATED
+        )
+        assertEquals(AlertAvailability.Available, availabilityFor(v, published)[MotionAlertKind.DUTY])
+        assertEquals(setOf(MotionAlertKind.DUTY), estimatedKinds(published))
+
+        // Deliberately incoherent: an ESTIMATED source and a number beside hasDuty = false is a combination no
+        // producer emits (an unproven or uncalibrated wheel publishes hasDuty = false, MEASURED). The flag decides.
+        val notPublished = published.copy(hasDuty = false, dutyPercent = 61f)
+        assertEquals(
+            AlertAvailability.Unavailable(AlertUnavailableReason.ControllerHasNotReportedDuty),
+            availabilityFor(v, notPublished)[MotionAlertKind.DUTY]
+        )
+        assertEquals(emptySet(), estimatedKinds(notPublished), "no estimate on offer, no caption")
+    }
+
+    @Test fun a_measured_duty_never_carries_the_estimate_caption() {
+        val measured = ControllerData(isConnected = true, hasDuty = true, dutyPercent = 61f)
+        assertEquals(emptySet(), estimatedKinds(measured))
+        assertEquals(emptySet(), estimatedKinds(null))
+        // A disconnected placeholder is not an observation, so it cannot claim an estimate either.
+        val placeholder = measured.copy(isConnected = false, dutySource = ru.sodovaya.volty.domain.model.DutySource.ESTIMATED)
+        assertEquals(emptySet(), estimatedKinds(placeholder))
+    }
 }

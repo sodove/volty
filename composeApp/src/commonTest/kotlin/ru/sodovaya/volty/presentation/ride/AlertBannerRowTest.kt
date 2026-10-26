@@ -52,4 +52,11 @@ class AlertBannerRowTest {
             bannerTitleIsFaults(listOf(alertRow(AlertSeverity.CRITICAL), RideDashboardComponent.FaultEntry("x")))
         )
     }
+
+    @Test
+    fun `the wheel's own alarm has its own row key and is not folded into the duty row`() {
+        assertEquals("alert:WHEEL_PWM_ALARM", alertRowKey(AlertKind.WHEEL_PWM_ALARM))
+        kotlin.test.assertNotEquals(alertRowKey(AlertKind.DUTY_HIGH), alertRowKey(AlertKind.WHEEL_PWM_ALARM))
+        assertEquals(false, autoHides(AlertKind.WHEEL_PWM_ALARM))
+    }
 }

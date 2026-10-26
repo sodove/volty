@@ -22,6 +22,8 @@ import ru.sodovaya.volty.domain.energy.EnergyRecord
 import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.pwm.PwmEvidence
+import ru.sodovaya.volty.domain.pwm.PwmMemory
 import ru.sodovaya.volty.domain.repository.BleDiagnosticsRepository
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -78,6 +80,7 @@ class DefaultVehicleInfoComponent(
 
     private val saved = MutableStateFlow<Vehicle?>(null)
     private val stored = MutableStateFlow<EnergyRecord?>(null)
+    private val pwm = MutableStateFlow(PwmMemory.EMPTY)
     private val mutableInfo = MutableStateFlow<VehicleInfo?>(null)
     private val mutableName = MutableStateFlow<String?>(null)
     private var peeked = false
@@ -94,7 +97,7 @@ class DefaultVehicleInfoComponent(
         scope.launch {
             combine(bms.activeVehicle, bms.connectionState) { v, s -> isLinkTo(v, s) }
                 .distinctUntilChanged()
-                .collect { connected -> if (!connected || !peeked) { peeked = true; refreshStored(); rebuild() } }
+                .collect { connected -> if (!connected || !peeked) { peeked = true; refreshStored(); refreshPwm(); rebuild() } }
         }
         // The tick runs only while the screen is STARTED: a screen under another one in the stack, or the
         // app in the background, is not looked at and must not rebuild ~100 rows twice a second.
@@ -102,6 +105,9 @@ class DefaultVehicleInfoComponent(
             tick?.cancel()
             tick = scope.launch {
                 while (isActive) {
+                    // Connected: the repository answers from the live estimator (a plain in-memory read), so a latch or a
+                    // learned onset shows without reopening the screen. Idle: read on open and on a drop, never per tick.
+                    if (isLinkTo(bms.activeVehicle.value, bms.connectionState.value)) refreshPwm()
                     rebuild()
                     delay(refreshMillis)
                 }
@@ -117,6 +123,21 @@ class DefaultVehicleInfoComponent(
         try { stored.value = energyStore.peek(vehicleId) }
         catch (cancel: CancellationException) { throw cancel }
         catch (_: Exception) { /* an unreadable row is "nothing persisted" on screen, not a crash */ }
+    }
+
+    /**
+     * What the repository knows about this vehicle PWM. The evidence is merged monotonically ([PwmEvidence.monotone]):
+     * a read answered before a latch must not put a weaker state back on screen. The calibration is taken as read (a
+     * reset really does remove it).
+     */
+    private suspend fun refreshPwm() {
+        try {
+            val read = bms.pwmMemory(vehicleId)
+            val merged = read.copy(evidence = PwmEvidence.monotone(pwm.value.evidence, read.evidence))
+            if (merged != pwm.value) pwm.value = merged
+        }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { /* an unreadable PWM row leaves the block as it was */ }
     }
 
     private fun rebuild() {
@@ -137,6 +158,7 @@ class DefaultVehicleInfoComponent(
             availability = availabilityFor(vehicle, motion),
             units = unitSystem.value,
             nowEpochMillis = nowEpochMillis(),
+            pwm = pwm.value,
         )
         if (next != mutableInfo.value) mutableInfo.value = next
     }

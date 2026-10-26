@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.ride
 
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.domain.stats.BmsReadings
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.util.UnitFormatter
@@ -58,6 +59,8 @@ object LightDashboardMapper {
         return LightTelemetryValues(
             speedKmh = speedKmh(motion, gpsSpeedKmh),
             dutyPercent = MotionReadings.dutyPercent(motion)?.takeIf { connected },
+            dutyEstimated = connected && motion.hasDuty && motion.dutySource == DutySource.ESTIMATED,
+            dutyAtCeiling = connected && motion.hasDuty && motion.dutySource == DutySource.ESTIMATED && motion.dutyAtCeiling,
             motorCurrentA = motion.motorCurrentA.takeIf { connected && (it != 0f || motion.hasPower) },
             batteryCurrentA = batteryCurrentA(motion, battery),
             controllerTemperatureC = MotionReadings.escTempC(motion)?.takeIf { connected },
@@ -71,7 +74,7 @@ object LightDashboardMapper {
         LightTelemetryReadouts(
             speed = values.speedKmh?.let { LightReadout(UnitFormatter.speed(it, units), UnitFormatter.speedUnit(units)) }
                 ?: LightReadout(UNKNOWN_READOUT),
-            duty = values.dutyPercent?.let { LightReadout(it.roundToInt().toString(), "%") }
+            duty = values.dutyPercent?.let { LightReadout(MotionReadings.dutyText(it, values.dutyEstimated, values.dutyAtCeiling), "%") }
                 ?: LightReadout(UNKNOWN_READOUT),
             motorCurrent = values.motorCurrentA?.let { LightReadout(formatFixed(it, 0), "A") }
                 ?: LightReadout(UNKNOWN_READOUT),
@@ -111,6 +114,10 @@ object LightDashboardMapper {
         val speed = speedKmh(motion, gpsSpeedKmh) ?: return 0f
         return if (maxSpeedKmh > 0f) (speed / maxSpeedKmh).coerceIn(0f, 1f) else 0f
     }
+
+    /** The graph's peak caption; an estimated peak keeps the "~" so the graph cannot read as a measurement. */
+    fun dutyPeakLabel(peakPercent: Float, estimated: Boolean): String =
+        "max ${if (estimated) "~" else ""}${peakPercent.roundToInt()}%"
 
     fun dutyFraction(motion: ControllerData): Float =
         (MotionReadings.dutyPercent(motion)?.takeIf { motion.isConnected }?.div(100f) ?: 0f)

@@ -92,6 +92,7 @@ import volty.composeapp.generated.resources.ride_uptime
 import volty.composeapp.generated.resources.ride_faults_title
 import volty.composeapp.generated.resources.ride_alerts_title
 import volty.composeapp.generated.resources.ride_alert_duty
+import volty.composeapp.generated.resources.ride_alert_wheel_pwm
 import volty.composeapp.generated.resources.ride_alert_speed_kmh
 import volty.composeapp.generated.resources.ride_alert_speed_mph
 import volty.composeapp.generated.resources.ride_alert_motor_temp
@@ -432,6 +433,8 @@ internal fun RideFaultsBanner(
 /** "ШИМ 87 %", "Скорость 52 км/ч", "Заряд 14 %" ... - the template per kind, the number from [alertBannerNumber]. */
 @Composable
 private fun alertRowLabel(alert: ActiveAlert, units: UnitSystem): String {
+    // The wheel's own alarm has no number in its words: the wheel says it is over ITS threshold, whatever that is.
+    if (alert.kind == AlertKind.WHEEL_PWM_ALARM) return stringResource(Res.string.ride_alert_wheel_pwm)
     val number = alertBannerNumber(alert.kind, alert.peakValue, units)
     val template = when (alert.kind) {
         AlertKind.DUTY_HIGH -> Res.string.ride_alert_duty
@@ -446,7 +449,8 @@ private fun alertRowLabel(alert: ActiveAlert, units: UnitSystem): String {
         AlertKind.CELL_LOW -> Res.string.ride_alert_cell_low
         AlertKind.CELL_DELTA -> Res.string.ride_alert_cell_delta
         // Not alerts the tracker ever reports; faults have their own rows.
-        AlertKind.DISCONNECT, AlertKind.CHARGE_COMPLETE, AlertKind.CONTROLLER_FAULT, AlertKind.BMS_FAULT ->
+        AlertKind.DISCONNECT, AlertKind.CHARGE_COMPLETE, AlertKind.CONTROLLER_FAULT, AlertKind.BMS_FAULT,
+        AlertKind.WHEEL_PWM_ALARM ->
             return alert.kind.name
     }
     return stringResource(template, number)

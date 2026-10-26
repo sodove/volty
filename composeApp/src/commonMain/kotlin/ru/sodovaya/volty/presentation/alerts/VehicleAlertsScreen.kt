@@ -49,6 +49,7 @@ import ru.sodovaya.volty.domain.audio.MAX_ALERT_GAIN_DB
 import ru.sodovaya.volty.presentation.alerts.BatteryAlertDraft
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
+import volty.composeapp.generated.resources.alert_duty_estimated_caption
 import volty.composeapp.generated.resources.alerts_add_level
 import volty.composeapp.generated.resources.alerts_notify_bms_fault
 import volty.composeapp.generated.resources.alerts_notify_controller_fault
@@ -429,6 +430,8 @@ private fun AlertKindCard(
                 // Unknown gets its own sentence ("no data yet"), which must never
                 // read as "your hardware lacks this sensor".
                 alertAvailabilityNote(draft.availability)?.let { Caption(it) }
+                // An estimated duty is armable, but under load it can under-read: say so where the rider sets the threshold.
+                if (draft.showsEstimateCaption) Caption(stringResource(Res.string.alert_duty_estimated_caption))
                 if (editable && !draft.isOn) Caption(stringResource(Res.string.alerts_kind_off))
             }
             Switch(

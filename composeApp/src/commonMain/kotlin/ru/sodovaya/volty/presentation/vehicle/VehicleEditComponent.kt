@@ -1222,7 +1222,9 @@ class DefaultVehicleEditComponent(
         }
         _state.update {
             it.copy(
-                pwmEvidence = memory.evidence,
+                // Merged, not assigned: the read may have been answered before a latch the live stream already
+                // delivered (REPORTS wins, NEVER_REPORTED beats UNKNOWN), and the evidence only ever moves up.
+                pwmEvidence = ru.sodovaya.volty.domain.pwm.PwmEvidence.monotone(it.pwmEvidence, memory.evidence),
                 pwmCalibration = pwmSummaryOf(memory.calibration),
                 pwmHasStoredCalibration = memory.calibration != null
             )

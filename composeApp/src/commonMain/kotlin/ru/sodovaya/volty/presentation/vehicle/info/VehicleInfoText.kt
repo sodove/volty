@@ -17,6 +17,7 @@ fun InfoSectionKind.stringRes(): StringResource = when (this) {
         InfoSectionKind.CONNECTIONS -> Res.string.info_section_connections
         InfoSectionKind.BATTERIES -> Res.string.info_section_batteries
         InfoSectionKind.CONTROLLERS -> Res.string.info_section_controllers
+        InfoSectionKind.PWM -> Res.string.info_section_pwm
         InfoSectionKind.ENERGY -> Res.string.info_section_energy
         InfoSectionKind.RANGE -> Res.string.info_section_range
         InfoSectionKind.ALERTS -> Res.string.info_section_alerts
@@ -72,6 +73,18 @@ fun InfoLabel.stringRes(): StringResource = when (this) {
         InfoLabel.ODOMETER -> Res.string.info_label_odometer
         InfoLabel.TRIP -> Res.string.info_label_trip
         InfoLabel.CONTROLLER_FAULTS -> Res.string.info_label_controller_faults
+        InfoLabel.PWM_EVIDENCE -> Res.string.info_label_pwm_evidence
+        InfoLabel.PWM_THRESHOLD -> Res.string.info_label_pwm_threshold
+        InfoLabel.PWM_SOURCE -> Res.string.info_label_pwm_source
+        InfoLabel.PWM_BASIS -> Res.string.info_label_pwm_basis
+        InfoLabel.PWM_K -> Res.string.info_label_pwm_k
+        InfoLabel.PWM_R -> Res.string.info_label_pwm_r
+        InfoLabel.PWM_POINTS -> Res.string.info_label_pwm_points
+        InfoLabel.PWM_SPREAD -> Res.string.info_label_pwm_spread
+        InfoLabel.PWM_MANUAL_KMH -> Res.string.info_label_pwm_manual_kmh
+        InfoLabel.PWM_MANUAL_VOLTS -> Res.string.info_label_pwm_manual_volts
+        InfoLabel.PWM_ESTIMATE -> Res.string.info_label_pwm_estimate
+        InfoLabel.PWM_WHEEL_ALARM -> Res.string.info_label_pwm_wheel_alarm
         InfoLabel.ENERGY_SOC -> Res.string.info_label_energy_soc
         InfoLabel.USABLE_AH -> Res.string.info_label_usable_ah
         InfoLabel.NOMINAL_PACK_V -> Res.string.info_label_nominal_pack_v
@@ -120,6 +133,8 @@ fun InfoAbsence.stringRes(): StringResource = when (this) {
         InfoAbsence.STALE -> Res.string.info_absence_stale
         InfoAbsence.NOT_SET -> Res.string.info_absence_not_set
         InfoAbsence.SOC_UNKNOWN -> Res.string.info_absence_soc_unknown
+        InfoAbsence.PWM_WHEEL_REPORTS -> Res.string.info_absence_pwm_wheel_reports
+        InfoAbsence.PWM_NOT_PROVEN -> Res.string.info_absence_pwm_not_proven
         InfoAbsence.RANGE_NO_CAPACITY -> Res.string.info_absence_range_no_capacity
         InfoAbsence.RANGE_TOO_SHORT -> Res.string.info_absence_range_too_short
         InfoAbsence.RANGE_TOO_FEW_SAMPLES -> Res.string.info_absence_range_too_few_samples
@@ -156,6 +171,17 @@ fun InfoChoice.stringRes(): StringResource = when (this) {
         InfoChoice.CURRENT_FROM_PACKS -> Res.string.info_choice_current_from_packs
         InfoChoice.CURRENT_NONE -> Res.string.info_choice_current_none
         InfoChoice.RANGE_EARNED -> Res.string.info_choice_range_earned
+        InfoChoice.PWM_EVIDENCE_UNKNOWN -> Res.string.info_choice_pwm_evidence_unknown
+        InfoChoice.PWM_EVIDENCE_NEVER_REPORTED -> Res.string.info_choice_pwm_evidence_never_reported
+        InfoChoice.PWM_EVIDENCE_REPORTS -> Res.string.info_choice_pwm_evidence_reports
+        InfoChoice.PWM_SOURCE_WIZARD -> Res.string.info_choice_pwm_source_wizard
+        InfoChoice.PWM_SOURCE_RIDING -> Res.string.info_choice_pwm_source_riding
+        InfoChoice.PWM_SOURCE_MANUAL -> Res.string.info_choice_pwm_source_manual
+        InfoChoice.PWM_BASIS_ONSET -> Res.string.info_choice_pwm_basis_onset
+        InfoChoice.PWM_BASIS_FREE_SPIN -> Res.string.info_choice_pwm_basis_free_spin
+        InfoChoice.PWM_ESTIMATE_CEILING -> Res.string.info_choice_pwm_estimate_ceiling
+        InfoChoice.PWM_ALARM_SOUNDING -> Res.string.info_choice_pwm_alarm_sounding
+        InfoChoice.PWM_ALARM_QUIET -> Res.string.info_choice_pwm_alarm_quiet
         InfoChoice.LINK_ONLINE -> Res.string.info_choice_link_online
         InfoChoice.LINK_OFFLINE -> Res.string.info_choice_link_offline
         InfoChoice.ALERT_ARMED -> Res.string.info_choice_alert_armed
@@ -213,5 +239,7 @@ fun InfoUnit.stringRes(system: UnitSystem): StringResource {
         InfoUnit.CONSUMPTION -> if (imperial) Res.string.unit_wh_per_mi else Res.string.unit_wh_per_km
         InfoUnit.KILOMETER -> Res.string.history_unit_km
         InfoUnit.KMH -> Res.string.unit_kmh
+        InfoUnit.VOLT_PER_KMH -> Res.string.info_unit_volt_per_kmh
+        InfoUnit.OHM -> Res.string.info_unit_ohm
     }
 }

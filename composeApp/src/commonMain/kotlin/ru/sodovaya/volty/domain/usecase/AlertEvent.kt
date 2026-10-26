@@ -26,7 +26,15 @@ enum class AlertKind {
     CELL_HIGH, CELL_LOW, CELL_DELTA, TEMPERATURE_WARN, TEMPERATURE_HIGH,
     SOC_LOW, SOC_CUTOFF, DISCONNECT, CHARGE_COMPLETE,
     CONTROLLER_FAULT, MOTOR_TEMP_HIGH, ESC_TEMP_HIGH,
-    BMS_FAULT, SPEED_HIGH, DUTY_HIGH
+    BMS_FAULT, SPEED_HIGH, DUTY_HIGH,
+    /**
+     * The wheel's OWN high-power alarm ([ru.sodovaya.volty.domain.model.ControllerData.wheelPwmAlarm]): a fact about the
+     * wheel, shown as a dashboard banner row only. The notification engine never builds a message of this kind (the
+     * banner is the rider's eyes, not a notification); it is in this enum because the banner rows are
+     * [ru.sodovaya.volty.domain.alert.ActiveAlert]s. [AlertNotificationFormatter] still answers it, with the duty
+     * wording, so its `when` stays exhaustive.
+     */
+    WHEEL_PWM_ALARM
 }
 
 /**

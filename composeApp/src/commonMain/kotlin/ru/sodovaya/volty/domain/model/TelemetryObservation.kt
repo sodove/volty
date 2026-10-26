@@ -33,6 +33,10 @@ enum class TelemetryMetric(val id: String, val origin: TelemetryOrigin, val inde
     CELL_DELTA("cell_delta_mv", TelemetryOrigin.BATTERY),
     CELL("cell_v", TelemetryOrigin.BATTERY, true),
     SPEED("speed_kmh", TelemetryOrigin.CONTROLLER),
+    /**
+     * History records the duty the DECODER reported (the per-controller raw value), never the per-wheel PWM estimate:
+     * the estimate is a vehicle-level display value ([ControllerData.dutySource]) and is not a measurement.
+     */
     DUTY("duty_percent", TelemetryOrigin.CONTROLLER),
     MOTOR_CURRENT("motor_current_a", TelemetryOrigin.CONTROLLER),
     CONTROLLER_BATTERY_CURRENT("battery_current_a", TelemetryOrigin.CONTROLLER),

@@ -2257,4 +2257,33 @@ class RideDashboardComponentTest {
         assertEquals(repo.activeVehicle.value?.id, editedId)
         c.state.test { assertEquals(false, awaitItem().sheetOpen) }
     }
+
+    @Test
+    fun the_wheels_own_pwm_alarm_is_a_row_with_the_same_episode_and_linger_whatever_the_notify_switches_say() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        // Every notify switch off, and no duty rule at all: the banner row is the rider's eyes, not a notification.
+        repo.activeVehicle.value = alertVehicle(notify = emptySet()).copy(motionAlerts = emptyList())
+        val c = component(repo, faultLingerSeconds = 10)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(52_000)
+        fun emit(atMs: Long, alarm: Boolean) {
+            repo.emitMotion(dutySample(start, atMs, 0f).copy(hasDuty = false, wheelPwmAlarm = alarm))
+        }
+        val key = alertRowKey(ru.sodovaya.volty.domain.usecase.AlertKind.WHEEL_PWM_ALARM)
+
+        emit(0, true); advanceUntilIdle()
+        assertEquals(key, alertRows(c).single().message)
+        assertTrue(alertRows(c).single().active)
+        // The bit flickers off for 1 s (it did on the real wheel) and back: still ONE episode, one count.
+        emit(500, false); advanceUntilIdle()
+        emit(1_500, true); advanceUntilIdle()
+        assertEquals(1, alertRows(c).single().occurrences)
+
+        emit(2_000, false); advanceUntilIdle()
+        emit(6_000, false); advanceUntilIdle()
+        assertEquals(false, alertRows(c).single().active, "held after it ends")
+        emit(14_000, false); advanceUntilIdle()
+        assertTrue(alertRows(c).isEmpty(), "gone ten seconds after it cleared")
+    }
 }
