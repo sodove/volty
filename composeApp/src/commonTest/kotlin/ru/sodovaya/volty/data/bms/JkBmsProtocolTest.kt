@@ -1,9 +1,12 @@
 package ru.sodovaya.volty.data.bms
 
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class JkBmsProtocolTest {
@@ -227,5 +230,73 @@ class JkBmsProtocolTest {
         assertNotNull(data)
         assertEquals(13.200f, data.voltage, 0.001f)
         assertEquals(75f, data.soc)
+    }
+
+    // ----- device facts -----
+
+    private fun synthesizeSettingsFrame(cells: Long): ByteArray {
+        val frame = ByteArray(300)
+        frame[0] = 0x55.toByte(); frame[1] = 0xAA.toByte()
+        frame[2] = 0xEB.toByte(); frame[3] = 0x90.toByte()
+        frame[4] = 0x01
+        writeU32LE(frame, 114, cells)
+        frame[299] = checksumSum(frame, 0, 299).toByte()
+        return frame
+    }
+
+    @Test
+    fun `facts are empty before any device-info or settings reply`() {
+        val proto = JkBmsProtocol()
+        proto.onNotification(synthesizeCellDataFrame())
+        // maxCells = 24 is the constructor expectation, not something the BMS said.
+        assertEquals(emptyList(), proto.deviceFacts())
+    }
+
+    @Test
+    fun `device info yields the firmware and hardware version strings verbatim`() {
+        val proto = JkBmsProtocol()
+        proto.onNotification(synthesizeDeviceInfoFrame("11.26"))
+        assertEquals(
+            listOf(
+                DeviceFact(DeviceFactKey.FIRMWARE, "11.26"),
+                DeviceFact(DeviceFactKey.HARDWARE_VERSION, "11.A"),
+            ),
+            proto.deviceFacts(),
+        )
+    }
+
+    @Test
+    fun `settings reply adds the declared cell count`() {
+        val proto = JkBmsProtocol()
+        proto.onNotification(synthesizeDeviceInfoFrame("10.07"))
+        proto.onNotification(synthesizeSettingsFrame(cells = 16))
+        assertEquals(
+            listOf(
+                DeviceFact(DeviceFactKey.FIRMWARE, "10.07"),
+                DeviceFact(DeviceFactKey.HARDWARE_VERSION, "11.A"),
+                DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "16"),
+            ),
+            proto.deviceFacts(),
+        )
+    }
+
+    @Test
+    fun `an out-of-range declared cell count is not a fact`() {
+        val proto = JkBmsProtocol()
+        proto.onNotification(synthesizeSettingsFrame(cells = 0))
+        assertEquals(emptyList(), proto.deviceFacts())
+        proto.onNotification(synthesizeSettingsFrame(cells = 33))
+        assertEquals(emptyList(), proto.deviceFacts())
+    }
+
+    @Test
+    fun `facts list is cached while nothing changes and cleared by reset`() {
+        val proto = JkBmsProtocol()
+        proto.onNotification(synthesizeDeviceInfoFrame("11.26"))
+        val first = proto.deviceFacts()
+        proto.onNotification(synthesizeDeviceInfoFrame("11.26"))
+        assertSame(first, proto.deviceFacts())
+        proto.reset()
+        assertEquals(emptyList(), proto.deviceFacts())
     }
 }

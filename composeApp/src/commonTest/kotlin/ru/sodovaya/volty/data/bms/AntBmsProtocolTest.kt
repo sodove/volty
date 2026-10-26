@@ -1,9 +1,12 @@
 package ru.sodovaya.volty.data.bms
 
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class AntBmsProtocolTest {
@@ -303,5 +306,48 @@ class AntBmsProtocolTest {
         assertNotNull(data)
         assertEquals(listOf("charge: pack OV"), data.bmsFaults)
         assertEquals(false, data.chargeEnabled)
+    }
+
+    // ----- device facts (BMS-declared counts; ANT decodes no version string, see deviceFacts KDoc) -----
+
+    @Test
+    fun `facts are empty until a status frame arrives`() {
+        assertEquals(emptyList(), AntBmsProtocol().deviceFacts())
+    }
+
+    @Test
+    fun `facts report the cell and sensor counts the BMS declares`() {
+        val proto = AntBmsProtocol()
+        proto.onNotification(synthesizeStatusFrame())
+        assertEquals(
+            listOf(
+                DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "4"),
+                DeviceFact(DeviceFactKey.BMS_DECLARED_TEMP_SENSORS, "2"),
+            ),
+            proto.deviceFacts(),
+        )
+    }
+
+    @Test
+    fun `declared cell count is the BMS word, not the number of plausible voltages shown`() {
+        // Deliberately incoherent: the header declares 4 cells but one reads 0 mV, so the common
+        // section shows 3 voltages. The fact must keep saying what the BMS declared.
+        val proto = AntBmsProtocol()
+        proto.onNotification(synthesizeStatusFrame(cellVoltagesMv = intArrayOf(3300, 0, 3302, 3303)))
+        assertEquals(3, proto.latestData()!!.cellVoltages.size)
+        assertEquals(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "4"), proto.deviceFacts().first())
+    }
+
+    @Test
+    fun `facts list is cached while nothing changes, follows a change and is cleared by reset`() {
+        val proto = AntBmsProtocol()
+        proto.onNotification(synthesizeStatusFrame())
+        val first = proto.deviceFacts()
+        proto.onNotification(synthesizeStatusFrame())
+        assertSame(first, proto.deviceFacts())
+        proto.onNotification(synthesizeStatusFrame(numCells = 3, cellVoltagesMv = intArrayOf(3300, 3301, 3302)))
+        assertEquals(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "3"), proto.deviceFacts().first())
+        proto.reset()
+        assertEquals(emptyList(), proto.deviceFacts())
     }
 }

@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 
 /**
@@ -19,10 +20,16 @@ import ru.sodovaya.volty.domain.model.TelemetryOrigin
  *   Status:     func=0x01, addr=0x0000, value=0xBE → response code 0x11
  *   DeviceInfo: func=0x02, addr=0x026C, value=0x20 → response code 0x12
  *
+ * Device facts: only the cell and temperature-sensor counts the status header declares. The
+ * 0x12 device-info reply is requested by nobody and its body is ignored, so no model or version
+ * string is decoded; the SOH word and the balancer state/temperature are skipped over, not
+ * decoded; voltage, current, SOC, capacity, cycles, MOS state, MOS temperature and the MOS
+ * fault enums already reach the common battery section.
+ *
  * Based on: github.com/fl4p/batmon-ha bmslib/models/ant.py
  */
 @OptIn(kotlin.time.ExperimentalTime::class)
-class AntBmsProtocol : BmsProtocol() {
+class AntBmsProtocol : BmsProtocol(), ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -33,6 +40,8 @@ class AntBmsProtocol : BmsProtocol() {
     private val buffer = ByteArrayAccumulator()
     private var lastData: BmsData? = null
     private var observedCellCount = 0
+    private var declaredTempSensors: Int? = null
+    private val factsCache = SmartBmsFactsCache()
 
     override fun handshakeCommands(): List<ByteArray> = listOf(
         buildCommand(FUNC_STATUS, 0x0000, 0xBE)
@@ -55,7 +64,17 @@ class AntBmsProtocol : BmsProtocol() {
         buffer.reset()
         lastData = null
         observedCellCount = 0
+        declaredTempSensors = null
+        factsCache.reset()
     }
+
+    /** The cell and sensor counts the last status header declared; empty before the first one. */
+    override fun deviceFacts(): List<DeviceFact> = factsCache.facts(
+        firmware = null,
+        hardware = null,
+        declaredCells = observedCellCount.takeIf { it > 0 },
+        declaredTempSensors = declaredTempSensors,
+    )
 
     // --- Protocol implementation ---
 
@@ -143,6 +162,7 @@ class AntBmsProtocol : BmsProtocol() {
         val numCells = buf.u8(9)
         val previousCellCount = observedCellCount
         observedCellCount = numCells
+        declaredTempSensors = numTemp
 
         // Cell voltages start at offset 34, 2 bytes each (LE, millivolts)
         val cells = mutableListOf<Float>()

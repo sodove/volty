@@ -24,6 +24,11 @@ enum class DeviceFactKey {
     FIRMWARE,
     CAN_IDS,
     FAULT_CODES,
+
+    // Smart BMS (ANT, JK, JBD, Daly)
+    HARDWARE_VERSION,
+    BMS_DECLARED_CELLS,
+    BMS_DECLARED_TEMP_SENSORS,
 }
 
 /**

@@ -1,9 +1,12 @@
 package ru.sodovaya.volty.data.bms
 
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class DalyBmsProtocolTest {
@@ -345,5 +348,50 @@ class DalyBmsProtocolTest {
             dalyFrame(0x95, cellFramePayload(frameNum = 1, cellsMv = intArrayOf(3300, 3310, 3320)))
         )
         assertNull(proto.latestData())
+    }
+
+    // ----- device facts (the 0x94 counts; no version string is decoded, see deviceFacts KDoc) -----
+
+    private fun countsFrame(cells: Int, temps: Int) =
+        dalyFrame(0x94, byteArrayOf(cells.toByte(), temps.toByte(), 0, 0, 0, 0, 0, 0))
+
+    @Test
+    fun `facts are empty before the 0x94 reply`() {
+        val proto = DalyBmsProtocol()
+        proto.onNotification(dalyFrame(0x90, voltageFramePayload()))
+        assertEquals(emptyList(), proto.deviceFacts())
+    }
+
+    @Test
+    fun `0x94 yields the declared cell and sensor counts`() {
+        val proto = DalyBmsProtocol()
+        proto.onNotification(countsFrame(cells = 16, temps = 3))
+        assertEquals(
+            listOf(
+                DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "16"),
+                DeviceFact(DeviceFactKey.BMS_DECLARED_TEMP_SENSORS, "3"),
+            ),
+            proto.deviceFacts(),
+        )
+    }
+
+    @Test
+    fun `a zero cell count is not a fact`() {
+        val proto = DalyBmsProtocol()
+        proto.onNotification(countsFrame(cells = 0, temps = 2))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.BMS_DECLARED_TEMP_SENSORS, "2")), proto.deviceFacts())
+    }
+
+    @Test
+    fun `facts list is cached while nothing changes, follows a change and is cleared by reset`() {
+        val proto = DalyBmsProtocol()
+        proto.onNotification(countsFrame(cells = 16, temps = 3))
+        val first = proto.deviceFacts()
+        proto.onNotification(countsFrame(cells = 16, temps = 3))
+        assertSame(first, proto.deviceFacts())
+        proto.onNotification(countsFrame(cells = 20, temps = 3))
+        assertEquals(DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "20"), proto.deviceFacts().first())
+        proto.reset()
+        assertEquals(emptyList(), proto.deviceFacts())
     }
 }

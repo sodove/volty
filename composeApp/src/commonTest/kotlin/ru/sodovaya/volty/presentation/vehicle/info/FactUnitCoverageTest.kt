@@ -3,6 +3,11 @@ package ru.sodovaya.volty.presentation.vehicle.info
 import ru.sodovaya.volty.data.bms.BegodeDumpFixture
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BegodeT4Fixture
+import ru.sodovaya.volty.data.bms.DalyBmsProtocol
+import ru.sodovaya.volty.data.bms.JkBmsProtocol
+import ru.sodovaya.volty.data.bms.SmartBmsFactsCache
+import ru.sodovaya.volty.data.bms.checksumSum
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import ru.sodovaya.volty.domain.model.DeviceFact
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -37,5 +42,36 @@ class FactUnitCoverageTest {
         assertEquals(setOf("km", "km/h", "°C", "%", "V", "A"), symbols)
         for (s in symbols) assertNotNull(factUnit(s), "unit symbol '$s' has no InfoUnit")
         assertTrue(factUnit(null) == null)
+    }
+
+    /**
+     * The smart-BMS facts (ANT, JK, JBD, Daly) are text and counts: none carries a unit symbol, so
+     * none can render as a bare number for want of a mapping. Daly and JK are driven through their
+     * real decoders (minimal frames: no capture exists for either); the shared builder behind all
+     * four is driven with every input set, which covers ANT and JBD too.
+     */
+    @Test fun smartBmsFactsCarryNoUnitSymbol() {
+        val daly = DalyBmsProtocol().also { p ->
+            val f = ByteArray(13)
+            f[0] = 0xA5.toByte(); f[1] = 1; f[2] = 0x94.toByte(); f[3] = 8; f[4] = 16; f[5] = 3
+            f[12] = checksumSum(f, 0, 12).toByte()
+            p.onNotification(f)
+        }
+        val jk = JkBmsProtocol().also { p ->
+            val f = ByteArray(300)
+            f[0] = 0x55; f[1] = 0xAA.toByte(); f[2] = 0xEB.toByte(); f[3] = 0x90.toByte(); f[4] = 0x03
+            "11.A".encodeToByteArray().copyInto(f, 22)
+            "11.26".encodeToByteArray().copyInto(f, 30)
+            f[299] = checksumSum(f, 0, 299).toByte()
+            p.onNotification(f)
+        }
+        val all = SmartBmsFactsCache().facts("fw", "hw", 4, 2)
+        val facts = daly.deviceFacts() + jk.deviceFacts() + all
+        // Precondition: the drivers really emitted every smart-BMS key.
+        assertEquals(
+            setOf(DeviceFactKey.FIRMWARE, DeviceFactKey.HARDWARE_VERSION, DeviceFactKey.BMS_DECLARED_CELLS, DeviceFactKey.BMS_DECLARED_TEMP_SENSORS),
+            facts.map { it.key }.toSet(),
+        )
+        assertEquals(emptyList(), facts.mapNotNull { it.unit })
     }
 }

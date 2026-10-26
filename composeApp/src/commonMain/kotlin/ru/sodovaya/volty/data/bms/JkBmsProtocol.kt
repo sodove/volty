@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryReading
 import ru.sodovaya.volty.domain.model.TelemetryUnknown
@@ -21,13 +22,19 @@ import ru.sodovaya.volty.domain.model.TelemetryMetric
  *
  * After sending 0x96 (query state), BMS streams type 0x02 messages continuously.
  *
+ * Device facts: the software and hardware version strings of the 0x03 device-info reply (ASCII,
+ * shown verbatim) and the cell count the 0x01 settings reply declares. The vendor id (offset 6)
+ * is not surfaced. The constructor parameter maxCells is the app expectation, not a BMS word, so
+ * it is never a fact. Voltage, current, SOC, capacity, cycles, temperatures, switches and the
+ * error word already reach the common battery section; no SOH, balancer or MOS state is decoded.
+ *
  * Based on: github.com/fl4p/batmon-ha bmslib/models/jikong.py
  */
 @OptIn(kotlin.time.ExperimentalTime::class)
 class JkBmsProtocol(
     /** Number of cells expected. 0 = auto-detect from settings response. */
     private val maxCells: Int = 24
-) : BmsProtocol() {
+) : BmsProtocol(), ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -45,6 +52,12 @@ class JkBmsProtocol(
     private var historyDeclaredCells: Int? = null
     private var historyCells: Set<Int> = emptySet()
     private var historyHadStatus = false
+
+    // Facts-only state: what the device-info and settings replies said, null until they did.
+    private var softwareVersion: String? = null
+    private var hardwareVersion: String? = null
+    private var declaredCells: Int? = null
+    private val factsCache = SmartBmsFactsCache()
 
     // Switch states from settings response (type 0x01)
     private var chargeSwitch: Boolean = false
@@ -75,7 +88,15 @@ class JkBmsProtocol(
         historyDeclaredCells = null
         historyCells = emptySet()
         historyHadStatus = false
+        softwareVersion = null
+        hardwareVersion = null
+        declaredCells = null
+        factsCache.reset()
     }
+
+    /** The version strings and declared cell count seen so far; empty before any such reply. */
+    override fun deviceFacts(): List<DeviceFact> =
+        factsCache.facts(softwareVersion, hardwareVersion, declaredCells, declaredTempSensors = null)
 
     // --- Protocol implementation ---
 
@@ -162,6 +183,8 @@ class JkBmsProtocol(
     private fun parseDeviceInfo(buf: ByteArray) {
         if (buf.size < 38) return
         val sw = buf.decodeToString(30, 38).takeWhile { it != '\u0000' }
+        softwareVersion = sw.ifEmpty { null }
+        hardwareVersion = buf.decodeToString(22, 30).takeWhile { it != '\u0000' }.ifEmpty { null }
         val major = sw.dropWhile { !it.isDigit() }.takeWhile { it.isDigit() }.toIntOrNull()
         val layout = major?.takeIf { it > 0 }?.let { if (it >= 11) 32 else 0 }
         val changed = historyLayout != layout
@@ -183,6 +206,7 @@ class JkBmsProtocol(
         // num_cells at offset 114
         val nc = buf.u8(114)
         if (nc in 1..32) numCells = nc
+        declaredCells = nc.takeIf { it in 1..32 }
 
         // Switch states
         chargeSwitch = buf.u8(118) != 0

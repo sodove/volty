@@ -1,9 +1,12 @@
 package ru.sodovaya.volty.data.bms
 
+import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DeviceFactKey
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class JbdBmsProtocolTest {
@@ -170,5 +173,46 @@ class JbdBmsProtocolTest {
         val data = proto.latestData()
         assertNotNull(data)
         assertEquals(listOf("discharge OT"), data.bmsFaults)
+    }
+
+    // ----- device facts (JBD decodes no version string, see deviceFacts KDoc) -----
+
+    @Test
+    fun `facts are empty before main data`() {
+        assertEquals(emptyList(), JbdBmsProtocol().deviceFacts())
+    }
+
+    @Test
+    fun `facts report the cell count byte and the sensor count of main data`() {
+        val proto = JbdBmsProtocol()
+        val payload = mainDataPayload(numTemp = 2)
+        payload[21] = 14 // series cells, payload offset 21
+        proto.onNotification(jbdFrame(0x03, payload))
+        assertEquals(
+            listOf(
+                DeviceFact(DeviceFactKey.BMS_DECLARED_CELLS, "14"),
+                DeviceFact(DeviceFactKey.BMS_DECLARED_TEMP_SENSORS, "2"),
+            ),
+            proto.deviceFacts(),
+        )
+    }
+
+    @Test
+    fun `a zero cell-count byte is not a fact but the sensor count still is`() {
+        val proto = JbdBmsProtocol()
+        proto.onNotification(jbdFrame(0x03, mainDataPayload(numTemp = 3, temps = listOf(2981, 2991, 3001))))
+        assertEquals(listOf(DeviceFact(DeviceFactKey.BMS_DECLARED_TEMP_SENSORS, "3")), proto.deviceFacts())
+    }
+
+    @Test
+    fun `facts list is cached while nothing changes and cleared by reset`() {
+        val proto = JbdBmsProtocol()
+        val payload = mainDataPayload().also { it[21] = 14 }
+        proto.onNotification(jbdFrame(0x03, payload))
+        val first = proto.deviceFacts()
+        proto.onNotification(jbdFrame(0x03, payload))
+        assertSame(first, proto.deviceFacts())
+        proto.reset()
+        assertEquals(emptyList(), proto.deviceFacts())
     }
 }

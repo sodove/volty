@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.TelemetryMetric
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryReading
@@ -21,10 +22,15 @@ import ru.sodovaya.volty.domain.model.TelemetryReading
  *   0x03 = Main data (voltage, current, SOC, temperatures, switch states)
  *   0x04 = Cell voltages
  *
+ * Device facts: only the series-cell count (payload byte 21) and the temperature-sensor count
+ * (byte 22) of the 0x03 main reply. The hardware-version command (0x05) is never sent, so no
+ * model string is decoded; voltage, current, SOC, capacity, cycles, FET state, temperatures and
+ * the protection word already reach the common battery section.
+ *
  * Based on: github.com/fl4p/batmon-ha bmslib/models/jbd.py
  */
 @OptIn(kotlin.time.ExperimentalTime::class)
-class JbdBmsProtocol : BmsProtocol() {
+class JbdBmsProtocol : BmsProtocol(), ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000ff00-0000-1000-8000-00805f9b34fb",
@@ -51,6 +57,8 @@ class JbdBmsProtocol : BmsProtocol() {
     private var hasCellData = false
     private var observedCellCount = 0
     private var declaredCellCount: Int? = null
+    private var declaredTempSensors: Int? = null
+    private val factsCache = SmartBmsFactsCache()
 
     override fun handshakeCommands(): List<ByteArray> = emptyList()
 
@@ -75,7 +83,13 @@ class JbdBmsProtocol : BmsProtocol() {
         hasCellData = false
         observedCellCount = 0
         declaredCellCount = null
+        declaredTempSensors = null
+        factsCache.reset()
     }
+
+    /** The cell and sensor counts the last main reply declared; empty before the first one. */
+    override fun deviceFacts(): List<DeviceFact> =
+        factsCache.facts(firmware = null, hardware = null, declaredCells = declaredCellCount, declaredTempSensors = declaredTempSensors)
 
     // --- Protocol implementation ---
 
@@ -207,6 +221,7 @@ class JbdBmsProtocol : BmsProtocol() {
 
         // Number of temperature sensors: byte at offset 22
         val numTemp = frame[d + 22].toInt() and 0xFF
+        declaredTempSensors = if ((frame[3].toInt() and 255) >= 23) numTemp else null
 
         // Temperatures starting at offset 23, 2 bytes each.
         // Format: Kelvin * 10, subtract 2731 then / 10 for Celsius.

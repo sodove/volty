@@ -181,6 +181,9 @@ fun DeviceFactKey.stringRes(): StringResource = when (this) {
         DeviceFactKey.FIRMWARE -> Res.string.info_fact_firmware
         DeviceFactKey.CAN_IDS -> Res.string.info_fact_can_ids
         DeviceFactKey.FAULT_CODES -> Res.string.info_fact_fault_codes
+        DeviceFactKey.HARDWARE_VERSION -> Res.string.info_fact_hardware_version
+        DeviceFactKey.BMS_DECLARED_CELLS -> Res.string.info_fact_bms_declared_cells
+        DeviceFactKey.BMS_DECLARED_TEMP_SENSORS -> Res.string.info_fact_bms_declared_temp_sensors
 }
 
 /**

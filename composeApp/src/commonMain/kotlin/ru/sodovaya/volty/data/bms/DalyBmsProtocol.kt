@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.TelemetryMetric
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryReading
@@ -30,11 +31,16 @@ import ru.sodovaya.volty.domain.model.TelemetryReading
  *   0x95 = Cell voltages (3 per frame, multiple frames)
  *   0x96 = Temperatures
  *
+ * Device facts: only the cell and temperature-sensor counts of the 0x94 reply (board 1, length
+ * 8). No model or version string is requested or decoded, and the large D2 03 frame is read for
+ * its alarm bitmap alone; voltage, current, SOC, capacity, cycles, MOS state, cells,
+ * temperatures and the alarm bitmap already reach the common battery section.
+ *
  * Based on: github.com/fl4p/batmon-ha bmslib/models/daly.py and
  * github.com/syssi/esphome-daly-bms-ble components/daly_bms_ble/.
  */
 @OptIn(kotlin.time.ExperimentalTime::class)
-class DalyBmsProtocol : BmsProtocol() {
+class DalyBmsProtocol : BmsProtocol(), ProtocolFacts {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000fff0-0000-1000-8000-00805f9b34fb",
@@ -62,6 +68,7 @@ class DalyBmsProtocol : BmsProtocol() {
     // Independent from the dashboard accumulators, whose numeric fields survive reset.
     private var observedDeclaredCells: Int? = null
     private var observedDeclaredTemperatures: Int? = null
+    private val factsCache = SmartBmsFactsCache()
 
     override fun handshakeCommands(): List<ByteArray> = emptyList()
 
@@ -94,7 +101,16 @@ class DalyBmsProtocol : BmsProtocol() {
         faults = emptyList()
         observedDeclaredCells = null
         observedDeclaredTemperatures = null
+        factsCache.reset()
     }
+
+    /** The counts of the last valid 0x94 reply; empty before the first one. */
+    override fun deviceFacts(): List<DeviceFact> = factsCache.facts(
+        firmware = null,
+        hardware = null,
+        declaredCells = observedDeclaredCells?.takeIf { it > 0 },
+        declaredTempSensors = observedDeclaredTemperatures,
+    )
 
     // --- Protocol implementation ---
 
