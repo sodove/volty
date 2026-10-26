@@ -85,7 +85,18 @@ class PwmEstimator(
     fun markDirty() { dirty = true }
     fun markSaved() { dirty = false }
 
-    fun updateVehicle(updated: Vehicle) { vehicle = updated }
+    /**
+     * Adopts the edited vehicle. A changed alarm threshold re-reads ALL stored onsets against the new value at once
+     * (ruling R5, [PwmCalibrationLearner.refit]) and marks the state unsaved, so the estimate and the row follow.
+     */
+    fun updateVehicle(updated: Vehicle) {
+        val thresholdChanged = updated.pwmAlarmThresholdPercent != vehicle.pwmAlarmThresholdPercent
+        vehicle = updated
+        if (!thresholdChanged) return
+        val current = calibration ?: return
+        val refit = PwmCalibrationLearner.refit(current, updated.pwmAlarmThresholdPercent.toFloat())
+        if (refit != current) { calibration = refit; dirty = true }
+    }
 
     /** Adopts the loaded memory. Evidence only moves up ([PwmEvidence.monotone]); a calibration already held is kept. */
     fun installMemory(loaded: PwmMemory) {

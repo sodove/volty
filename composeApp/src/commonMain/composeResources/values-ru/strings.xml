@@ -1558,7 +1558,7 @@
     <string name="pwm_calibration_manual">Ниже введена точка холостого хода</string>
     <string name="pwm_threshold_label">Порог сигнала колеса, %</string>
     <string name="pwm_threshold_invalid">Целое число от 1 до 100</string>
-    <string name="pwm_threshold_caption">ШИМ, при котором колесо само пищит. 80, если ты не менял это на колесе.</string>
+    <string name="pwm_threshold_caption">ШИМ, при котором колесо само пищит (80, если ты не менял это на колесе). Смена порога пересчитает все прошлые точки калибровки; если ты менял режим сигнала на самом колесе, откалибруй заново.</string>
     <string name="pwm_manual_title">Точка холостого хода (необязательно)</string>
     <string name="pwm_manual_kmh">Скорость на холостом ходу, км/ч</string>
     <string name="pwm_manual_volts">При напряжении, В</string>
@@ -1594,4 +1594,9 @@
     <string name="pwm_wiz_notice_not_connected">Сначала подключись к этому ТС.</string>
     <string name="pwm_wiz_notice_no_data">От колеса пока нет данных.</string>
     <string name="pwm_wiz_notice_nothing">Пока ничего не замерено.</string>
+    <string name="pwm_reset_confirm">Сбросить</string>
+    <string name="pwm_wiz_blocked_reports">Это колесо отдаёт свой ШИМ, калибровка ему не нужна.</string>
+    <string name="pwm_wiz_blocked_unknown">Пока не известно, отдаёт ли это колесо свой ШИМ. Проедь немного и вернись.</string>
+    <string name="pwm_wiz_blocked_load">Не удалось прочитать это ТС. Вернись и попробуй ещё раз.</string>
+    <string name="pwm_wiz_notice_loading">Читаю данные ТС, попробуй через секунду.</string>
 </resources>

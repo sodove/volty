@@ -10,6 +10,10 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+import ru.sodovaya.volty.domain.pwm.PwmCalibration
+import ru.sodovaya.volty.domain.pwm.PwmEvidence
+import ru.sodovaya.volty.domain.pwm.PwmMemory
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.time.Duration
 
@@ -144,16 +148,24 @@ interface BmsRepository {
      * that vehicle is connected and its memory is loaded, else from the store. Read on the ordered PWM path so a
      * pending save is never missed. [PwmMemory.EMPTY] for a repository without a PWM model.
      */
-    suspend fun pwmMemory(vehicleId: String): ru.sodovaya.volty.domain.pwm.PwmMemory = ru.sodovaya.volty.domain.pwm.PwmMemory.EMPTY
+    suspend fun pwmMemory(vehicleId: String): PwmMemory = PwmMemory.EMPTY
 
-    /** Forget [vehicleId]'s PWM calibration (live estimator AND row, one ordered section); the evidence stays. */
     suspend fun resetPwmCalibration(vehicleId: String) {}
 
     /**
      * Install [calibration] (the wizard's result) in the live estimator when [vehicleId] is connected, and persist it
      * through the same ordered path as every other PWM write, so the estimator and the row cannot disagree.
+     * **Refused (a failure, nothing stored or installed) unless the wheel's evidence is NEVER_REPORTED**: the rider rule
+     * is enforced here as well as in the screens, so no path can calibrate a wheel that reports its own PWM.
      */
-    suspend fun applyPwmCalibration(vehicleId: String, calibration: ru.sodovaya.volty.domain.pwm.PwmCalibration) {}
+    suspend fun applyPwmCalibration(vehicleId: String, calibration: PwmCalibration): Result<Unit> = Result.success(Unit)
+
+    /**
+     * The PROVEN PWM evidence of [vehicleId], live: its current value first, then every change (it only moves up).
+     * The wizard and the editor collect it so a wheel that latches REPORTS stops being offered a calibration at once.
+     * The default is the stored value, once.
+     */
+    fun pwmEvidence(vehicleId: String): Flow<PwmEvidence> = flow { emit(pwmMemory(vehicleId).evidence) }
 
 
     /**

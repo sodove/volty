@@ -27,6 +27,7 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.pwm.PwmBasis
 import ru.sodovaya.volty.domain.pwm.PwmCalibration
+import ru.sodovaya.volty.domain.pwm.PwmEvidence
 import ru.sodovaya.volty.domain.pwm.PwmCalibrationSource
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
@@ -62,10 +63,16 @@ class PwmCalibrationComponentTest {
         val applied = mutableListOf<Pair<String, PwmCalibration>>()
         var applyGate: CompletableDeferred<Unit>? = null
         var failApply = false
-        override suspend fun applyPwmCalibration(vehicleId: String, calibration: PwmCalibration) {
+        /** The wheel's evidence as the repository reports it, live. */
+        val evidence = MutableStateFlow(PwmEvidence.NEVER_REPORTED)
+        override fun pwmEvidence(vehicleId: String): Flow<PwmEvidence> = evidence
+        var refuse = false
+        override suspend fun applyPwmCalibration(vehicleId: String, calibration: PwmCalibration): Result<Unit> {
             applyGate?.await()
             if (failApply) throw IllegalStateException("disk full")
+            if (refuse) return Result.failure(IllegalStateException("evidence"))
             applied += vehicleId to calibration
+            return Result.success(Unit)
         }
         override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
         override suspend fun connect(vehicle: Vehicle): Result<Unit> = Result.success(Unit)
@@ -79,9 +86,12 @@ class PwmCalibrationComponentTest {
         override suspend fun onAppResumed() {}
     }
 
-    private class Vehicles(private val v: Vehicle) : VehicleRepository {
+    private class Vehicles(private val v: Vehicle, var gate: CompletableDeferred<Unit>? = null, var missing: Boolean = false) : VehicleRepository {
         override val vehicles: Flow<List<Vehicle>> = MutableStateFlow(listOf(v))
-        override suspend fun get(id: String): Vehicle? = v.takeIf { it.id == id }
+        override suspend fun get(id: String): Vehicle? {
+            gate?.await()
+            return v.takeIf { it.id == id && !missing }
+        }
         override suspend fun upsert(vehicle: Vehicle) = error("the wizard never writes the vehicle")
         override suspend fun delete(id: String) {}
         override suspend fun touch(id: String) {}
@@ -101,12 +111,12 @@ class PwmCalibrationComponentTest {
         }
     }
 
-    private fun TestScope.rig(): Rig {
-        val bms = FakeBms()
+    private fun TestScope.rig(vehicle: Vehicle = t4, vehicles: Vehicles = Vehicles(vehicle), evidence: PwmEvidence = PwmEvidence.NEVER_REPORTED): Rig {
+        val bms = FakeBms().also { it.evidence.value = evidence }
         lateinit var rig: Rig
         val component = DefaultPwmCalibrationComponent(
             DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, "t4",
-            Vehicles(t4), bms, onBackRequested = { rig.backs++ }, ioContext = StandardTestDispatcher(testScheduler),
+            vehicles, bms, onBackRequested = { rig.backs++ }, ioContext = StandardTestDispatcher(testScheduler),
         )
         rig = Rig(bms, component)
         return rig
@@ -207,5 +217,67 @@ class PwmCalibrationComponentTest {
         r.component.onSave(); runCurrent(); r.component.onSave(); runCurrent()
         r.bms.applyGate!!.complete(Unit); runCurrent()
         assertEquals(1, r.bms.applied.size)
+    }
+
+    @Test fun evidenceFlippingToReportsMidRunBlocksTheWizardAndSaveIsImpossible() = runTest {
+        val r = rig(); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onFinish()
+        assertEquals(PwmWizardStep.RESULT, r.component.state.value.wizard.step)
+        r.bms.evidence.value = PwmEvidence.REPORTS; runCurrent()
+        val w = r.component.state.value.wizard
+        assertEquals(PwmWizardStep.BLOCKED, w.step)
+        assertEquals(PwmWizardBlock.REPORTS, w.blockReason)
+        assertNull(w.result); assertTrue(w.onsets.isEmpty())
+        r.component.onSave(); runCurrent()
+        assertTrue(r.bms.applied.isEmpty(), "Save is impossible once blocked")
+        r.component.onStart(); r.component.onRestart()
+        assertEquals(PwmWizardStep.BLOCKED, r.component.state.value.wizard.step, "terminal")
+    }
+
+    @Test fun aRestoredConfigOpenedOnAWheelThatReportsOrIsNotProvenIsBlocked() = runTest {
+        for ((ev, reason) in listOf(PwmEvidence.REPORTS to PwmWizardBlock.REPORTS, PwmEvidence.UNKNOWN to PwmWizardBlock.NOT_PROVEN)) {
+            val r = rig(evidence = ev); connect(r); r.send(0f, false); runCurrent()
+            assertEquals(PwmWizardStep.BLOCKED, r.component.state.value.wizard.step, "$ev")
+            assertEquals(reason, r.component.state.value.wizard.blockReason)
+            r.component.onStart()
+            assertEquals(PwmWizardStep.BLOCKED, r.component.state.value.wizard.step)
+        }
+    }
+
+    @Test fun startDoesNothingBeforeTheVehicleHasLoaded() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val r = rig(vehicles = Vehicles(t4, gate)); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart()
+        assertEquals(PwmWizardStep.INTRO, r.component.state.value.wizard.step, "no run can start against the default threshold")
+        assertEquals(PwmWizardNotice.LOADING, r.component.state.value.wizard.notice)
+        gate.complete(Unit); runCurrent()
+        r.component.onStart()
+        assertEquals(PwmWizardStep.THRESHOLD, r.component.state.value.wizard.step)
+    }
+
+    @Test fun aNinetyPercentVehicleIsFittedAgainstNinetyNotTheDefault() = runTest {
+        val r = rig(vehicle = t4.copy(pwmAlarmThresholdPercent = 90)); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onFinish()
+        val k = assertNotNull(r.component.state.value.wizard.result).calibration.k
+        assertEquals(0.9f * 96.8f / 68.4f, k, 1e-4f)
+        assertTrue(kotlin.math.abs(k - 0.8f * 96.8f / 68.4f) > 0.05f, "not the 80 % fit")
+    }
+
+    @Test fun aVehicleThatCannotBeReadBlocksInsteadOfRunningOnTheDefault() = runTest {
+        val r = rig(vehicles = Vehicles(t4, missing = true)); connect(r); r.send(0f, false); runCurrent()
+        assertEquals(PwmWizardStep.BLOCKED, r.component.state.value.wizard.step)
+        assertEquals(PwmWizardBlock.LOAD_FAILED, r.component.state.value.wizard.blockReason)
+    }
+
+    @Test fun aSaveTheRepositoryRefusesKeepsTheResultAndReportsFailure() = runTest {
+        val r = rig(); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onFinish()
+        r.bms.refuse = true
+        r.component.onSave(); runCurrent()
+        assertTrue(r.component.state.value.saveFailed)
+        assertEquals(0, r.backs)
     }
 }

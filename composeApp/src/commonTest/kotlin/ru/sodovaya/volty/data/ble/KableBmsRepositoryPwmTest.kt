@@ -291,7 +291,7 @@ class KableBmsRepositoryPwmTest {
             repo.applyPwmCalibration("other", wizard); advanceUntilIdle()
             assertEquals(wizard, store.rows["other"]!!.calibration)
             assertEquals(PwmEvidence.NEVER_REPORTED, store.rows["other"]!!.evidence, "an UNKNOWN save never lowers it (R3)")
-            assertEquals(listOf("save-start", "save"), store.log)
+            assertEquals(listOf("load", "save-start", "save"), store.log)
         }
     }
 
@@ -343,4 +343,94 @@ class KableBmsRepositoryPwmTest {
 
     private fun TestScope.launchReset(repo: KableBmsRepository) =
         launch { repo.resetPwmCalibration("v-pwm") }
+
+    private val reporting = PwmMemory(null, PwmEvidence.REPORTS)
+
+    @Test
+    fun `applyPwmCalibration is refused for a stored REPORTS or never-proven wheel and stores nothing`() {
+        for (row in listOf(reporting, PwmMemory(null, PwmEvidence.UNKNOWN), PwmMemory.EMPTY)) {
+            val store = FakeStore(mapOf("v-pwm" to row))
+            repoTest(store) { repo ->
+                val outcome = repo.applyPwmCalibration("v-pwm", wizard); advanceUntilIdle()
+                assertTrue(outcome.isFailure, "$row")
+                assertTrue(store.saves.isEmpty(), "nothing stored")
+                assertEquals(row.evidence, store.rows["v-pwm"]?.evidence ?: PwmEvidence.UNKNOWN)
+                assertNull(store.rows["v-pwm"]?.calibration)
+            }
+        }
+    }
+
+    @Test
+    fun `applyPwmCalibration is refused when the live wheel just latched REPORTS`() {
+        val store = FakeStore(mapOf("v-pwm" to proven))
+        repoTest(store) { repo ->
+            val ride = Ride(repo, { advanceUntilIdle() }); ride.connect()
+            ride.send(30f); ride.send(30f)
+            ride.send(30f, duty = 12f)   // a measured, non-zero duty: the one-way latch
+            assertEquals(PwmEvidence.REPORTS, assertNotNull(repo.vehicleConnectionForTest()?.pwm).evidence)
+            val outcome = repo.applyPwmCalibration("v-pwm", wizard); advanceUntilIdle()
+            assertTrue(outcome.isFailure)
+            assertNull(assertNotNull(repo.vehicleConnectionForTest()?.pwm).memory().calibration, "not installed live either")
+            assertNull(store.rows["v-pwm"]!!.calibration)
+        }
+    }
+
+    @Test
+    fun `applyPwmCalibration fails, not throws, when the store cannot be read`() {
+        val store = FakeStore(failLoad = true)
+        repoTest(store) { repo ->
+            assertTrue(repo.applyPwmCalibration("v-pwm", wizard).isFailure)
+        }
+    }
+
+    @Test
+    fun `pwmEvidence emits the stored value and then follows the live estimator upward`() {
+        val store = FakeStore(mapOf("v-pwm" to proven))
+        repoTest(store) { repo ->
+            val seen = mutableListOf<PwmEvidence>()
+            val job = launch { repo.pwmEvidence("v-pwm").collect { seen += it } }
+            advanceUntilIdle()
+            assertEquals(listOf(PwmEvidence.NEVER_REPORTED), seen)
+            val ride = Ride(repo, { advanceUntilIdle() }); ride.connect()
+            ride.send(30f); ride.send(30f); ride.send(30f, duty = 9f)
+            assertEquals(listOf(PwmEvidence.NEVER_REPORTED, PwmEvidence.REPORTS), seen)
+            job.cancel()
+        }
+    }
+
+    @Test
+    fun `changing the vehicle threshold refits every stored onset at once, live and in the row`() {
+        val store = FakeStore(mapOf("v-pwm" to PwmMemory(measured, PwmEvidence.NEVER_REPORTED)))
+        val vehicles = kotlinx.coroutines.flow.MutableStateFlow(listOf(wheel()))
+        val repo0 = object : VehicleRepository by NoVehicles() {
+            override val vehicles: Flow<List<Vehicle>> = vehicles
+        }
+        bleRepositoryTest(vehicleRepository = repo0, pwmStore = store) { repo ->
+            val ride = Ride(repo, { advanceUntilIdle() }); ride.connect()
+            ride.send(60f); ride.send(60f)
+            val before = repo.activeMotion.value.dutyPercent
+            assertEquals(DutySource.ESTIMATED, repo.activeMotion.value.dutySource, "precondition: estimating at 80 %")
+            vehicles.value = listOf(wheel().copy(pwmAlarmThresholdPercent = 90)); advanceUntilIdle()
+            ride.send(60f)
+            assertEquals(before * 90f / 80f, repo.activeMotion.value.dutyPercent, 0.05f, "the live estimate moved at once")
+            val stored = assertNotNull(store.rows["v-pwm"]!!.calibration)
+            assertEquals(measured.k * 90f / 80f, stored.k, 1e-3f, "and so did the persisted row")
+            assertEquals(PwmEvidence.NEVER_REPORTED, store.rows["v-pwm"]!!.evidence)
+        }
+    }
+
+    @Test
+    fun `changing the threshold of a vehicle that is not connected refits its row in place`() {
+        val store = FakeStore(mapOf("v-pwm" to PwmMemory(measured, PwmEvidence.NEVER_REPORTED)))
+        val vehicles = kotlinx.coroutines.flow.MutableStateFlow(listOf(wheel()))
+        val repo0 = object : VehicleRepository by NoVehicles() {
+            override val vehicles: Flow<List<Vehicle>> = vehicles
+        }
+        bleRepositoryTest(vehicleRepository = repo0, pwmStore = store) { _ ->
+            advanceUntilIdle()
+            assertTrue(store.saves.isEmpty(), "the first sighting is a baseline, not a change")
+            vehicles.value = listOf(wheel().copy(pwmAlarmThresholdPercent = 90)); advanceUntilIdle()
+            assertEquals(measured.k * 90f / 80f, store.rows["v-pwm"]!!.calibration!!.k, 1e-3f)
+        }
+    }
 }

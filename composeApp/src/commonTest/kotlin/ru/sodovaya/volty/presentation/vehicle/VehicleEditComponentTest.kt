@@ -34,6 +34,7 @@ import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.PwmManual
+import ru.sodovaya.volty.presentation.vehicle.pwm.PwmEntry
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.renderedBody
@@ -76,6 +77,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.onCompletion
@@ -150,6 +152,10 @@ class VehicleEditComponentTest {
         var pwmMemoryReads = 0
         val pwmResets = mutableListOf<String>()
         override suspend fun pwmMemory(vehicleId: String): ru.sodovaya.volty.domain.pwm.PwmMemory { pwmMemoryReads++; return pwmMemoryAnswer }
+        /** Live evidence changes pushed by a test; silent until then (the initial value comes from [pwmMemory]). */
+        val evidenceLive = MutableStateFlow<ru.sodovaya.volty.domain.pwm.PwmEvidence?>(null)
+        override fun pwmEvidence(vehicleId: String): Flow<ru.sodovaya.volty.domain.pwm.PwmEvidence> =
+            evidenceLive.filterNotNull()
         override suspend fun resetPwmCalibration(vehicleId: String) {
             pwmResets += vehicleId
             pwmMemoryAnswer = pwmMemoryAnswer.copy(calibration = null)
@@ -4086,6 +4092,23 @@ class VehicleEditComponentTest {
         lifecycle.pause(); lifecycle.resume()
         advanceUntilIdle()
         assertEquals(ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED, c.state.value.pwmEvidence)
+    }
+
+    @Test
+    fun `the editor follows the live evidence, so a wheel that latches REPORTS stops offering the wizard without a resume`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var opened = 0
+        val bms = FakeBmsRepo().apply {
+            pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED)
+        }
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms, onOpenPwmWizard = { opened++ })
+        advanceUntilIdle()
+        assertEquals(PwmEntry.WIZARD, c.state.value.pwmEntry)
+        bms.evidenceLive.value = ru.sodovaya.volty.domain.pwm.PwmEvidence.REPORTS
+        advanceUntilIdle()
+        assertEquals(PwmEntry.WHEEL_REPORTS, c.state.value.pwmEntry)
+        c.onOpenPwmWizard()
+        assertEquals(0, opened, "the stale NEVER_REPORTED is gone")
     }
 
     @Test

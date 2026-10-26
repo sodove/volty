@@ -279,4 +279,15 @@ class PwmCalibrationLearnerTest {
         assertEquals(first.k, m.k)
         assertEquals(2, m.onsets.size)
     }
+
+    @Test fun refitReadsEveryStoredOnsetAgainstTheNewThreshold() {
+        val onsets = listOf(AlarmOnset(68.4f, 96.8f, null, 0L), AlarmOnset(70f, 97f, null, 1L))
+        val at80 = PwmCalibrationLearner.fromOnsets(onsets, 80f)!!.copy(source = PwmCalibrationSource.WIZARD)
+        val at90 = PwmCalibrationLearner.refit(at80, 90f)
+        assertEquals(PwmCalibrationSource.WIZARD, at90.source, "the source is kept")
+        assertEquals(at80.k * 90f / 80f, at90.k, 1e-4f, "k scales with the threshold")
+        assertEquals(2, at90.onsets.size)
+        val freeSpin = PwmCalibrationLearner.fromFreeSpin(81.7f, 96.5f)!!
+        assertEquals(freeSpin, PwmCalibrationLearner.refit(freeSpin, 90f), "a plateau does not depend on the threshold")
+    }
 }

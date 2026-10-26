@@ -71,3 +71,18 @@ fun pwmHubSummaryOf(evidence: PwmEvidence, calibration: PwmCalibrationSummary?, 
         PwmEvidence.NEVER_REPORTED ->
             if (calibration != null || manual != null) PwmHubSummary.CALIBRATED else PwmHubSummary.UNCALIBRATED
     }
+
+/**
+ * [v] rounded to [decimals] places, trailing zeros trimmed, with [separator] as the decimal mark (ru writes 0,84 next
+ * to its «0,75–0,92»). Pure integer arithmetic: no locale machinery exists in common code. Non-finite -> an en dash.
+ */
+fun formatPwmNumber(v: Float, decimals: Int, separator: Char): String {
+    if (!v.isFinite()) return "–"
+    var scale = 1L
+    repeat(decimals) { scale *= 10 }
+    val scaled = kotlin.math.round(kotlin.math.abs(v.toDouble()) * scale).toLong()
+    val whole = scaled / scale
+    val frac = (scaled % scale).toString().padStart(decimals, '0').trimEnd('0')
+    val sign = if (v < 0f && scaled != 0L) "-" else ""
+    return if (frac.isEmpty()) "$sign$whole" else "$sign$whole$separator$frac"
+}

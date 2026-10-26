@@ -6,10 +6,22 @@ import ru.sodovaya.volty.domain.pwm.PwmCalibrationLearner
 import ru.sodovaya.volty.domain.pwm.PwmCalibrationSource
 
 /** Where the wizard is. THRESHOLD is skipped for a wheel that reports no alarm bit. */
-enum class PwmWizardStep { INTRO, THRESHOLD, PLATEAU, RESULT }
+enum class PwmWizardStep {
+    INTRO, THRESHOLD, PLATEAU, RESULT,
+
+    /** Terminal: the wizard may not run for this wheel (see [PwmWizardBlock]). Nothing is measured, nothing can be saved. */
+    BLOCKED
+}
+
+/**
+ * Why the wizard is closed. REPORTS: the wheel reports its own PWM (rider rule: no calibration for it, ever).
+ * NOT_PROVEN: the wheel is not yet proven NOT to report it. LOAD_FAILED: the vehicle (and so its alarm threshold) could
+ * not be read, and a calibration fitted against a guessed threshold would be wrong.
+ */
+enum class PwmWizardBlock { REPORTS, NOT_PROVEN, LOAD_FAILED }
 
 /** Why the wizard is not where the rider expects. Shown as a line of text, never an error dialog. */
-enum class PwmWizardNotice { DISCONNECTED, NOT_CONNECTED, NO_DATA, NOTHING_CAPTURED }
+enum class PwmWizardNotice { DISCONNECTED, NOT_CONNECTED, NO_DATA, NOTHING_CAPTURED, LOADING }
 
 /**
  * One live reading as the wizard sees it. [packV] is null when the link has no voltage yet, [alarm] is null for a
@@ -57,6 +69,13 @@ data class PwmWizardState(
     val runCaptured: Boolean = false,
     val plateau: WizardPlateau? = null,
     val result: PwmWizardResult? = null,
+    /**
+     * False until the owner knows the vehicle's own threshold AND that the wheel is proven not to report PWM:
+     * [start] refuses (notice LOADING) until then, so a run can never be fitted against a default or a guess.
+     * Defaults to true for the pure tests; the component starts it false.
+     */
+    val ready: Boolean = true,
+    val blockReason: PwmWizardBlock? = null,
     private val prevAlarm: Boolean? = null,
     private val stretch: WizardStretch? = null,
 ) {
@@ -110,6 +129,7 @@ data class PwmWizardState(
     /** INTRO -> THRESHOLD (or PLATEAU for a wheel with no alarm bit). Refused, with a notice, without a link or data. */
     fun start(connected: Boolean): PwmWizardState {
         if (step != PwmWizardStep.INTRO) return this
+        if (!ready) return copy(notice = PwmWizardNotice.LOADING)
         if (!connected) return copy(notice = PwmWizardNotice.NOT_CONNECTED)
         val sample = lastSample ?: return copy(notice = PwmWizardNotice.NO_DATA)
         return copy(
@@ -155,8 +175,17 @@ data class PwmWizardState(
         )
     }
 
-    /** RESULT -> a clean INTRO. */
-    fun restart(): PwmWizardState = PwmWizardState(thresholdPercent, lastSample = lastSample)
+    /** RESULT -> a clean INTRO. A blocked wizard stays blocked. */
+    fun restart(): PwmWizardState =
+        if (step == PwmWizardStep.BLOCKED) this else PwmWizardState(thresholdPercent, lastSample = lastSample, ready = ready)
+
+    /**
+     * The wizard may not run (rider rule, or the vehicle could not be read): from ANY step, including a result still
+     * on screen, to the terminal BLOCKED step, discarding every measurement. Idempotent; the first reason is kept.
+     */
+    fun block(reason: PwmWizardBlock): PwmWizardState =
+        if (step == PwmWizardStep.BLOCKED) this
+        else PwmWizardState(thresholdPercent, step = PwmWizardStep.BLOCKED, ready = false, blockReason = reason)
 
     /**
      * The link dropped. Mid-run (THRESHOLD or PLATEAU) everything captured is forgotten — a half-measured run
@@ -165,7 +194,7 @@ data class PwmWizardState(
      */
     fun onDisconnected(): PwmWizardState =
         if (step == PwmWizardStep.THRESHOLD || step == PwmWizardStep.PLATEAU) {
-            PwmWizardState(thresholdPercent, notice = PwmWizardNotice.DISCONNECTED)
+            PwmWizardState(thresholdPercent, notice = PwmWizardNotice.DISCONNECTED, ready = ready)
         } else this
 
     companion object {

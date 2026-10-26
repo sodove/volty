@@ -95,6 +95,17 @@ object PwmCalibrationLearner {
         }
     }
 
+    /**
+     * Ruling R5: the vehicle's alarm threshold models the wheel's FIXED alarm, so when it changes every stored onset
+     * is re-read against the new value (an onset is "the alarm fired here", and what that means in duty depends on
+     * the threshold). An ONSET-basis calibration is refit from its whole history keeping its source; a FREE_SPIN one
+     * (plateau / manual) does not depend on the threshold and is returned as it is, as is one whose refit is unusable.
+     */
+    fun refit(current: PwmCalibration, thresholdPercent: Float): PwmCalibration {
+        if (current.basis != PwmBasis.ONSET || current.onsets.isEmpty()) return current
+        return fromOnsets(current.onsets, thresholdPercent)?.copy(source = current.source) ?: current
+    }
+
     private fun median(xs: List<Double>): Double {
         val s = xs.sorted()
         val m = s.size / 2

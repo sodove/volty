@@ -871,6 +871,19 @@ class DefaultVehicleEditComponent(
         // Back from the wizard (or any screen above): the evidence and the calibration may have moved. Skipped until
         // the form has loaded, because initialize() replaces the whole state and would erase an earlier refresh.
         lifecycle.doOnResume { if (_state.value.savedValues != null) scope.launch { refreshPwm() } }
+        // The evidence is live, not only read on load and resume: a wheel that latches REPORTS while this form is on
+        // screen must stop offering the wizard at once.
+        if (vehicleId != null) {
+            scope.launch {
+                try {
+                    bmsRepository.pwmEvidence(vehicleId).collect { ev -> _state.update { it.copy(pwmEvidence = ev) } }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    println("[VOLTY] pwm evidence stream failed: $e")
+                }
+            }
+        }
         // A CAN scan needs a live link, and whether there is one changes under
         // the form: the rider can arrive here connected, drop, or reconnect. The
         // button follows, rather than being decided once at load.
@@ -1204,6 +1217,7 @@ class DefaultVehicleEditComponent(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
+            println("[VOLTY] pwm memory read failed: $e")
             return
         }
         _state.update {

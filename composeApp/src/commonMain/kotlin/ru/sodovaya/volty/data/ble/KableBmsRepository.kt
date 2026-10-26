@@ -48,6 +48,7 @@ import ru.sodovaya.volty.domain.energy.EnergyMemory
 import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
 import ru.sodovaya.volty.domain.energy.VehicleEnergyTracker
 import ru.sodovaya.volty.domain.pwm.PwmCalibration
+import ru.sodovaya.volty.domain.pwm.PwmCalibrationLearner
 import ru.sodovaya.volty.domain.pwm.PwmEstimator
 import ru.sodovaya.volty.domain.pwm.PwmEvidence
 import ru.sodovaya.volty.domain.pwm.PwmMemory
@@ -829,6 +830,7 @@ class KableBmsRepository private constructor(
                 }
                 refreshEnergyVehicle(list)
                 refreshPwmVehicle(list)
+                reconcilePwmThresholds(list)
             }
         }
         scope.launch {
@@ -1624,6 +1626,7 @@ class KableBmsRepository private constructor(
                 vehicleDataTapForTest?.invoke(vd)
                 maybeSaveEnergy(orchestrator)
                 maybeSavePwm(orchestrator)
+                publishPwmEvidence(orchestrator)
             },
             clock = orchestratorClockForTest ?: { Clock.System.now() },
             energy = energy,
@@ -1811,20 +1814,98 @@ class KableBmsRepository private constructor(
     /**
      * The wizard's result: installed in the live estimator (when [vehicleId] is the connected vehicle) and written to
      * the row in ONE ordered section, so a save captured earlier cannot overwrite it and the estimator and the row
-     * cannot disagree. Guests and demos are never persisted. The evidence written is the estimator's own (UNKNOWN when
-     * not connected: R3 makes that a no-op for the stored evidence).
+     * cannot disagree.
+     *
+     * **Refused unless the wheel's evidence is NEVER_REPORTED** (live evidence and the stored row, whichever is
+     * higher; an unreadable row refuses too): the rider rule holds here as well as on the screens, so a restored back
+     * stack, a deep link or a wheel that latched REPORTS while the wizard was open cannot calibrate a wheel that
+     * reports its own PWM. Guests and demos are refused (nothing is persisted for them).
      */
-    override suspend fun applyPwmCalibration(vehicleId: String, calibration: PwmCalibration) {
-        pwmSaveMutex.withLock {
-            val evidence = sessionLock.withLock {
-                val estimator = vehicleConnection?.pwm
-                if (estimator != null && estimator.vehicleId == vehicleId) {
-                    estimator.installCalibration(calibration)
-                    estimator.evidence
-                } else PwmEvidence.UNKNOWN
+    override suspend fun applyPwmCalibration(vehicleId: String, calibration: PwmCalibration): Result<Unit> {
+        if (vehicleId.startsWith(GUEST_VEHICLE_ID_PREFIX) || vehicleId == DEMO_VEHICLE_ID || vehicleId == DEMO_WHEEL_VEHICLE_ID) {
+            return Result.failure(IllegalStateException("a guest or demo vehicle keeps no PWM calibration"))
+        }
+        val store = pwmStore ?: return Result.failure(IllegalStateException("no PWM store"))
+        return try {
+            pwmSaveMutex.withLock {
+                val live = sessionLock.withLock {
+                    vehicleConnection?.pwm?.takeIf { it.vehicleId == vehicleId }?.evidence
+                }
+                val evidence = PwmEvidence.monotone(live ?: PwmEvidence.UNKNOWN, store.load(vehicleId).evidence)
+                if (evidence != PwmEvidence.NEVER_REPORTED) {
+                    return@withLock Result.failure(IllegalStateException("PWM evidence is $evidence: calibration refused"))
+                }
+                sessionLock.withLock {
+                    val estimator = vehicleConnection?.pwm
+                    if (estimator != null && estimator.vehicleId == vehicleId) estimator.installCalibration(calibration)
+                }
+                store.save(vehicleId, PwmMemory(calibration, evidence))
+                Result.success(Unit)
             }
-            if (vehicleId.startsWith(GUEST_VEHICLE_ID_PREFIX) || vehicleId == DEMO_VEHICLE_ID || vehicleId == DEMO_WHEEL_VEHICLE_ID) return
-            pwmStore?.save(vehicleId, PwmMemory(calibration, evidence))
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("[VOLTY-BLE] pwm calibration apply failed for $vehicleId: $e")
+            Result.failure(e)
+        }
+    }
+
+    /** Latest (vehicle, evidence) of the live estimator, published from the funnel; see [pwmEvidence]. */
+    private val pwmEvidenceLive = kotlinx.coroutines.flow.MutableStateFlow<Pair<String, PwmEvidence>?>(null)
+
+    /**
+     * The live evidence of [vehicleId]: the stored/live value first, then every change the estimator proves.
+     * Monotone (REPORTS > NEVER_REPORTED > UNKNOWN), like the persisted evidence, so a reconnect that starts the
+     * next estimator at UNKNOWN cannot look like a downgrade.
+     */
+    override fun pwmEvidence(vehicleId: String): kotlinx.coroutines.flow.Flow<PwmEvidence> = kotlinx.coroutines.flow.flow {
+        var current = pwmMemory(vehicleId).evidence
+        emit(current)
+        pwmEvidenceLive.collect { live ->
+            if (live != null && live.first == vehicleId) {
+                val next = PwmEvidence.monotone(current, live.second)
+                if (next != current) { current = next; emit(next) }
+            }
+        }
+    }
+
+    /** Called on the funnel after each publish. */
+    private fun publishPwmEvidence(orchestrator: VehicleConnection) {
+        val estimator = orchestrator.pwm ?: return
+        if (!estimator.memoryReady) return
+        pwmEvidenceLive.value = estimator.vehicleId to estimator.evidence
+    }
+
+    /** vehicle id -> the threshold last seen; touched only by the single collector in `init`. */
+    private val seenPwmThresholds = HashMap<String, Int>()
+
+    /**
+     * Ruling R5: when a saved vehicle's alarm threshold changes, every stored onset is re-read against it at once.
+     * The live estimator did so in `updateVehicle` (and is persisted here through the ordered path); a vehicle that is
+     * not connected has its row refit in place. Failures are logged, never thrown into the vehicle collector.
+     */
+    private suspend fun reconcilePwmThresholds(list: List<Vehicle>) {
+        val store = pwmStore ?: return
+        for (v in list) {
+            val before = seenPwmThresholds.put(v.id, v.pwmAlarmThresholdPercent)
+            if (before == null || before == v.pwmAlarmThresholdPercent) continue
+            try {
+                val live = sessionLock.withLock { vehicleConnection?.pwm?.takeIf { it.vehicleId == v.id && it.memoryReady } }
+                if (live != null) {
+                    persistPwm(live, prompt = false)
+                } else {
+                    pwmSaveMutex.withLock {
+                        val row = store.load(v.id)
+                        val cal = row.calibration ?: return@withLock
+                        val refit = PwmCalibrationLearner.refit(cal, v.pwmAlarmThresholdPercent.toFloat())
+                        if (refit != cal) store.save(v.id, PwmMemory(refit, row.evidence))
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                println("[VOLTY-BLE] pwm threshold refit failed for ${v.id}: $e")
+            }
         }
     }
 

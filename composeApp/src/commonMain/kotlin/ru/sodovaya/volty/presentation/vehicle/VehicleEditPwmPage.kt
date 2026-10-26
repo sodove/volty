@@ -34,7 +34,7 @@ import ru.sodovaya.volty.presentation.common.settings.SettingsTint
 import ru.sodovaya.volty.presentation.vehicle.pwm.PwmEntry
 import ru.sodovaya.volty.presentation.vehicle.pwm.PwmHubSummary
 import ru.sodovaya.volty.presentation.vehicle.pwm.pwmHubSummaryOf
-import kotlin.math.roundToInt
+import ru.sodovaya.volty.presentation.vehicle.pwm.formatPwmNumber
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.pwm_calibration_manual
@@ -61,7 +61,7 @@ import volty.composeapp.generated.resources.pwm_source_wizard
 import volty.composeapp.generated.resources.pwm_threshold_caption
 import volty.composeapp.generated.resources.pwm_threshold_invalid
 import volty.composeapp.generated.resources.pwm_threshold_label
-import volty.composeapp.generated.resources.vehicle_energy_reset_confirm
+import volty.composeapp.generated.resources.pwm_reset_confirm
 
 /** The hub row's summary line. Every decision is `pwmHubSummaryOf`'s; this only picks the words. */
 @Composable
@@ -177,7 +177,7 @@ internal fun PwmPage(state: VehicleEditComponent.State, component: VehicleEditCo
             onDismissRequest = { confirmReset = false },
             confirmButton = {
                 TextButton(onClick = { confirmReset = false; component.onResetPwmCalibration() }) {
-                    Text(stringResource(Res.string.vehicle_energy_reset_confirm), color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(Res.string.pwm_reset_confirm), color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
@@ -199,7 +199,7 @@ private fun calibrationLine(state: VehicleEditComponent.State): String {
     return when {
         cal != null -> stringResource(
             Res.string.pwm_calibration_summary,
-            ((cal.k * 1000f).roundToInt() / 1000f).toString(),
+            formatPwmNumber(cal.k, 3, if (androidx.compose.ui.text.intl.Locale.current.language == "en") '.' else ','),
             stringResource(if (cal.source == PwmCalibrationSource.WIZARD) Res.string.pwm_source_wizard else Res.string.pwm_source_riding)
         )
         state.pwmManual != null -> stringResource(Res.string.pwm_calibration_manual)

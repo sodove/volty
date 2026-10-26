@@ -206,4 +206,23 @@ class PwmWizardMachineTest {
         assertEquals(PwmWizardStep.INTRO, st.step)
         assertTrue(st.onsets.isEmpty()); assertNull(st.result)
     }
+
+    @Test fun startIsRefusedUntilTheWizardIsReady() {
+        val st = PwmWizardState(thresholdPercent = 80, ready = false).onSample(s(0, 0f)).start(true)
+        assertEquals(PwmWizardStep.INTRO, st.step)
+        assertEquals(PwmWizardNotice.LOADING, st.notice)
+    }
+
+    @Test fun blockIsTerminalFromAnyStepAndDiscardsEverything() {
+        val running = fresh().onSample(s(0, 0f)).start(true).runToOnset()
+        val result = running.finish()
+        for (st in listOf(fresh(), running, result)) {
+            val b = st.block(PwmWizardBlock.REPORTS)
+            assertEquals(PwmWizardStep.BLOCKED, b.step)
+            assertTrue(b.onsets.isEmpty()); assertNull(b.result)
+            assertEquals(b, b.block(PwmWizardBlock.LOAD_FAILED), "idempotent; the first reason stays")
+            assertEquals(b, b.start(true)); assertEquals(b, b.finish()); assertEquals(b, b.restart()); assertEquals(b, b.runAgain())
+            assertEquals(b, b.onDisconnected())
+        }
+    }
 }

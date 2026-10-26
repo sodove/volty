@@ -1560,7 +1560,7 @@
     <string name="pwm_calibration_manual">A free-spin point is typed below</string>
     <string name="pwm_threshold_label">Wheel alarm threshold, %</string>
     <string name="pwm_threshold_invalid">A whole number from 1 to 100</string>
-    <string name="pwm_threshold_caption">The PWM at which the wheel itself beeps. 80 unless you changed it on the wheel.</string>
+    <string name="pwm_threshold_caption">The PWM at which the wheel itself beeps (80 unless you changed it on the wheel). Changing it re-reads all past calibration points; if you changed the wheel's own alarm mode, recalibrate.</string>
     <string name="pwm_manual_title">Free-spin point (optional)</string>
     <string name="pwm_manual_kmh">Free-spin speed, km/h</string>
     <string name="pwm_manual_volts">At voltage, V</string>
@@ -1596,4 +1596,9 @@
     <string name="pwm_wiz_notice_not_connected">Connect to this vehicle first.</string>
     <string name="pwm_wiz_notice_no_data">No data from the wheel yet.</string>
     <string name="pwm_wiz_notice_nothing">Nothing measured yet.</string>
+    <string name="pwm_reset_confirm">Reset</string>
+    <string name="pwm_wiz_blocked_reports">This wheel reports its own PWM, so it needs no calibration.</string>
+    <string name="pwm_wiz_blocked_unknown">It is not yet known whether this wheel reports its own PWM. Ride a little, then come back.</string>
+    <string name="pwm_wiz_blocked_load">Could not read this vehicle. Go back and try again.</string>
+    <string name="pwm_wiz_notice_loading">Reading the vehicle; try again in a moment.</string>
 </resources>

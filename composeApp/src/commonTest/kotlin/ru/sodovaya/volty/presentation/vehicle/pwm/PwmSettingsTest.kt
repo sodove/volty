@@ -50,4 +50,15 @@ class PwmSettingsTest {
         assertNull(pwmSummaryOf(null))
         assertNull(pwmSummaryOf(cal(ru.sodovaya.volty.domain.pwm.PwmCalibrationSource.WIZARD).copy(k = Float.NaN)))
     }
+
+    @Test fun numbersUseTheLocalesDecimalMark() {
+        assertEquals("0,84", formatPwmNumber(0.837f, 2, ','))
+        assertEquals("0.84", formatPwmNumber(0.837f, 2, '.'))
+        assertEquals("68,4", formatPwmNumber(68.4f, 1, ','))
+        assertEquals("1,132", formatPwmNumber(1.13216f, 3, ','))
+        assertEquals("97", formatPwmNumber(96.96f, 0, ','))
+        assertEquals("1", formatPwmNumber(1.0f, 3, ','))
+        assertEquals("-0,5", formatPwmNumber(-0.5f, 2, ','))
+        assertEquals("–", formatPwmNumber(Float.NaN, 2, ','))
+    }
 }

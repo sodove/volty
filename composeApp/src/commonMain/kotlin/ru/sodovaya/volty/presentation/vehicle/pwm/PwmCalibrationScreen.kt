@@ -27,10 +27,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.presentation.common.settings.SettingsGroup
-import kotlin.math.roundToInt
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.pwm_wiz_again
+import volty.composeapp.generated.resources.pwm_wiz_blocked_load
+import volty.composeapp.generated.resources.pwm_wiz_blocked_reports
+import volty.composeapp.generated.resources.pwm_wiz_blocked_unknown
+import volty.composeapp.generated.resources.pwm_wiz_notice_loading
 import volty.composeapp.generated.resources.pwm_wiz_finish
 import volty.composeapp.generated.resources.pwm_wiz_intro_alarm
 import volty.composeapp.generated.resources.pwm_wiz_intro_lift
@@ -59,9 +62,9 @@ import volty.composeapp.generated.resources.pwm_wiz_title
 import volty.composeapp.generated.resources.pwm_wiz_to_plateau
 import volty.composeapp.generated.resources.vehicle_hub_back
 
-private fun one(v: Float): String = ((v * 10f).roundToInt() / 10f).toString()
-private fun three(v: Float): String = ((v * 1000f).roundToInt() / 1000f).toString()
-private fun two(v: Float): String = ((v * 100f).roundToInt() / 100f).toString()
+/** ru writes a decimal comma, en a point; the app ships exactly these two languages. */
+@Composable
+private fun decimalMark(): Char = if (androidx.compose.ui.text.intl.Locale.current.language == "en") '.' else ','
 
 /**
  * A renderer for [PwmCalibrationComponent.state]. Which step shows, which buttons exist and every number are the
@@ -75,6 +78,10 @@ private fun two(v: Float): String = ((v * 100f).roundToInt() / 100f).toString()
 fun PwmCalibrationScreen(component: PwmCalibrationComponent) {
     val ui by component.state.collectAsState()
     val w = ui.wizard
+    val mark = decimalMark()
+    fun one(v: Float) = formatPwmNumber(v, 1, mark)
+    fun two(v: Float) = formatPwmNumber(v, 2, mark)
+    fun three(v: Float) = formatPwmNumber(v, 3, mark)
 
     Scaffold(
         topBar = {
@@ -101,9 +108,13 @@ fun PwmCalibrationScreen(component: PwmCalibrationComponent) {
         ) {
             w.notice?.let { Notice(stringResource(noticeText(it))) }
 
-            if (w.step != PwmWizardStep.RESULT) LiveReadout(w)
+            if (w.step != PwmWizardStep.RESULT && w.step != PwmWizardStep.BLOCKED) LiveReadout(w, ::one)
 
             when (w.step) {
+                PwmWizardStep.BLOCKED -> {
+                    // Terminal: only the reason and a way out; no Start, no Save.
+                    Notice(stringResource(blockText(w.blockReason)))
+                }
                 PwmWizardStep.INTRO -> {
                     Body(stringResource(Res.string.pwm_wiz_intro_lift))
                     Body(stringResource(if (w.hasAlarmSignal || w.lastSample == null) Res.string.pwm_wiz_intro_alarm else Res.string.pwm_wiz_intro_plateau))
@@ -161,7 +172,14 @@ fun PwmCalibrationScreen(component: PwmCalibrationComponent) {
     }
 }
 
+private fun blockText(r: PwmWizardBlock?) = when (r) {
+    PwmWizardBlock.REPORTS -> Res.string.pwm_wiz_blocked_reports
+    PwmWizardBlock.NOT_PROVEN, null -> Res.string.pwm_wiz_blocked_unknown
+    PwmWizardBlock.LOAD_FAILED -> Res.string.pwm_wiz_blocked_load
+}
+
 private fun noticeText(n: PwmWizardNotice) = when (n) {
+    PwmWizardNotice.LOADING -> Res.string.pwm_wiz_notice_loading
     PwmWizardNotice.DISCONNECTED -> Res.string.pwm_wiz_notice_disconnected
     PwmWizardNotice.NOT_CONNECTED -> Res.string.pwm_wiz_notice_not_connected
     PwmWizardNotice.NO_DATA -> Res.string.pwm_wiz_notice_no_data
@@ -169,7 +187,7 @@ private fun noticeText(n: PwmWizardNotice) = when (n) {
 }
 
 @Composable
-private fun LiveReadout(w: PwmWizardState) {
+private fun LiveReadout(w: PwmWizardState, one: (Float) -> String) {
     val s = w.lastSample
     val speed = s?.speedKmh?.takeIf { it.isFinite() }
     val volts = s?.packV

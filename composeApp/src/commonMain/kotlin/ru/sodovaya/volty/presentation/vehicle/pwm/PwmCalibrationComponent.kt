@@ -19,6 +19,7 @@ import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DEFAULT_PWM_ALARM_THRESHOLD_PERCENT
 import ru.sodovaya.volty.domain.model.VehicleData
+import ru.sodovaya.volty.domain.pwm.PwmEvidence
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlin.coroutines.CoroutineContext
@@ -86,22 +87,49 @@ class DefaultPwmCalibrationComponent(
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
 
-    private val _state = MutableStateFlow(PwmCalibrationUi(PwmWizardState(DEFAULT_PWM_ALARM_THRESHOLD_PERCENT)))
+    // Not ready until the vehicle's own threshold is read AND the wheel is proven not to report PWM: Start does nothing before.
+    private val _state = MutableStateFlow(PwmCalibrationUi(PwmWizardState(DEFAULT_PWM_ALARM_THRESHOLD_PERCENT, ready = false)))
+
+    private var loadedThreshold: Int? = null
+    private var evidenceProven = false
+
+    /** Opens the wizard once both gates are known, and only while it is still waiting in INTRO. */
+    private fun openIfReady() = _state.update { ui ->
+        val t = loadedThreshold
+        val w = ui.wizard
+        if (t != null && evidenceProven && !w.ready && w.step == PwmWizardStep.INTRO) ui.copy(wizard = w.copy(thresholdPercent = t, ready = true))
+        else ui
+    }
+
+    private fun block(reason: PwmWizardBlock) = _state.update { ui -> ui.copy(wizard = ui.wizard.block(reason), saving = false) }
     override val state: StateFlow<PwmCalibrationUi> = _state.asStateFlow()
 
     init {
         lifecycle.doOnDestroy { lifetime.cancel() }
         scope.launch {
             val v = try { vehicles.get(vehicleId) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
-            _state.update { ui ->
-                ui.copy(
-                    vehicleName = v?.name,
-                    // Only before the rider has begun: the fit must use the threshold the run started under.
-                    wizard = if (v != null && ui.wizard.step == PwmWizardStep.INTRO) {
-                        ui.wizard.copy(thresholdPercent = v.pwmAlarmThresholdPercent)
-                    } else ui.wizard,
-                )
+            _state.update { it.copy(vehicleName = v?.name) }
+            if (v == null) block(PwmWizardBlock.LOAD_FAILED)
+            else { loadedThreshold = v.pwmAlarmThresholdPercent; openIfReady() }
+        }
+        // The rider rule, enforced HERE and not only at the editor's tap: a restored back stack can open this screen
+        // on any wheel, and a wheel can latch REPORTS while it is open. Anything but NEVER_REPORTED closes it for good.
+        scope.launch {
+            val failure = try {
+                bms.pwmEvidence(vehicleId).collect { ev ->
+                    when (ev) {
+                        PwmEvidence.NEVER_REPORTED -> { evidenceProven = true; openIfReady() }
+                        PwmEvidence.REPORTS -> block(PwmWizardBlock.REPORTS)
+                        PwmEvidence.UNKNOWN -> block(PwmWizardBlock.NOT_PROVEN)
+                    }
+                }
+                null
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                e
             }
+            if (failure != null) block(PwmWizardBlock.LOAD_FAILED)
         }
         scope.launch {
             combine(bms.activeVehicle, bms.connectionState, bms.activeMotion, bms.activeVehicleData) { active, st, motion, data ->
@@ -126,15 +154,21 @@ class DefaultPwmCalibrationComponent(
     override fun onRestart() = machine { w, _ -> w.restart() }
 
     override fun onSave() {
-        val calibration = _state.value.wizard.result?.calibration ?: return
+        val w = _state.value.wizard
+        if (w.step != PwmWizardStep.RESULT) return // BLOCKED has no result; nothing else saves
+        val calibration = w.result?.calibration ?: return
         if (_state.value.saving) return
         _state.update { it.copy(saving = true, saveFailed = false) }
         scope.launch {
-            try {
+            // The repository re-checks the evidence and refuses (a failure) for a wheel that is not NEVER_REPORTED.
+            val outcome = try {
                 withContext(ioContext) { bms.applyPwmCalibration(vehicleId, calibration) }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Result.failure(e)
+            }
+            if (outcome.isFailure) {
                 _state.update { it.copy(saving = false, saveFailed = true) }
                 return@launch
             }
