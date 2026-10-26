@@ -11,6 +11,7 @@ import ru.sodovaya.volty.data.bms.AntBmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.ProtocolDiagnosticValues
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.data.bms.LearnedCellCountSource
 import ru.sodovaya.volty.data.bms.BmsTypeDetector
@@ -255,6 +256,9 @@ class KableBmsRepository private constructor(
         ownership: SampleSessionOwnership): SessionTelemetryCapture? = makeHistoryTelemetryCapture(
             protocol, checkNotNull(links.find { it.spec.address == address }), ownership, checkNotNull(sampleChannel))
     private val protocolDiagnosticsByAddress = mutableMapOf<String, ProtocolDiagnosticValues>()
+    /** Per-link notification rate and protocol facts, stored by the session, published with the diagnostics. */
+    private class LinkStats(val framesPerSecond: Float?, val facts: List<DeviceFact>)
+    private val linkStatsByAddress = mutableMapOf<String, LinkStats>()
     private val diagnosticBatteriesByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticBatterySample>>()
     private val diagnosticControllersByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticControllerSample>>()
     override val state get() = diagnosticBuffer.state
@@ -1150,6 +1154,7 @@ class KableBmsRepository private constructor(
             currentCoroutineContext().ensureActive()
             synchronized(linkStateLock) {
                 protocolDiagnosticsByAddress.clear()
+                linkStatsByAddress.clear()
                 diagnosticBatteriesByAddress.clear()
                 diagnosticControllersByAddress.clear()
             }
@@ -2404,6 +2409,7 @@ class KableBmsRepository private constructor(
             val onlineLinks = links.filter { it.status == LinkStatus.ONLINE }
             val retainedAddresses = onlineLinks.map { it.spec.address }.toSet()
             protocolDiagnosticsByAddress.keys.retainAll(retainedAddresses)
+            linkStatsByAddress.keys.retainAll(retainedAddresses)
             diagnosticBatteriesByAddress.keys.retainAll(retainedAddresses)
             diagnosticControllersByAddress.keys.retainAll(retainedAddresses)
             onlineLinks.map { link ->
@@ -2411,10 +2417,12 @@ class KableBmsRepository private constructor(
                     link.vehicle?.controllers?.firstOrNull { it.index == source.globalIndex }?.controllerType?.name
                 }.distinct().takeIf { it.isNotEmpty() }?.joinToString("/")
                 val decoded = protocolDiagnosticsByAddress[link.spec.address]
+                val stats = linkStatsByAddress[link.spec.address]
                 BleDiagnosticLink(link.spec.address, cachedAdvertisement(link.spec.address)?.name,
                     link.spec.protocolKind.name, identity, decoded?.hardwareCode, decoded?.model, decoded?.firmwareVersion,
                     diagnosticBatteriesByAddress[link.spec.address]?.values?.sortedBy { it.localPackIndex }.orEmpty(),
-                    diagnosticControllersByAddress[link.spec.address]?.values?.sortedBy { it.localControllerIndex }.orEmpty())
+                    diagnosticControllersByAddress[link.spec.address]?.values?.sortedBy { it.localControllerIndex }.orEmpty(),
+                    facts = stats?.facts.orEmpty(), framesPerSecond = stats?.framesPerSecond, reconnects = link.reconnects)
             }
         }
         diagnosticBuffer.updateActiveLinks(snapshots)
@@ -2855,6 +2863,11 @@ class KableBmsRepository private constructor(
                         bytes = bytes,
                     )
                 },
+                onLinkStats = { framesPerSecond, facts ->
+                    synchronized(linkStateLock) {
+                        if (links.any { it === link }) linkStatsByAddress[address] = LinkStats(framesPerSecond, facts)
+                    }
+                },
                 onProtocolDiagnostics = { values ->
                     synchronized(linkStateLock) {
                         if (links.any { it === link }) {
@@ -2904,6 +2917,7 @@ class KableBmsRepository private constructor(
                 }
                 link.session = session
                 protocolDiagnosticsByAddress.remove(address)
+                linkStatsByAddress.remove(address)
                 diagnosticBatteriesByAddress.remove(address)
                 diagnosticControllersByAddress.remove(address)
             }
@@ -3089,6 +3103,7 @@ class KableBmsRepository private constructor(
     ): Job {
         val address = link.spec.address
         link.reconnectJob?.cancel()
+        link.reconnects++
         println("[VOLTY-BLE] reconnect loop[$address]: starting reason=$initialReason")
         val reconnect = scope.launch(start = start) {
             var attempt = 0
@@ -3285,6 +3300,7 @@ class KableBmsRepository private constructor(
         _activeVehicle.value = null
         synchronized(linkStateLock) {
             protocolDiagnosticsByAddress.clear()
+            linkStatsByAddress.clear()
             diagnosticBatteriesByAddress.clear()
             diagnosticControllersByAddress.clear()
         }
@@ -3356,7 +3372,7 @@ class KableBmsRepository private constructor(
             true
         }
         if (removed) {
-            synchronized(linkStateLock) { protocolDiagnosticsByAddress.remove(address) }
+            synchronized(linkStateLock) { protocolDiagnosticsByAddress.remove(address); linkStatsByAddress.remove(address) }
             tearDownRemovedSessionWithHistory(sessionToTearDown)
             publishActiveDiagnosticLinks()
         }
@@ -3387,7 +3403,7 @@ class KableBmsRepository private constructor(
                 println("[VOLTY-BLE] disconnectLink: dropping $address, ${outcome.remaining.size} link(s) remain")
                 outcome.reconnectJob?.cancel()
                 tearDownRemovedSessionWithHistory(outcome.session)
-                synchronized(linkStateLock) { protocolDiagnosticsByAddress.remove(address) }
+                synchronized(linkStateLock) { protocolDiagnosticsByAddress.remove(address); linkStatsByAddress.remove(address) }
                 // Reuse the existing fold — do not hand-roll a second copy of
                 // it. Guarded by linkStateLock, same as every other fold
                 // write, so a sibling link's concurrent status transition

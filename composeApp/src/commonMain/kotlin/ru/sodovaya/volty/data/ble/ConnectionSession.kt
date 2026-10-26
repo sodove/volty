@@ -9,6 +9,8 @@ import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.CanBusScanner
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.ProtocolDiagnostics
+import ru.sodovaya.volty.data.bms.deviceFactsOf
+import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.data.bms.ProtocolDiagnosticValues
 import ru.sodovaya.volty.data.bms.diagnosticValues
 import ru.sodovaya.volty.data.bms.SerialPollSource
@@ -66,7 +68,15 @@ internal class ConnectionSession(
     /** A later plain-VESC decode clears [onPlainVescNotificationsNotUnderstood]'s state. */
     private val onPlainVescDecode: () -> Unit = {},
     private val onNotification: (ByteArray) -> Unit = {},
+    /**
+     * Link statistics measured here, per notification: the notification rate and the protocol's
+     * [ProtocolFacts]. It only STORES; [onProtocolDiagnostics], called right after it for the same
+     * notification, is what publishes - so one notification costs one publish.
+     */
+    private val onLinkStats: (framesPerSecond: Float?, facts: List<DeviceFact>) -> Unit = { _, _ -> },
     private val onProtocolDiagnostics: (ProtocolDiagnosticValues?) -> Unit = {},
+    /** Wall clock for [onLinkStats]'s notification rate; tests inject a fake. */
+    private val notificationClockMs: () -> Long = { Clock.System.now().toEpochMilliseconds() },
     /**
      * Called for every parsed sample. The session does not own where samples
      * go: with more than one pack behind a link there is no single
@@ -86,6 +96,8 @@ internal class ConnectionSession(
     private val onDropDetected: suspend (reason: String) -> Unit
 ) {
     init { telemetryCapture?.requireProtocol(protocol) }
+
+    private val notificationRate = NotificationRateMeter(notificationClockMs)
 
     private val teardownOwner = SessionTeardownOwner(::releaseNativeResources)
     private val torn: Boolean get() = teardownOwner.retired
@@ -267,6 +279,8 @@ internal class ConnectionSession(
                     // decoding. A VESC can notify a valid transport frame that
                     // answers neither opcode we know; redialling that healthy
                     // GATT link cannot make the frame understandable.
+                    // Stamped on arrival, before decoding costs any time.
+                    val framesPerSecond = notificationRate.onNotification()
                     processObservedSessionNotification(protocol, data, noSampleEverActivity, telemetryCapture) { onNotification(data) }
                     val routed = routeObservedSessionSamples(
                         protocol = protocol,
@@ -280,6 +294,7 @@ internal class ConnectionSession(
                             onMotionSample(controllerIndex, motion.copy(timestamp = Clock.System.now()))
                         }
                     )
+                    onLinkStats(framesPerSecond, deviceFactsOf(protocol))
                     onProtocolDiagnostics((protocol as? ProtocolDiagnostics)?.diagnosticValues())
                     // Battery protocols retain their historic cached-decode
                     // liveness rule. A plain VESC is different: an unknown

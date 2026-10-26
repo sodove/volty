@@ -66,6 +66,22 @@ class ChargeTracker(
     var restVoltageSocPercent: Float? = null
         private set
 
+    /** Pack voltage plus the resistive sag back, as of the latest accepted reading; null before one. */
+    var compensatedPackV: Float? = null
+        private set
+
+    /** SoC of [compensatedPackV] on the stretched curve (the voltage side of the model), unsmoothed. */
+    var voltageSocPercent: Float? = null
+        private set
+
+    /** The discharge current of the latest accepted reading, null = not measured. */
+    var lastDischargeA: Float? = null
+        private set
+
+    /** True once |I| < [REST_A] has held for [REST_MS] as of the latest reading; false after a gap. */
+    var atRest: Boolean = false
+        private set
+
     private var displayed: Float? = null
     private var lastAt: Long? = null
     private var restSince: Long? = null
@@ -88,6 +104,9 @@ class ChargeTracker(
         val compPackV = input.packV + comp
         val cellV = compPackV / input.cellCount
         val vSoc = OcvCurve.stretchedSocPercent(config.chemistry, cellV, config.lowV, config.highV)
+        compensatedPackV = compPackV
+        voltageSocPercent = vSoc
+        lastDischargeA = current
 
         if (dt > RESEED_GAP_MS) {
             gapMillis += dt
@@ -99,6 +118,7 @@ class ChargeTracker(
         } else if (dt >= GAP_SKIP_MS) {
             gapMillis += dt
             restSince = null
+            atRest = false
             restVoltageSocPercent = null
             if (counterPercent != null) return displayed // not integrated, not corrected
         }
@@ -145,10 +165,12 @@ class ChargeTracker(
     private fun trackRest(at: Long, current: Float?): Boolean {
         if (current == null || abs(current) >= REST_A) {
             restSince = null
+            atRest = false
             return false
         }
         val since = restSince ?: at.also { restSince = it }
-        return at - since >= REST_MS
+        atRest = at - since >= REST_MS
+        return atRest
     }
 
     private fun trySeed(at: Long, compPackV: Float, soc: Float) {

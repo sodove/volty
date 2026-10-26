@@ -23,6 +23,7 @@ import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.energy.CapacitySource
 import ru.sodovaya.volty.domain.energy.EnergyState
+import ru.sodovaya.volty.domain.energy.RangeUnearnedReason
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -68,6 +69,41 @@ class BmsRangeSourceTest {
             advanceTimeBy(1_000L)
             assertEquals(20f, assertNotNull(source.range.value).km, 0.01f)
             assertEquals(2, computations)
+        } finally {
+            job.cancel()
+        }
+    }
+
+    @Test
+    fun detailIsPublishedWithTheRangeFromTheSameComputation() = runTest {
+        val time = Instant.fromEpochSeconds(1_700_000_000L)
+        val fake = FakeBmsRepository()
+        val vehicle = testVehicle("range-vehicle", time)
+        fake.activeVehicle.value = vehicle
+        fake.connectionState.value = ConnectionState.Connected(vehicle)
+        fake.activeVehicleData.value = vehicleWithEnergy(time)
+        fake.motionSamples.value = motionSamples(time)
+        fake.activeMotion.value = motion(time, consumedWh = 500f)
+
+        var computations = 0
+        val job = Job()
+        val source = BmsRangeSource(fake, CoroutineScope(UnconfinedTestDispatcher(testScheduler) + job)) { computations++ }
+        try {
+            assertNull(source.detail.value)
+            advanceTimeBy(1_001L)
+            val d = assertNotNull(source.detail.value)
+            assertNull(d.unearnedReason)
+            assertEquals(50.0, assertNotNull(d.tripWhPerKm), 0.01)
+            assertEquals(10.0, assertNotNull(d.tripKm), 0.01)
+            assertEquals(1, computations, "detail rides on the same throttled computation")
+
+            // Incoherent: SoC known and capacity present, but no usable-Ah behind the remaining energy.
+            fake.activeVehicleData.value = VehicleData(
+                energy = vehicleWithEnergy(time).energy!!.copy(usableAh = null, remainingWh = null),
+            )
+            advanceTimeBy(1_000L)
+            assertNull(source.range.value)
+            assertEquals(RangeUnearnedReason.NO_CAPACITY, assertNotNull(source.detail.value).unearnedReason)
         } finally {
             job.cancel()
         }

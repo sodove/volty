@@ -4,12 +4,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.flow.stateIn
+import ru.sodovaya.volty.domain.energy.RangeAssessment
+import ru.sodovaya.volty.domain.energy.RangeDetail
 import ru.sodovaya.volty.domain.energy.RangeEstimate
 import ru.sodovaya.volty.domain.energy.RangeEstimator
 import ru.sodovaya.volty.domain.model.ConnectionState
@@ -23,6 +26,9 @@ import ru.sodovaya.volty.domain.stats.RideEnergy
 interface RangeSource {
     /** Null until the range is earned (a capacity, ~1 km and a minimum sample count behind it). */
     val range: StateFlow<RangeEstimate?>
+
+    /** The figures behind [range], from the same computation; null until the first one runs. */
+    val detail: StateFlow<RangeDetail?> get() = MutableStateFlow(null)
 }
 
 @OptIn(FlowPreview::class)
@@ -53,7 +59,7 @@ class BmsRangeSource(
         val connected: Boolean,
     )
 
-    override val range: StateFlow<RangeEstimate?> = combine(
+    private val assessment: StateFlow<RangeAssessment?> = combine(
         bmsRepository.activeVehicleData,
         bmsRepository.activeMotion,
         bmsRepository.motionSamples(RideEnergy.SESSION_WINDOW),
@@ -70,11 +76,20 @@ class BmsRangeSource(
                 motion = inputs.motion,
                 samples = inputs.samples,
             )
-            RangeEstimator.estimate(
+            RangeEstimator.assess(
                 energy = inputs.vehicleData.energy,
                 consumption = ConsumptionEvidenceBuilder.build(inputs.motion, sessionSamples),
                 recentWhPerKm = ConsumptionEvidenceBuilder.recentWhPerKm(sessionSamples, RangeEstimator.RECENT_KM),
             )
         }
+        .stateIn(scope = scope, started = SharingStarted.Eagerly, initialValue = null)
+
+    // Both views derive from the one throttled computation above; neither recomputes.
+    override val range: StateFlow<RangeEstimate?> = assessment
+        .map { it?.estimate }
+        .stateIn(scope = scope, started = SharingStarted.Eagerly, initialValue = null)
+
+    override val detail: StateFlow<RangeDetail?> = assessment
+        .map { it?.detail }
         .stateIn(scope = scope, started = SharingStarted.Eagerly, initialValue = null)
 }

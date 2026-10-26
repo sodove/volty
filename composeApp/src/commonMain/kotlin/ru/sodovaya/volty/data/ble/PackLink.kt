@@ -76,4 +76,8 @@ internal class PackLink(
     /** Plain VESC notifications are arriving, but none has decoded into a sample. */
     @Volatile
     var notificationsNotUnderstood: Boolean = false
+
+    /** Reconnect episodes started on this link since it was created (one per connect of the vehicle). */
+    @Volatile
+    var reconnects: Int = 0
 }

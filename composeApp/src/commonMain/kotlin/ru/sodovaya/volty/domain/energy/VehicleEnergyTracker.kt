@@ -13,6 +13,37 @@ import kotlin.time.Instant
 /** Where the usable capacity behind an [EnergyState] came from. */
 enum class CapacitySource { ENTERED, REPORTED, LEARNED, NONE }
 
+/** Where the discharge current behind an [EnergyDetail] was measured. */
+enum class CurrentSource { CONTROLLER, PACKS, NONE }
+
+/**
+ * The model's working, for the vehicle-info screen. Present only while the tracker owns the SoC
+ * ([EnergyState.modelled]); null for a smart-BMS vehicle, whose SoC is not computed here.
+ * An absent measurement is null, never zero: [dischargeA] is null with [currentSource] NONE.
+ *
+ *  - [counterSocPercent]: the charge counter (the source of the shown SoC); null until seeded.
+ *  - [voltageSocPercent]: the SoC of the load-compensated voltage, [compensatedPackV] / cells.
+ *  - [integratedAh] / [integratedWh]: charge drawn since the engine began; Wh = Ah x nominal V.
+ *  - [learnDropPercent]: rest SoC at the open learning segment's anchor minus the current
+ *    voltage SoC - how far the pack has fallen since, as the capacity learner will see it.
+ *    Null with no anchor yet.
+ *  - [usableFraction]: share of nameplate between the cell bounds.
+ *  - [atRest]: the rest condition holds now.
+ */
+data class EnergyDetail(
+    val counterSocPercent: Float?,
+    val voltageSocPercent: Float?,
+    val packV: Float?,
+    val compensatedPackV: Float?,
+    val dischargeA: Float?,
+    val currentSource: CurrentSource,
+    val integratedAh: Double,
+    val integratedWh: Double,
+    val learnDropPercent: Float?,
+    val usableFraction: Float?,
+    val atRest: Boolean,
+)
+
 /**
  * What the energy model knows about the vehicle right now. [modelled] is true exactly when the
  * tracker owns the SoC (no online pack reports one); then [socPercent] is the number the dashboard
@@ -27,6 +58,8 @@ data class EnergyState(
     val learned: LearnedCapacity?,
     val resistanceOhm: Float?,
     val modelled: Boolean,
+    /** The model's working; see [EnergyDetail]. Null unless [modelled]. */
+    val detail: EnergyDetail? = null,
 )
 
 /**
@@ -138,6 +171,13 @@ open class VehicleEnergyTracker(
 
         fun refreshCapacity() {
             charge.config = charge.config.copy(lowV = bounds.first, highV = bounds.second, usableAh = usableAh)
+        }
+
+        /** Rest SoC at the open segment's anchor minus the current voltage SoC; null with no anchor. */
+        fun learnDropPercent(): Float? {
+            val start = anchor ?: return null
+            val now = charge.voltageSocPercent ?: return null
+            return start.soc - now
         }
 
         fun abandonSegment() {
@@ -311,7 +351,7 @@ open class VehicleEnergyTracker(
         atMillis: Long,
     ): VehicleData {
         val agg = snapshot.aggregate
-        val current = dischargeCurrent(snapshot, online)
+        val (current, currentSource) = dischargeCurrent(snapshot, online)
         if (current != null) e.resistance.feed(agg.voltage, current, atMillis)
         lastAtMillis = atMillis
         val soc = e.charge.update(ChargeInput(atMillis, agg.voltage, cells, current, e.resistance.ohm))
@@ -338,6 +378,20 @@ open class VehicleEnergyTracker(
             learned = e.learned,
             resistanceOhm = e.resistance.ohm,
             modelled = true,
+            detail = EnergyDetail(
+                counterSocPercent = e.charge.counterPercent,
+                voltageSocPercent = e.charge.voltageSocPercent,
+                packV = agg.voltage,
+                compensatedPackV = e.charge.compensatedPackV,
+                dischargeA = current,
+                currentSource = currentSource,
+                integratedAh = e.charge.integratedAh,
+                integratedWh = e.charge.integratedAh * nominalV,
+                learnDropPercent = e.learnDropPercent(),
+                usableFraction = OcvCurve.usableFraction(vehicle.chemistry, e.bounds.first, e.bounds.second)
+                    .takeIf { it > 0f },
+                atRest = e.charge.atRest,
+            ),
         )
         return snapshot.copy(
             packs = packs,
@@ -388,15 +442,16 @@ open class VehicleEnergyTracker(
      * is positive on discharge); else the packs' own measured currents (BmsData.current is
      * charge-positive, hence negated): summed for PARALLEL, the first for SERIES; else null.
      */
-    private fun dischargeCurrent(snapshot: VehicleData, online: List<PackState>): Float? {
+    private fun dischargeCurrent(snapshot: VehicleData, online: List<PackState>): Pair<Float?, CurrentSource> {
         val motion = snapshot.motion
         if (motion.isConnected && motion.hasBatteryCurrent && motion.batteryCurrentA.isFinite()) {
-            return motion.batteryCurrentA
+            return motion.batteryCurrentA to CurrentSource.CONTROLLER
         }
         val measured = online.filter { it.data.hasCurrent && it.data.current.isFinite() }
-        if (measured.isEmpty()) return null
-        return if (snapshot.topology == PackTopology.SERIES) -measured.first().data.current
+        if (measured.isEmpty()) return null to CurrentSource.NONE
+        val amps = if (snapshot.topology == PackTopology.SERIES) -measured.first().data.current
         else measured.sumOf { -it.data.current.toDouble() }.toFloat()
+        return amps to CurrentSource.PACKS
     }
 
     private fun resolveSeriesCells(): Int? {

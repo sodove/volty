@@ -106,6 +106,55 @@ class RangeEstimatorTest {
         assertNull(ConsumptionEvidenceBuilder.recentWhPerKm(emptyList(), 3.0))
     }
 
+    // ---- assess(): why a range is withheld, and the figures behind it ----
+
+    private fun reason(e: EnergyState?, c: ConsumptionEvidence?) = RangeEstimator.assess(e, c, null).detail.unearnedReason
+
+    @Test
+    fun everyUnearnedCaseNamesItsReason() {
+        assertEquals(RangeUnearnedReason.NO_CAPACITY, reason(null, consumption()))
+        // Incoherent on purpose: a SoC with no capacity behind it (usableAh null, remaining null).
+        assertEquals(
+            RangeUnearnedReason.NO_CAPACITY,
+            reason(energy(remainingWh = null).copy(usableAh = null, socPercent = 50f), consumption()),
+        )
+        assertEquals(
+            RangeUnearnedReason.SOC_UNKNOWN,
+            reason(energy(remainingWh = null).copy(usableAh = 20f, socPercent = null), consumption()),
+        )
+        assertEquals(RangeUnearnedReason.NO_CONSUMPTION, reason(energy(), null))
+        assertEquals(RangeUnearnedReason.NO_CONSUMPTION, reason(energy(), consumption(whPerKm = -3.0)))
+        assertEquals(RangeUnearnedReason.TOO_SHORT, reason(energy(), consumption(distanceKm = 0.5)))
+        assertEquals(RangeUnearnedReason.TOO_FEW_SAMPLES, reason(energy(), consumption(samples = 5)))
+        assertNull(reason(energy(), consumption()))
+    }
+
+    @Test
+    fun theDetailCarriesTheFiguresEvenWhenTheRangeIsNotEarned() {
+        val a = RangeEstimator.assess(energy(), consumption(whPerKm = 20.0, distanceKm = 0.5, samples = 30), 40.0)
+        assertNull(a.estimate)
+        assertEquals(20.0, a.detail.tripWhPerKm)
+        assertEquals(0.5, a.detail.tripKm)
+        assertEquals(40.0, a.detail.recentWhPerKm)
+        assertEquals(20.0, a.detail.blendedWhPerKm, "a trip under RECENT_KM is the trip average alone")
+        assertEquals(RangeUnearnedReason.TOO_SHORT, a.detail.unearnedReason)
+    }
+
+    @Test
+    fun anEarnedRangeAgreesWithEstimateAndBlendsLikeIt() {
+        val c = consumption(whPerKm = 20.0, distanceKm = 5.0)
+        val a = RangeEstimator.assess(energy(remainingWh = 900f), c, 40.0)
+        assertEquals(RangeEstimator.estimate(energy(remainingWh = 900f), c, 40.0), a.estimate)
+        assertEquals(30.0, a.detail.blendedWhPerKm)
+        assertNull(a.detail.unearnedReason)
+    }
+
+    @Test
+    fun noConsumptionLeavesTheFiguresAbsentNotZero() {
+        val d = RangeEstimator.assess(energy(), null, null).detail
+        assertNull(d.tripWhPerKm); assertNull(d.tripKm); assertNull(d.blendedWhPerKm); assertNull(d.recentWhPerKm)
+    }
+
     private fun energy(remainingWh: Float? = 900f, nominalV: Float = 72f) = EnergyState(
         socPercent = 50f, usableAh = 20f, nominalPackV = nominalV, remainingWh = remainingWh,
         capacitySource = CapacitySource.ENTERED, learned = null, resistanceOhm = null, modelled = true,

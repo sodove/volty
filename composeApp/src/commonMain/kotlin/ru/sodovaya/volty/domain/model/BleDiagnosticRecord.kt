@@ -30,6 +30,12 @@ data class BleDiagnosticLink(
     val firmwareVersion: String?,
     val batteries: List<BleDiagnosticBatterySample> = emptyList(),
     val controllers: List<BleDiagnosticControllerSample> = emptyList(),
+    /** Protocol-specific facts decoded so far; empty when the protocol reports none. */
+    val facts: List<DeviceFact> = emptyList(),
+    /** Notifications per second over the last ~5 s; null until two have arrived in that window. */
+    val framesPerSecond: Float? = null,
+    /** Reconnect episodes of this link since the vehicle connected. */
+    val reconnects: Int = 0,
 )
 
 /** Latest decoded battery sample attributed to one pack on this BLE link. */

@@ -8,6 +8,24 @@ import ru.sodovaya.volty.domain.navigation.ConsumptionEvidence
  */
 data class RangeEstimate(val km: Float, val whPerKm: Double)
 
+/** Why [RangeEstimator] withholds a range; the first failing check in this order. */
+enum class RangeUnearnedReason { NO_CAPACITY, TOO_SHORT, TOO_FEW_SAMPLES, SOC_UNKNOWN, NO_CONSUMPTION }
+
+/**
+ * The figures behind a range, for the vehicle-info screen. Figures are null when their source is
+ * absent - never zero. [unearnedReason] is null exactly when a range is published.
+ */
+data class RangeDetail(
+    val tripWhPerKm: Double?,
+    val recentWhPerKm: Double?,
+    val blendedWhPerKm: Double?,
+    val tripKm: Double?,
+    val unearnedReason: RangeUnearnedReason?,
+)
+
+/** [estimate] and its [detail], from one computation. */
+data class RangeAssessment(val estimate: RangeEstimate?, val detail: RangeDetail)
+
 /**
  * "~42 km left": remaining energy over a blended consumption, hidden until earned.
  *
@@ -33,19 +51,41 @@ object RangeEstimator {
         return 0.5 * tripWhPerKm + 0.5 * recentWhPerKm
     }
 
-    fun estimate(energy: EnergyState?, consumption: ConsumptionEvidence?, recentWhPerKm: Double?): RangeEstimate? {
-        val remaining = energy?.remainingWh ?: return null
-        if (!remaining.isFinite() || remaining < 0f) return null
-        if (consumption == null ||
-            !consumption.whPerKm.isFinite() || consumption.whPerKm <= 0.0 ||
-            !consumption.distanceKm.isFinite() || consumption.distanceKm < MIN_KM ||
-            consumption.measuredSampleCount < MIN_SAMPLES
-        ) {
-            return null
+    fun estimate(energy: EnergyState?, consumption: ConsumptionEvidence?, recentWhPerKm: Double?): RangeEstimate? =
+        assess(energy, consumption, recentWhPerKm).estimate
+
+    /**
+     * [estimate] plus the reason when there is none. Checks run capacity (usable Ah), SoC,
+     * remaining energy, consumption, then distance and sample count; the first to fail names the
+     * reason. Consumption figures are reported whenever consumption exists, earned or not.
+     */
+    fun assess(energy: EnergyState?, consumption: ConsumptionEvidence?, recentWhPerKm: Double?): RangeAssessment {
+        val consumptionUsable = consumption != null && consumption.whPerKm.isFinite() && consumption.whPerKm > 0.0
+        val blended = if (consumption != null && consumptionUsable) {
+            blendedWhPerKm(consumption.whPerKm, consumption.distanceKm, recentWhPerKm)
+        } else null
+        val recent = recentWhPerKm?.takeIf { it.isFinite() }
+
+        val remaining = energy?.remainingWh
+        val reason: RangeUnearnedReason? = when {
+            energy == null -> RangeUnearnedReason.NO_CAPACITY
+            remaining == null && !(energy.usableAh != null && energy.usableAh > 0f) -> RangeUnearnedReason.NO_CAPACITY
+            remaining == null || !remaining.isFinite() || remaining < 0f -> RangeUnearnedReason.SOC_UNKNOWN
+            consumption == null || !consumptionUsable -> RangeUnearnedReason.NO_CONSUMPTION
+            !consumption.distanceKm.isFinite() || consumption.distanceKm < MIN_KM -> RangeUnearnedReason.TOO_SHORT
+            consumption.measuredSampleCount < MIN_SAMPLES -> RangeUnearnedReason.TOO_FEW_SAMPLES
+            else -> null
         }
-        val blended = blendedWhPerKm(consumption.whPerKm, consumption.distanceKm, recentWhPerKm)
-        val km = (remaining / blended).toFloat()
-        if (!km.isFinite()) return null
-        return RangeEstimate(km = km, whPerKm = blended)
+        val estimate = if (reason == null && remaining != null && blended != null) {
+            (remaining / blended).toFloat().takeIf { it.isFinite() }?.let { RangeEstimate(km = it, whPerKm = blended) }
+        } else null
+        val detail = RangeDetail(
+            tripWhPerKm = consumption?.whPerKm?.takeIf { it.isFinite() },
+            recentWhPerKm = recent,
+            blendedWhPerKm = blended,
+            tripKm = consumption?.distanceKm?.takeIf { it.isFinite() },
+            unearnedReason = reason ?: if (estimate == null) RangeUnearnedReason.NO_CONSUMPTION else null,
+        )
+        return RangeAssessment(estimate, detail)
     }
 }

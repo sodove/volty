@@ -450,4 +450,74 @@ class VehicleEnergyTrackerTest {
         assertEquals(1, learned.rides)
         assertEquals(30f, learned.usableAh, 3f, "no draw from before the charge is counted")
     }
+
+    // ---- EnergyDetail: what the model computed, for the vehicle-info screen ----
+
+    @Test
+    fun theDetailShowsTheCounterTheCompensatedVoltageAndTheIntegral() {
+        val rig = Rig(wheel(capacity = entered30Ah))
+        rig.run(40, 90f, 0f)
+        rig.run(100, 88f, 40f)
+        val e = rig.last.energy!!
+        val d = assertNotNull(e.detail)
+        assertEquals(88f, d.packV)
+        assertEquals(40f, d.dischargeA)
+        assertEquals(CurrentSource.CONTROLLER, d.currentSource)
+        assertNotNull(d.counterSocPercent)
+        assertNotNull(d.voltageSocPercent)
+        assertNotNull(d.compensatedPackV)
+        assertTrue(d.compensatedPackV!! >= d.packV!!, "compensation only adds the sag back")
+        assertEquals(0.28, d.integratedAh, 0.05) // 100 steps of 250 ms at 40 A
+        assertEquals(d.integratedAh * e.nominalPackV!!, d.integratedWh, 1e-6)
+        assertNotNull(d.usableFraction)
+        assertTrue(d.usableFraction!! in 0.5f..1f)
+        assertFalse(d.atRest)
+        assertNotNull(d.learnDropPercent, "leaving the 10 s rest closed the episode: the anchor is open")
+    }
+
+    @Test
+    fun theCurrentSourceSaysWhereTheAmpsCameFromAndAnUnmeasuredCurrentIsNotAFigure() {
+        fun rigWith(packCurrent: Float?, ctrlCurrent: Float?): EnergyDetail {
+            val rig = Rig(wheel(capacity = entered30Ah))
+            repeat(40) {
+                rig.clock.advance(150)
+                rig.conn.submit(0, BmsData(voltage = 90f, soc = 50f, socKnown = true,
+                    hasCurrent = packCurrent != null, current = packCurrent ?: 0f, isConnected = true))
+                rig.clock.advance(100)
+                // Incoherent when absent: an 80 A value that must be ignored because the flag is false.
+                rig.conn.submitMotion(0, ControllerData(batteryCurrentA = ctrlCurrent ?: 80f,
+                    hasBatteryCurrent = ctrlCurrent != null, isConnected = true))
+            }
+            return assertNotNull(rig.last.energy!!.detail)
+        }
+        // Pack current is charge-positive: -20 is a 20 A discharge.
+        val packs = rigWith(packCurrent = -20f, ctrlCurrent = null)
+        assertEquals(CurrentSource.PACKS, packs.currentSource); assertEquals(20f, packs.dischargeA)
+        val ctrl = rigWith(packCurrent = -20f, ctrlCurrent = 50f)
+        assertEquals(CurrentSource.CONTROLLER, ctrl.currentSource); assertEquals(50f, ctrl.dischargeA)
+        val none = rigWith(packCurrent = null, ctrlCurrent = null)
+        assertEquals(CurrentSource.NONE, none.currentSource); assertNull(none.dischargeA)
+    }
+
+    @Test
+    fun atRestFollowsTheRestTimer() {
+        val rig = Rig(wheel(capacity = entered30Ah))
+        rig.run(8, 90f, 0f) // 2 s: not yet 5 s
+        assertEquals(false, rig.last.energy!!.detail?.atRest)
+        rig.run(32, 90f, 0f)
+        assertEquals(true, rig.last.energy!!.detail?.atRest)
+    }
+
+    @Test
+    fun learnDropIsTheAnchorRestSocMinusTheCurrentCompensatedVoltageSoc() {
+        val rig = Rig(wheel())
+        rig.run(40, packVoltsAt(96f), 0f)
+        assertNull(rig.last.energy!!.detail!!.learnDropPercent, "no anchor before a rest episode has ended")
+        rig.run(1, packVoltsAt(96f) - 2f, 30f) // leaving the rest: the anchor is now ~96
+        rig.rideBetweenStops(96f, 90f)         // ride 6 %, rest at 90
+        val d = rig.last.energy!!.detail!!
+        assertTrue(d.atRest)
+        assertEquals(6f, assertNotNull(d.learnDropPercent), 0.5f)
+        assertEquals(90f, d.voltageSocPercent!!, 0.5f)
+    }
 }
