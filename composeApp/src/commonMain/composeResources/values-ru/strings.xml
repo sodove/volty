@@ -846,6 +846,7 @@
 <string name="debug_stop_capture">Остановить</string>
 <string name="debug_clear">Очистить</string>
 <string name="debug_copy">Скопировать диагностику</string>
+<string name="debug_share_file">Отправить файлом</string>
 <string name="debug_empty">Данных пока нет</string>
 <string name="debug_links">Активные BLE-соединения</string>
 <string name="debug_battery">Сводка батареи</string>

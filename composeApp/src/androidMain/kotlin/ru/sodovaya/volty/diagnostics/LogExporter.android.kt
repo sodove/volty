@@ -27,6 +27,17 @@ actual class LogExporter(private val context: Context) {
         }.start()
     }
 
+    actual fun exportText(fileName: String, contents: String) {
+        Thread {
+            runCatching {
+                val dir = File(context.cacheDir, "logs").apply { mkdirs() }
+                // Fixed name per kind of export - overwritten each time, so the cache never grows.
+                val file = File(dir, fileName).apply { writeText(contents) }
+                shareFile(file)
+            }
+        }.start()
+    }
+
     /** `-d` = dump and exit; `-v time` prefixes each line with a timestamp. */
     private fun readLogcat(): String =
         runCatching {

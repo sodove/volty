@@ -10,4 +10,7 @@ package ru.sodovaya.volty.diagnostics
  */
 expect class LogExporter {
     fun exportLogs()
+
+    /** Writes [contents] to a cache file named [fileName] and opens the share sheet for it. */
+    fun exportText(fileName: String, contents: String)
 }

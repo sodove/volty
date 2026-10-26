@@ -31,6 +31,7 @@ import volty.composeapp.generated.resources.debug_start_capture
 import volty.composeapp.generated.resources.debug_stop_capture
 import volty.composeapp.generated.resources.debug_clear
 import volty.composeapp.generated.resources.debug_copy
+import volty.composeapp.generated.resources.debug_share_file
 import volty.composeapp.generated.resources.debug_empty
 import volty.composeapp.generated.resources.debug_links
 import volty.composeapp.generated.resources.debug_battery
@@ -82,6 +83,7 @@ fun DebugSettingsTab(
     onStart: () -> Unit,
     onStop: () -> Unit,
     onClear: () -> Unit,
+    onShare: () -> Unit = {},
 ) {
     val clipboard = LocalClipboardManager.current
     val voiceDiagnostics = koinInject<VoiceDiagnosticLauncher>()
@@ -100,7 +102,7 @@ fun DebugSettingsTab(
                 fontWeight = FontWeight.SemiBold,
             )
             Text(
-                stringResource(Res.string.debug_record_count, state.diagnostics.records.size),
+                stringResource(Res.string.debug_record_count, state.diagnostics.recordCount),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -110,6 +112,8 @@ fun DebugSettingsTab(
                 TextButton(onClick = onClear) { Text(stringResource(Res.string.debug_clear)) }
                 TextButton(onClick = { clipboard.setText(AnnotatedString(copyBundle(state))) }) { Text(stringResource(Res.string.debug_copy)) }
             }
+            // The clipboard holds the newest 200 records; the file carries the whole capture.
+            TextButton(onClick = onShare, enabled = state.diagnostics.recordCount > 0) { Text(stringResource(Res.string.debug_share_file)) }
         }
         SettingsCard {
             DebugHeading(stringResource(Res.string.debug_links))
@@ -225,9 +229,35 @@ private fun phaseCurrentKnown(link: BleDiagnosticLink, sample: BleDiagnosticCont
     sample.data.isConnected && link.protocol.equals("VETERAN", ignoreCase = true)
 
 private fun copyBundle(state: SettingsComponent.State): String = buildString {
+    appendBundleHeader(state)
+    appendLine("records newest first")
+    var used = length
+    for (record in state.diagnostics.records.asReversed().take(200)) {
+        val row = recordRow(record)
+        if (used + row.length > MAX_COPY_CHARS) break
+        append(row)
+        used += row.length
+    }
+}.take(MAX_COPY_CHARS)
+
+/**
+ * The whole capture as a file: the same header as the clipboard bundle, then EVERY retained record,
+ * oldest first (a dump is read forwards in time). No size cap - a file, unlike the clipboard or a
+ * plain-text share, has no binder limit to fit under.
+ */
+internal fun bleCaptureFile(state: SettingsComponent.State, records: List<BleDiagnosticRecord>): String = buildString {
+    appendBundleHeader(state)
+    appendLine("records oldest first (${records.size})")
+    for (record in records) append(recordRow(record))
+}
+
+private fun recordRow(record: BleDiagnosticRecord): String =
+    "${record.timestampEpochMillis} ${record.deviceName.orEmpty()} ${record.deviceAddress} ${record.protocol} ${record.notifyUuid} ${record.payloadLength} ${record.payloadHex}\n"
+
+private fun StringBuilder.appendBundleHeader(state: SettingsComponent.State) {
     appendLine("BLE diagnostics")
     appendLine("capturing=${state.diagnostics.isCapturing}")
-    appendLine("capturedRecords=${state.diagnostics.records.size}")
+    appendLine("capturedRecords=${state.diagnostics.recordCount}")
     state.activeVehicle?.let { appendLine("vehicle=${it.name} ${it.id}") }
     state.diagnostics.activeLinks.forEach { link ->
         appendLine("link=${link.deviceName.orEmpty()} ${link.deviceAddress} protocol=${link.protocol} identity=${link.controllerIdentity.orEmpty()} model=${link.model.orEmpty()} hardware=${link.hardwareCode.orEmpty()} firmware=${link.firmwareVersion.orEmpty()}")
@@ -248,15 +278,7 @@ private fun copyBundle(state: SettingsComponent.State): String = buildString {
             appendLine("    knownFlags inputVoltage=${c.isConnected && c.hasInputVoltage} speed=${c.isConnected && c.speedKnown} duty=${c.isConnected && c.hasDuty} batteryCurrent=${c.isConnected && c.hasBatteryCurrent} phaseCurrent=$phaseKnown power=${c.isConnected && c.hasPower}")
         }
     }
-    appendLine("records newest first")
-    var used = length
-    for (record in state.diagnostics.records.asReversed().take(200)) {
-        val row = "${record.timestampEpochMillis} ${record.deviceName.orEmpty()} ${record.deviceAddress} ${record.protocol} ${record.notifyUuid} ${record.payloadLength} ${record.payloadHex}\n"
-        if (used + row.length > MAX_COPY_CHARS) break
-        append(row)
-        used += row.length
-    }
-}.take(MAX_COPY_CHARS)
+}
 
 private fun known(value: Float, known: Boolean): String = if (known) value.toString() else "unknown"
 private const val MAX_COPY_CHARS = 256 * 1024

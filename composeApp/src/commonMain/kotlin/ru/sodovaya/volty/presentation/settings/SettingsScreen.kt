@@ -914,7 +914,7 @@ private fun DeveloperPage(state: SettingsComponent.State, component: SettingsCom
             )
         }
     }
-    DebugSettingsTab(state, component::onStartBleCapture, component::onStopBleCapture, component::onClearBleCapture)
+    DebugSettingsTab(state, component::onStartBleCapture, component::onStopBleCapture, component::onClearBleCapture, component::onShareBleCapture)
 }
 
 @Composable
