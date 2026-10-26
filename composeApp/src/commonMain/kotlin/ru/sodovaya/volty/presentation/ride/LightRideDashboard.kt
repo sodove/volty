@@ -785,8 +785,9 @@ private fun LightBatteryLine(readout: LightReadout, soc: LightReadout, line: Lig
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(if (readout.unit.isNotEmpty()) "${readout.value} ${readout.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.muted, fontSize = lightHudSp(line.voltageSp, layoutMode))
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(if (soc.unit.isNotEmpty()) "${soc.value}${soc.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.battery, fontSize = lightHudSp(line.socSp, layoutMode), fontWeight = FontWeight.Bold)
+                // Range first, charge last: the percentage stays at the right edge where the rider looks for it.
                 line.rangeText?.let { Text(it, color = LocalLightHudPalette.current.muted, fontSize = lightHudSp(line.rangeSp, layoutMode)) }
+                Text(if (soc.unit.isNotEmpty()) "${soc.value}${soc.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.battery, fontSize = lightHudSp(line.socSp, layoutMode), fontWeight = FontWeight.Bold)
             }
         }
     }

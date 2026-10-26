@@ -96,7 +96,7 @@ object LightDashboardMapper {
         voltageSp = 12f,
         socSp = 13f,
         rangeSp = 13f,
-        rangeText = rangeLabel?.takeIf { battery.isConnected && battery.socKnown }?.let { " · $it" },
+        rangeText = rangeLabel?.takeIf { battery.isConnected && battery.socKnown }?.let { "$it · " },
     )
 
     fun speedKmh(motion: ControllerData, gpsSpeedKmh: Float?): Float? =

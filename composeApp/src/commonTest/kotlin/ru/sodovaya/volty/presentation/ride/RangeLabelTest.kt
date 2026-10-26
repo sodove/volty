@@ -36,7 +36,7 @@ class RangeLabelTest {
         assertEquals(12f, spec.voltageSp)
         assertEquals(13f, spec.socSp)
         assertEquals(13f, spec.rangeSp)
-        assertEquals(" · ~42 км", spec.rangeText)
+        assertEquals("~42 км · ", spec.rangeText)
     }
 
     @Test fun light_battery_line_has_no_range_text_when_unearned() {
