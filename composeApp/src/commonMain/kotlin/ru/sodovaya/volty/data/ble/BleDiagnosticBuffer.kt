@@ -72,8 +72,9 @@ internal class BleDiagnosticBuffer {
         mutableState.value = current.copy(records = newest, recordCount = ring.size)
     }
 
-    fun updateActiveLinks(links: List<ru.sodovaya.volty.domain.model.BleDiagnosticLink>) = synchronized(lock) {
-        mutableState.value = mutableState.value.copy(activeLinks = links.toList())
+    fun updateActiveLinks(links: List<ru.sodovaya.volty.domain.model.BleDiagnosticLink>,
+        retired: List<ru.sodovaya.volty.domain.model.RetiredLinkRing> = mutableState.value.retiredLinks) = synchronized(lock) {
+        mutableState.value = mutableState.value.copy(activeLinks = links.toList(), retiredLinks = retired)
     }
 
     companion object {

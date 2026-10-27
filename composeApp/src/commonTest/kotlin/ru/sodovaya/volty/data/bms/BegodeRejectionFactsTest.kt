@@ -79,4 +79,28 @@ class BegodeRejectionFactsTest {
         assertTrue(p.odometerWitnessDistrusted)
         assertEquals("distrusted", p.deviceFacts().value(DeviceFactKey.ODOMETER_WITNESS))
     }
+
+    private val r13Live = bytes("55 AA 19 5D 00 00 00 4B 00 00 FF 74 EE A5 00 80 00 05 00 18 5A 5A 5A 5A")
+    private val r13Pack = bytes("55 AA 00 50 00 00 03 CE 00 00 00 00 00 00 00 00 00 00 01 00 5A 5A 5A 5A")
+    private fun certified() = BegodeProtocol().also { p -> repeat(6) { p.onNotification(r13Live); p.onNotification(r13Pack) } }
+
+    @Test fun aPackVoltageRejectionIsAFactWithoutAnyOdometerFrame() {
+        val p = certified()
+        p.onNotification(r13Pack.copyOf().also { it[6] = 0x04; it[7] = 0xB0.toByte() }) // 120.0 V against ~97.4 V
+        val facts = p.deviceFacts()
+        assertEquals("1", facts.value(DeviceFactKey.REJECTED_FRAMES))
+        assertEquals("pack_voltage_witness", facts.value(DeviceFactKey.REJECTED_LAST_RULE))
+        assertTrue(facts.value(DeviceFactKey.REJECTED_LAST_DETAIL)!!.contains(" V / "), facts.value(DeviceFactKey.REJECTED_LAST_DETAIL))
+    }
+
+    @Test fun aSecondRejectionByAnotherRuleReplacesTheLastRule() {
+        val p = certified()
+        p.onNotification(r13Pack.copyOf().also { it[6] = 0x04; it[7] = 0xB0.toByte() })
+        assertEquals("pack_voltage_witness", p.deviceFacts().value(DeviceFactKey.REJECTED_LAST_RULE))
+        p.pair(101, base); p.onNotification(live(108)); p.onNotification(odo(base + 7 + 65_536)); p.pair(115, base + 14)
+        val facts = p.deviceFacts()
+        assertEquals("2", facts.value(DeviceFactKey.REJECTED_FRAMES))
+        assertEquals("odometer_witness", facts.value(DeviceFactKey.REJECTED_LAST_RULE))
+        assertEquals("2816164 m / +7 m", facts.value(DeviceFactKey.REJECTED_LAST_DETAIL))
+    }
 }

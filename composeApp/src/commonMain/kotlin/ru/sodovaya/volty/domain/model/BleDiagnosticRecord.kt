@@ -20,6 +20,8 @@ data class BleDiagnosticsState(
     val records: List<BleDiagnosticRecord> = emptyList(),
     val recordCount: Int = records.size,
     val activeLinks: List<BleDiagnosticLink> = emptyList(),
+    /** Rejection rings of links that dropped, so the evidence outlives the connection (see RetiredRejectionRings). */
+    val retiredLinks: List<RetiredLinkRing> = emptyList(),
 )
 
 /** Read-only identity/version facts for one currently active BLE link. */
@@ -67,4 +69,14 @@ data class BleDiagnosticControllerSample(
     val globalControllerIndex: Int?,
     val controllerIdentity: String?,
     val data: ControllerData,
+)
+
+/**
+ * The rejection ring of a link that has since dropped or been rebuilt: [connection] counts that address's retired
+ * connections (1 = the oldest kept), because each connection's `atFrameIndex` restarts at 0.
+ */
+data class RetiredLinkRing(
+    val deviceAddress: String,
+    val connection: Int,
+    val frames: List<RejectedFrame>,
 )

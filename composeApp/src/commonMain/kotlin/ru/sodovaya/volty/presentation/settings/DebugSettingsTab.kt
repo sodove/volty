@@ -280,10 +280,20 @@ private fun StringBuilder.appendBundleHeader(state: SettingsComponent.State) {
         // Always-on ring, independent of manual capture: what a plausibility rule held back, raw bytes included.
         appendLine("  rejected frames (${link.rejectedFrames.size}, oldest first)")
         for (f in link.rejectedFrames) {
-            appendLine("    rejectedFrame atFrame=${f.atFrameIndex} kind=${f.kind} rule=${f.rule} type=0x${f.frameType.toString(16).padStart(2, '0')} reference=${f.reference ?: "-"} witness=${f.witness ?: "-"} raw=${f.rawHex}")
+            appendLine("    ${rejectedFrameLine(f)}")
+        }
+    }
+    if (state.diagnostics.retiredLinks.isNotEmpty()) {
+        appendLine("retired links (rejection rings of connections that ended; atFrame restarts at 0 per connection)")
+        for (ring in state.diagnostics.retiredLinks) {
+            appendLine("  retiredLink=${ring.deviceAddress} connection=${ring.connection} rejected frames (${ring.frames.size}, oldest first)")
+            for (f in ring.frames) appendLine("    ${rejectedFrameLine(f)}")
         }
     }
 }
 
 private fun known(value: Float, known: Boolean): String = if (known) value.toString() else "unknown"
 private const val MAX_COPY_CHARS = 256 * 1024
+
+private fun rejectedFrameLine(f: ru.sodovaya.volty.domain.plausibility.RejectedFrame): String =
+    "rejectedFrame atFrame=${f.atFrameIndex} kind=${f.kind} rule=${f.rule} type=0x${f.frameType.toString(16).padStart(2, '0')} reference=${f.reference ?: "-"} witness=${f.witness ?: "-"} raw=${f.rawHex}"
