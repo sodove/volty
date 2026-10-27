@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.history
 
 import kotlin.math.*
 import ru.sodovaya.volty.domain.history.*
+import ru.sodovaya.volty.domain.plausibility.RobustPeak
 
 enum class HistoryTotalKind {
     DISTANCE_KM, DURATION_MILLIS, MOVING_MILLIS, AVERAGE_KMH, MAX_KMH, ENERGY_WH, WH_PER_KM,
@@ -11,9 +12,19 @@ enum class HistoryTotalKind {
 /** [approximate] when a contributing stat was incomplete; [HistoryTotalKind.BATTERY_USED_PERCENT] is SIGNED (positive = discharged); a missing input omits the tile instead. */
 data class HistoryTotal(val kind: HistoryTotalKind, val value: Double, val approximate: Boolean = false)
 
+/**
+ * Needle-free peaks read from paged detail ([historyRobustPeaks] in the totals reader), in display units, per series.
+ * [overBudget] lists series whose detail did not fit the page budget: their tile keeps today's stats maximum and says
+ * approximate, because a needle could not be ruled out. A series in neither collection (a reader that cannot page
+ * detail) behaves as before. See `HistoryNeedles.kt` for the rule and its false-positive risk.
+ */
+class HistoryRobustPeaks(val peaks: Map<HistorySeriesKey, RobustPeak> = emptyMap(), val overBudget: Set<HistorySeriesKey> = emptySet()) {
+    companion object { val NONE = HistoryRobustPeaks() }
+}
+
 internal val motionTiers = listOf(setOf(HistorySourceKind.VEHICLE_MOTION), setOf(HistorySourceKind.CONTROLLER))
 internal val batteryTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY), setOf(HistorySourceKind.BATTERY))
-private val batteryTemperatureTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY),
+internal val batteryTemperatureTiers = listOf(setOf(HistorySourceKind.VEHICLE_BATTERY),
     setOf(HistorySourceKind.BATTERY, HistorySourceKind.BATTERY_ASSEMBLY))
 
 private val motionMetrics = listOf("speed_kmh", "trip_distance_km", "odometer_km", "motor_temperature_c",
@@ -62,6 +73,7 @@ fun historyRideTotals(
     distance: HistoryRideDistance?,
     moving: HistoryMovingTime? = null,
     batteryUsed: HistoryBatteryUsed? = null,
+    robustPeaks: HistoryRobustPeaks = HistoryRobustPeaks.NONE,
 ): List<HistoryTotal> {
     fun values(tierSources: List<HistorySource>, metric: String) =
         tierSources.mapNotNull { source -> stats[HistorySeriesKey(source.id, metric)]?.let { metric to it } }
@@ -69,10 +81,17 @@ fun historyRideTotals(
         val key = HistorySeriesKey(source.id, metric)
         stats[key]?.let { historyMetricSummary(key, it) }
     }
+    /** One peak per source: the needle-free detail peak when there is one, else the stored stats maximum. */
+    fun candidates(tierSources: List<HistorySource>, metric: String): List<HistoryTotal> = tierSources.mapNotNull { source ->
+        val key = HistorySeriesKey(source.id, metric)
+        robustPeaks.peaks[key]?.let { return@mapNotNull HistoryTotal(HistoryTotalKind.MAX_KMH, it.value, it.approximate) }
+        val maximum = historyMetricSummary(key, stats[key]).maximum
+        maximum.value?.let { HistoryTotal(HistoryTotalKind.MAX_KMH, it, maximum.quality != SummaryQuality.EXACT || key in robustPeaks.overBudget) }
+    }
     fun peak(tierSources: List<HistorySource>, metric: String): HistoryTotal? {
-        val found = summaries(tierSources, metric).filter { it.maximum.value != null }
-        val best = found.maxByOrNull { it.maximum.value!! } ?: return null
-        return HistoryTotal(HistoryTotalKind.MAX_KMH, best.maximum.value!!, found.any { it.maximum.quality != SummaryQuality.EXACT })
+        val found = candidates(tierSources, metric)
+        val best = found.maxByOrNull { it.value } ?: return null
+        return HistoryTotal(HistoryTotalKind.MAX_KMH, best.value, found.any { it.approximate })
     }
     val motion = tier(sources, motionTiers)
     val battery = tier(sources, batteryTiers)
@@ -107,10 +126,9 @@ fun historyRideTotals(
     batteryUsed?.let { result += HistoryTotal(HistoryTotalKind.BATTERY_USED_PERCENT, it.percent, it.approximate) }
 
     // A summed peak of several packs is not knowable from their separate peaks: only a single source counts.
-    val packPower = summaries(battery, "power_w").filter { it.maximum.value != null }
-    val power = packPower.singleOrNull()?.maximum ?: summaries(motion, "controller_power_w")
-        .filter { it.maximum.value != null }.maxByOrNull { it.maximum.value!! }?.maximum
-    power?.value?.takeIf { it > 0 }?.let { result += HistoryTotal(HistoryTotalKind.MAX_POWER_W, it, power.quality != SummaryQuality.EXACT) }
+    val packPower = candidates(battery, "power_w")
+    val power = packPower.singleOrNull() ?: peak(motion, "controller_power_w")
+    power?.takeIf { it.value > 0 }?.let { result += HistoryTotal(HistoryTotalKind.MAX_POWER_W, it.value, it.approximate) }
 
     peak(motion, "motor_temperature_c")?.let { result += it.copy(kind = HistoryTotalKind.MOTOR_TEMP_C) }
     peak(motion, "esc_temperature_c")?.let { result += it.copy(kind = HistoryTotalKind.CONTROLLER_TEMP_C) }

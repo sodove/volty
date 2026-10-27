@@ -65,7 +65,7 @@ class HistoryTotalsReadTest {
         assertEquals(5.70, d.value, 0.01); assertTrue(d.approximate)
         assertTrue(totals.of(HistoryTotalKind.AVERAGE_KMH)!!.value < 55.1)
         // Issued: the trip series first (empty), then the odometer in pages of 20 000 at most.
-        assertEquals(trip, repo.issued.first().first)
+        assertEquals(trip, repo.issued.first { it.first == trip || it.first == odo }.first) // peak series are read before the counter
         assertTrue(repo.issued.all { it.third == 20_000 })
         assertTrue(repo.issued.count { it.first == odo } > 1, "paged through the cursor")
     }
@@ -131,7 +131,7 @@ class HistoryTotalsReadTest {
         val d = readHistoryTotals(repo, "r", listOf(esc), range, maxDetailPages = 2).of(HistoryTotalKind.DISTANCE_KM)!!
         assertEquals(5.7, d.value, 1e-6)
         assertTrue(d.approximate, "the budget ran out: not exact")
-        assertEquals(3, repo.issued.count { it.first != speed }, "the empty trip series, then two odometer pages, then no more reads")
+        assertEquals(3, repo.issued.count { it.first == trip || it.first == odo }, "the empty trip series, then two odometer pages, then no more reads")
         // The stats path still carries the cross-check: a needle in the stats shows nothing.
         repo.stats = incoherentStats
         assertNull(readHistoryTotals(repo, "r", listOf(esc), range, maxDetailPages = 2).of(HistoryTotalKind.DISTANCE_KM))
@@ -214,5 +214,74 @@ class HistoryTotalsReadTest {
         repo.detailSupported = false
         repo.stats = mapOf(soc to HistoryStats(40.0, 80.0, null, true))
         assertNull(readHistoryTotals(repo, "r", listOf(esc, pack), range).of(HistoryTotalKind.BATTERY_USED_PERCENT))
+    }
+
+    // ---- Task 10: peak tiles ignore single-sample needles (rule and false-positive risk: HistoryNeedles.kt) ----
+    private fun steadySpeed(needleAtMillis: Long? = null) = (0..1900).map { i ->
+        val t = i * 500L
+        at(t, speed, if (t == needleAtMillis) 1180.0 else 40.0 + (i % 5))
+    }
+
+    @Test fun aSpeedNeedleDoesNotBecomeTheTopSpeedEvenWhenTheStatsAreCompleteAndSayOtherwise() = runTest {
+        // Incoherent on purpose: complete = true stats whose maximum is the needle, with detail available.
+        val repo = Repo(origin).apply { series = mapOf(speed to steadySpeed(500_000)); stats = mapOf(speed to HistoryStats(0.0, 1180.0, null, true)) }
+        val top = readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.MAX_KMH)!!
+        assertEquals(44.0, top.value); assertTrue(top.approximate)
+    }
+
+    @Test fun aSpeedSeriesWithoutNeedlesKeepsAnExactPeak() = runTest {
+        val repo = Repo(origin).apply { series = mapOf(speed to steadySpeed()); stats = mapOf(speed to HistoryStats(0.0, 44.0, null, true)) }
+        val top = readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.MAX_KMH)!!
+        assertEquals(44.0, top.value); assertFalse(top.approximate)
+    }
+
+    @Test fun theDistanceCrossCheckJudgesAgainstTheRobustSpeedPeakNotTheNeedle() = runTest {
+        // 67 km of counter progress in 950 s is only affordable at a 1180 km/h top speed, which is the needle.
+        val fast = (0..1900).map { i -> at(i * 500L, odo, 2816.4 + 67.0 * i / 1900.0) }
+        val repo = Repo(origin).apply {
+            series = mapOf(odo to fast, speed to steadySpeed(500_000))
+            stats = mapOf(odo to HistoryStats(2816.4, 2883.4, null, true), speed to HistoryStats(0.0, 1180.0, null, true))
+        }
+        assertNull(readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.DISTANCE_KM), "unearned and no GPS: no tile")
+    }
+
+    @Test fun overBudgetDetailKeepsTodaysStatsMaximumAndSaysApproximate() = runTest {
+        val repo = Repo(origin).apply {
+            series = mapOf(speed to steadySpeed(500_000)); pageSize = 100
+            stats = mapOf(speed to HistoryStats(0.0, 1180.0, null, true))
+        }
+        val top = readHistoryTotals(repo, "r", listOf(esc), range, maxDetailPages = 2).of(HistoryTotalKind.MAX_KMH)!!
+        assertEquals(1180.0, top.value); assertTrue(top.approximate)
+    }
+
+    @Test fun aReaderThatCannotPageDetailKeepsTheStatsPeakUnchanged() = runTest {
+        val repo = Repo(origin).apply { detailSupported = false; stats = mapOf(speed to HistoryStats(0.0, 55.1, null, true)) }
+        val top = readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.MAX_KMH)!!
+        assertEquals(55.1, top.value); assertFalse(top.approximate)
+    }
+
+    @Test fun controllerPowerArtefactUnknownsDoNotHideANeedleFromItsNeighbours() = runTest {
+        // Known values with the proven PARTIAL_SOURCE alternation between them (Task 6); the 5000 W sample is a needle
+        // only once the bridge has made its neighbours adjacent.
+        val power = HistorySeriesKey("esc", "controller_power_w")
+        val values = listOf(1000.0, 1010.0, 990.0, 1000.0, 5000.0, 1005.0, 995.0, 1000.0, 1010.0)
+        val samples = values.flatMapIndexed { i, v ->
+            val t = i * 1000L
+            listOf(HistorySample(HistoryTick(1_000_000 + t, t, 1), power, v),
+                HistorySample(HistoryTick(1_000_000 + t + 500, t + 500, 1), power, null, HistoryUnknownReason.PARTIAL_SOURCE))
+        }
+        val repo = Repo(origin).apply { series = mapOf(power to samples); stats = mapOf(power to HistoryStats(0.0, 5000.0, null, true)) }
+        val top = readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.MAX_POWER_W)!!
+        assertEquals(1010.0, top.value); assertTrue(top.approximate)
+    }
+
+    @Test fun aRealUnknownBesideAPowerSampleStillBlocksTheNeedleRule() = runTest {
+        val power = HistorySeriesKey("esc", "controller_power_w")
+        val unavailable = listOf(1000.0, 1010.0, 5000.0, null, 1000.0, 1005.0).mapIndexed { i, v ->
+            val t = i * 500L
+            HistorySample(HistoryTick(1_000_000 + t, t, 1), power, v, if (v == null) HistoryUnknownReason.UNAVAILABLE else null)
+        }
+        val repo = Repo(origin).apply { series = mapOf(power to unavailable); stats = mapOf(power to HistoryStats(0.0, 5000.0, null, true)) }
+        assertEquals(5000.0, readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.MAX_POWER_W)!!.value)
     }
 }

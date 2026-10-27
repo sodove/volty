@@ -129,6 +129,7 @@ fun historyStatsDistance(
     stats: Map<HistorySeriesKey, HistoryStats>,
     durationMillis: Long?,
     gpsKm: Double?,
+    robustPeaks: HistoryRobustPeaks = HistoryRobustPeaks.NONE,
 ): HistoryRideDistance? {
     val motion = tier(sources, motionTiers)
     fun span(metric: String) = motion.mapNotNull { source ->
@@ -139,7 +140,7 @@ fun historyStatsDistance(
     val counted = span("trip_distance_km") ?: span("odometer_km")
     val gps = gpsKm?.takeIf { it > 0 }
     if (counted == null) return gps?.let { HistoryRideDistance(it, false) }
-    val peak = historyPeakSpeedKmh(sources, stats)
+    val peak = historyPeakSpeedKmh(sources, stats, robustPeaks)
     if (peak != null && durationMillis != null && durationMillis > 0 &&
         counted.first > peak * (durationMillis / 3_600_000.0) * CROSS_CHECK_TOLERANCE) {
         return gps?.let { HistoryRideDistance(it, true) }
@@ -147,9 +148,18 @@ fun historyStatsDistance(
     return HistoryRideDistance(counted.first, counted.second)
 }
 
-/** The ride's top speed from the motion tier's stats (the kind-1 witness for the distance cross-check), or null. */
-internal fun historyPeakSpeedKmh(sources: List<HistorySource>, stats: Map<HistorySeriesKey, HistoryStats>): Double? =
-    tier(sources, motionTiers).mapNotNull { stats[HistorySeriesKey(it.id, "speed_kmh")]?.maximum }.maxOrNull()
+/**
+ * The ride's top speed (the witness for the distance cross-check), or null: per motion source the needle-free detail peak
+ * when [robustPeaks] has one, else the stats maximum. A single corrupt speed sample must not raise the ceiling the counter
+ * is judged against. An earlier revision read the raw stats maximum only; that was wrong because one 1180 km/h needle
+ * made any counter jump look affordable.
+ */
+internal fun historyPeakSpeedKmh(sources: List<HistorySource>, stats: Map<HistorySeriesKey, HistoryStats>,
+    robustPeaks: HistoryRobustPeaks = HistoryRobustPeaks.NONE): Double? =
+    tier(sources, motionTiers).mapNotNull {
+        val key = HistorySeriesKey(it.id, "speed_kmh")
+        robustPeaks.peaks[key]?.value ?: stats[key]?.maximum
+    }.maxOrNull()
 
 /** Slack over the top speed: the stored peak is a 500 ms window maximum and the clock of a window is coarse. */
 private const val CROSS_CHECK_TOLERANCE = 1.05

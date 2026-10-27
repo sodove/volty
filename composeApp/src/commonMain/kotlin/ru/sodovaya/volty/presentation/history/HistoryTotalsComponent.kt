@@ -6,6 +6,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import ru.sodovaya.volty.domain.history.*
+import ru.sodovaya.volty.domain.plausibility.RobustPeak
+import ru.sodovaya.volty.domain.plausibility.historyRobustPeak
 
 data class HistoryTotalsState(val rideId: String? = null, val totals: List<HistoryTotal> = emptyList(), val loading: Boolean = false)
 
@@ -64,7 +66,15 @@ internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId
     val route = try { readHistoryRoute(repository, rideId, range, maxGpsPages) }
     catch (cancel: CancellationException) { throw cancel }
     catch (_: Exception) { null }
-    val peak = historyPeakSpeedKmh(sources, stats)
+    // One read of any detail series per call: the peaks and the moving time share speed_kmh.
+    val detailCache = HashMap<HistorySeriesKey, HistoryDetailRead?>()
+    val detail: suspend (HistorySeriesKey) -> HistoryDetailRead? = { key ->
+        if (detailCache.containsKey(key)) detailCache[key]
+        else readHistoryDetail(repository, rideId, key, range, maxDetailPages).also { detailCache[key] = it }
+    }
+    // Needle-free peaks first: the distance cross-check below must judge against the robust top speed too.
+    val robustPeaks = readRobustPeaks(sources, detail)
+    val peak = historyPeakSpeedKmh(sources, stats, robustPeaks)
 
     var budgetRanOut = false
     var walked: HistoryRideWalk? = null
@@ -94,15 +104,15 @@ internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId
 
     // A counter the cross-check judged unearned is final: GPS alone or no tile, never the stats' max - min.
     val distance = if (walked != null) walked.distance
-    else historyStatsDistance(sources, stats, duration, route?.fixes?.let(::historyGpsDistanceKm))
+    else historyStatsDistance(sources, stats, duration, route?.fixes?.let(::historyGpsDistanceKm), robustPeaks)
         ?.let { if (budgetRanOut) it.copy(approximate = true) else it }
-    val moving = try { readMovingTime(repository, rideId, sources, range, maxDetailPages) }
+    val moving = try { readMovingTime(sources, detail) }
     catch (cancel: CancellationException) { throw cancel }
     catch (_: Exception) { null }
     val batteryUsed = try { readBatteryUsed(repository, rideId, sources, range, maxDetailPages) }
     catch (cancel: CancellationException) { throw cancel }
     catch (_: Exception) { null }
-    return historyVisibleTotals(historyRideTotals(sources, stats, duration, distance, moving, batteryUsed))
+    return historyVisibleTotals(historyRideTotals(sources, stats, duration, distance, moving, batteryUsed, robustPeaks))
 }
 
 /**
@@ -134,14 +144,45 @@ private suspend fun readBatteryUsed(repository: HistoryReadRepository, rideId: S
 }
 
 /**
+ * Needle-free peaks of the series behind the peak tiles (speed, motor / controller / battery temperature, pack and
+ * controller power), from paged detail through the shared pager and budget. Samples are scaled to display units first
+ * (a Begode's speed is stored negative). The controller-power series passes through [HistoryPartialSourceBridge]'s
+ * one-shot form first, so the proven PARTIAL_SOURCE artefact between 0x07 values does not read as a gap that would
+ * disable the needle rule's neighbours. A series that cannot be paged is simply absent (the stats maximum decides, as
+ * before); one that ran out of budget is listed in [HistoryRobustPeaks.overBudget] (stats maximum, approximate).
+ * MAX_DUTY (Task 11) reuses [historyRobustPeak] the same way.
+ */
+private suspend fun readRobustPeaks(sources: List<HistorySource>,
+    detail: suspend (HistorySeriesKey) -> HistoryDetailRead?): HistoryRobustPeaks {
+    val keys = (tier(sources, motionTiers).flatMap { s -> listOf("speed_kmh", "motor_temperature_c", "esc_temperature_c",
+            "controller_power_w").map { HistorySeriesKey(s.id, it) } } +
+        tier(sources, batteryTiers).map { HistorySeriesKey(it.id, "power_w") } +
+        tier(sources, batteryTemperatureTiers).map { HistorySeriesKey(it.id, "battery_temperature_c") }).distinct()
+    val peaks = HashMap<HistorySeriesKey, RobustPeak>()
+    val over = HashSet<HistorySeriesKey>()
+    for (key in keys) {
+        val read = try { detail(key) }
+        catch (cancel: CancellationException) { throw cancel }
+        catch (_: Exception) { null } ?: continue
+        if (!read.complete) { over += key; continue }
+        val multiplier = HistoryMetricRegistry.descriptor(key.metricId)?.displayMultiplier ?: 1.0
+        val display = bridgePartialSourceArtefact(read.samples).map { sample ->
+            sample.value?.let { sample.copy(value = it * multiplier + 0.0) } ?: sample
+        }
+        historyRobustPeak(display)?.let { peaks[key] = it }
+    }
+    return HistoryRobustPeaks(peaks, over)
+}
+
+/**
  * Moving time from the motion tier's paged `speed_kmh` detail, through the same pager and budget as the counter. Null (the
  * average then falls back to wall duration, marked approximate) when the reader cannot page detail, the budget ran out
  * (a prefix is not the ride) or no source has a known speed sample.
  */
-private suspend fun readMovingTime(repository: HistoryReadRepository, rideId: String, sources: List<HistorySource>,
-    range: HistoryRange, maxPages: Int): HistoryMovingTime? {
+private suspend fun readMovingTime(sources: List<HistorySource>,
+    detail: suspend (HistorySeriesKey) -> HistoryDetailRead?): HistoryMovingTime? {
     for (source in tier(sources, motionTiers)) {
-        val read = readHistoryDetail(repository, rideId, HistorySeriesKey(source.id, "speed_kmh"), range, maxPages) ?: return null
+        val read = detail(HistorySeriesKey(source.id, "speed_kmh")) ?: return null
         if (!read.complete) return null
         if (read.samples.any { it.value != null }) return historyMovingMillis(read.samples)
     }
