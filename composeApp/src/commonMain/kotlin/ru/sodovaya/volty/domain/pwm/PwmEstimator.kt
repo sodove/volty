@@ -202,7 +202,7 @@ class PwmEstimator(
         lookback = lookback.push(edge)
         if (!rising) return
         // The onset is the last sample BEFORE the edge: the bit is first seen one frame after it fired.
-        val before = (lookback.onsetFor(edge) as? OnsetVerdict.Take)?.point ?: return
+        val before = (lookback.onsetFor(edge, motion.wheelPwmAlarmSinceMillis) as? OnsetVerdict.Take)?.point ?: return
         val beforeV = before.packV ?: return
         if (before.speedKmh < PwmCalibrationLearner.MIN_SPEED_KMH) return
         val onset = AlarmOnset(before.speedKmh, beforeV, before.phaseA, edge.atMillis)

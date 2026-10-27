@@ -1538,6 +1538,7 @@
     <string name="info_fact_rejected_last_detail">Последнее отброшенное, числа</string>
     <string name="info_fact_odometer_rebased">Одометр перепривязан</string>
     <string name="info_fact_odometer_witness">Счётчик с включения</string>
+    <string name="info_fact_unconfirmed_alert_bits">Биты тревоги, ждущие второго кадра</string>
     <string name="info_fact_smart_bms_seen">Умный BMS замечен</string>
     <string name="info_fact_branch_voltage_v">Напряжение ветки</string>
     <string name="info_fact_branch_current_a">Ток ветки</string>

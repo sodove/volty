@@ -1540,6 +1540,7 @@
     <string name="info_fact_rejected_last_detail">Last rejected, numbers</string>
     <string name="info_fact_odometer_rebased">Odometer re-based</string>
     <string name="info_fact_odometer_witness">Since-power-on counter</string>
+    <string name="info_fact_unconfirmed_alert_bits">Alert bits awaiting a second frame</string>
     <string name="info_fact_smart_bms_seen">Smart BMS seen</string>
     <string name="info_fact_branch_voltage_v">Branch voltage</string>
     <string name="info_fact_branch_current_a">Branch current</string>

@@ -213,6 +213,7 @@ fun DeviceFactKey.stringRes(): StringResource = when (this) {
         DeviceFactKey.REJECTED_LAST_DETAIL -> Res.string.info_fact_rejected_last_detail
         DeviceFactKey.ODOMETER_REBASED -> Res.string.info_fact_odometer_rebased
         DeviceFactKey.ODOMETER_WITNESS -> Res.string.info_fact_odometer_witness
+        DeviceFactKey.UNCONFIRMED_ALERT_BITS -> Res.string.info_fact_unconfirmed_alert_bits
         DeviceFactKey.CONTROLLER_ID -> Res.string.info_fact_controller_id
         DeviceFactKey.FIRMWARE -> Res.string.info_fact_firmware
         DeviceFactKey.CAN_IDS -> Res.string.info_fact_can_ids

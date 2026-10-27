@@ -702,6 +702,7 @@ class KableBmsRepositoryBegodeFunnelTest {
         batteryLevelFraction = 0.62f,
         // The wheel's own PWM alarm: non-null (the default is null) so a dropped fold line is visible.
         wheelPwmAlarm = true,
+        wheelPwmAlarmSinceMillis = 7L,
         // The estimated-duty provenance: non-default so a dropped fold line is visible.
         dutySource = DutySource.ESTIMATED,
         dutyAtCeiling = true,

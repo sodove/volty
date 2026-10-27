@@ -241,6 +241,14 @@ data class ControllerData(
      * Folded across controllers with `any` over the non-null contributors.
      */
     val wheelPwmAlarm: Boolean? = null,
+    /**
+     * With [wheelPwmAlarm] true: epoch milliseconds when the alarm bit was FIRST set in a raw frame, which can be one
+     * frame (~310 ms) before the debounce let [wheelPwmAlarm] turn true (Begode R12). The PWM onset lookback measures
+     * "the sample before the edge" from here, so the debounce does not move the onset later (a later, faster onset
+     * fits `k` too small and reads LOW). Null when the alarm is not true or the producer does not debounce, in which
+     * case the edge is the sample where [wheelPwmAlarm] turned true.
+     */
+    val wheelPwmAlarmSinceMillis: Long? = null,
     /** [DutySource.ESTIMATED] only on the vehicle-level motion, and only while the estimator publishes [dutyPercent]. */
     val dutySource: DutySource = DutySource.MEASURED,
     /** With [DutySource.ESTIMATED]: the model reached 100 % (field weakening beyond), shown as "at least 100 %". */

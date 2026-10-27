@@ -39,18 +39,39 @@ sealed interface OnsetVerdict {
  *
  * Immutable: the wizard state is a data class, the estimator holds a `var`.
  */
-data class OnsetLookback(val last: OnsetPoint? = null, val before: OnsetPoint? = null) {
+data class OnsetLookback(
+    val last: OnsetPoint? = null,
+    val before: OnsetPoint? = null,
+    /** The newest [HISTORY] samples, oldest first: what a debounced edge is re-judged from (see [onsetFor]). */
+    val recent: List<OnsetPoint> = emptyList(),
+) {
 
     /** Adds [p], the newest sample (every sample, edge or not, once it has been judged or before it is). */
-    fun push(p: OnsetPoint): OnsetLookback =
-        if (last != null && last.speedKmh != p.speedKmh) OnsetLookback(last = p, before = last) else copy(last = p)
+    fun push(p: OnsetPoint): OnsetLookback {
+        val kept = (recent + p).takeLast(HISTORY)
+        return if (last != null && last.speedKmh != p.speedKmh) OnsetLookback(last = p, before = last, recent = kept)
+        else copy(last = p, recent = kept)
+    }
 
     /**
      * What to do with a rising edge seen on [edge] (already [push]ed). [OnsetVerdict.NoPrevious] with no earlier
      * speed; [OnsetVerdict.TooFast] when the speed moved more than [MAX_ONSET_JUMP_KMH] or the samples are more than
      * [MAX_ONSET_GAP_MS] apart; otherwise [OnsetVerdict.Take] the previous point.
      */
-    fun onsetFor(edge: OnsetPoint): OnsetVerdict {
+    fun onsetFor(edge: OnsetPoint, firstSetAtMillis: Long? = null): OnsetVerdict {
+        // A debounced producer (Begode R12) publishes the edge one 0x04 after the bit was first set. The onset must
+        // not move later with it: a later, faster onset fits `k` too small and the estimate reads LOW, the dangerous
+        // direction. So the edge is re-judged AS IF it were the newest sample strictly BEFORE the first raw set frame
+        // (the sample whose speed that frame arrived beside: a held 0x04 publishes no sample of its own, so "the
+        // first sample after it" would already be a cycle faster), and the onset comes from before that one.
+        // Strictly before: a tie in milliseconds takes the earlier sample, which errs high.
+        if (firstSetAtMillis != null && firstSetAtMillis < edge.atMillis) {
+            val i = recent.indexOfLast { it.atMillis < firstSetAtMillis }
+            if (i >= 0 && recent[i] !== recent.last()) {
+                val earlier = recent.subList(0, i + 1).fold(OnsetLookback()) { l, p -> l.push(p) }
+                return earlier.onsetFor(recent[i])
+            }
+        }
         val prev = before ?: return OnsetVerdict.NoPrevious
         if (kotlin.math.abs(edge.speedKmh - prev.speedKmh) > MAX_ONSET_JUMP_KMH) return OnsetVerdict.TooFast
         if (edge.atMillis - prev.atMillis > MAX_ONSET_GAP_MS) return OnsetVerdict.TooFast
@@ -65,5 +86,8 @@ data class OnsetLookback(val last: OnsetPoint? = null, val before: OnsetPoint? =
 
         /** The measured cycle is ~310 ms; over a second apart means the link stalled and the "previous" sample is stale. */
         const val MAX_ONSET_GAP_MS = 1_000L
+
+        /** Samples kept for the debounced-edge re-judgement; a Begode cycle is ~4 samples, the debounce shifts by one cycle. */
+        const val HISTORY = 12
     }
 }

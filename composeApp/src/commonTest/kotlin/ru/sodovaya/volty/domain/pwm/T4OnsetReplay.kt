@@ -13,12 +13,14 @@ data class ReplayedSample(val atMillis: Long, val motion: ControllerData)
  */
 object T4OnsetReplay {
     fun samples(cellCount: Int = 24): List<ReplayedSample> {
-        val protocol = BegodeProtocol(cellCount = cellCount)
+        // The decoder's alarm "first set" time is the dump's own clock, not the wall clock of a fast replay.
+        var at = 0L
+        val protocol = BegodeProtocol(cellCount = cellCount, nowMillis = { at })
         var last: ControllerData? = null
         val out = mutableListOf<ReplayedSample>()
         for (line in T4OnsetDump.lines) {
             val parts = line.trim().split(' ')
-            val at = parts[0].toLong()
+            at = parts[0].toLong()
             protocol.onNotification(ByteArray(parts.size - 1) { parts[it + 1].toInt(16).toByte() })
             val m = protocol.latestMotion(0) ?: continue
             if (m === last) continue

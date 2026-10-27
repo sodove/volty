@@ -1043,6 +1043,33 @@ class AlertEngineTest {
     }
 
     @Test
+    fun `a Begode fault bit seen in one 0x04 frame raises no notification, two consecutive frames raise one`() {
+        // R12 (telemetry-plausibility Task 9), end to end from the real decoder: the frames carry no checksum, so a
+        // single corrupt alert byte must not produce a CRITICAL push. The wheel stands still, so its odometer gate holds
+        // each 0x04 a frame; the alert byte must not wait for that.
+        val frame = ru.sodovaya.volty.data.bms.BegodeProtocol()
+        val odometer = "55 AA 00 2A DC AD 28 00 1C 20 00 C8 00 00 01 00 00 12 04 18 5A 5A 5A 5A".split(" ").map { it.toInt(16).toByte() }.toByteArray()
+        fun alerted(bits: Int): ControllerData {
+            frame.onNotification(odometer.copyOf().also { it[14] = bits.toByte() })
+            return frame.latestMotion(0)!!
+        }
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
+        val v = motionVehicle(controllerType = ControllerType.BEGODE)
+        alerted(0x00); engine.evaluateMotionForTest(alerted(0x00), v)
+        engine.evaluateMotionForTest(alerted(0x20), v)
+        engine.evaluateMotionForTest(alerted(0x00), v)
+        engine.evaluateMotionForTest(alerted(0x00), v)
+        assertEquals(emptyList(), notifier.messages, "a one-frame fault blip raised a notification")
+        engine.evaluateMotionForTest(alerted(0x20), v)
+        assertEquals(emptyList(), notifier.messages, "one frame is not enough")
+        engine.evaluateMotionForTest(alerted(0x20), v)
+        val message = notifier.messages.single().first
+        assertEquals(AlertKind.CONTROLLER_FAULT, message.kind)
+        assertEquals(listOf("Over temperature"), message.details)
+    }
+
+    @Test
     fun `a bms fault present in fifty consecutive samples notifies once`() {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())

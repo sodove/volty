@@ -996,13 +996,14 @@ class BegodeMotionProtocolTest {
         )
         for ((bit, label) in expected) {
             val protocol = BegodeProtocol()
-            protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = bit))
+            // R12 (Task 9): a bit is visible only once set in two consecutive 0x04 frames.
+            protocol.witnessed(odometerFrame(etMaxOdometerBytes(), alertBitmap = bit))
             assertEquals(listOf(label), protocol.wheelAlerts(), "alert bit ${bit.toString(2)}")
         }
 
         // …and all of them at once come back in bit order, none swallowed.
         val all = BegodeProtocol()
-        all.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0xFF))
+        all.witnessed(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0xFF))
         assertEquals(expected.map { it.second }, all.wheelAlerts())
     }
 
@@ -1015,7 +1016,7 @@ class BegodeMotionProtocolTest {
         //   byte 14 (correct, 0x20)    -> "Over temperature"
         //   byte 15 (light mode, 0x01) -> "PWM alarm"
         val protocol = BegodeProtocol()
-        protocol.onNotification(
+        protocol.witnessed(
             odometerFrame(
                 etMaxOdometerBytes(),
                 settings = 0x2800,
@@ -1036,7 +1037,7 @@ class BegodeMotionProtocolTest {
         // text is the labels joined with commas — so this is the exact string a
         // rider reads.
         val protocol = BegodeProtocol()
-        protocol.onNotification(
+        protocol.witnessed(
             odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x20 or 0x40)
         )
         val m = assertNotNull(protocol.latestMotion(0), "the 0x04 frame is a motion decode")
@@ -1102,7 +1103,7 @@ class BegodeMotionProtocolTest {
         // A reconnect may face a healthy wheel. A fault surviving it would fire
         // a CRITICAL notification about a wheel that never reported anything.
         val protocol = BegodeProtocol()
-        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x20))
+        protocol.witnessed(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x20))
         assertEquals(listOf("Over temperature"), protocol.wheelAlerts())
 
         protocol.reset()

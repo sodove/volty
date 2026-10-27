@@ -34,7 +34,7 @@ enum class PwmWizardNotice { DISCONNECTED, NOT_CONNECTED, NO_DATA, NOTHING_CAPTU
  * One live reading as the wizard sees it. [packV] is null when the link has no voltage yet, [alarm] is null for a
  * wheel that reports no alarm bit at all (the T4's firmware may; a wheel that does not must not be asked for it).
  */
-data class WizardSample(val atMillis: Long, val speedKmh: Float, val packV: Float?, val alarm: Boolean?)
+data class WizardSample(val atMillis: Long, val speedKmh: Float, val packV: Float?, val alarm: Boolean?, val alarmSinceMillis: Long? = null)
 
 /** The highest speed held for [PwmWizardState.PLATEAU_MILLIS] within one km/h, with the voltage at that moment. */
 data class WizardPlateau(val kmh: Float, val packV: Float)
@@ -118,7 +118,7 @@ data class PwmWizardState(
         val look = if (point != null) lookback.push(point) else OnsetLookback()
         val next = copy(prevAlarm = s.alarm, lookback = look)
         if (!rising || runCaptured || point == null) return next
-        val before = when (val verdict = look.onsetFor(point)) {
+        val before = when (val verdict = look.onsetFor(point, s.alarmSinceMillis)) {
             is OnsetVerdict.Take -> verdict.point
             OnsetVerdict.NoPrevious -> return next.copy(notice = null)
             OnsetVerdict.TooFast -> return next.copy(notice = PwmWizardNotice.SPIN_SLOWER)

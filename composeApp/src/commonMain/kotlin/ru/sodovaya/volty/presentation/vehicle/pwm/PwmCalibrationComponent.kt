@@ -67,7 +67,7 @@ fun wizardSampleOf(motion: ControllerData, data: VehicleData): WizardSample {
     val packV = if (agg.isConnected && agg.voltage.isFinite() && agg.voltage > 0f) agg.voltage
     else motion.inputVoltageV.takeIf { motion.hasInputVoltage && it.isFinite() && it > 0f }
     val speed = if (motion.speedKnown && motion.speedKmh.isFinite()) motion.speedKmh else Float.NaN
-    return WizardSample(motion.timestamp.toEpochMilliseconds(), speed, packV, motion.wheelPwmAlarm)
+    return WizardSample(motion.timestamp.toEpochMilliseconds(), speed, packV, motion.wheelPwmAlarm, motion.wheelPwmAlarmSinceMillis)
 }
 
 /**

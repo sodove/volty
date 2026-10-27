@@ -7,6 +7,7 @@ import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.stats.MotionAggregator
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 
@@ -29,8 +30,13 @@ class BegodeWheelPwmAlarmTest {
     private fun motionOnly(): ByteArray = frame("55AA00100001000A000200000000000000000718" + "5A5A5A5A")
 
     @Test
-    fun `the rider's 0x04 frame has bit 0 set and publishes the alarm`() {
+    fun `the rider's 0x04 frame has bit 0 set and publishes the alarm once a second frame confirms it`() {
+        // Retraction (telemetry-plausibility Task 9, R12): an earlier revision of this test asserted the alarm from
+        // the FIRST 0x04 carrying the bit. That was wrong because the frames have no checksum: one corrupt byte 14
+        // taught the PWM learner a false onset. A newly set bit now needs two consecutive 0x04 frames.
         val p = BegodeProtocol()
+        p.onNotification(frame(alarmOnHex))
+        assertNotEquals(true, p.latestMotion(0)?.wheelPwmAlarm, "one frame is not enough")
         p.onNotification(frame(alarmOnHex))
         assertEquals(true, assertNotNull(p.latestMotion(0)).wheelPwmAlarm)
     }
@@ -74,7 +80,8 @@ class BegodeWheelPwmAlarmTest {
     @Test
     fun `bit 0 is labelled as the PWM alarm`() {
         val p = BegodeProtocol()
-        p.onNotification(withAlert(0x01))
+        // Twice: R12 (Task 9) confirms a newly set bit on the second consecutive 0x04 (the first-frame form is retracted above).
+        p.onNotification(withAlert(0x01)); p.onNotification(withAlert(0x01))
         assertEquals(listOf("PWM alarm"), p.wheelAlerts())
     }
 

@@ -116,6 +116,8 @@ object MotionAggregator {
             wheelPwmAlarm = d.mapNotNull { it.wheelPwmAlarm }.let { signals ->
                 if (signals.isEmpty()) null else signals.any { it }
             },
+            // The earliest first-set time among the controllers that sound the alarm: the vehicle's edge started then.
+            wheelPwmAlarmSinceMillis = d.filter { it.wheelPwmAlarm == true }.mapNotNull { it.wheelPwmAlarmSinceMillis }.minOrNull(),
             // No producer emits ESTIMATED (the PWM estimator rewrites the fold AFTER it), but the aggregate is itself a
             // ControllerData: carried with `any` so the one-controller fold stays the identity on every field.
             dutySource = if (d.any { it.dutySource == DutySource.ESTIMATED }) DutySource.ESTIMATED else DutySource.MEASURED,

@@ -14,6 +14,11 @@ import ru.sodovaya.volty.domain.plausibility.LedgerKind
 import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
+
+@OptIn(ExperimentalTime::class)
+private fun wallClockMillis(): Long = Clock.System.now().toEpochMilliseconds()
 
 /**
  * Begode / Gotway electric unicycle protocol.
@@ -75,7 +80,9 @@ import kotlin.math.max
  *   construction by the layer that owns the profile.
  */
 class BegodeProtocol(
-    private val cellCount: Int? = null
+    private val cellCount: Int? = null,
+    /** Wall clock in epoch milliseconds, for [ControllerData.wheelPwmAlarmSinceMillis] only; tests replaying a dump inject the dump's time. */
+    private val nowMillis: () -> Long = ::wallClockMillis,
 ) : BmsProtocol(), MotionSource, ProtocolFacts {
 
     override val uuids = BmsUuids(
@@ -186,8 +193,24 @@ class BegodeProtocol(
     private val pendingPoints = ArrayList<OdometerPoint>()
     private var lastAcceptedPoint: OdometerPoint? = null
 
-    /** Last decoded 0x04 alert bitmap (byte 14) — see [parseOdometerFrame]. */
+    /**
+     * The CONFIRMED 0x04 alert bitmap (byte 14) — see [parseOdometerFrame] and [confirmAlertBits]: a bit is in here
+     * only once it was set in two consecutive 0x04 frames, and leaves it the moment a frame has it clear.
+     */
     private var alertBitmap: Int = 0
+
+    /** The raw byte 14 of the previous 0x04 frame (R12), 0 before one. */
+    private var rawAlertPrevious: Int = 0
+
+    /** Bits set in the newest 0x04 but not yet confirmed (R12's `unconfirmedAlertBits` fact counts them). */
+    private var unconfirmedAlertBits: Int = 0
+
+    /**
+     * When bit 0 (the wheel's PWM alarm) was FIRST set in a raw 0x04 of the current run, epoch ms; null while the
+     * raw bit is clear. Published with the confirmed alarm as [ControllerData.wheelPwmAlarmSinceMillis] so the PWM
+     * onset lookback is not moved one 0x04 later by the debounce (Ruling 1 of the plausibility plan).
+     */
+    private var pwmAlarmFirstSetAtMillis: Long? = null
 
     /**
      * The subset of [alertBitmap] that belongs in [ControllerData.faults] —
@@ -980,6 +1003,7 @@ class BegodeProtocol(
             // Bit 0 of the 0x04 alert byte is the wheel's own PWM alarm (see [alertLabels]). Null until a
             // 0x04 frame has been seen: before it the bit is unknown, which is not the same as false.
             wheelPwmAlarm = if (sawOdometer) (alertBitmap and PWM_ALARM_BIT) != 0 else null,
+            wheelPwmAlarmSinceMillis = if (sawOdometer && (alertBitmap and PWM_ALARM_BIT) != 0) pwmAlarmFirstSetAtMillis else null,
             isConnected = true
         )
     }
@@ -1300,6 +1324,7 @@ class BegodeProtocol(
         s[15] = rejectedFrameCount
         s[16] = rebaseCount
         s[17] = if (odometerWitnessDistrusted) 1L else 0L
+        s[18] = if (sawOdometer) Integer.bitCount(unconfirmedAlertBits).toLong() else Long.MIN_VALUE
         if (s.contentEquals(cachedStamp)) return cachedFacts
         cachedFacts = buildFacts()
         factsStamp = cachedStamp
@@ -1314,6 +1339,9 @@ class BegodeProtocol(
         if (sawOdometer) {
             val labels = alertLabels(alertBitmap)
             if (labels.isNotEmpty()) add(DeviceFact(DeviceFactKey.WHEEL_ALERTS, labels.joinToString(", ")))
+            // R12: bits seen once and waiting for a second frame; 0 on a healthy wheel, so a count that grows is
+            // either a wheel flickering a bit or a false positive of this rule.
+            add(DeviceFact(DeviceFactKey.UNCONFIRMED_ALERT_BITS, Integer.bitCount(unconfirmedAlertBits).toString()))
         }
         boardTempFactC?.let { add(DeviceFact(DeviceFactKey.BOARD_TEMP_C, factNumber(it, 1), "\u00B0C")) }
         livePwmRawValue?.let {
@@ -1389,6 +1417,9 @@ class BegodeProtocol(
         // A reconnect may face a healthy wheel: the previous one's alerts must
         // not survive it, or a cleared fault would keep firing.
         alertBitmap = 0
+        rawAlertPrevious = 0
+        unconfirmedAlertBits = 0
+        pwmAlarmFirstSetAtMillis = null
         faultsValue = emptyList()
         tiltbackSpeedValue = null
         batteryCurrentAValue = 0f
@@ -1708,6 +1739,9 @@ class BegodeProtocol(
         // zero-padded boot 0x04 mid-stream republished the wheel's lifetime
         // mileage as 0.0 km and reset the trip baseline under a rider.
         if (isZeroPaddedPayload(frame)) return
+        // R12 sees the alert byte of EVERY non-padded 0x04 on arrival, whatever the odometer gate later decides
+        // about that frame (Ruling 5: delays must not stack; only odometer and trip wait for the gate).
+        confirmAlertBits(frame.u8(14))
         val point = OdometerPoint(frame.u32BE(2), witnessPowerOnM, liveStamp, frame.copyOf(), currentLedgerFrame)
         if (witnessTrust == WitnessTrust.UNPROVEN && (provesWitness(arrivedLast, point) || provesWitness(arrivedBeforeLast, point))) {
             witnessTrust = WitnessTrust.TRUSTED
@@ -1728,6 +1762,37 @@ class BegodeProtocol(
         }
         flushSuspects()
         offerOdometerPoint(point)
+    }
+
+    /**
+     * R12, the fault-bit debounce (kind 2, temporal confirmation). A bit becomes visible in [alertBitmap] (and so in
+     * [ControllerData.faults] and [ControllerData.wheelPwmAlarm]) only when it is set in this 0x04 AND the previous
+     * one; a bit that is clear in this frame clears at once. Begode only: KingSong and Veteran publish no `faults`.
+     *
+     * Why: the frames have no checksum, so one corrupt byte 14 would raise a CRITICAL CONTROLLER_FAULT push and a
+     * banner row, and a bit-0 blip would teach the PWM learner a false onset. Cost and false-positive analysis: a
+     * genuine fault shows one 0x04 (~310 ms) late; a genuine fault that lasts exactly one frame is never shown;
+     * the wheel's own beep is unaffected. On a healthy wheel `unconfirmedAlertBits` stays 0.
+     *
+     * Not a rejected frame: nothing enters the ledger. A frame the odometer gate later REJECTS (a torn read) may
+     * already have counted toward this; acceptable, since two frames are required anyway.
+     *
+     * PWM onset (Ruling 1): bit 0's rising edge calibrates the PWM estimate, and the onset is the sample before
+     * the edge (OnsetLookback), erring HIGH. Confirming one 0x04 later would publish the edge later and the lookback
+     * would then pick a faster sample, a LOW estimate. So the time the bit was first set raw is kept in
+     * [pwmAlarmFirstSetAtMillis] and published beside the confirmed alarm; the lookback measures from there.
+     */
+    private fun confirmAlertBits(raw: Int) {
+        if ((raw and PWM_ALARM_BIT) == 0) pwmAlarmFirstSetAtMillis = null
+        else if ((rawAlertPrevious and PWM_ALARM_BIT) == 0 || pwmAlarmFirstSetAtMillis == null) pwmAlarmFirstSetAtMillis = nowMillis()
+        val before = alertBitmap
+        alertBitmap = raw and rawAlertPrevious
+        unconfirmedAlertBits = raw and alertBitmap.inv()
+        rawAlertPrevious = raw
+        faultsValue = alertLabels(alertBitmap and FAULT_BITS)
+        // A 0x04 the odometer gate is still holding has not published its sample; one already published must not
+        // wait for the gate to show a newly confirmed (or cleared) bit.
+        if (sawOdometer && alertBitmap != before) rebuildMotion()
     }
 
     private fun flushSuspects() {
@@ -1808,8 +1873,7 @@ class BegodeProtocol(
         // not a configuration, it is a field nobody filled in.
         tiltbackSpeedValue =
             if (tiltbackRaw in 1 until TILTBACK_UNSET_AT) tiltbackRaw.toFloat() else null
-        alertBitmap = frame.u8(14)
-        faultsValue = alertLabels(alertBitmap and FAULT_BITS)
+        // The alert byte is NOT taken from this frame: [confirmAlertBits] already judged it on arrival (R12).
         sawOdometer = true
         rebuildMotion()
         observeControllerFrame(0x04)
@@ -2144,8 +2208,8 @@ class BegodeProtocol(
          */
         private const val POWER_JOIN_MAX_MOTION_FRAMES = 3
 
-        /** Slots of the cache stamp in [deviceFacts]: eleven scalars, two per branch and three of the plausibility ledger. */
-        private const val FACTS_STAMP_SIZE = 18
+        /** Slots of the cache stamp in [deviceFacts]: eleven scalars, two per branch, three of the plausibility ledger and R12's unconfirmed-bit count. */
+        private const val FACTS_STAMP_SIZE = 19
         private const val FRAME_SIZE = 24
         private const val TAIL_OFFSET = 20
 

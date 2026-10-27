@@ -147,7 +147,8 @@ class BegodeFactsTest {
     fun tiltbackAndAlertsComeFromTheOdometerFrame() {
         // Synthetic: the capture's tiltback is unset and its alert byte is 0.
         val p = BegodeProtocol()
-        p.onNotification(odometerFrame(meters = 1_234_567, tiltbackRaw = 40, alertBitmap = 0x08 or 0x20))
+        // Twice: R12 shows an alert bit only once two consecutive 0x04 frames carry it (Task 9).
+        repeat(2) { p.onNotification(odometerFrame(meters = 1_234_567, tiltbackRaw = 40, alertBitmap = 0x08 or 0x20)) }
         val facts = p.deviceFacts()
         assertEquals(DeviceFact(DeviceFactKey.TILTBACK_SPEED_KMH, "40", "km/h"), facts.one(DeviceFactKey.TILTBACK_SPEED_KMH))
         assertEquals("Low voltage, Over temperature", facts.one(DeviceFactKey.WHEEL_ALERTS)?.value)

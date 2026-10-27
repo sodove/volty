@@ -26,6 +26,9 @@ enum class DeviceFactKey {
     ODOMETER_REBASED,
     ODOMETER_WITNESS,
 
+    /** Begode R12: alert-byte bits seen set once and not yet confirmed by a second consecutive 0x04. */
+    UNCONFIRMED_ALERT_BITS,
+
     // VESC
     CONTROLLER_ID,
     FIRMWARE,
