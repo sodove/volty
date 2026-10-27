@@ -29,4 +29,16 @@ interface HistoryReadRepository {
     suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor? = null): HistoryPage<HistoryGpsFix>
     suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor? = null): HistoryRoutePage
     suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats
+
+    /**
+     * One page of the stored detail samples of [key], oldest first, with the same range, order and cursor checks as
+     * [series] but no thinning: what a whole-ride computation (distance, charge used) must walk. Keep the cursor even
+     * for equal-time samples. Null means "this reader cannot page detail" (the legacy reader, fakes), which is not the
+     * same as an empty page: callers then fall back to [stats].
+     */
+    suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int):
+        HistoryPage<HistorySample>? = null
 }
+
+/** The largest page [HistoryReadRepository.samples] serves. */
+const val HISTORY_DETAIL_PAGE_SIZE = 20_000

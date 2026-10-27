@@ -16,6 +16,8 @@ class PreparedHistoryReadRepositoryTest {
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryPage<HistoryGpsFix> = error("unused")
         override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage = error("unused")
         override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats = error("unused")
+        override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int):
+            HistoryPage<HistorySample>? { calls += "samples:$limit"; return HistoryPage(emptyList(), null, false) }
     }
     @Test fun catalogAndDirectRideEntryAwaitRecoveryBeforeIssuingAnyRead() = runTest {
         val repository = PreparedHistoryReadRepository(delegate) { calls += "prepare" }
@@ -36,5 +38,11 @@ class PreparedHistoryReadRepositoryTest {
         val repository = PreparedHistoryReadRepository(delegate) { currentCoroutineContext()[Job]!!.cancel() }
         val job = launch(start = CoroutineStart.UNDISPATCHED) { repository.ride("old") }
         job.join(); assertTrue(job.isCancelled); assertTrue(calls.isEmpty())
+    }
+    @Test fun detailSamplesReachTheDelegate() = runTest {
+        val repository = PreparedHistoryReadRepository(delegate) { calls += "prepare" }
+        val key = HistorySeriesKey("esc", "odometer_km")
+        assertNotNull(repository.samples("r", key, HistoryRange(0, 1), null, 7))
+        assertEquals(listOf("samples:7"), calls)
     }
 }

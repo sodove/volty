@@ -148,6 +148,44 @@ class HistoryReadRepositoryTest {
         assertEquals(1, store.gpsReads.size)
     }
 
+    @Test fun samplesPageTheRawDetailWithSeriesChecksAndNeverThinning() = runTest {
+        val store = Store()
+        val cursor = HistoryCursor(10001, "2")
+        val a = sample(0, 1.0); val b = sample(1, 2.0); val c = sample(1, 3.0)
+        store.readPage = { after -> if (after == null) page(a, b, next = cursor) else page(c) }
+        val repository = DefaultHistoryReadRepository(store)
+        val first = checkNotNull(repository.samples(ride.id, key, range, null, 20000))
+        assertEquals(listOf(a, b), first.items); assertEquals(cursor, first.next)
+        val second = checkNotNull(repository.samples(ride.id, key, range, cursor, 20000))
+        assertEquals(listOf(c), second.items); assertNull(second.next)
+        assertEquals(listOf<Pair<HistoryCursor?, Int>>(null to 20000, cursor to 20000), store.sampleReads)
+        assertEquals(0, store.markerReads)
+    }
+
+    @Test fun samplesOfAnUnavailableSeriesAreAnEmptyPageNotAFabrication() = runTest {
+        val store = Store()
+        val repository = DefaultHistoryReadRepository(store)
+        val empty = checkNotNull(repository.samples(ride.id, key.copy(metricId = "speed_kmh"), range, null, 100))
+        assertTrue(empty.items.isEmpty()); assertNull(empty.next)
+        store.recordedRide = null
+        assertTrue(checkNotNull(repository.samples(ride.id, key, range, null, 100)).items.isEmpty())
+        assertTrue(store.sampleReads.isEmpty())
+        assertFailsWith<IllegalArgumentException> { repository.samples(ride.id, key, range, null, 0) }
+        assertFailsWith<IllegalArgumentException> { repository.samples(ride.id, key, range, null, 20001) }
+    }
+
+    @Test fun samplesFailOnForeignRowsDisorderAndANonAdvancingCursor() = runTest {
+        val store = Store()
+        val repository = DefaultHistoryReadRepository(store)
+        store.readPage = { page(sample(0, 1.0).copy(key = key.copy(sourceId = "other"))) }
+        assertFailsWith<IllegalStateException> { repository.samples(ride.id, key, range, null, 100) }
+        store.readPage = { page(sample(1, 1.0), sample(0, 2.0)) }
+        assertFailsWith<IllegalStateException> { repository.samples(ride.id, key, range, null, 100) }
+        val cursor = HistoryCursor(10001, "1")
+        store.readPage = { page(sample(1, 1.0), next = cursor) }
+        assertFailsWith<IllegalStateException> { repository.samples(ride.id, key, range, cursor, 100) }
+    }
+
     private inner class Store : HistoryStore {
         override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys = TODO("Unused metadata")
         var recordedRide: HistoryRide? = ride

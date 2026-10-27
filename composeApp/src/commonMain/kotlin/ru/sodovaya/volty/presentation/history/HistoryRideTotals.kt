@@ -48,14 +48,15 @@ fun historyTotalsKeys(sources: List<HistorySource>): List<HistorySeriesKey> {
 }
 
 /**
- * The ride's headline numbers from whole-ride stats. Distance prefers the controller's trip counter,
- * then its odometer, then the GPS track; average speed and consumption are derived from it.
+ * The ride's headline numbers from whole-ride stats. The distance is computed elsewhere ([historyRideDistance] from
+ * detail samples, GPS first; [historyStatsDistance] from stats) and handed in; average speed and consumption are
+ * derived from it. A null [distance] omits all three tiles: an unearned distance is never replaced by `max - min`.
  */
 fun historyRideTotals(
     sources: List<HistorySource>,
     stats: Map<HistorySeriesKey, HistoryStats>,
     durationMillis: Long?,
-    gpsDistanceKm: Double?,
+    distance: HistoryRideDistance?,
 ): List<HistoryTotal> {
     fun values(tierSources: List<HistorySource>, metric: String) =
         tierSources.mapNotNull { source -> stats[HistorySeriesKey(source.id, metric)]?.let { metric to it } }
@@ -68,26 +69,16 @@ fun historyRideTotals(
         val best = found.maxByOrNull { it.maximum.value!! } ?: return null
         return HistoryTotal(HistoryTotalKind.MAX_KMH, best.maximum.value!!, found.any { it.maximum.quality != SummaryQuality.EXACT })
     }
-    fun delta(tierSources: List<HistorySource>, metric: String): Pair<Double, Boolean>? {
-        val spans = values(tierSources, metric).mapNotNull { (_, s) ->
-            val low = s.minimum; val high = s.maximum
-            if (low == null || high == null) null else (high - low) to !s.complete
-        }
-        return spans.maxByOrNull { it.first }
-    }
-
     val motion = tier(sources, motionTiers)
     val battery = tier(sources, batteryTiers)
     val result = mutableListOf<HistoryTotal>()
 
-    val counted = delta(motion, "trip_distance_km")?.takeIf { it.first > 0 } ?: delta(motion, "odometer_km")?.takeIf { it.first > 0 }
-    val distance = counted?.let { HistoryTotal(HistoryTotalKind.DISTANCE_KM, it.first, it.second) }
-        ?: gpsDistanceKm?.takeIf { it > 0 }?.let { HistoryTotal(HistoryTotalKind.DISTANCE_KM, it) }
-    distance?.let(result::add)
+    val distanceTotal = distance?.let { HistoryTotal(HistoryTotalKind.DISTANCE_KM, it.km, it.approximate) }
+    distanceTotal?.let(result::add)
     val duration = durationMillis?.takeIf { it > 0 }
     duration?.let { result += HistoryTotal(HistoryTotalKind.DURATION_MILLIS, it.toDouble()) }
-    if (distance != null && duration != null)
-        result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH, distance.value / (duration / 3_600_000.0), distance.approximate)
+    if (distanceTotal != null && duration != null)
+        result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH, distanceTotal.value / (duration / 3_600_000.0), distanceTotal.approximate)
     peak(motion, "speed_kmh")?.let { result += it.copy(kind = HistoryTotalKind.MAX_KMH) }
 
     // Battery energy is the pack's own measurement; the controller's is the fallback.
@@ -98,8 +89,8 @@ fun historyRideTotals(
         HistoryTotal(HistoryTotalKind.ENERGY_WH, found.maxOf { it.energy.value!! }, found.any { it.energy.quality != SummaryQuality.EXACT })
     }
     energy?.let(result::add)
-    if (energy != null && distance != null && distance.value >= MIN_CONSUMPTION_DISTANCE_KM)
-        result += HistoryTotal(HistoryTotalKind.WH_PER_KM, energy.value / distance.value, energy.approximate || distance.approximate)
+    if (energy != null && distanceTotal != null && distanceTotal.value >= MIN_CONSUMPTION_DISTANCE_KM)
+        result += HistoryTotal(HistoryTotalKind.WH_PER_KM, energy.value / distanceTotal.value, energy.approximate || distanceTotal.approximate)
 
     val soc = values(battery, "soc_percent").mapNotNull { (_, s) ->
         val low = s.minimum; val high = s.maximum

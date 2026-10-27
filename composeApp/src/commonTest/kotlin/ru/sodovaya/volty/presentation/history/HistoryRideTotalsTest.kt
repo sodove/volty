@@ -10,7 +10,7 @@ class HistoryRideTotalsTest {
     private fun stats(min: Double?, max: Double?, energy: Double? = null, complete: Boolean = true) = HistoryStats(min, max, energy, complete)
     private fun Map<HistoryTotalKind, HistoryTotal>.v(kind: HistoryTotalKind) = getValue(kind).value
     private fun totals(sources: List<HistorySource>, stats: Map<HistorySeriesKey, HistoryStats>,
-        duration: Long? = 3_600_000, gps: Double? = null) = historyRideTotals(sources, stats, duration, gps).associateBy { it.kind }
+        duration: Long? = 3_600_000, gps: Double? = null) = historyRideTotals(sources, stats, duration, historyStatsDistance(sources, stats, duration, gps)).associateBy { it.kind }
 
     @Test fun controllerAndPackGiveTheFullSet() {
         val t = totals(listOf(controller, pack), mapOf(

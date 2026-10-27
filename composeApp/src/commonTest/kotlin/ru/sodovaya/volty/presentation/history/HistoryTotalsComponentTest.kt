@@ -47,7 +47,7 @@ class HistoryTotalsComponentTest {
         val kinds = c.state.value.totals.associateBy { it.kind }
         assertEquals(10.0, kinds.getValue(HistoryTotalKind.DISTANCE_KM).value)
         assertNull(kinds[HistoryTotalKind.MAX_KMH], "speed failed to read: no tile, not zero")
-        assertEquals(0, repo.routeReads, "a counted distance needs no GPS track")
+        assertEquals(1, repo.routeReads, "the GPS track is always read now: it is the primary witness of the distance")
         assertFalse(c.state.value.loading)
     }
 

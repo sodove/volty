@@ -14,7 +14,7 @@ data class HistoryTotalsState(val rideId: String? = null, val totals: List<Histo
  */
 class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: CoroutineScope,
     private val repository: HistoryReadRepository, private val refreshMillis: Long = 15_000,
-    private val maxGpsPages: Int = 16) {
+    private val maxGpsPages: Int = 16, private val maxDetailPages: Int = 16) {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val mutableState = MutableStateFlow(HistoryTotalsState())
@@ -35,7 +35,7 @@ class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: Co
         job = scope.launch {
             // The same ride growing while recorded: keep the shown tiles and coalesce the updates.
             if (sameRide) delay(refreshMillis)
-            val totals = readHistoryTotals(repository, rideId, sources, range, maxGpsPages)
+            val totals = readHistoryTotals(repository, rideId, sources, range, maxGpsPages, maxDetailPages)
             if (requested == next) mutableState.value = HistoryTotalsState(rideId = rideId, totals = totals)
         }
     }
@@ -44,34 +44,94 @@ class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: Co
     fun close() { job?.cancel(); lifetime.cancel() }
 }
 
-/** Whole-ride totals read from storage; a failed stat only drops its tiles, a capped GPS read gives no distance. */
+/**
+ * Whole-ride totals read from storage; a failed stat only drops its tiles.
+ *
+ * The distance is the part that must be earned. The GPS track is always read; the counter (trip, else odometer, of the
+ * motion tier) is paged as detail samples through at most [maxDetailPages] pages and walked by [historyRideDistance].
+ * When the detail cannot be paged (a reader that returns null, a ride missing from storage, a page budget that ran out)
+ * the stats path [historyStatsDistance] decides, cross-checked against the ride's top speed all the same. A budget that
+ * ran out makes that distance approximate; a capped GPS read gives no GPS at all (a partial track would mislead).
+ */
 internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId: String, sources: List<HistorySource>,
-    range: HistoryRange, maxGpsPages: Int = 16): List<HistoryTotal> {
+    range: HistoryRange, maxGpsPages: Int = 16, maxDetailPages: Int = 16): List<HistoryTotal> {
     val stats = historyTotalsKeys(sources).mapNotNull { key ->
         try { key to repository.stats(rideId, key, range) }
         catch (cancel: CancellationException) { throw cancel }
         catch (_: Exception) { null }
     }.toMap()
     val duration = range.endEpochMillis - range.startEpochMillis
-    val counted = historyRideTotals(sources, stats, duration, null)
-    if (counted.any { it.kind == HistoryTotalKind.DISTANCE_KM }) return historyVisibleTotals(counted)
-    val gps = try {
-        val fixes = readHistoryRouteFixes(repository, rideId, range, maxGpsPages)
-        fixes?.let(::historyGpsDistanceKm)
+    val route = try { readHistoryRoute(repository, rideId, range, maxGpsPages) }
+    catch (cancel: CancellationException) { throw cancel }
+    catch (_: Exception) { null }
+    val peak = historyPeakSpeedKmh(sources, stats)
+
+    var budgetRanOut = false
+    val detailed = try {
+        val origin = repository.ride(rideId)?.started
+        if (origin == null) null else {
+            var found: HistoryRideDistance? = null
+            // The counter series in order of preference; the first one that actually rises is the one to walk.
+            for (metric in listOf("trip_distance_km", "odometer_km")) {
+                for (source in tier(sources, motionTiers)) {
+                    val read = readHistoryDetail(repository, rideId, HistorySeriesKey(source.id, metric), range, maxDetailPages)
+                        ?: return historyVisibleTotals(historyRideTotals(sources, stats, duration,
+                            historyStatsDistance(sources, stats, duration, route?.fixes?.let(::historyGpsDistanceKm))))
+                    if (!read.complete) { budgetRanOut = true; break }
+                    val known = read.samples.mapNotNull { it.value }
+                    if (known.isEmpty() || known.min() >= known.max()) continue
+                    found = historyRideDistance(read.samples, route?.fixes.orEmpty(), origin, peak, duration, route?.markers.orEmpty())
+                    break
+                }
+                if (found != null || budgetRanOut) break
+            }
+            found
+        }
     } catch (cancel: CancellationException) { throw cancel }
     catch (_: Exception) { null }
-    return historyVisibleTotals(historyRideTotals(sources, stats, duration, gps))
+
+    val distance = detailed ?: historyStatsDistance(sources, stats, duration, route?.fixes?.let(::historyGpsDistanceKm))
+        ?.let { if (budgetRanOut) it.copy(approximate = true) else it }
+    return historyVisibleTotals(historyRideTotals(sources, stats, duration, distance))
 }
 
-/** Every recorded fix of a range, or null when the page budget ran out first (a partial track would mislead). */
-internal suspend fun readHistoryRouteFixes(repository: HistoryReadRepository, rideId: String, range: HistoryRange,
-    maxPages: Int): List<HistoryGpsFix>? {
+/**
+ * Pages one detail series through [HistoryReadRepository.samples] with a page budget, so another series (speed, charge,
+ * current) can reuse it. Null when the reader cannot page detail; [HistoryDetailRead.complete] is false when the budget
+ * ran out before the series ended (the samples read so far are a prefix, not the ride).
+ */
+internal suspend fun readHistoryDetail(repository: HistoryReadRepository, rideId: String, key: HistorySeriesKey,
+    range: HistoryRange, maxPages: Int): HistoryDetailRead? {
+    val samples = ArrayList<HistorySample>()
+    var after: HistoryCursor? = null
+    repeat(maxPages) {
+        val page = repository.samples(rideId, key, range, after, HISTORY_DETAIL_PAGE_SIZE) ?: return null
+        samples += page.items
+        after = page.next ?: return HistoryDetailRead(samples, true)
+    }
+    return HistoryDetailRead(samples, false)
+}
+
+internal class HistoryDetailRead(val samples: List<HistorySample>, val complete: Boolean)
+
+/** The whole recorded track and its markers of a range. */
+internal class HistoryRouteRead(val fixes: List<HistoryGpsFix>, val markers: List<HistoryMarker>)
+
+/** Every recorded fix and marker of a range, or null when the page budget ran out first (a partial track would mislead). */
+internal suspend fun readHistoryRoute(repository: HistoryReadRepository, rideId: String, range: HistoryRange,
+    maxPages: Int): HistoryRouteRead? {
     val fixes = mutableListOf<HistoryGpsFix>()
+    val markers = LinkedHashSet<HistoryMarker>()
     var after: HistoryCursor? = null
     repeat(maxPages) {
         val page = repository.route(rideId, range, after)
         fixes += page.fixes.items
-        after = page.fixes.next ?: return fixes
+        markers += page.markers
+        after = page.fixes.next ?: return HistoryRouteRead(fixes, markers.toList())
     }
     return null
 }
+
+/** Every recorded fix of a range, or null when the page budget ran out first (a partial track would mislead). */
+internal suspend fun readHistoryRouteFixes(repository: HistoryReadRepository, rideId: String, range: HistoryRange,
+    maxPages: Int): List<HistoryGpsFix>? = readHistoryRoute(repository, rideId, range, maxPages)?.fixes

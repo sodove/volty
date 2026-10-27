@@ -43,19 +43,8 @@ class DefaultHistoryReadRepository(
         var previousAxis: Long? = null
         repeat(maxReadPages) { pageIndex ->
             val page = read { store.samples(rideId, key, range, after, PAGE_SIZE) }
-            check(page.items.size <= PAGE_SIZE) { "History sample read exceeded its bound" }
-            for (sample in page.items) {
-                check(sample.key == key) { "History sample belongs to another series" }
-                val axis = checkNotNull(historyAxisEpochMillis(origin, sample.tick)) { "History sample has another clock origin" }
-                check(axis in range.startEpochMillis..range.endEpochMillis &&
-                    (previousAxis == null || axis >= checkNotNull(previousAxis))) { "History sample order/range is invalid" }
-                previousAxis = axis
-            }
+            previousAxis = checkSamplePage(origin, key, range, after, PAGE_SIZE, page, previousAxis)
             val next = page.next
-            if (next != null) {
-                check(page.items.isNotEmpty() && next.epochMillis == previousAxis) { "History cursor does not end its page" }
-                checkCursorProgress(after, next)
-            }
             overview.offerPage(page.items)
             if (next == null || pageIndex == maxReadPages - 1) {
                 return HistorySeries(key, overview.snapshot(), markers, page.truncated || next != null, origin)
@@ -63,6 +52,17 @@ class DefaultHistoryReadRepository(
             after = next
         }
         error("Unreachable history read budget")
+    }
+
+    override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int):
+        HistoryPage<HistorySample>? {
+        require(limit in 1..PAGE_SIZE)
+        val empty = HistoryPage<HistorySample>(emptyList(), null, false)
+        val origin = ride(rideId)?.started ?: return empty
+        if (!available(rideId, key)) return empty
+        val page = read { store.samples(rideId, key, range, after, limit) }
+        checkSamplePage(origin, key, range, after, limit, page, null)
+        return page.copy(items = page.items.toList())
     }
 
     override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryPage<HistoryGpsFix> =
@@ -90,6 +90,26 @@ class DefaultHistoryReadRepository(
     private fun emptySeries(key: HistorySeriesKey, origin: HistoryTick?) =
         HistorySeries(key, emptyList(), emptyList(), false, origin)
 
+    /** The checks every sample page passes, whether it feeds an overview or a whole-ride walk. Returns the last axis seen. */
+    private fun checkSamplePage(origin: HistoryTick, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?,
+        limit: Int, page: HistoryPage<HistorySample>, previous: Long?): Long? {
+        check(page.items.size <= limit) { "History sample read exceeded its bound" }
+        var previousAxis = previous
+        for (sample in page.items) {
+            check(sample.key == key) { "History sample belongs to another series" }
+            val axis = checkNotNull(historyAxisEpochMillis(origin, sample.tick)) { "History sample has another clock origin" }
+            check(axis in range.startEpochMillis..range.endEpochMillis &&
+                (previousAxis == null || axis >= checkNotNull(previousAxis))) { "History sample order/range is invalid" }
+            previousAxis = axis
+        }
+        val next = page.next
+        if (next != null) {
+            check(page.items.isNotEmpty() && next.epochMillis == previousAxis) { "History cursor does not end its page" }
+            checkCursorProgress(after, next)
+        }
+        return previousAxis
+    }
+
     private fun checkCursorProgress(after: HistoryCursor?, next: HistoryCursor) {
         val sequence = next.stableId.toLongOrNull()
         check(sequence != null && sequence >= 0) { "History cursor is not a stored sequence" }
@@ -109,5 +129,5 @@ class DefaultHistoryReadRepository(
         return result
     }
 
-    private companion object { const val PAGE_SIZE = 20000 }
+    private companion object { const val PAGE_SIZE = HISTORY_DETAIL_PAGE_SIZE }
 }
