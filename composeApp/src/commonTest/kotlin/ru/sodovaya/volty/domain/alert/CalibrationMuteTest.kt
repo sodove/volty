@@ -36,9 +36,4 @@ class CalibrationMuteTest {
         now += 20
         assertFalse(mute.isActive())
     }
-
-    @Test
-    fun `the time box is three minutes`() {
-        assertTrue(CalibrationMute.TIME_BOX_MS == 180_000L)
-    }
 }

@@ -141,10 +141,10 @@ class AlarmDriver(
     private val repository: BmsRepository,
     private val modalities: Flow<AlarmModalities>,
     private val alarm: AlarmOutput,
+    /** True while a PWM calibration runs: duty and speed are left out of the alarm (see [CalibrationMute]). Required: no silent default. */
+    private val calibrationMuted: () -> Boolean,
     private val controller: AlarmController = AlarmController(),
-    private val silencer: AlarmSilencer = AlarmSilencer(),
-    /** True while a PWM calibration runs: duty and speed are left out of the alarm (see [CalibrationMute]). */
-    private val calibrationMuted: () -> Boolean = { false }
+    private val silencer: AlarmSilencer = AlarmSilencer()
 ) {
 
     /** Which stream produced a tick. See the class doc for why all four share one collector. */

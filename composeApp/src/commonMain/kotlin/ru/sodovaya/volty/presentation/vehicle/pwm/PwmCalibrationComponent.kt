@@ -2,6 +2,8 @@ package ru.sodovaya.volty.presentation.vehicle.pwm
 
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
+import com.arkivanov.essenty.lifecycle.doOnStart
+import com.arkivanov.essenty.lifecycle.doOnStop
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -12,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -84,7 +87,7 @@ class DefaultPwmCalibrationComponent(
     private val bms: BmsRepository,
     private val onBackRequested: () -> Unit,
     private val ioContext: CoroutineContext = Dispatchers.Default,
-    private val calibrationMute: CalibrationMute = CalibrationMute(),
+    private val calibrationMute: CalibrationMute,
 ) : PwmCalibrationComponent, ComponentContext by componentContext {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
@@ -108,13 +111,20 @@ class DefaultPwmCalibrationComponent(
 
     init {
         lifecycle.doOnDestroy { lifetime.cancel(); calibrationMute.end() }
-        // While the rider is spinning the lifted wheel (THRESHOLD / PLATEAU) the duty and speed alarms are muted;
-        // every state change is a heartbeat that renews the signal's time box. INTRO, RESULT and BLOCKED release it.
+        // The mute follows what the rider can SEE and DO, never the telemetry: live samples rewrite the state on every
+        // frame, so renewing on them would let a wizard left open keep the alarms off for a whole ride (review of
+        // Task 3). It is renewed only by rider actions (start / run again / to plateau, see [renewMute]) and by
+        // wizard progress (the step, an onset captured, a run captured) - and by nothing else - so the 3-minute time
+        // box really does end a forgotten run.
+        // The wizard stops being visible (app backgrounded, another screen pushed): the mute is released at once.
+        // On returning it is renewed only if the machine is still in a spinning step - the rider is looking at the
+        // run again; a forgotten run is still bounded by the time box.
+        lifecycle.doOnStop { calibrationMute.end() }
+        lifecycle.doOnStart { renewMute() }
         scope.launch {
-            _state.collect { ui ->
-                if (ui.wizard.step == PwmWizardStep.THRESHOLD || ui.wizard.step == PwmWizardStep.PLATEAU) calibrationMute.begin()
-                else calibrationMute.end()
-            }
+            _state.map { Triple(it.wizard.step, it.wizard.onsets.size, it.wizard.runCaptured) }
+                .distinctUntilChanged()
+                .collect { renewMute() }
         }
         scope.launch {
             val v = try { vehicles.get(vehicleId) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
@@ -154,8 +164,17 @@ class DefaultPwmCalibrationComponent(
         }
     }
 
-    private fun machine(f: (PwmWizardState, Boolean) -> PwmWizardState) =
+    private fun machine(f: (PwmWizardState, Boolean) -> PwmWizardState) {
         _state.update { ui -> ui.copy(wizard = f(ui.wizard, ui.connected)) }
+        renewMute()
+    }
+
+    /** Spinning step (THRESHOLD / PLATEAU) and visible: mute duty and speed alarms for another time box; else release. */
+    private fun renewMute() {
+        val step = _state.value.wizard.step
+        if (step == PwmWizardStep.THRESHOLD || step == PwmWizardStep.PLATEAU) calibrationMute.begin()
+        else calibrationMute.end()
+    }
 
     override fun onStart() = machine { w, connected -> w.start(connected) }
     override fun onRunAgain() = machine { w, _ -> w.runAgain() }
@@ -187,5 +206,8 @@ class DefaultPwmCalibrationComponent(
         }
     }
 
-    override fun onCancel() = onBackRequested()
+    override fun onCancel() {
+        calibrationMute.end() // explicit: do not rely on the navigation pop reaching doOnDestroy
+        onBackRequested()
+    }
 }

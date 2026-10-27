@@ -4,6 +4,8 @@ import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.Lifecycle
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import com.arkivanov.essenty.lifecycle.destroy
+import com.arkivanov.essenty.lifecycle.start
+import com.arkivanov.essenty.lifecycle.stop
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -315,5 +317,53 @@ class PwmCalibrationComponentTest {
         assertTrue(mute.isActive())
         lifecycle.destroy()
         assertFalse(mute.isActive(), "back or process teardown mid-run must not leave the alarms muted")
+    }
+
+    @Test fun liveSamplesDoNotRenewTheMuteSoAForgottenRunTimesOut() = runTest {
+        var now = 0L
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute { now }
+        val r = rig(mute = mute); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart(); runCurrent()
+        assertTrue(mute.isActive())
+        // The rider put the wheel down and rode off: speeds keep arriving, nothing in the wizard progresses.
+        repeat(5) { i ->
+            now += ru.sodovaya.volty.domain.alert.CalibrationMute.TIME_BOX_MS / 4
+            r.send(20f + i, false); runCurrent()
+        }
+        assertEquals(PwmWizardStep.THRESHOLD, r.component.state.value.wizard.step)
+        assertFalse(mute.isActive(), "telemetry alone must not keep the alarms muted past the time box")
+    }
+
+    @Test fun anOnsetCapturedRenewsTheMute() = runTest {
+        var now = 0L
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute { now }
+        val r = rig(mute = mute); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart(); runCurrent()
+        now += ru.sodovaya.volty.domain.alert.CalibrationMute.TIME_BOX_MS - 1000
+        r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        assertEquals(1, r.component.state.value.wizard.onsets.size)
+        now += ru.sodovaya.volty.domain.alert.CalibrationMute.TIME_BOX_MS - 1000
+        assertTrue(mute.isActive(), "progress renewed the box")
+    }
+
+    @Test fun theWizardLeavingTheScreenReleasesTheMuteAndReturningRenewsIt() = runTest {
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute()
+        val lifecycle = LifecycleRegistry(Lifecycle.State.RESUMED)
+        val r = rig(mute = mute, lifecycle = lifecycle); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart(); runCurrent()
+        assertTrue(mute.isActive())
+        lifecycle.stop()
+        assertFalse(mute.isActive(), "backgrounded or covered by another screen: not muting")
+        lifecycle.start()
+        assertTrue(mute.isActive(), "back on screen in a spinning step")
+    }
+
+    @Test fun cancelMidRunReleasesTheMuteItself() = runTest {
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute()
+        val r = rig(mute = mute); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart(); runCurrent()
+        assertTrue(mute.isActive())
+        r.component.onCancel()
+        assertFalse(mute.isActive(), "released before navigating, not left to doOnDestroy")
     }
 }

@@ -211,7 +211,7 @@ class DefaultRideDashboardComponent(
     private val onDisconnectRequested: () -> Unit,
     private val onEditVehicleRequested: (String) -> Unit = {},
     private val rangeSource: ru.sodovaya.volty.data.energy.RangeSource? = null,
-    private val calibrationMute: ru.sodovaya.volty.domain.alert.CalibrationMute = ru.sodovaya.volty.domain.alert.CalibrationMute(),
+    private val calibrationMute: ru.sodovaya.volty.domain.alert.CalibrationMute,
 ) : RideDashboardComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())

@@ -156,7 +156,7 @@ class AlertEngineTest {
     @Test
     fun `cell high triggers critical alert`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         // Use close-together cell values so CELL_DELTA (200 mV default) doesn't fire too.
         engine.evaluateForTest(bmsData(cells = listOf(4.21f, 4.25f)), v)
@@ -169,7 +169,7 @@ class AlertEngineTest {
     @Test
     fun `cell high does not fire twice without recovery (hysteresis)`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         engine.evaluateForTest(bmsData(cells = listOf(4.21f, 4.25f)), v)
         engine.evaluateForTest(bmsData(cells = listOf(4.21f, 4.26f)), v)
@@ -180,7 +180,7 @@ class AlertEngineTest {
     @Test
     fun `cell high re-arms after recovery and fires again`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         engine.evaluateForTest(bmsData(cells = listOf(4.21f, 4.25f)), v) // fires
         engine.evaluateForTest(bmsData(cells = listOf(4.05f, 4.10f)), v) // recovered (max < 4.20 - 0.05)
@@ -192,7 +192,7 @@ class AlertEngineTest {
     fun `debounce blocks rapid re-fire within 3 seconds`() {
         val notifier = TestNotifier()
         val frozenClock: () -> Instant = { Instant.fromEpochSeconds(1_000_000L) }
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = frozenClock)
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = frozenClock)
         val v = vehicleWith()
         engine.evaluateForTest(bmsData(cells = listOf(4.21f, 4.25f)), v) // fires
         engine.evaluateForTest(bmsData(cells = listOf(4.05f, 4.10f)), v) // recover so armed=true
@@ -203,7 +203,7 @@ class AlertEngineTest {
     @Test
     fun `temperature high triggers critical`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         engine.settleBattery(bmsData(temps = listOf(65f)), v)
         assertEquals(1, notifier.alerts.size)
@@ -213,7 +213,7 @@ class AlertEngineTest {
     @Test
     fun `temperature warning fires in band below critical`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         // 54°C is above warn (50) but below high (60) -> a single WARNING.
         engine.settleBattery(bmsData(temps = listOf(54f)), v)
@@ -226,7 +226,7 @@ class AlertEngineTest {
     @Test
     fun `temperature uses hottest sensor not first`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         // First sensor is cool, a later one is hot -> warn must still fire on max.
         engine.settleBattery(bmsData(temps = listOf(25f, 30f, 54f)), v)
@@ -237,7 +237,7 @@ class AlertEngineTest {
     @Test
     fun `temperature escalates warn then critical as it rises`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         engine.settleBattery(bmsData(temps = listOf(54f)), v) // WARNING
         engine.settleBattery(bmsData(temps = listOf(65f)), v) // CRITICAL (warn no longer in band)
@@ -249,7 +249,7 @@ class AlertEngineTest {
     @Test
     fun `temperature high at 65 does not also fire warning`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         // Jumping straight into the critical range must not emit a warn too.
         engine.settleBattery(bmsData(temps = listOf(65f)), v)
@@ -260,7 +260,7 @@ class AlertEngineTest {
     @Test
     fun `soc low triggers warning`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         engine.evaluateForTest(bmsData(soc = 10f), v)
         assertEquals(1, notifier.alerts.size)
@@ -272,7 +272,7 @@ class AlertEngineTest {
         // A dumb Begode with no cell count: soc = 0 means "unknown", not
         // "empty". Neither SOC_LOW nor SOC_CUTOFF may fire on it.
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
         engine.evaluateForTest(bmsData(soc = 0f).copy(socKnown = false), v)
         assertEquals(0, notifier.alerts.size)
@@ -281,7 +281,7 @@ class AlertEngineTest {
     @Test
     fun `an all-unknown aggregate raises no low-charge alarm`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
         val aggregate = aggregateSoc(
             PackTopology.PARALLEL,
@@ -298,7 +298,7 @@ class AlertEngineTest {
     @Test
     fun `an eighty-percent known aggregate raises no low-charge alarm`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(alertConfig = AlertConfig(socLowPercent = 15, socCutoffPercent = 5))
         val aggregate = aggregateSoc(
             PackTopology.PARALLEL,
@@ -316,7 +316,7 @@ class AlertEngineTest {
     @Test
     fun `unknown soc does not silence cell voltage alerts on the same sample`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
         // Close-together cells so CELL_DELTA does not fire too.
         engine.evaluateForTest(bmsData(cells = listOf(4.21f, 4.25f), soc = 0f).copy(socKnown = false), v)
@@ -327,7 +327,7 @@ class AlertEngineTest {
     @Test
     fun `unknown soc does not silence temperature alerts on the same sample`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
         engine.settleBattery(bmsData(temps = listOf(65f), soc = 0f).copy(socKnown = false), v)
         assertEquals(1, notifier.alerts.size)
@@ -339,7 +339,7 @@ class AlertEngineTest {
         // The case the socKnown gate must NOT break: a coulomb-counting BMS
         // reporting a truly flat pack. socKnown defaults to true on its samples.
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
         engine.evaluateForTest(bmsData(soc = 0f), v)
         assertEquals(2, notifier.alerts.size)
@@ -352,7 +352,7 @@ class AlertEngineTest {
     @Test
     fun `charge complete fires when SOC 100 and current near zero`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         engine.evaluateForTest(bmsData(soc = 100f, current = 0.05f), v)
         assertEquals(1, notifier.alerts.size)
@@ -363,7 +363,7 @@ class AlertEngineTest {
     @Test
     fun `charge complete respects the battery notification setting`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(alertConfig = AlertConfig(chargeCompleteNotify = false))
 
         engine.evaluateForTest(bmsData(soc = 100f, current = 0.05f), v)
@@ -374,7 +374,7 @@ class AlertEngineTest {
     @Test
     fun `each battery alert can be disabled independently`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(
             alertConfig = AlertConfig(
                 cellDeltaMv = 100,
@@ -402,7 +402,7 @@ class AlertEngineTest {
     @Test
     fun `battery conditions stay quiet when their measurements are unknown`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(
             alertConfig = AlertConfig(
                 cellHighV = 4.1f,
@@ -435,7 +435,7 @@ class AlertEngineTest {
     @Test
     fun `charge complete requires a measured current rather than a zero placeholder`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         // A voltage-estimated pack can look full while its missing current field
         // is still the default zero. The non-zero raw value makes this fixture
@@ -452,7 +452,7 @@ class AlertEngineTest {
     @Test
     fun `disconnected data produces no alerts`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         engine.evaluateForTest(BmsData(cellVoltages = listOf(4.5f), isConnected = false), v)
         assertEquals(0, notifier.alerts.size)
@@ -461,7 +461,7 @@ class AlertEngineTest {
     @Test
     fun `chemistry-aware threshold — LiFePO4 fires above 3 point 65V instead of 4 point 2V`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith(chemistry = Chemistry.LIFEPO4)
         // 3.70 V is fine for Li-ion (< 4.20) but HIGH for LiFePO4 (> 3.65)
         engine.evaluateForTest(bmsData(cells = listOf(3.7f, 3.7f)), v)
@@ -542,7 +542,7 @@ class AlertEngineTest {
     @Test
     fun `a controller fault fires a critical one-shot naming the fault`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         engine.evaluateMotionForTest(motion(faults = listOf("OVER_VOLTAGE")), motionVehicle())
         assertEquals(1, notifier.alerts.size)
         val (title, text, severity) = notifier.alerts.first()
@@ -554,7 +554,7 @@ class AlertEngineTest {
     @Test
     fun `every fault the controllers report is named, not just the first`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         engine.evaluateMotionForTest(
             motion(faults = listOf("ESC0: OVER_TEMP_FET", "ESC1: DRV")),
             motionVehicle()
@@ -565,7 +565,7 @@ class AlertEngineTest {
     @Test
     fun `a persisting fault does not re-notify on every sample`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle()
         repeat(3) { engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v) }
         assertEquals(1, notifier.alerts.size, "one notification per arming episode, not one per sample")
@@ -574,7 +574,7 @@ class AlertEngineTest {
     @Test
     fun `a fault re-arms once it clears and notifies again if it returns`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle()
         engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
         engine.evaluateMotionForTest(motion(faults = emptyList(), atMillis = 1_001_000L), v)
@@ -588,7 +588,7 @@ class AlertEngineTest {
     @Test
     fun `motor temperature past the rider's only step fires a critical one-shot`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         // Defaults: motor 110 °C, one step. 115 is past it; the ESC's 20 °C is not.
         engine.settle(motion(motorTempC = 115f), motionVehicle())
         assertEquals(1, notifier.alerts.size)
@@ -604,7 +604,7 @@ class AlertEngineTest {
     @Test
     fun `esc temperature thresholds against the ESC reading and names it`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         // ESC 95 °C is past its 90 °C default; the motor's 20 °C is nowhere near 110.
         engine.settle(motion(escTempC = 95f), motionVehicle())
         assertEquals(1, notifier.alerts.size)
@@ -615,7 +615,7 @@ class AlertEngineTest {
     @Test
     fun `a climb through three levels posts one notification, not one per level`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
         engine.settle(motion(motorTempC = 105f), v) // level 1
         engine.settle(motion(motorTempC = 115f), v) // level 2
@@ -629,7 +629,7 @@ class AlertEngineTest {
     @Test
     fun `a levelled alert re-arms only after the reading falls below every level`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 120f)))
         engine.settle(motion(motorTempC = 125f), v) // fires at level 2
         engine.settle(motion(motorTempC = 105f), v) // down to level 1 — still engaged
@@ -651,7 +651,7 @@ class AlertEngineTest {
         // A hand-set clock: every temperature reading is confirmed over three
         // samples, so the clock must not tick per sample here.
         var nowSeconds = 1_000_000L
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = { Instant.fromEpochSeconds(nowSeconds) })
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = { Instant.fromEpochSeconds(nowSeconds) })
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
         engine.settle(motion(motorTempC = 105f), v) // t=0 fires at level 1
         assertEquals(AlertSeverity.WARNING, notifier.alerts.single().third, "the first episode was only step 1")
@@ -672,7 +672,7 @@ class AlertEngineTest {
     @Test
     fun `a new episode is graded on its own peak, not the previous episode's`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
         engine.settle(motion(motorTempC = 125f), v) // episode 1 reaches step 3
         assertEquals(AlertSeverity.CRITICAL, notifier.alerts.single().third)
@@ -687,7 +687,7 @@ class AlertEngineTest {
     @Test
     fun `a muted level is skipped and does not fire on its own threshold`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(
             rules = listOf(
                 AlertRule(
@@ -703,7 +703,7 @@ class AlertEngineTest {
     @Test
     fun `a muted top step leaves the highest step that can still sound as the critical one`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(
             rules = listOf(
                 AlertRule(
@@ -724,7 +724,7 @@ class AlertEngineTest {
     @Test
     fun `no motor thermistor means no motor temperature alert, however hot the field reads`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         // 200 °C in a field the hardware does not measure is not evidence of
         // anything (F §10: an unavailable alert must be impossible to arm).
         engine.settle(motion(motorTempC = 200f, hasMotorTemp = false), motionVehicle())
@@ -751,7 +751,7 @@ class AlertEngineTest {
     @Test
     fun `a rule the rider switched off raises nothing`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(AlertRule(MotionAlertKind.MOTOR_TEMP, emptyList())))
         engine.settle(motion(motorTempC = 200f), v)
         assertEquals(0, notifier.alerts.size)
@@ -760,7 +760,7 @@ class AlertEngineTest {
     @Test
     fun `duty and speed raise no notification however high they go`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         // Both armed and both far past their steps. They belong to the
         // continuous alarm (F §2); a notification per excursion would be dozens
         // per ride.
@@ -776,7 +776,7 @@ class AlertEngineTest {
     @Test
     fun `a disconnected sample fires nothing, whatever it still carries`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         // A STALE sample, not the zero-filled placeholder: a fault list and a
         // 200 °C motor would both fire if the guard were missing, so this can
         // actually detect the guard's absence.
@@ -790,7 +790,7 @@ class AlertEngineTest {
     @Test
     fun `a gap does not re-arm a fault that never cleared`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle()
         engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
         assertEquals(1, notifier.alerts.size, "faulted, and notified once")
@@ -822,7 +822,7 @@ class AlertEngineTest {
         // gap — a plausible reading of "ignore what happened while offline" —
         // would swallow the first real sample after it.
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle()
         engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)   // fires
         engine.evaluateMotionForTest(motion(faults = emptyList(), atMillis = 1_001_000L), v)     // cleared
@@ -854,7 +854,7 @@ class AlertEngineTest {
     fun `motion samples drive the motion alerts without re-evaluating the battery ones`() = runTest {
         val repo = StubBmsRepository()
         val notifier = TestNotifier()
-        val engine = AlertEngine(repo, notifier, clock = fakeClockStepping(1))
+        val engine = AlertEngine(repo, notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockStepping(1))
         // backgroundScope: the collectors never complete, and runTest cancels it
         // rather than waiting for them.
         engine.start(backgroundScope)
@@ -887,7 +887,7 @@ class AlertEngineTest {
     @Test
     fun `oneCorruptFrameRaisesNothing`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle()
         // Three good frames establish the baseline, then one corrupt 130 °C
         // controller frame (the field report) between good ones.
@@ -900,7 +900,7 @@ class AlertEngineTest {
     @Test
     fun `a single corrupt frame on a fresh gate raises nothing either`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         engine.evaluateMotionForTest(motion(motorTempC = 150f), motionVehicle())
         assertEquals(0, notifier.alerts.size, "the first sample after a reset needs corroboration too")
     }
@@ -908,7 +908,7 @@ class AlertEngineTest {
     @Test
     fun `aRealRiseConfirmsAfterThreeFrames`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
         for (esc in listOf(40f, 40f, 40f, 60f, 82f, 83f)) engine.evaluateMotionForTest(motion(escTempC = esc), v)
         assertEquals(0, notifier.alerts.size, "only two samples over the line so far")
@@ -920,7 +920,7 @@ class AlertEngineTest {
     @Test
     fun `three frames over the threshold on a fresh gate fire on the third`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
         engine.evaluateMotionForTest(motion(escTempC = 82f), v)
         engine.evaluateMotionForTest(motion(escTempC = 83f), v)
@@ -932,7 +932,7 @@ class AlertEngineTest {
     @Test
     fun `aGenuineFastJumpIsAcceptedOnceItHolds`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 70f)))
         for (t in listOf(40f, 40f, 40f, 75f, 75f)) engine.evaluateMotionForTest(motion(motorTempC = t), v)
         assertEquals(0, notifier.alerts.size, "a 35 degree jump is held until it repeats")
@@ -943,7 +943,7 @@ class AlertEngineTest {
     @Test
     fun `nanIsRejected`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 70f)))
         repeat(6) { engine.evaluateMotionForTest(motion(motorTempC = Float.NaN), v) }
         assertEquals(0, notifier.alerts.size)
@@ -952,7 +952,7 @@ class AlertEngineTest {
     @Test
     fun `a corrupt battery temperature frame raises nothing`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         for (t in listOf(25f, 25f, 25f, 90f, 25f, 25f)) engine.evaluateForTest(bmsData(temps = listOf(t)), v)
         assertEquals(0, notifier.alerts.size)
@@ -961,7 +961,7 @@ class AlertEngineTest {
     @Test
     fun `a disconnect clears the gate so the next link must confirm itself again`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 70f)))
         repeat(3) { engine.evaluateMotionForTest(motion(motorTempC = 40f), v) }
         engine.evaluateMotionForTest(motion(isConnected = false), v)
@@ -973,7 +973,7 @@ class AlertEngineTest {
     @Test
     fun `aSmallGlitchOverTheThresholdDoesNotFire`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
         for (esc in listOf(75f, 75f, 75f, 85f, 75f)) engine.evaluateMotionForTest(motion(escTempC = esc), v)
         assertEquals(0, notifier.alerts.size, "one frame over the line is not three consecutive samples")
@@ -982,7 +982,7 @@ class AlertEngineTest {
     @Test
     fun `aSmallGlitchOverTheBatteryThresholdDoesNotFire`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         for (t in listOf(45f, 45f, 45f, 55f, 45f, 45f)) engine.evaluateForTest(bmsData(temps = listOf(t)), v)
         assertEquals(0, notifier.alerts.size)
@@ -991,7 +991,7 @@ class AlertEngineTest {
     @Test
     fun `oneLowGlitchDoesNotRearm`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
         for (esc in listOf(85f, 85f, 85f, 85f, 70f, 85f, 85f, 85f)) {
             engine.evaluateMotionForTest(motion(escTempC = esc), v)
@@ -1002,7 +1002,7 @@ class AlertEngineTest {
     @Test
     fun `three low samples do rearm`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.ESC_TEMP, 80f)))
         for (esc in listOf(85f, 85f, 85f, 70f, 70f, 70f, 85f, 85f, 85f)) {
             engine.evaluateMotionForTest(motion(escTempC = esc), v)
@@ -1023,7 +1023,7 @@ class AlertEngineTest {
     @Test
     fun `the engine hands the notifier a structured message not words`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         engine.evaluateForTest(bmsData(cells = listOf(4.3f, 3.7f)), vehicleWith())
         val (message, severity) = notifier.messages.first()
         assertEquals(AlertKind.CELL_HIGH, message.kind)
@@ -1035,7 +1035,7 @@ class AlertEngineTest {
     @Test
     fun `a controller fault message carries the fault names`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         engine.evaluateMotionForTest(motion(faults = listOf("ESC0: DRV", "ESC1: OVP")), motionVehicle())
         val message = notifier.messages.single().first
         assertEquals(AlertKind.CONTROLLER_FAULT, message.kind)
@@ -1045,7 +1045,7 @@ class AlertEngineTest {
     @Test
     fun `a bms fault present in fifty consecutive samples notifies once`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         repeat(50) { i -> engine.bmsSample(listOf("discharge disabled"), 1_000_000L + i * 100L, v) }
         assertEquals(1, notifier.messages.size, "one notification per episode, not one per frame")
@@ -1058,7 +1058,7 @@ class AlertEngineTest {
     @Test
     fun `a bms fault that flickers within the episode gap stays one episode`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         val t = 1_000_000L
         engine.bmsSample(listOf("OVP"), t, v)
@@ -1073,7 +1073,7 @@ class AlertEngineTest {
     @Test
     fun `a bms fault returning after the episode gap is a new episode`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         val t = 1_000_000L
         engine.bmsSample(listOf("OVP"), t, v)
@@ -1086,7 +1086,7 @@ class AlertEngineTest {
     @Test
     fun `a bms fault is silent when its notify switch is off`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith().copy(notifyKinds = NotifyKind.DEFAULTS - NotifyKind.BMS_FAULT)
         repeat(3) { i -> engine.bmsSample(listOf("OVP"), 1_000_000L + i * 100L, v) }
         assertEquals(0, notifier.messages.size)
@@ -1095,7 +1095,7 @@ class AlertEngineTest {
     @Test
     fun `a vehicle that never chose notifies for bms faults by default`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         engine.bmsSample(listOf("OVP"), 1_000_000L, vehicleWith())
         assertEquals(1, notifier.messages.size)
     }
@@ -1103,7 +1103,7 @@ class AlertEngineTest {
     @Test
     fun `speed does not notify by default however fast`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.SPEED, 50f)))
         repeat(5) { engine.evaluateMotionForTest(motion(speedKmh = 70f), v) }
         assertEquals(0, notifier.messages.size)
@@ -1112,7 +1112,7 @@ class AlertEngineTest {
     @Test
     fun `duty does not notify by default however high`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle()   // shipped defaults: duty 80 / 90
         repeat(5) { engine.evaluateMotionForTest(motion(dutyPercent = 95f), v) }
         assertEquals(0, notifier.messages.size)
@@ -1121,7 +1121,7 @@ class AlertEngineTest {
     @Test
     fun `speed notifies once per episode when switched on`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle(rules = listOf(rule(MotionAlertKind.SPEED, 50f)))
             .copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.SPEED)
         repeat(5) { engine.evaluateMotionForTest(motion(speedKmh = 62f), v) }
@@ -1138,7 +1138,7 @@ class AlertEngineTest {
     @Test
     fun `duty notifies once per episode when switched on`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.DUTY)
         for (d in listOf(85f, 92f, 95f, 88f, 93f)) engine.evaluateMotionForTest(motion(dutyPercent = d), v)
         assertEquals(1, notifier.messages.size)
@@ -1151,7 +1151,7 @@ class AlertEngineTest {
     @Test
     fun `switching motor temperature off silences its notification only`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS - NotifyKind.MOTOR_TEMP)
         engine.settle(motion(motorTempC = 130f, escTempC = 20f), v)
         assertEquals(0, notifier.messages.size)
@@ -1162,7 +1162,7 @@ class AlertEngineTest {
     @Test
     fun `switching controller temperature off silences it and leaves the motor`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS - NotifyKind.ESC_TEMP)
         engine.settle(motion(motorTempC = 20f, escTempC = 120f), v)
         assertEquals(0, notifier.messages.size)
@@ -1173,7 +1173,7 @@ class AlertEngineTest {
     @Test
     fun `switching controller faults off silences them`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle().copy(notifyKinds = emptySet())
         engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
         assertEquals(0, notifier.messages.size)
@@ -1193,7 +1193,7 @@ class AlertEngineTest {
     @Test
     fun `a controller fault flickering every frame notifies once`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle()
         repeat(50) { i ->
             val faults = if (i % 2 == 0) listOf("DRV") else emptyList()
@@ -1205,7 +1205,7 @@ class AlertEngineTest {
     @Test
     fun `a controller fault absent for two seconds then present is a second episode`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle()
         engine.evaluateMotionForTest(motion(faults = listOf("DRV"), atMillis = 1_000_000L), v)
         engine.evaluateMotionForTest(motion(faults = emptyList(), atMillis = 1_000_500L), v)
@@ -1216,7 +1216,7 @@ class AlertEngineTest {
     @Test
     fun `a fault list that grows within an episode does not notify again`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = motionVehicle()
         engine.evaluateMotionForTest(motion(faults = listOf("DRV"), atMillis = 1_000_000L), v)
         engine.evaluateMotionForTest(motion(faults = listOf("DRV", "OVP"), atMillis = 1_000_100L), v)
@@ -1226,7 +1226,7 @@ class AlertEngineTest {
     @Test
     fun `a bms fault returning after a long silence with no absent sample is a new episode`() {
         val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
         val v = vehicleWith()
         engine.bmsSample(listOf("OVP"), 1_000_000L, v)
         engine.bmsSample(emptyList(), 1_000_500L, v)
@@ -1257,7 +1257,7 @@ class AlertEngineTest {
         )
         for ((name, samples) in fixtures) {
             val notifier = TestNotifier()
-            val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+            val engine = AlertEngine(StubBmsRepository(), notifier, ru.sodovaya.volty.domain.alert.CalibrationMute(), clock = fakeClockProgressing())
             val tracker = ru.sodovaya.volty.domain.alert.ActiveAlertTracker()
             val shown = mutableSetOf<AlertKind>()
             for (sample in samples) {
@@ -1278,7 +1278,7 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val clock = MuteClock()
         val mute = ru.sodovaya.volty.domain.alert.CalibrationMute { clock.now }
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing(), calibrationMute = mute)
+        val engine = AlertEngine(StubBmsRepository(), notifier, mute, clock = fakeClockProgressing())
         val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.DUTY + NotifyKind.SPEED)
             .let { it.copy(motionAlerts = listOf(rule(MotionAlertKind.DUTY, 80f, 90f), rule(MotionAlertKind.SPEED, 50f), rule(MotionAlertKind.ESC_TEMP, 90f))) }
         mute.begin()
@@ -1293,7 +1293,7 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val clock = MuteClock()
         val mute = ru.sodovaya.volty.domain.alert.CalibrationMute { clock.now }
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing(), calibrationMute = mute)
+        val engine = AlertEngine(StubBmsRepository(), notifier, mute, clock = fakeClockProgressing())
         val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.DUTY + NotifyKind.SPEED)
             .copy(motionAlerts = listOf(rule(MotionAlertKind.DUTY, 80f, 90f), rule(MotionAlertKind.SPEED, 50f)))
         mute.begin()
@@ -1313,7 +1313,7 @@ class AlertEngineTest {
         val notifier = TestNotifier()
         val clock = MuteClock()
         val mute = ru.sodovaya.volty.domain.alert.CalibrationMute { clock.now }
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing(), calibrationMute = mute)
+        val engine = AlertEngine(StubBmsRepository(), notifier, mute, clock = fakeClockProgressing())
         val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.SPEED)
             .copy(motionAlerts = listOf(rule(MotionAlertKind.SPEED, 50f)))
         mute.begin()

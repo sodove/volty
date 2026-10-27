@@ -285,6 +285,7 @@ class RideDashboardComponentTest {
             onDisconnectRequested = onDisconnectRequested,
             onEditVehicleRequested = onEditVehicleRequested,
             rangeSource = rangeSource,
+            calibrationMute = ru.sodovaya.volty.domain.alert.CalibrationMute(),
         )
     }
 
@@ -1759,7 +1760,8 @@ class RideDashboardComponentTest {
             onOpenGraphRequested = {},
             onOpenSettingsRequested = {},
             onAddVehicleRequested = {},
-            onDisconnectRequested = {}
+            onDisconnectRequested = {},
+            calibrationMute = ru.sodovaya.volty.domain.alert.CalibrationMute()
         )
 
         suspend fun assertRing(where: String) {

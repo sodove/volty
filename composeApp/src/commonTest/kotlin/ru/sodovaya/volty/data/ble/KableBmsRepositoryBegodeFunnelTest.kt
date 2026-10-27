@@ -467,7 +467,8 @@ class KableBmsRepositoryBegodeFunnelTest {
             onOpenGraphRequested = {},
             onOpenSettingsRequested = {},
             onAddVehicleRequested = {},
-            onDisconnectRequested = {}
+            onDisconnectRequested = {},
+            calibrationMute = ru.sodovaya.volty.domain.alert.CalibrationMute()
         )
         advanceUntilIdle()
         assertEquals(

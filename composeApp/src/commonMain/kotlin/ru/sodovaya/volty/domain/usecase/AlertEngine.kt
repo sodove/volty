@@ -66,8 +66,9 @@ import kotlin.time.Instant
 class AlertEngine(
     private val bmsRepository: BmsRepository,
     private val notifier: Notifier,
-    private val clock: () -> Instant = { Clock.System.now() },
-    private val calibrationMute: CalibrationMute = CalibrationMute()
+    /** Required (no default): a forgotten Koin wiring must fail to compile, not mute nothing. */
+    private val calibrationMute: CalibrationMute,
+    private val clock: () -> Instant = { Clock.System.now() }
 ) {
 
     private val lastFired = mutableMapOf<Pair<String, AlertKind>, Instant>()
@@ -350,21 +351,31 @@ class AlertEngine(
             // Speed and duty are not gated (decision 1: unchanged) - one raw
             // reading is its own min, max and latest. Switched off by default,
             // in which case fireLevelled posts nothing.
-            MotionAlertKind.DUTY -> if (calibrating) markNotifiedForCalibration(vehicle, AlertKind.DUTY_HIGH, rule, motion.dutyPercent) else motion.dutyPercent.let { v ->
-                fireLevelled(
-                    AlertKind.DUTY_HIGH, rule, vehicle, now,
-                    value = TemperatureGate.Confirmed(min = v, max = v, latest = v),
-                    enabled = vehicle.notifies(NotifyKind.DUTY),
-                    message = AlertMessage(AlertKind.DUTY_HIGH, vehicle.name, value = v)
-                )
+            MotionAlertKind.DUTY -> {
+                val v = motion.dutyPercent
+                if (calibrating) {
+                    markNotifiedForCalibration(vehicle, AlertKind.DUTY_HIGH, rule, v)
+                } else {
+                    fireLevelled(
+                        AlertKind.DUTY_HIGH, rule, vehicle, now,
+                        value = TemperatureGate.Confirmed(min = v, max = v, latest = v),
+                        enabled = vehicle.notifies(NotifyKind.DUTY),
+                        message = AlertMessage(AlertKind.DUTY_HIGH, vehicle.name, value = v)
+                    )
+                }
             }
-            MotionAlertKind.SPEED -> if (calibrating) markNotifiedForCalibration(vehicle, AlertKind.SPEED_HIGH, rule, motion.speedKmh) else motion.speedKmh.let { v ->
-                fireLevelled(
-                    AlertKind.SPEED_HIGH, rule, vehicle, now,
-                    value = TemperatureGate.Confirmed(min = v, max = v, latest = v),
-                    enabled = vehicle.notifies(NotifyKind.SPEED),
-                    message = AlertMessage(AlertKind.SPEED_HIGH, vehicle.name, value = v)
-                )
+            MotionAlertKind.SPEED -> {
+                val v = motion.speedKmh
+                if (calibrating) {
+                    markNotifiedForCalibration(vehicle, AlertKind.SPEED_HIGH, rule, v)
+                } else {
+                    fireLevelled(
+                        AlertKind.SPEED_HIGH, rule, vehicle, now,
+                        value = TemperatureGate.Confirmed(min = v, max = v, latest = v),
+                        enabled = vehicle.notifies(NotifyKind.SPEED),
+                        message = AlertMessage(AlertKind.SPEED_HIGH, vehicle.name, value = v)
+                    )
+                }
             }
         }
     }

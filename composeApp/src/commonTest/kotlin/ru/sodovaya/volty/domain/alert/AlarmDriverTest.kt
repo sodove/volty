@@ -150,7 +150,7 @@ class AlarmDriverTest {
     ): RecordingAlarm {
         // backgroundScope: the collector never completes, and runTest cancels it
         // rather than waiting for it.
-        AlarmDriver(repo, modalities, alarm).start(backgroundScope)
+        AlarmDriver(repo, modalities, alarm, calibrationMuted = { false }).start(backgroundScope)
         runCurrent()
         return alarm
     }
@@ -527,7 +527,8 @@ class AlarmDriverTest {
             AlarmDriver(
                 StubBmsRepository(),
                 MutableStateFlow(AlarmModalities.DEFAULT),
-                RecordingAlarm()
+                RecordingAlarm(),
+                calibrationMuted = { false }
             ).start(scope)
 
             assertEquals(
@@ -558,7 +559,7 @@ class AlarmDriverTest {
     fun the_notification_action_silences_the_running_alarm_without_ending_the_ride() = runTest {
         val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f, 90f)))
         val alarm = RecordingAlarm()
-        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm, calibrationMuted = { false })
         driver.start(backgroundScope)
         runCurrent()
 
@@ -591,7 +592,7 @@ class AlarmDriverTest {
     fun a_silenced_alarm_re_arms_once_the_reading_recovers() = runTest {
         val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f, 90f)))
         val alarm = RecordingAlarm()
-        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm, calibrationMuted = { false })
         driver.start(backgroundScope)
         runCurrent()
 
@@ -620,7 +621,7 @@ class AlarmDriverTest {
         val v = vehicle(rule(MotionAlertKind.DUTY, 80f, 90f))
         val repo = ridingOn(v)
         val alarm = RecordingAlarm()
-        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm, calibrationMuted = { false })
         driver.start(backgroundScope)
         runCurrent()
 
@@ -656,7 +657,7 @@ class AlarmDriverTest {
     fun the_silenced_state_is_published_while_it_is_in_force_and_withdrawn_when_it_lifts() = runTest {
         val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f, 90f)))
         val alarm = RecordingAlarm()
-        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm, calibrationMuted = { false })
         driver.start(backgroundScope)
         runCurrent()
         assertEquals(false, driver.isSilenced.value, "nothing is silenced before anything is pressed")
@@ -697,7 +698,7 @@ class AlarmDriverTest {
         val v = vehicle(rule(MotionAlertKind.DUTY, 80f, 90f))
         val repo = ridingOn(v)
         val alarm = RecordingAlarm()
-        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm, calibrationMuted = { false })
         driver.start(backgroundScope)
         runCurrent()
 
@@ -721,7 +722,7 @@ class AlarmDriverTest {
     fun silencing_a_quiet_alarm_does_not_swallow_the_next_one() = runTest {
         val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f, 90f)))
         val alarm = RecordingAlarm()
-        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm, calibrationMuted = { false })
         driver.start(backgroundScope)
         runCurrent()
         assertEquals(0, alarm.level, "fixture guard: nothing is sounding")
