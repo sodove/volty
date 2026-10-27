@@ -278,6 +278,9 @@ class KableBmsRepository private constructor(
     private fun historySocViewFromActivePipeline(): HistorySocView? =
         historySocOwned?.takeIf { ownsActivePipeline(it.first) }?.second
 
+    /** What the history enrichment would read right now (see [historySocOwned]). */
+    internal fun historySocViewForTest(): HistorySocView? = historySocViewFromActivePipeline()
+
     private fun publishHistorySocView(orchestrator: VehicleConnection, vd: VehicleData) {
         val tracker = orchestrator.energy
         historySocOwned = orchestrator to if (tracker == null) null else historySocView(tracker.vehicleId, vd.energy)

@@ -23,6 +23,39 @@ class HistoryBatteryUsedTest {
         assertEquals(1.0, used.percent, 1e-9)
         assertFalse(used.approximate, "calm windows read from the battery's own current")
         assertEquals("−", historyBatteryUsedSign(used.percent)); assertEquals("", historyBatteryUsedSign(0.3))
+        // Half up, one rule for sign, digit and visibility: exactly 0.5 prints 1, never "−0".
+        assertEquals(1, historyBatteryUsedDigit(0.5)); assertEquals("−", historyBatteryUsedSign(0.5)); assertEquals("+", historyBatteryUsedSign(-0.5))
+        assertEquals(3, historyBatteryUsedDigit(2.5)); assertEquals(0, historyBatteryUsedDigit(0.4999)); assertEquals("", historyBatteryUsedSign(-0.4999))
+    }
+
+    private fun ms(millis: Long, key: HistorySeriesKey, v: Double) =
+        HistorySample(HistoryTick(1_000_000L + millis, millis, 1), key, v)
+
+    @Test fun aWindowMixingCalmAndLoadedSamplesReadsTheCalmOnes() {
+        // 30 calm samples at 80 and 30 sagged ones at 60 interleaved in the first minute: all-samples would read 70.
+        val soc = (0..59).map { t -> s(t, socKey, if (t % 2 == 0) 80.0 else 60.0) } + (840..900).map { t -> s(t, socKey, 50.0) }
+        val cur = (0..59).map { t -> s(t, amps, if (t % 2 == 0) -1.0 else -25.0) } + (840..900).map { t -> s(t, amps, -0.5) }
+        assertEquals(30.0, assertNotNull(historyBatteryUsed(soc, cur, true)).percent, 1e-9)
+    }
+
+    /** Start window of two samples, A (80, calm) and B (60) with [bAmps] [bOffsetMs] away from B; an all-calm 50 end. */
+    private fun startWith(bAmps: Double, bOffsetMs: Long): Double {
+        val soc = listOf(ms(0, socKey, 80.0), ms(10_000, socKey, 60.0), ms(900_000, socKey, 50.0))
+        val cur = listOf(ms(0, amps, -0.5), ms(10_000 + bOffsetMs, amps, bAmps), ms(900_000, amps, -0.5))
+        return assertNotNull(historyBatteryUsed(soc, cur, true)).percent + 50.0
+    }
+
+    @Test fun theCalmBoundaryIsStrictlyBelowThreeAmps() {
+        assertEquals(70.0, startWith(-2.999, 0), 1e-9, "2.999 A is calm: both samples count, median 70")
+        assertEquals(80.0, startWith(-3.0, 0), 1e-9, "exactly 3.0 A is not calm: only the calm sample counts")
+        assertEquals(80.0, startWith(3.0, 0), 1e-9, "sign does not matter")
+    }
+
+    @Test fun theCurrentPairingWindowIsExactlyOneSecondEitherSide() {
+        assertEquals(70.0, startWith(-1.0, 1_000), 1e-9, "a current 1000 ms away still pairs")
+        assertEquals(70.0, startWith(-1.0, -1_000), 1e-9, "and before the sample too")
+        assertEquals(80.0, startWith(-1.0, 1_001), 1e-9, "1001 ms away does not: no nearby current, not calm")
+        assertEquals(80.0, startWith(-1.0, 2_000), 1e-9)
     }
 
     @Test fun aChargingSessionIsNegativeAndSignedPlus() {

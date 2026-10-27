@@ -129,7 +129,7 @@ fun historyVisibleTotals(totals: List<HistoryTotal>): List<HistoryTotal> {
         HistoryTotalKind.AVERAGE_KMH -> distance >= 0.05 && t.value >= 0.05
         HistoryTotalKind.ENERGY_WH, HistoryTotalKind.MAX_POWER_W -> t.value >= 0.5
         // Signed: a charging session (+12 %) is as much news as a ride (-12 %).
-        HistoryTotalKind.BATTERY_USED_PERCENT -> abs(t.value) >= 0.5
+        HistoryTotalKind.BATTERY_USED_PERCENT -> historyBatteryUsedDigit(t.value) >= 1
         HistoryTotalKind.MOVING_MILLIS -> t.value >= 1_000.0
         else -> true
     } }

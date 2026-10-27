@@ -40,6 +40,11 @@ internal const val BATTERY_CALM_AMPS = 3.0
  * is conservative: a BMS reporting its own charge but no current is marked approximate too. Also approximate when the two
  * windows share samples (a ride under two windows' length) or when no current series exists.
  *
+ * **Known limitation.** Whether the pack's charge is itself a voltage estimate (a `!reportsStateOfCharge` pack, now the
+ * tracker's value) cannot be told here: a stored source carries no BMS type, so such a pack WITH its own calm current
+ * reads as exact although its charge is modelled. A later change that records the type (or an "estimated" flag) fixes it.
+ * A ride spanning a clock break is always approximate (the end window is anchored to the last generation only).
+ *
  * Null when no charge sample is known. False-positive risk: a pack charging during the first minute then riding reads its
  * start from the charging level; it would show as a small "+" tile. Not seen.
  */
@@ -83,9 +88,15 @@ private fun median(values: List<Double>): Double {
 internal fun historyBatteryUsedTotal(parts: List<HistoryBatteryUsed>): HistoryBatteryUsed? =
     if (parts.isEmpty()) null else HistoryBatteryUsed(parts.map { it.percent }.average(), parts.any { it.approximate })
 
-/** "-" for a discharge, "+" for a charge. The sign of the ROUNDED digit decides: 0 prints no sign (the tile is hidden below 0.5 anyway). */
+/**
+ * The digit the tile prints: |value| rounded HALF UP. `formatFixed` rounds half to even, which printed exactly 0.5 as
+ * "−0 %" while the tile was still visible (review minor 2); one rule here serves the sign, the digit and the visibility.
+ */
+internal fun historyBatteryUsedDigit(value: Double): Int = kotlin.math.floor(abs(value) + 0.5).toInt()
+
+/** "−" for a discharge, "+" for a charge; nothing when the printed digit is 0, so "−0 %" cannot occur. */
 internal fun historyBatteryUsedSign(value: Double): String = when {
-    value >= 0.5 -> "−"
-    value <= -0.5 -> "+"
-    else -> ""
+    historyBatteryUsedDigit(value) == 0 -> ""
+    value > 0 -> "−"
+    else -> "+"
 }

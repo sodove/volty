@@ -9,7 +9,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.resources.stringResource
-import kotlin.math.abs
 import ru.sodovaya.volty.util.formatFixed
 import volty.composeapp.generated.resources.*
 
@@ -41,7 +40,7 @@ internal fun HistoryTotal.text(): String {
         HistoryTotalKind.AVERAGE_KMH, HistoryTotalKind.MAX_KMH -> "${formatFixed(v, 1)} ${stringResource(Res.string.unit_kmh)}"
         HistoryTotalKind.ENERGY_WH -> "${formatFixed(v, 0)} ${stringResource(Res.string.history_unit_wh)}"
         HistoryTotalKind.WH_PER_KM -> "${formatFixed(v, 1)} ${stringResource(Res.string.history_unit_wh_per_km)}"
-        HistoryTotalKind.BATTERY_USED_PERCENT -> "${historyBatteryUsedSign(value)}${formatFixed(abs(v), 0)} ${stringResource(Res.string.unit_percent)}"
+        HistoryTotalKind.BATTERY_USED_PERCENT -> "${historyBatteryUsedSign(value)}${historyBatteryUsedDigit(value)} ${stringResource(Res.string.unit_percent)}"
         HistoryTotalKind.MAX_POWER_W -> "${formatFixed(v, 0)} ${stringResource(Res.string.history_unit_watt)}"
         HistoryTotalKind.MOTOR_TEMP_C, HistoryTotalKind.CONTROLLER_TEMP_C, HistoryTotalKind.BATTERY_TEMP_C ->
             "${formatFixed(v, 0)} ${stringResource(Res.string.unit_celsius)}"

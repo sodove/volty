@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.data.ble
 
+import ru.sodovaya.volty.data.history.withHistoryEstimatedSoc
+import ru.sodovaya.volty.domain.model.*
 import ru.sodovaya.volty.data.bms.BegodeDumpFixture
 import ru.sodovaya.volty.data.bms.BegodeT4Fixture
 import ru.sodovaya.volty.data.bms.MotionSource
@@ -30,6 +32,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -429,6 +432,32 @@ class KableBmsRepositoryDumbBegodeTest {
             assertEquals(Chemistry.LI_ION_NMC, saved.chemistry)
             assertNotNull(saved.memory.counter, "the live counter is what is persisted")
         } }
+
+    @Test
+    fun `history reads the trackers charge for the owning vehicle only, and nothing once it is gone`() = FakeEnergyStore().let { store -> energyRepoTest(store) { repo ->
+        val v1 = vehicle(cellCount = 24)
+        val ride = EnergyRide(repo, v1)
+        ride.feed(1_000)
+        assertNull(repo.historySocViewForTest()?.percent, "unseeded: the view carries no charge, history keeps the voltage estimate")
+        advanceUntilIdle(); ride.feed(8_000)
+        val live = assertNotNull(assertNotNull(repo.activeVehicleData.value.energy).socPercent)
+        val view = assertNotNull(repo.historySocViewForTest())
+        assertEquals("v1", view.vehicleId); assertEquals(live, view.percent)
+        // The enrichment end to end: this vehicle's gauge-less pack records the live value, another vehicle's does not.
+        val obs = TelemetryObservation(TelemetryOrigin.BATTERY, 0, listOf(
+            TelemetryReading.measured(TelemetryMetric.VOLTAGE, 90.8), TelemetryReading(TelemetryMetric.SOC, null, TelemetryUnknown.UNAVAILABLE)))
+        fun recorded(v: Vehicle) = withHistoryEstimatedSoc(obs, v, BmsType.BEGODE, null, { repo.historySocViewForTest() }) { 24 }
+            .readings.single { it.metric == TelemetryMetric.SOC }.value
+        assertEquals(live.toDouble(), recorded(v1))
+        assertNotEquals(live.toDouble(), recorded(v1.copy(id = "v2")), "another vehicle's observation falls back to the voltage estimate")
+
+        // A new pipeline for another vehicle supersedes the old one: v1's pair is never read as its own.
+        Wire(repo, v1.copy(id = "v2"))
+        assertNull(repo.historySocViewForTest(), "the superseded orchestrator's view is dead before the new one publishes")
+
+        ride.feed(0); repo.disconnect(); advanceUntilIdle()
+        assertNull(repo.historySocViewForTest(), "disconnected: no view, history falls back")
+    } }
 
     @Test
     fun `memory is saved at most every 30 seconds while connected`() = FakeEnergyStore().let { store -> energyRepoTest(store) { repo ->
