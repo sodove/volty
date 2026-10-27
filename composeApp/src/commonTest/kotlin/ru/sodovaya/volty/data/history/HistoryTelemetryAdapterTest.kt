@@ -78,6 +78,14 @@ class HistoryTelemetryAdapterTest {
         assertFailsWith<IllegalArgumentException> { historyTelemetrySamples(source.copy(kind = HistorySourceKind.CONTROLLER), tick, observation) }
     }
 
+    @Test fun theEstimatedDutyIsRecordedUnderItsOwnMetricId() {
+        val controller = source.copy(id = "esc", kind = HistorySourceKind.CONTROLLER)
+        val observation = TelemetryObservation(TelemetryOrigin.CONTROLLER, 0, listOf(
+            TelemetryReading.measured(TelemetryMetric.DUTY_ESTIMATED, 70.6)))
+        val sample = historyTelemetrySamples(controller, tick, observation).single()
+        assertEquals("duty_estimated_percent", sample.key.metricId); assertEquals(70.6, sample.value)
+    }
+
     @Test fun canonicalVocabularyCoversRegistryWithoutSignOrUnitConversion() {
         assertEquals(HistoryMetricRegistry.descriptors.map { it.id }.toSet(), TelemetryMetric.entries.map { it.id }.toSet())
         val readings = listOf(TelemetryReading.measured(TelemetryMetric.POWER, -100.0),

@@ -39,7 +39,8 @@ class NativeHistoryEstimatedDutyTest {
         override suspend fun close() {}
     }
 
-    private suspend fun recorded(view: () -> HistoryPwmView?): List<Double?> {
+    /** (metric id, value) of every duty-family sample recorded. */
+    private suspend fun recorded(view: () -> HistoryPwmView?): List<Pair<String, Double?>> {
         val writer = Writer(); var n = 0
         val c = RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++n}" }, { 0 })
         val spec = LinkSpec("a", ProtocolKind.BEGODE, listOf(OwnedSource(0)))
@@ -51,18 +52,20 @@ class NativeHistoryEstimatedDutyTest {
             sampleFunnelChannel(4), pwmView = view))
         assertTrue(capture.prepareForObservation())
         now = tick(20); assertTrue(capture.processNotification(byteArrayOf(1)))
-        return writer.samples.filter { it.key.metricId == TelemetryMetric.DUTY.id }.map { it.value }
+        return writer.samples.filter { it.key.metricId == TelemetryMetric.DUTY.id || it.key.metricId == TelemetryMetric.DUTY_ESTIMATED.id }
+            .map { it.key.metricId to it.value }
     }
 
     @Test fun aNeverReportingWheelsRecordedDutyIsTheLiveEstimate() = kotlinx.coroutines.test.runTest {
-        assertEquals(listOf<Double?>(42.5), recorded { HistoryPwmView("wheel", PwmEvidence.NEVER_REPORTED, 42.5f) })
+        // The estimate is its own metric: "duty_percent" is NOT written at all, so the raw constant cannot be mistaken for it.
+        assertEquals(listOf<Pair<String, Double?>>("duty_estimated_percent" to 42.5), recorded { HistoryPwmView("wheel", PwmEvidence.NEVER_REPORTED, 42.5f) })
     }
 
     @Test fun noEstimateRecordsUnknownNotTheRawZero() = kotlinx.coroutines.test.runTest {
-        assertEquals(listOf<Double?>(null), recorded { HistoryPwmView("wheel", PwmEvidence.NEVER_REPORTED, null) })
+        assertEquals(listOf<Pair<String, Double?>>("duty_estimated_percent" to null), recorded { HistoryPwmView("wheel", PwmEvidence.NEVER_REPORTED, null) })
     }
 
     @Test fun withoutAnEstimatorViewTheDecodersReadingStands() = kotlinx.coroutines.test.runTest {
-        assertEquals(listOf<Double?>(0.0), recorded { null })
+        assertEquals(listOf<Pair<String, Double?>>("duty_percent" to 0.0), recorded { null })
     }
 }

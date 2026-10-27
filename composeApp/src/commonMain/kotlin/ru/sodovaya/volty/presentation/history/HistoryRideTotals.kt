@@ -6,11 +6,32 @@ import ru.sodovaya.volty.domain.plausibility.RobustPeak
 
 enum class HistoryTotalKind {
     DISTANCE_KM, DURATION_MILLIS, MOVING_MILLIS, AVERAGE_KMH, MAX_KMH, ENERGY_WH, WH_PER_KM,
-    BATTERY_USED_PERCENT, MAX_POWER_W, MOTOR_TEMP_C, CONTROLLER_TEMP_C, BATTERY_TEMP_C,
+    BATTERY_USED_PERCENT, MAX_POWER_W, MOTOR_TEMP_C, CONTROLLER_TEMP_C, BATTERY_TEMP_C, MAX_DUTY_PERCENT,
 }
 
-/** [approximate] when a contributing stat was incomplete; [HistoryTotalKind.BATTERY_USED_PERCENT] is SIGNED (positive = discharged); a missing input omits the tile instead. */
-data class HistoryTotal(val kind: HistoryTotalKind, val value: Double, val approximate: Boolean = false)
+/**
+ * [approximate] when a contributing stat was incomplete; [HistoryTotalKind.BATTERY_USED_PERCENT] is SIGNED (positive = discharged); a missing input omits the tile instead.
+ * [estimated] when the number is the PWM estimate of a wheel that does not report one (the series `duty_estimated_percent`),
+ * not a measurement; the tile marks it with a tilde ([historyTotalPrefix]). Distinct from [approximate]: that is "the
+ * measurement may be off", this is "nothing was measured".
+ */
+data class HistoryTotal(val kind: HistoryTotalKind, val value: Double, val approximate: Boolean = false, val estimated: Boolean = false)
+
+/** The prefix a tile prints before the value: a tilde for an estimate, an approximation sign for an incomplete measurement. */
+fun historyTotalPrefix(total: HistoryTotal): String =
+    (if (total.estimated) "~" else "") + (if (total.approximate) "≈" else "") + (if (total.estimated || total.approximate) " " else "")
+
+/**
+ * The peak PWM of a ride from its two duty series: what the controller [measured] and what the estimator [estimated].
+ * The larger wins; on a tie the measurement wins. The result is marked [HistoryTotal.estimated] only when the estimate won,
+ * and approximate when any candidate was. No upper bound is applied: Sherman / SV wheels with field weakening show 105 %.
+ * An old ride (before the estimate had its own series) has only the first list and reads as measured.
+ */
+internal fun historyPeakDuty(measured: List<HistoryTotal>, estimated: List<HistoryTotal>): HistoryTotal? {
+    val all = measured.map { it to false } + estimated.map { it to true }
+    val (best, isEstimate) = all.maxByOrNull { it.first.value } ?: return null
+    return HistoryTotal(HistoryTotalKind.MAX_DUTY_PERCENT, best.value, all.any { it.first.approximate }, isEstimate)
+}
 
 /**
  * Needle-free peaks read from paged detail ([historyRobustPeaks] in the totals reader), in display units, per series.
@@ -28,7 +49,7 @@ internal val batteryTemperatureTiers = listOf(setOf(HistorySourceKind.VEHICLE_BA
     setOf(HistorySourceKind.BATTERY, HistorySourceKind.BATTERY_ASSEMBLY))
 
 private val motionMetrics = listOf("speed_kmh", "trip_distance_km", "odometer_km", "motor_temperature_c",
-    "esc_temperature_c", "controller_power_w")
+    "esc_temperature_c", "controller_power_w", "duty_percent", "duty_estimated_percent")
 private val batteryMetrics = listOf("soc_percent", "power_w")
 
 /**
@@ -130,6 +151,9 @@ fun historyRideTotals(
     val power = packPower.singleOrNull() ?: peak(motion, "controller_power_w")
     power?.takeIf { it.value > 0 }?.let { result += HistoryTotal(HistoryTotalKind.MAX_POWER_W, it.value, it.approximate) }
 
+    // Peak PWM: the measured series and the estimate are separate series; the winner decides whether the tile is marked.
+    historyPeakDuty(candidates(motion, "duty_percent"), candidates(motion, "duty_estimated_percent"))?.let { result += it }
+
     peak(motion, "motor_temperature_c")?.let { result += it.copy(kind = HistoryTotalKind.MOTOR_TEMP_C) }
     peak(motion, "esc_temperature_c")?.let { result += it.copy(kind = HistoryTotalKind.CONTROLLER_TEMP_C) }
     peak(tier(sources, batteryTemperatureTiers), "battery_temperature_c")?.let { result += it.copy(kind = HistoryTotalKind.BATTERY_TEMP_C) }
@@ -145,7 +169,7 @@ fun historyVisibleTotals(totals: List<HistoryTotal>): List<HistoryTotal> {
     return totals.filter { t -> when (t.kind) {
         HistoryTotalKind.DISTANCE_KM -> t.value >= 0.05
         HistoryTotalKind.AVERAGE_KMH -> distance >= 0.05 && t.value >= 0.05
-        HistoryTotalKind.ENERGY_WH, HistoryTotalKind.MAX_POWER_W -> t.value >= 0.5
+        HistoryTotalKind.ENERGY_WH, HistoryTotalKind.MAX_POWER_W, HistoryTotalKind.MAX_DUTY_PERCENT -> t.value >= 0.5
         // Signed: a charging session (+12 %) is as much news as a ride (-12 %).
         HistoryTotalKind.BATTERY_USED_PERCENT -> historyBatteryUsedDigit(t.value) >= 1
         HistoryTotalKind.MOVING_MILLIS -> t.value >= 1_000.0

@@ -1145,6 +1145,7 @@
     <string name="history_metric_cell">Cell</string>
     <string name="history_metric_speed">Speed</string>
     <string name="history_metric_duty">Duty cycle</string>
+    <string name="history_metric_duty_estimated">Duty cycle (estimate)</string>
     <string name="history_metric_motor_current">Motor current</string>
     <string name="history_metric_battery_current">Controller input current</string>
     <string name="history_metric_input_voltage">Controller input voltage</string>
@@ -1242,6 +1243,8 @@
     <string name="history_total_motor_temp">Motor</string>
     <string name="history_total_controller_temp">Controller</string>
     <string name="history_total_battery_temp">Battery temp</string>
+    <string name="history_total_max_duty">Peak PWM</string>
+    <string name="history_card_max_duty">PWM ≤ %1$s</string>
     <string name="history_duration_hours">%1$d h %2$d min</string>
     <string name="history_duration_minutes">%1$d min</string>
     <string name="history_chart_cursor">Cursor: %1$s</string>

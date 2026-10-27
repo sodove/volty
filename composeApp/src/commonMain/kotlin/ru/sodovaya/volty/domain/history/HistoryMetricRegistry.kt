@@ -30,6 +30,7 @@ object HistoryMetricRegistry {
         HistoryMetricDescriptor("cell_v", HistoryUnit.VOLT, HistoryMetricGroup.CELL, individualBattery, indexedByCell = true),
         HistoryMetricDescriptor("speed_kmh", HistoryUnit.KMH, HistoryMetricGroup.MOVEMENT, motionSources),
         HistoryMetricDescriptor("duty_percent", HistoryUnit.PERCENT, HistoryMetricGroup.CONTROLLER, motionSources),
+        HistoryMetricDescriptor("duty_estimated_percent", HistoryUnit.PERCENT, HistoryMetricGroup.CONTROLLER, motionSources),
         HistoryMetricDescriptor("motor_current_a", HistoryUnit.AMP, HistoryMetricGroup.CONTROLLER, motionCurrentSources),
         HistoryMetricDescriptor("battery_current_a", HistoryUnit.AMP, HistoryMetricGroup.CONTROLLER, motionCurrentSources),
         HistoryMetricDescriptor("input_voltage_v", HistoryUnit.VOLT, HistoryMetricGroup.CONTROLLER, motionSources),

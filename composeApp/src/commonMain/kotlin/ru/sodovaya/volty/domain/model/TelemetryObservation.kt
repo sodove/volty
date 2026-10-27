@@ -42,8 +42,15 @@ enum class TelemetryMetric(val id: String, val origin: TelemetryOrigin, val inde
      * records the estimate for such a wheel (`withHistoryEstimatedDuty`), UNMARKED - a sample has no per-reading
      * flag and a marker needs a schema migration, which is left for later. A wheel that reports its own duty is
      * still recorded raw.
+     *
+     * Second retraction (telemetry plausibility, Task 11): "a marker needs a schema migration" was wrong. A sample
+     * is keyed by a TEXT `metricId` and the registry is code, so a new id needs no migration; the estimate is now its
+     * own metric, [DUTY_ESTIMATED]. This id keeps ONLY what a controller reported. Rides recorded before that change
+     * hold the estimate here, indistinguishable from a measurement, and show unmarked.
      */
     DUTY("duty_percent", TelemetryOrigin.CONTROLLER),
+    /** The PWM ESTIMATE of a wheel proven not to report one; never a measurement, shown with a tilde. */
+    DUTY_ESTIMATED("duty_estimated_percent", TelemetryOrigin.CONTROLLER),
     MOTOR_CURRENT("motor_current_a", TelemetryOrigin.CONTROLLER),
     CONTROLLER_BATTERY_CURRENT("battery_current_a", TelemetryOrigin.CONTROLLER),
     INPUT_VOLTAGE("input_voltage_v", TelemetryOrigin.CONTROLLER),

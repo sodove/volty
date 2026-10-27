@@ -25,6 +25,7 @@ internal fun HistoryTotalKind.title() = when (this) {
     HistoryTotalKind.MOTOR_TEMP_C -> Res.string.history_total_motor_temp
     HistoryTotalKind.CONTROLLER_TEMP_C -> Res.string.history_total_controller_temp
     HistoryTotalKind.BATTERY_TEMP_C -> Res.string.history_total_battery_temp
+    HistoryTotalKind.MAX_DUTY_PERCENT -> Res.string.history_total_max_duty
 }
 
 @Composable
@@ -41,6 +42,7 @@ internal fun HistoryTotal.text(): String {
         HistoryTotalKind.ENERGY_WH -> "${formatFixed(v, 0)} ${stringResource(Res.string.history_unit_wh)}"
         HistoryTotalKind.WH_PER_KM -> "${formatFixed(v, 1)} ${stringResource(Res.string.history_unit_wh_per_km)}"
         HistoryTotalKind.BATTERY_USED_PERCENT -> "${historyBatteryUsedSign(value)}${historyBatteryUsedDigit(value)} ${stringResource(Res.string.unit_percent)}"
+        HistoryTotalKind.MAX_DUTY_PERCENT -> "${formatFixed(v, 0)} ${stringResource(Res.string.unit_percent)}"
         HistoryTotalKind.MAX_POWER_W -> "${formatFixed(v, 0)} ${stringResource(Res.string.history_unit_watt)}"
         HistoryTotalKind.MOTOR_TEMP_C, HistoryTotalKind.CONTROLLER_TEMP_C, HistoryTotalKind.BATTERY_TEMP_C ->
             "${formatFixed(v, 0)} ${stringResource(Res.string.unit_celsius)}"

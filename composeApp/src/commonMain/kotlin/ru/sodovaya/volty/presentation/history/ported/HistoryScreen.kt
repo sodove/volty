@@ -107,7 +107,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         HistoryRideList(state.catalog, state.selectedRideId, openRide, owner::refresh, owner::loadOlder, Modifier.fillMaxWidth().weight(1f),
             vehicleNames, state.previews, reduceMotion, owner::setVisibleRides, owner::retryPreview,
             catalogList, state.previewImages, state.previewRevision, owner::setVisiblePreviewImages,
-            onDelete = if (state.deletion.available) owner::requestRideDeletion else null)
+            onDelete = if (state.deletion.available) owner::requestRideDeletion else null, cardStats = state.cardStats)
         }
     }
     BoxWithConstraints(modifier.fillMaxSize().background(

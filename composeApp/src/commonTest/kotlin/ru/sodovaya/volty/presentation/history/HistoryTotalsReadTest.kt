@@ -348,4 +348,72 @@ class HistoryTotalsReadTest {
         val top = readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.MAX_KMH)!!
         assertEquals(44.0, top.value); assertFalse(top.approximate)
     }
+
+    // --- Task 11: peak PWM -------------------------------------------------------------------------------------------
+    private val duty = HistorySeriesKey("esc", "duty_percent")
+    private val estimatedDuty = HistorySeriesKey("esc", "duty_estimated_percent")
+    /** 600 s of a ride at 50-54 %, with a sustained plateau (not a needle) at [peak] and an optional one-sample [needle]. */
+    private fun dutySeries(key: HistorySeriesKey, peak: Double, needle: Double? = null) = (0..600).map { i ->
+        val t = i * 1000L
+        at(t, key, when { i in 300..305 -> peak; needle != null && i == 450 -> needle; else -> 50.0 + (i % 5) })
+    }
+    private suspend fun totalsOf(vararg series: Pair<HistorySeriesKey, List<HistorySample>>, stats: Map<HistorySeriesKey, HistoryStats> = emptyMap()):
+        List<HistoryTotal> {
+        val repo = Repo(origin).apply { this.series = series.toMap(); this.stats = stats }
+        return readHistoryTotals(repo, "r", listOf(esc), range)
+    }
+
+    @Test fun anEstimatedDutySeriesGivesAMarkedPeak() = runTest {
+        val top = totalsOf(estimatedDuty to dutySeries(estimatedDuty, 87.0)).of(HistoryTotalKind.MAX_DUTY_PERCENT)!!
+        assertEquals(87.0, top.value); assertTrue(top.estimated); assertFalse(top.approximate)
+    }
+
+    @Test fun aMeasuredDutySeriesGivesAnUnmarkedPeak() = runTest {
+        val top = totalsOf(duty to dutySeries(duty, 92.0)).of(HistoryTotalKind.MAX_DUTY_PERCENT)!!
+        assertEquals(92.0, top.value); assertFalse(top.estimated)
+    }
+
+    @Test fun anOldRideWithOnlyDutyPercentIsNotMarkedEvenIfItsValuesWereOnceAnEstimate() = runTest {
+        // Rides recorded before the estimate had its own metric cannot be told apart: unmarked is the honest answer.
+        val top = totalsOf(stats = mapOf(duty to HistoryStats(0.0, 63.0, null, true))).of(HistoryTotalKind.MAX_DUTY_PERCENT)!!
+        assertEquals(63.0, top.value); assertFalse(top.estimated)
+    }
+
+    @Test fun theLargerOfTheTwoSeriesWinsAndOnlyAnEstimateWinMarksTheTile() = runTest {
+        val estimateWins = totalsOf(duty to dutySeries(duty, 40.0), estimatedDuty to dutySeries(estimatedDuty, 87.0))
+            .of(HistoryTotalKind.MAX_DUTY_PERCENT)!!
+        assertEquals(87.0, estimateWins.value); assertTrue(estimateWins.estimated)
+        val measuredWins = totalsOf(duty to dutySeries(duty, 92.0), estimatedDuty to dutySeries(estimatedDuty, 87.0))
+            .of(HistoryTotalKind.MAX_DUTY_PERCENT)!!
+        assertEquals(92.0, measuredWins.value); assertFalse(measuredWins.estimated)
+    }
+
+    @Test fun noUpperBoundIsAppliedToDuty() = runTest {
+        // Sherman / SV field weakening reports 105 %.
+        assertEquals(105.0, totalsOf(duty to dutySeries(duty, 105.0)).of(HistoryTotalKind.MAX_DUTY_PERCENT)!!.value)
+    }
+
+    @Test fun aSingleSampleDutyNeedleIsNotThePeakAndSaysApproximate() = runTest {
+        // Incoherent on purpose: complete = true stats whose maximum is the needle.
+        val top = totalsOf(estimatedDuty to dutySeries(estimatedDuty, 87.0, needle = 400.0),
+            stats = mapOf(estimatedDuty to HistoryStats(0.0, 400.0, null, true))).of(HistoryTotalKind.MAX_DUTY_PERCENT)!!
+        assertEquals(87.0, top.value); assertTrue(top.approximate); assertTrue(top.estimated)
+    }
+
+    @Test fun aRideWithNoDutyAtAllHasNoPeakTile() = runTest {
+        assertNull(totalsOf().of(HistoryTotalKind.MAX_DUTY_PERCENT))
+    }
+
+    @Test fun aZeroDutyPeakIsNotNews() = runTest {
+        val all = historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.MAX_DUTY_PERCENT, 0.0)))
+        assertTrue(all.isEmpty())
+        assertEquals(1, historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.MAX_DUTY_PERCENT, 1.0, estimated = true))).size)
+    }
+
+    @Test fun theTilePrefixSaysEstimatedApproximateBothOrNothing() = runTest {
+        fun p(estimated: Boolean, approximate: Boolean) =
+            historyTotalPrefix(HistoryTotal(HistoryTotalKind.MAX_DUTY_PERCENT, 80.0, approximate, estimated))
+        assertEquals("", p(false, false)); assertEquals("~ ", p(true, false))
+        assertEquals("≈ ", p(false, true)); assertEquals("~≈ ", p(true, true))
+    }
 }

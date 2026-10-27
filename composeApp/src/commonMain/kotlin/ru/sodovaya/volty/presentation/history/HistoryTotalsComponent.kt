@@ -184,12 +184,12 @@ private suspend fun readBatteryUsed(repository: HistoryReadRepository, rideId: S
  * one-shot form first, so the proven PARTIAL_SOURCE artefact between 0x07 values does not read as a gap that would
  * disable the needle rule's neighbours. A series that cannot be paged is simply absent (the stats maximum decides, as
  * before); one that ran out of budget is listed in [HistoryRobustPeaks.overBudget] (stats maximum, approximate).
- * MAX_DUTY (Task 11) reuses [historyRobustPeak] the same way.
+ * Both duty series (measured and estimated, Task 11) are paged the same way: [historyPeakDuty] picks the winner.
  */
 private suspend fun readRobustPeaks(sources: List<HistorySource>,
     detail: suspend (HistorySeriesKey) -> HistoryDetailRead?): Pair<HistoryRobustPeaks, Boolean> {
     val keys = (tier(sources, motionTiers).flatMap { s -> listOf("speed_kmh", "motor_temperature_c", "esc_temperature_c",
-            "controller_power_w").map { HistorySeriesKey(s.id, it) } } +
+            "controller_power_w", "duty_percent", "duty_estimated_percent").map { HistorySeriesKey(s.id, it) } } +
         tier(sources, batteryTiers).map { HistorySeriesKey(it.id, "power_w") } +
         tier(sources, batteryTemperatureTiers).map { HistorySeriesKey(it.id, "battery_temperature_c") }).distinct()
     val peaks = HashMap<HistorySeriesKey, RobustPeak>()

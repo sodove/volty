@@ -28,6 +28,7 @@ import kotlin.math.cos
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.history.HistoryTotal
+import ru.sodovaya.volty.presentation.history.historyTotalPrefix
 import ru.sodovaya.volty.presentation.history.text
 import ru.sodovaya.volty.presentation.history.title
 import ru.sodovaya.volty.presentation.picker.GarageWhen
@@ -155,7 +156,7 @@ internal fun TotalsTiles(totals: List<HistoryTotal>, modifier: Modifier = Modifi
             Column(Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
                 .padding(horizontal = 10.dp, vertical = 7.dp)) {
                 Text(stringResource(total.kind.title()), fontSize = 10.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text((if (total.approximate) "≈ " else "") + total.text(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(historyTotalPrefix(total) + total.text(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
             }
         }
     }

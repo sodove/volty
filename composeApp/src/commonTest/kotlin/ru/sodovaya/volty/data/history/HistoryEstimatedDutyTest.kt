@@ -10,20 +10,23 @@ class HistoryEstimatedDutyTest {
             TelemetryReading.measured(TelemetryMetric.CONTROLLER_BATTERY_CURRENT, 3.0), duty), role)
     private fun rawZero() = TelemetryReading.measured(TelemetryMetric.DUTY, 0.0)
     private fun TelemetryObservation.duty() = readings.single { it.metric == TelemetryMetric.DUTY }
+    private fun TelemetryObservation.estimate() = readings.single { it.metric == TelemetryMetric.DUTY_ESTIMATED }
     private fun view(evidence: PwmEvidence, percent: Float?, id: String = "v") = HistoryPwmView(id, evidence, percent)
 
     @Test fun aNeverReportingWheelRecordsTheEstimateInsteadOfTheRawConstant() {
         val out = withHistoryEstimatedDuty(controller(rawZero()), "v") { view(PwmEvidence.NEVER_REPORTED, 37.5f) }
-        assertEquals(37.5, out.duty().value)
-        assertNull(out.duty().unknown)
+        assertEquals(37.5, out.estimate().value)
+        assertNull(out.estimate().unknown)
+        assertTrue(out.readings.none { it.metric == TelemetryMetric.DUTY }, "the raw constant is replaced, not kept beside the estimate")
         // The other readings of the observation ride through untouched.
         assertEquals(3.0, out.readings.single { it.metric == TelemetryMetric.CONTROLLER_BATTERY_CURRENT }.value)
     }
 
     @Test fun aNeverReportingWheelWithNoEstimateRecordsUnknownNotTheConstantZero() {
         val out = withHistoryEstimatedDuty(controller(rawZero()), "v") { view(PwmEvidence.NEVER_REPORTED, null) }
-        assertNull(out.duty().value)
-        assertEquals(TelemetryUnknown.UNAVAILABLE, out.duty().unknown)
+        assertNull(out.estimate().value)
+        assertEquals(TelemetryUnknown.UNAVAILABLE, out.estimate().unknown)
+        assertTrue(out.readings.none { it.metric == TelemetryMetric.DUTY })
         val noView = withHistoryEstimatedDuty(controller(rawZero()), "v") { null }
         // No view at all (no estimator yet) is not proof of anything: the decoder's reading stands.
         assertEquals(0.0, noView.duty().value)
@@ -35,7 +38,14 @@ class HistoryEstimatedDutyTest {
             // Deliberately incoherent: an estimate beside non-NEVER_REPORTED evidence, which no producer emits.
             val out = withHistoryEstimatedDuty(controller(real), "v") { view(evidence, 99f) }
             assertEquals(41.0, out.duty().value, "$evidence")
+            assertTrue(out.readings.none { it.metric == TelemetryMetric.DUTY_ESTIMATED }, "$evidence")
         }
+    }
+
+    @Test fun anEstimateAboveAHundredPercentIsRecordedUnclamped() {
+        // Sherman / SV field weakening reports 105 %; no upper bound is applied to the estimate either.
+        val out = withHistoryEstimatedDuty(controller(rawZero()), "v") { view(PwmEvidence.NEVER_REPORTED, 105f) }
+        assertEquals(105.0, out.estimate().value)
     }
 
     @Test fun anEstimateOfAnotherVehicleIsNeverRecorded() {
@@ -45,7 +55,7 @@ class HistoryEstimatedDutyTest {
 
     @Test fun nonFiniteEstimateIsUnknown() {
         val out = withHistoryEstimatedDuty(controller(rawZero()), "v") { view(PwmEvidence.NEVER_REPORTED, Float.NaN) }
-        assertNull(out.duty().value)
+        assertNull(out.estimate().value)
     }
 
     @Test fun observationsWithoutADutyReadingAndBatteryObservationsPassThrough() {

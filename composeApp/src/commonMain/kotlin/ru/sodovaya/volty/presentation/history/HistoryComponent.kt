@@ -87,6 +87,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val detail = HistoryDetailComponent(componentContext, scope, repository, readTick)
     private val route = HistoryRouteComponent(componentContext, scope, repository)
     private val previews = HistoryPreviewComponent(componentContext, scope, repository, PREVIEW_GPS_SILENCE_MILLIS,previewDispatcher)
+    private val cardStats = HistoryCardStatsComponent(componentContext, scope, repository, previewDispatcher)
     private val presets = HistoryPresetsComponent(componentContext, scope, presetStore)
     private val favorites = HistoryFavoritesComponent(componentContext, scope, favoriteStore)
     private val media = HistoryMediaComponent(componentContext, scope, mediaRepository)
@@ -250,6 +251,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         } }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             previews.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(previews = it) }
+        }
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            cardStats.state.collect { if (lifetime.isActive) mutableState.value = mutableState.value.copy(cardStats = it) }
         }
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
             route.state.collect { next ->
@@ -423,7 +427,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         visiblePreviewIds = ids.distinct().take(20)
         syncVisiblePreviews()
     }
-    override fun retryPreview(id: String) { if (lifetime.isActive) previews.retry(id) }
+    override fun retryPreview(id: String) { if (lifetime.isActive) { previews.retry(id); cardStats.retry(id) } }
     override fun loadPresets() { if (lifetime.isActive) presets.refresh() }
     override fun savePreset(name: String) = withSelection {
         val current = detail.state.value
@@ -457,6 +461,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         if (!lifetime.isActive) return
         val models = mutableState.value.catalog.rides.associateBy { it.id }
         previews.setVisible(visiblePreviewIds.mapNotNull(models::get), previewRevision)
+        cardStats.setVisible(visiblePreviewIds.mapNotNull(models::get), previewRevision)
     }
 
     private fun withSelection(action: () -> Unit) {
@@ -498,7 +503,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         pendingRestoration = null
         selection = Any(); catalogIntent = Any(); selectedRideId = null; selectedSource = null
         windowIntent = Any(); windowGesture = null
-        totals?.close(); recording.close(); catalog.close(); detail.close(); route.close(); previews.close(); presets.close(); favorites.close(); media.close(); deletion.close(); exports.close(); previewImages?.close(); lifetime.cancel()
+        totals?.close(); recording.close(); catalog.close(); detail.close(); route.close(); previews.close(); cardStats.close(); presets.close(); favorites.close(); media.close(); deletion.close(); exports.close(); previewImages?.close(); lifetime.cancel()
     }
 }
 

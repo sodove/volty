@@ -11,6 +11,7 @@ data class HistoryUiState(
     val detail: HistoryDetailState = HistoryDetailState(),
     val route: HistoryRouteState = HistoryRouteState(),
     val previews: HistoryPreviewsState = HistoryPreviewsState(),
+    val cardStats: HistoryCardStatsState = HistoryCardStatsState(),
     val presets: HistoryPresetsState = HistoryPresetsState(),
     val favorites: HistoryFavoritesState = HistoryFavoritesState(),
     val selectedFavorite: ru.sodovaya.volty.domain.history.HistoryFavorite? = null,

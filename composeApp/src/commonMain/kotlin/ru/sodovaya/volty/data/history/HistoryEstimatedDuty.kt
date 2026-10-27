@@ -24,7 +24,7 @@ internal fun historyPwmView(vehicleId: String, evidence: PwmEvidence, memoryRead
  *
  * A Begode T4 sends a constant 0 in its duty word; the per-link observation recorded that 0 as a measurement
  * while the dashboard showed an estimate, so a ride's PWM chart was a flat line at zero. When the vehicle's
- * evidence is [PwmEvidence.NEVER_REPORTED] the DUTY reading becomes the estimate, or an honest unknown when the
+ * evidence is [PwmEvidence.NEVER_REPORTED] the DUTY reading is replaced by a DUTY_ESTIMATED one carrying the estimate, or an honest unknown when the
  * estimator has none - never the constant. Any other evidence (REPORTS, UNKNOWN) or no view at all leaves the
  * decoder's reading untouched, and a view of another vehicle is ignored.
  *
@@ -33,10 +33,13 @@ internal fun historyPwmView(vehicleId: String, evidence: PwmEvidence, memoryRead
  * is out of scope (the single-wheel Begode is the only NEVER_REPORTED shape today). While the evidence is still
  * UNKNOWN (the first seconds of a connection) the decoder's raw constant is recorded as-is.
  *
- * **Not marked as an estimate.** A history sample is (source, metric, value, unknown-reason): there is no
- * per-sample flag, and a separate metric id or a column needs a schema migration, which this change does not
- * take (the estimated charge from [withHistoryEstimatedSoc] is recorded the same, unmarked). The marker is left
- * for a later schema change; until then "duty_percent" on a NEVER_REPORTED vehicle means the estimate.
+ * **Marked as an estimate.** The reading is REPLACED by a [TelemetryMetric.DUTY_ESTIMATED] reading
+ * ("duty_estimated_percent"), so the raw constant is never recorded under "duty_percent" on such a vehicle and a ride's
+ * totals can tell the two apart. An earlier revision recorded the estimate unmarked under "duty_percent", claiming that
+ * "a separate metric id needs a schema migration"; that was wrong because a metric id is a TEXT value and the registry
+ * is code (the estimated charge from [withHistoryEstimatedSoc] is still recorded unmarked, a separate question). Rides
+ * recorded before this change cannot be told apart and read as measured: we do not know, and unmarked is the honest
+ * answer. No upper bound is applied to the estimate (field-weakening wheels reach 105 %).
  */
 internal fun withHistoryEstimatedDuty(observation: TelemetryObservation, vehicleId: String,
     view: () -> HistoryPwmView?): TelemetryObservation {
@@ -44,8 +47,8 @@ internal fun withHistoryEstimatedDuty(observation: TelemetryObservation, vehicle
     val duty = observation.readings.firstOrNull { it.metric == TelemetryMetric.DUTY } ?: return observation
     val pwm = view()?.takeIf { it.vehicleId == vehicleId && it.evidence == PwmEvidence.NEVER_REPORTED } ?: return observation
     val estimate = pwm.estimatePercent?.takeIf { it.isFinite() }
-    val replacement = if (estimate != null) TelemetryReading.measured(TelemetryMetric.DUTY, estimate.toDouble())
-        else TelemetryReading(TelemetryMetric.DUTY, null, TelemetryUnknown.UNAVAILABLE)
+    val replacement = if (estimate != null) TelemetryReading.measured(TelemetryMetric.DUTY_ESTIMATED, estimate.toDouble())
+        else TelemetryReading(TelemetryMetric.DUTY_ESTIMATED, null, TelemetryUnknown.UNAVAILABLE)
     return TelemetryObservation(observation.origin, observation.localIndex,
         observation.readings.map { if (it === duty) replacement else it }, observation.role, observation.assemblyIndex)
 }

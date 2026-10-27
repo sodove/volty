@@ -42,6 +42,13 @@ class HistoryMetricRegistryTest {
         assertTrue(pack.any { it.id == "cell_delta_mv" && it.unit == HistoryUnit.MILLIVOLT })
     }
 
+    @Test fun theEstimatedDutyIsItsOwnMetricOnTheMotionSources() {
+        val d = assertNotNull(HistoryMetricRegistry.descriptor("duty_estimated_percent"))
+        assertEquals(HistoryUnit.PERCENT, d.unit); assertEquals(HistoryMetricGroup.CONTROLLER, d.group)
+        assertEquals(HistoryMetricRegistry.descriptor("duty_percent")!!.sourceKinds, d.sourceKinds)
+        assertEquals(1.0, d.displayMultiplier)
+    }
+
     @Test fun registryCoversExistingGraphMetricsWithUniqueStableKeys() {
         val required = setOf("soc_percent", "power_w", "current_a", "voltage_v", "battery_temperature_c",
             "cell_min_v", "cell_max_v", "cell_delta_mv", "speed_kmh", "duty_percent", "motor_current_a",

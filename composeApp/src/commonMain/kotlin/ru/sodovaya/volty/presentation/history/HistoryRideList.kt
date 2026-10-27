@@ -32,7 +32,7 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
     reduceMotion: Boolean = false, onVisibleChanged: (List<String>) -> Unit = {}, onRetryPreview: (String) -> Unit = {},
     listState: LazyListState = rememberLazyListState(), previewImages: HistoryPreviewImagesState = HistoryPreviewImagesState(),
     previewRevision: Long = 0, onVisibleImagesChanged: (List<HistoryPreviewImageKey>) -> Unit = {},
-    onDelete: ((HistoryRide) -> Unit)? = null) {
+    onDelete: ((HistoryRide) -> Unit)? = null, cardStats: HistoryCardStatsState = HistoryCardStatsState()) {
     val zone = TimeZone.currentSystemDefault()
     val latestVisible by rememberUpdatedState(onVisibleChanged)
     val latestImages by rememberUpdatedState(onVisibleImagesChanged)
@@ -84,7 +84,8 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
                 HistoryRideStatus.COMPLETED -> Res.string.history_completed
             })
             HistoryRideCard(HistoryRideCardText(vehicleNames[ride.vehicleId] ?: stringResource(Res.string.history_ride_title),
-                date ?: stringResource(Res.string.history_date_unknown), listOfNotNull(duration, status).joinToString(" · ")),
+                date ?: stringResource(Res.string.history_date_unknown), listOfNotNull(duration, status).joinToString(" · "),
+                cardStats.stats[ride.id]?.maxDuty?.let { stringResource(Res.string.history_card_max_duty, historyTotalPrefix(it) + it.text()) }),
                 previews.previews[ride.id]?.segments.orEmpty(), ride.id == selectedRideId, { onOpen(ride.id) },
                 if (reduceMotion) Modifier else Modifier.animateItem(), previewLoading = ride.id in previews.loading,
                 previewPartial = previews.previews[ride.id]?.partial == true, previewError = ride.id in previews.errors,

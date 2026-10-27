@@ -26,6 +26,7 @@ internal fun historyMetricText() = HistoryMetricText(
         "cell_v" to stringResource(Res.string.history_metric_cell),
         "speed_kmh" to stringResource(Res.string.history_metric_speed),
         "duty_percent" to stringResource(Res.string.history_metric_duty),
+        "duty_estimated_percent" to stringResource(Res.string.history_metric_duty_estimated),
         "motor_current_a" to stringResource(Res.string.history_metric_motor_current),
         "battery_current_a" to stringResource(Res.string.history_metric_battery_current),
         "input_voltage_v" to stringResource(Res.string.history_metric_input_voltage),

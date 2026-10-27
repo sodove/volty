@@ -22,7 +22,8 @@ import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.*
 
-data class HistoryRideCardText(val title: String, val subtitle: String, val details: String?)
+/** [peakPwm] is the optional third line, already formatted (for example "PWM ≤ ~87 %"); null shows nothing. */
+data class HistoryRideCardText(val title: String, val subtitle: String, val details: String?, val peakPwm: String? = null)
 
 /** The upstream row hierarchy/preview proportions, adapted to Volty typography,
  * source-aware segmented routes and content that may grow with system font size.
@@ -55,6 +56,7 @@ fun HistoryRideCard(text: HistoryRideCardText, segments: List<HistoryMapSegment>
                 Text(text.title, style = MaterialTheme.typography.titleSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
                 Text(text.subtitle, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 text.details?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                text.peakPwm?.let { Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                 if (previewPartial) Text(stringResource(Res.string.history_preview_partial), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 if (previewError) Text(stringResource(Res.string.history_preview_unavailable), style = MaterialTheme.typography.labelSmall,
