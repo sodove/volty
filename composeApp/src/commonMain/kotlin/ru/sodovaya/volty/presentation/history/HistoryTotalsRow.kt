@@ -15,6 +15,7 @@ import volty.composeapp.generated.resources.*
 internal fun HistoryTotalKind.title() = when (this) {
     HistoryTotalKind.DISTANCE_KM -> Res.string.history_total_distance
     HistoryTotalKind.DURATION_MILLIS -> Res.string.history_total_duration
+    HistoryTotalKind.MOVING_MILLIS -> Res.string.history_total_moving
     HistoryTotalKind.AVERAGE_KMH -> Res.string.history_total_average
     HistoryTotalKind.MAX_KMH -> Res.string.history_total_max_speed
     HistoryTotalKind.ENERGY_WH -> Res.string.history_total_energy
@@ -31,7 +32,7 @@ internal fun HistoryTotal.text(): String {
     val v = value.toFloat()
     return when (kind) {
         HistoryTotalKind.DISTANCE_KM -> "${formatFixed(v, if (value < 100) 1 else 0)} ${stringResource(Res.string.history_unit_km)}"
-        HistoryTotalKind.DURATION_MILLIS -> {
+        HistoryTotalKind.DURATION_MILLIS, HistoryTotalKind.MOVING_MILLIS -> {
             val minutes = (value / 60_000).toLong()
             if (minutes >= 60) stringResource(Res.string.history_duration_hours, (minutes / 60).toInt(), (minutes % 60).toInt())
             else stringResource(Res.string.history_duration_minutes, minutes.toInt())

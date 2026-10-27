@@ -4,7 +4,7 @@ import kotlin.math.*
 import ru.sodovaya.volty.domain.history.*
 
 enum class HistoryTotalKind {
-    DISTANCE_KM, DURATION_MILLIS, AVERAGE_KMH, MAX_KMH, ENERGY_WH, WH_PER_KM,
+    DISTANCE_KM, DURATION_MILLIS, MOVING_MILLIS, AVERAGE_KMH, MAX_KMH, ENERGY_WH, WH_PER_KM,
     BATTERY_USED_PERCENT, MAX_POWER_W, MOTOR_TEMP_C, CONTROLLER_TEMP_C, BATTERY_TEMP_C,
 }
 
@@ -51,12 +51,16 @@ fun historyTotalsKeys(sources: List<HistorySource>): List<HistorySeriesKey> {
  * The ride's headline numbers from whole-ride stats. The distance is computed elsewhere ([historyRideDistance] from
  * detail samples, GPS first; [historyStatsDistance] from stats) and handed in; average speed and consumption are
  * derived from it. A null [distance] omits all three tiles: an unearned distance is never replaced by `max - min`.
+ * The average is over [moving] time only (speed above 3 km/h, the rider's definition); without a speed series
+ * ([moving] null) it falls back to distance / wall duration and says so as approximate. An earlier revision always
+ * divided by wall duration; that was wrong for the rider because standing at a light dragged the average down.
  */
 fun historyRideTotals(
     sources: List<HistorySource>,
     stats: Map<HistorySeriesKey, HistoryStats>,
     durationMillis: Long?,
     distance: HistoryRideDistance?,
+    moving: HistoryMovingTime? = null,
 ): List<HistoryTotal> {
     fun values(tierSources: List<HistorySource>, metric: String) =
         tierSources.mapNotNull { source -> stats[HistorySeriesKey(source.id, metric)]?.let { metric to it } }
@@ -77,8 +81,12 @@ fun historyRideTotals(
     distanceTotal?.let(result::add)
     val duration = durationMillis?.takeIf { it > 0 }
     duration?.let { result += HistoryTotal(HistoryTotalKind.DURATION_MILLIS, it.toDouble()) }
-    if (distanceTotal != null && duration != null)
-        result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH, distanceTotal.value / (duration / 3_600_000.0), distanceTotal.approximate)
+    moving?.let { result += HistoryTotal(HistoryTotalKind.MOVING_MILLIS, it.millis.toDouble(), it.approximate) }
+    if (distanceTotal != null && moving != null) {
+        if (moving.millis > 0) result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH,
+            distanceTotal.value / (moving.millis / 3_600_000.0), distanceTotal.approximate || moving.approximate)
+    } else if (distanceTotal != null && duration != null)
+        result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH, distanceTotal.value / (duration / 3_600_000.0), true)
     peak(motion, "speed_kmh")?.let { result += it.copy(kind = HistoryTotalKind.MAX_KMH) }
 
     // Battery energy is the pack's own measurement; the controller's is the fallback.
@@ -120,6 +128,7 @@ fun historyVisibleTotals(totals: List<HistoryTotal>): List<HistoryTotal> {
         HistoryTotalKind.DISTANCE_KM -> t.value >= 0.05
         HistoryTotalKind.AVERAGE_KMH -> distance >= 0.05 && t.value >= 0.05
         HistoryTotalKind.ENERGY_WH, HistoryTotalKind.BATTERY_USED_PERCENT, HistoryTotalKind.MAX_POWER_W -> t.value >= 0.5
+        HistoryTotalKind.MOVING_MILLIS -> t.value >= 1_000.0
         else -> true
     } }
 }

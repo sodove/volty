@@ -1232,6 +1232,7 @@
     <string name="history_unit_wh_per_km">Wh/km</string>
     <string name="history_total_distance">Distance</string>
     <string name="history_total_duration">Duration</string>
+    <string name="history_total_moving">Moving</string>
     <string name="history_total_average">Average</string>
     <string name="history_total_max_speed">Top speed</string>
     <string name="history_total_energy">Energy</string>

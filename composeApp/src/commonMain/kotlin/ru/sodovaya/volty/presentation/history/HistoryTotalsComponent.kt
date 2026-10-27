@@ -96,7 +96,25 @@ internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId
     val distance = if (walked != null) walked.distance
     else historyStatsDistance(sources, stats, duration, route?.fixes?.let(::historyGpsDistanceKm))
         ?.let { if (budgetRanOut) it.copy(approximate = true) else it }
-    return historyVisibleTotals(historyRideTotals(sources, stats, duration, distance))
+    val moving = try { readMovingTime(repository, rideId, sources, range, maxDetailPages) }
+    catch (cancel: CancellationException) { throw cancel }
+    catch (_: Exception) { null }
+    return historyVisibleTotals(historyRideTotals(sources, stats, duration, distance, moving))
+}
+
+/**
+ * Moving time from the motion tier's paged `speed_kmh` detail, through the same pager and budget as the counter. Null (the
+ * average then falls back to wall duration, marked approximate) when the reader cannot page detail, the budget ran out
+ * (a prefix is not the ride) or no source has a known speed sample.
+ */
+private suspend fun readMovingTime(repository: HistoryReadRepository, rideId: String, sources: List<HistorySource>,
+    range: HistoryRange, maxPages: Int): HistoryMovingTime? {
+    for (source in tier(sources, motionTiers)) {
+        val read = readHistoryDetail(repository, rideId, HistorySeriesKey(source.id, "speed_kmh"), range, maxPages) ?: return null
+        if (!read.complete) return null
+        if (read.samples.any { it.value != null }) return historyMovingMillis(read.samples)
+    }
+    return null
 }
 
 /**

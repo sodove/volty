@@ -131,10 +131,48 @@ class HistoryTotalsReadTest {
         val d = readHistoryTotals(repo, "r", listOf(esc), range, maxDetailPages = 2).of(HistoryTotalKind.DISTANCE_KM)!!
         assertEquals(5.7, d.value, 1e-6)
         assertTrue(d.approximate, "the budget ran out: not exact")
-        assertEquals(3, repo.issued.size, "the empty trip series, then two odometer pages, then no more reads")
+        assertEquals(3, repo.issued.count { it.first != speed }, "the empty trip series, then two odometer pages, then no more reads")
         // The stats path still carries the cross-check: a needle in the stats shows nothing.
         repo.stats = incoherentStats
         assertNull(readHistoryTotals(repo, "r", listOf(esc), range, maxDetailPages = 2).of(HistoryTotalKind.DISTANCE_KM))
+    }
+
+    private fun movingSpeed(unknownFrom: Long? = null) = (0..1900L).map { i ->
+        val t = i * 500L
+        val v = when { unknownFrom != null && t in unknownFrom until unknownFrom + 100_000 -> null
+            t < 100_000 -> 0.0; t < 900_000 -> 25.0; else -> 1.5 }
+        HistorySample(HistoryTick(1_000_000 + t, t, 1), speed, v, if (v == null) HistoryUnknownReason.UNAVAILABLE else null)
+    }
+
+    @Test fun theAverageUsesMovingTimeFromThePagedSpeedSeries() = runTest {
+        val repo = Repo(origin).apply { series = mapOf(odo to counterRide(odo), speed to movingSpeed()); pageSize = 500; stats = incoherentStats }
+        val totals = readHistoryTotals(repo, "r", listOf(esc), range)
+        assertEquals(800_000.0, totals.of(HistoryTotalKind.MOVING_MILLIS)!!.value, 500.0)
+        assertEquals(5.70 / (800.0 / 3600.0), totals.of(HistoryTotalKind.AVERAGE_KMH)!!.value, 0.3)
+        assertTrue(repo.issued.count { it.first == speed } > 1, "the speed detail went through the shared pager's cursor")
+        assertTrue(repo.issued.all { it.third == 20_000 })
+    }
+
+    @Test fun withoutAPagedSpeedSeriesTheAverageIsTheWallClockOneAndApproximate() = runTest {
+        val repo = Repo(origin).apply { series = mapOf(odo to counterRide(odo)); stats = incoherentStats }
+        val totals = readHistoryTotals(repo, "r", listOf(esc), range)
+        assertNull(totals.of(HistoryTotalKind.MOVING_MILLIS))
+        val average = totals.of(HistoryTotalKind.AVERAGE_KMH)!!
+        assertEquals(5.70 / (950.0 / 3600.0), average.value, 0.1); assertTrue(average.approximate)
+        val unpaged = Repo(origin).apply { detailSupported = false; fixes = (0..950L).map(::fix); stats = incoherentStats }
+        assertNull(readHistoryTotals(unpaged, "r", listOf(esc), range).of(HistoryTotalKind.MOVING_MILLIS))
+    }
+
+    @Test fun aSpeedSeriesTheBudgetCutShortIsNotAMovingTime() = runTest {
+        val repo = Repo(origin).apply { series = mapOf(odo to counterRide(odo), speed to movingSpeed()); pageSize = 100 }
+        val totals = readHistoryTotals(repo, "r", listOf(esc), range, maxDetailPages = 2)
+        assertNull(totals.of(HistoryTotalKind.MOVING_MILLIS), "a prefix of the ride is not the ride")
+    }
+
+    @Test fun anUnknownStretchMarksTheMovingTimeApproximateEvenWhenTheCounterIsComplete() = runTest {
+        val repo = Repo(origin).apply { series = mapOf(odo to counterRide(odo), speed to movingSpeed(unknownFrom = 300_000)); stats = incoherentStats }
+        val moving = readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.MOVING_MILLIS)!!
+        assertTrue(moving.approximate); assertEquals(700_000.0, moving.value, 1_500.0)
     }
 
     @Test fun aRideThatIsMissingFromStorageFallsBackToStats() = runTest {

@@ -1230,6 +1230,7 @@
     <string name="history_unit_wh_per_km">Вт·ч/км</string>
     <string name="history_total_distance">Дистанция</string>
     <string name="history_total_duration">В пути</string>
+    <string name="history_total_moving">В движении</string>
     <string name="history_total_average">Средняя</string>
     <string name="history_total_max_speed">Макс. скорость</string>
     <string name="history_total_energy">Энергия</string>

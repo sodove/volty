@@ -10,7 +10,9 @@ class HistoryRideTotalsTest {
     private fun stats(min: Double?, max: Double?, energy: Double? = null, complete: Boolean = true) = HistoryStats(min, max, energy, complete)
     private fun Map<HistoryTotalKind, HistoryTotal>.v(kind: HistoryTotalKind) = getValue(kind).value
     private fun totals(sources: List<HistorySource>, stats: Map<HistorySeriesKey, HistoryStats>,
-        duration: Long? = 3_600_000, gps: Double? = null) = historyRideTotals(sources, stats, duration, historyStatsDistance(sources, stats, duration, gps)).associateBy { it.kind }
+        duration: Long? = 3_600_000, gps: Double? = null,
+        moving: HistoryMovingTime? = duration?.let { HistoryMovingTime(it, false) }) =
+        historyRideTotals(sources, stats, duration, historyStatsDistance(sources, stats, duration, gps), moving).associateBy { it.kind }
 
     @Test fun controllerAndPackGiveTheFullSet() {
         val t = totals(listOf(controller, pack), mapOf(
@@ -30,6 +32,70 @@ class HistoryRideTotalsTest {
         assertEquals(61.0, t.v(HistoryTotalKind.MOTOR_TEMP_C)); assertEquals(44.0, t.v(HistoryTotalKind.CONTROLLER_TEMP_C))
         assertEquals(31.0, t.v(HistoryTotalKind.BATTERY_TEMP_C))
         assertTrue(t.values.none { it.approximate })
+    }
+
+    private val ride = 950_000L
+    private val rideStats = mapOf(HistorySeriesKey("esc", "trip_distance_km") to stats(0.0, 5.556))
+    private fun speedAt(millis: Long, value: Double?) =
+        HistorySample(HistoryTick(1_000_000 + millis, millis, 1), HistorySeriesKey("esc", "speed_kmh"), value,
+            if (value == null) HistoryUnknownReason.UNAVAILABLE else null)
+    /** Standing 0-100 s, 25 km/h 100-900 s, creeping at 1.5 km/h 900-950 s, at 2 Hz; seconds strictly inside [unknown] are unknown. */
+    private fun rideSpeed(unknown: LongRange? = null) = (0..1900L).map { i ->
+        val t = i * 500L
+        speedAt(t, when {
+            unknown != null && t > unknown.first * 1000 && t < unknown.last * 1000 -> null
+            t < 100_000 -> 0.0; t < 900_000 -> 25.0; else -> 1.5
+        })
+    }
+
+    @Test fun theAverageIsOverMovingTimeOnlyAndMovingTimeIsShown() {
+        val moving = historyMovingMillis(rideSpeed())
+        assertEquals(800_000.0, moving.millis.toDouble(), 500.0); assertFalse(moving.approximate)
+        val t = historyRideTotals(listOf(controller), rideStats, ride, historyStatsDistance(listOf(controller), rideStats, ride, null), moving)
+            .associateBy { it.kind }
+        assertEquals(800_000.0, t.v(HistoryTotalKind.MOVING_MILLIS), 500.0)
+        assertEquals(25.0, t.v(HistoryTotalKind.AVERAGE_KMH), 0.1, "today's wall-clock average would be 21.05")
+        assertFalse(t.getValue(HistoryTotalKind.AVERAGE_KMH).approximate)
+        assertEquals(listOf(HistoryTotalKind.DISTANCE_KM, HistoryTotalKind.DURATION_MILLIS, HistoryTotalKind.MOVING_MILLIS,
+            HistoryTotalKind.AVERAGE_KMH), t.keys.toList(), "moving time is listed right after the duration")
+    }
+
+    @Test fun unknownSpeedIsNeitherMovingNorStandingAndMakesTheAverageApproximate() {
+        // Incoherent on purpose: the counter keeps rising through the 300-400 s the speed is unknown for.
+        val moving = historyMovingMillis(rideSpeed(unknown = 300L..400L))
+        assertEquals(700_000.0, moving.millis.toDouble(), 500.0); assertTrue(moving.approximate)
+        val t = historyRideTotals(listOf(controller), rideStats, ride, HistoryRideDistance(5.556, false), moving).associateBy { it.kind }
+        assertTrue(t.getValue(HistoryTotalKind.AVERAGE_KMH).approximate)
+        assertTrue(t.getValue(HistoryTotalKind.MOVING_MILLIS).approximate)
+    }
+
+    @Test fun aGapLongerThanFiveSecondsCreditsNothingAndAClockBreakDoesNotEither() {
+        val gap = listOf(speedAt(0, 20.0), speedAt(5_000, 20.0), speedAt(10_001, 20.0))
+        assertEquals(5_000L, historyMovingMillis(gap).millis); assertTrue(historyMovingMillis(gap).approximate)
+        val other = HistorySample(HistoryTick(1_001_000, 1_000, 2), HistorySeriesKey("esc", "speed_kmh"), 20.0)
+        assertEquals(0L, historyMovingMillis(listOf(speedAt(0, 20.0), other)).millis)
+        assertEquals(0L, historyMovingMillis(listOf(speedAt(0, 3.0), speedAt(500, 3.0), speedAt(1000, 3.0))).millis, "3.0 is not above 3")
+    }
+
+    @Test fun noSpeedSeriesKeepsTheWallClockAverageAndSaysApproximate() {
+        val t = historyRideTotals(listOf(controller), rideStats, ride, HistoryRideDistance(5.556, false), null).associateBy { it.kind }
+        assertEquals(21.05, t.v(HistoryTotalKind.AVERAGE_KMH), 0.05)
+        assertTrue(t.getValue(HistoryTotalKind.AVERAGE_KMH).approximate)
+        assertNull(t[HistoryTotalKind.MOVING_MILLIS])
+    }
+
+    @Test fun noDistanceTileMeansNoAverageEvenWithMovingTime() {
+        val t = historyRideTotals(listOf(controller), rideStats, ride, null, HistoryMovingTime(800_000, false)).associateBy { it.kind }
+        assertNull(t[HistoryTotalKind.AVERAGE_KMH]); assertNull(t[HistoryTotalKind.DISTANCE_KM])
+        val still = historyRideTotals(listOf(controller), rideStats, ride, HistoryRideDistance(1.0, false), HistoryMovingTime(0, false))
+        assertNull(still.firstOrNull { it.kind == HistoryTotalKind.AVERAGE_KMH }, "no moving time: nothing to divide by")
+    }
+
+    @Test fun movingTimeBelowOneSecondIsNotShown() {
+        val shown = historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.MOVING_MILLIS, 999.0),
+            HistoryTotal(HistoryTotalKind.DURATION_MILLIS, 5_000.0))).map { it.kind }
+        assertEquals(listOf(HistoryTotalKind.DURATION_MILLIS), shown)
+        assertEquals(1, historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.MOVING_MILLIS, 1_000.0))).size)
     }
 
     @Test fun aVehicleAggregateIsNeverSummedWithThePacksItAggregates() {
