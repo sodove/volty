@@ -8,6 +8,9 @@ import ru.sodovaya.volty.domain.model.TelemetryObservation
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryReading
 import ru.sodovaya.volty.domain.model.TelemetryRole
+import ru.sodovaya.volty.domain.plausibility.LedgerKind
+import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
+import ru.sodovaya.volty.domain.plausibility.RejectedFrame
 
 abstract class BmsProtocol {
     /** Fresh accepted decoder output. Consumer failure must not tear down the live BLE stream. */
@@ -38,6 +41,57 @@ abstract class BmsProtocol {
             if (telemetryObserverFailures < Long.MAX_VALUE) telemetryObserverFailures++
         }
     }
+
+    // --- Rejection ledger, shared by every protocol ---
+
+    /** Framed notifications seen on this connection; the ledger's clock (frames carry no timestamps). */
+    @Volatile private var ledgerFrameIndex: Long = 0L
+    @Volatile private var rejectedCount: Long = 0L
+    @Volatile private var rebases: Long = 0L
+    @Volatile private var ring: List<RejectedFrame> = emptyList()
+
+    /** Frames a plausibility rule refused to publish on this connection. Zeroed by [resetLedger]. */
+    val rejectedFrameCount: Long get() = rejectedCount
+
+    /** Counter re-baselines accepted after confirmation on this connection. A storm of them on a healthy device is a false positive. */
+    val rebaseCount: Long get() = rebases
+
+    /**
+     * The last 32 rejections and re-baselines, oldest first. Unlike the counters it SURVIVES [resetLedger]:
+     * it is evidence for a later bug report, not connection state. Safe to read from another thread.
+     */
+    fun rejectedFrames(): List<RejectedFrame> = ring
+
+    /** Call once per framed notification, before decoding it; entries are stamped with this index. */
+    protected fun noteLedgerFrame() { ledgerFrameIndex++ }
+
+    /** The current frame's ledger index, for a decision that will be reported later. */
+    protected val currentLedgerFrame: Long get() = ledgerFrameIndex
+
+    /** Record a frame that a rule held back. [atFrameIndex] defaults to now; pass the arrival index for a late decision. */
+    protected fun recordRejection(frameType: Int, rule: PlausibilityRule, raw: ByteArray, reference: String?, witness: String?,
+        atFrameIndex: Long = ledgerFrameIndex) {
+        rejectedCount++
+        push(RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, LedgerKind.REJECTED))
+    }
+
+    /** Record a confirmed counter re-baseline (the frame that became the new baseline). */
+    protected fun recordRebase(frameType: Int, rule: PlausibilityRule, raw: ByteArray, reference: String?, witness: String?,
+        atFrameIndex: Long = ledgerFrameIndex) {
+        rebases++
+        push(RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, LedgerKind.REBASED))
+    }
+
+    /** Zero the per-connection counters. Subclasses call it from [reset]; the ring stays. */
+    protected fun resetLedger() {
+        ledgerFrameIndex = 0L
+        rejectedCount = 0L
+        rebases = 0L
+    }
+
+    private fun push(entry: RejectedFrame) { ring = (ring + entry).takeLast(LEDGER_CAPACITY) }
+
+    private fun ByteArray.toLedgerHex(): String = joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
 
     abstract val uuids: BmsUuids
 
@@ -83,4 +137,6 @@ abstract class BmsProtocol {
 
     /** Reset internal buffers and parser state. */
     abstract fun reset()
+
+    private companion object { const val LEDGER_CAPACITY = 32 }
 }

@@ -22,6 +22,9 @@ class BegodeWheelPwmAlarmTest {
     /** The same frame with byte 14 (the alert byte) replaced. */
     private fun withAlert(bits: Int): ByteArray = frame(alarmOnHex).also { it[14] = bits.toByte() }
 
+    /** A live 0x00 frame (real dump-3 bytes) whose power-on counter is 0, matching [withAlert]'s constant odometer. */
+    private fun liveFrame(): ByteArray = frame("55AA1906F743006A0000FE5CF1D208A000050018" + "5A5A5A5A")
+
     /** A 0x07 motion frame (battery current 16, duty 2): motion exists, no 0x04 frame has been seen. */
     private fun motionOnly(): ByteArray = frame("55AA00100001000A000200000000000000000718" + "5A5A5A5A")
 
@@ -44,15 +47,18 @@ class BegodeWheelPwmAlarmTest {
     @Test
     fun `true exactly while bit 0 is set`() {
         val p = BegodeProtocol()
-        p.onNotification(withAlert(0x00))
+        // Telemetry-plausibility Task 4: every 0x04 follows a live frame, as on a real wheel; without one the
+        // odometer has no witness and the frame publishes one 0x04 late.
+        fun alerted(bits: Int) { p.onNotification(liveFrame()); p.onNotification(withAlert(bits)) }
+        alerted(0x00)
         assertEquals(false, p.latestMotion(0)!!.wheelPwmAlarm)
-        p.onNotification(withAlert(0x01))
+        alerted(0x01)
         assertEquals(true, p.latestMotion(0)!!.wheelPwmAlarm)
-        p.onNotification(withAlert(0x02))
+        alerted(0x02)
         assertEquals(false, p.latestMotion(0)!!.wheelPwmAlarm, "another bit is not this alarm")
-        p.onNotification(withAlert(0xFF))
+        alerted(0xFF)
         assertEquals(true, p.latestMotion(0)!!.wheelPwmAlarm)
-        p.onNotification(withAlert(0x00))
+        alerted(0x00)
         assertEquals(false, p.latestMotion(0)!!.wheelPwmAlarm)
     }
 

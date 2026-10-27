@@ -8,7 +8,11 @@ import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryRole
+import ru.sodovaya.volty.domain.plausibility.CounterDecision
+import ru.sodovaya.volty.domain.plausibility.CounterStepGate
+import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 import kotlin.math.abs
+import kotlin.math.max
 
 /**
  * Begode / Gotway electric unicycle protocol.
@@ -139,16 +143,32 @@ class BegodeProtocol(
     private var sawOdometer = false
 
     /**
-     * Session baseline for [ControllerData.tripKm]: the lifetime odometer
-     * reading at the FIRST genuine 0x04 frame of this connection. Null until
-     * that frame arrives, and cleared by [reset] so a reconnect starts the trip
-     * over at 0.
+     * Sum of the accepted odometer increments of this connection, metres: what [sessionTripKm] publishes.
+     * Cleared by [reset] so a reconnect starts the trip over at 0.
      *
-     * The same shape [VescProtocol] uses, and deliberately so — see
-     * [sessionTripKm] for why the wheel's own power-on counter cannot be
-     * `tripKm` even though it is decoded.
+     * RETRACTION: this used to be `tripBaselineMeters`, the lifetime odometer at the connection's FIRST 0x04,
+     * with the trip as `odometer - baseline`. That was wrong because a single torn first read (true + 65 536 m)
+     * offset the trip by 65.5 km for the whole connection, and a later wheel power-cycle (odometer reset)
+     * pinned it at 0 through `coerceAtLeast(0)`. The baseline is gone; see [sessionTripKm].
      */
-    private var tripBaselineMeters: Long? = null
+    private var tripSumMeters: Double = 0.0
+
+    /**
+     * One 0x04 odometer reading as the [odometerGate] judges it. [powerOnM] is the power-on counter of the newest
+     * genuine live frame when this 0x04 arrived (null when none had), [liveStamp] how many genuine live frames had
+     * arrived by then: two points with different stamps have a live frame between them, so the counter moved
+     * independently of the odometer and is a WITNESS; equal stamps mean the same stale counter, which proves nothing.
+     */
+    private class OdometerPoint(val meters: Long, val powerOnM: Long?, val liveStamp: Long, val frame: ByteArray, val arrivedAt: Long)
+
+    /** Power-on counter of the newest genuine live frame; null before one (and after [reset]). */
+    private var witnessPowerOnM: Long? = null
+    private var liveStamp: Long = 0L
+
+    /** Last accepted odometer increment in metres: R1's tolerance scales with it. */
+    private var lastAcceptedStepM: Long = 0L
+
+    private var odometerGate = newOdometerGate()
 
     /** Last decoded 0x04 alert bitmap (byte 14) — see [parseOdometerFrame]. */
     private var alertBitmap: Int = 0
@@ -497,15 +517,56 @@ class BegodeProtocol(
      * non-nullable float and 0 is also the honest reading for a session that
      * has not moved. The odometer fills in within a second of connecting.
      *
-     * `coerceAtLeast(0)` for the same reason VESC's does: the baseline is a
-     * lifetime counter that only accumulates, so a negative delta would mean
-     * the wheel contradicted itself, and a negative distance helps nobody.
+     * RETRACTION (telemetry-plausibility Task 4). An earlier revision derived this as `odometer - baseline`
+     * (baseline = the first 0x04 of the connection) with `coerceAtLeast(0)`, and said the odometer "cannot be
+     * wrong". That was wrong: the wheel's 0x04 odometer is sometimes read torn (true + 65 536 m, a bit-16 flip), so
+     * a torn FIRST frame offset the trip by 65.5 km for the whole connection and a later wheel odometer reset
+     * pinned it at 0. The trip is now the SUM OF ACCEPTED INCREMENTS of the odometer as judged by the
+     * [odometerGate] (witnessed by the live frame's power-on counter, rule R1): a needle adds nothing, a
+     * confirmed re-baseline adds only its chain's internal progress, and the sum never decreases.
      */
-    private fun sessionTripKm(): Float {
-        val odometer = odometerMeters() ?: return 0f
-        val baseline = tripBaselineMeters ?: return 0f
-        return (odometer - baseline).coerceAtLeast(0L) / 1000f
+    private fun sessionTripKm(): Float = (tripSumMeters / 1000.0).toFloat()
+
+    /**
+     * Gate for the lifetime odometer, rule R1 (witness) with the counter re-baseline.
+     *
+     * The witness: between two 0x04 frames with a genuine live frame between them the wheel's power-on counter
+     * (live bytes 8..9, u16, metres) advances by exactly the odometer's step: `odometer - powerOn` was constant
+     * in all three field dumps (44 + 105 + 118 frames). A torn 0x04 breaks that by 65 536 m, so
+     * `agrees` = `|dOdo - dPowerOn| <= max(40 m, 2 x last accepted step)`, `dPowerOn` taken modulo 65 536 (the u16
+     * wraps). 40 m is a witness tolerance, not a speed limit: it covers the ~100 ms between the 0x00 and 0x04
+     * samples at the dumps' <= 7 m/frame with a x5 margin.
+     *
+     * The witness is UNAVAILABLE (and the gate falls back to "monotone, decided one 0x04 late") when no live
+     * frame arrived between the two points, when the earlier point had none, or after a power-on reset of the
+     * counter (`W_b < 100 && dW > 1000`: the wheel restarted its counter, which proves nothing about the odometer).
+     * No metre bound is applied there (rider ruling 2026-10-27): the price is one 0x04 (~310 ms) of lag.
+     *
+     * False-positive risk: R1 never fired on the 267 real frames. A wheel whose power-on counter does not track
+     * its odometer by more than 40 m per 0x04 would see every frame rejected and the odometer and trip FREEZE,
+     * with [rejectedFrameCount] climbing on a healthy wheel: that is how a false positive shows.
+     */
+    private fun newOdometerGate() = CounterStepGate<OdometerPoint>(
+        value = { it.meters.toDouble() },
+        agrees = { a, b ->
+            val dW = witnessStep(a, b)
+            if (dW != null) abs((b.meters - a.meters) - dW) <= max(R1_TOLERANCE_FLOOR_M, 2 * lastAcceptedStepM)
+            else b.meters >= a.meters
+        },
+        immediate = { a, b -> witnessStep(a, b) != null },
+    )
+
+    /** The power-on counter's advance from [a] to [b] when it is a usable witness, else null. See [newOdometerGate]. */
+    private fun witnessStep(a: OdometerPoint, b: OdometerPoint): Long? {
+        val wa = a.powerOnM ?: return null
+        val wb = b.powerOnM ?: return null
+        if (a.liveStamp == b.liveStamp) return null
+        val dW = ((wb - wa) % 65_536L + 65_536L) % 65_536L
+        if (wb < R1_POWER_ON_RESET_BELOW_M && dW > R1_POWER_ON_RESET_JUMP_M) return null
+        return dW
     }
+
+    private fun odometerText(p: OdometerPoint): String = "${p.meters} m"
 
     /**
      * BATTERY current in amperes from the 0x07 frame, or null before one
@@ -781,8 +842,8 @@ class BegodeProtocol(
      * negative distance would be worse. Both fields fill in within a second of
      * connecting.
      *
-     * **[tripKm] is the SESSION delta**, derived from the odometer against a
-     * baseline taken at this connection's first 0x04 frame — the same thing
+     * **[tripKm] is the SESSION distance**, the sum of the accepted odometer increments (see [sessionTripKm]; an
+     * earlier revision took it against a first-0x04 baseline, retracted there) — the same thing
      * [VescProtocol] publishes and the meaning `RideMetrics.sessionWhPerKm`
      * requires. The wheel's own since-power-on counter is decoded and kept, but
      * it is not this field: see [sessionTripKm] and [powerOnDistanceMeters].
@@ -1223,10 +1284,15 @@ class BegodeProtocol(
         odometerMetersValue = 0L
         sawOdometer = false
         // The trip is per-CONNECTION by definition: a reconnect starts a new
-        // session and must start its trip at 0, not carry the last one's
-        // baseline (which would make the new session open at the old one's
-        // distance). Same reason VescProtocol.reset clears its baseline.
-        tripBaselineMeters = null
+        // session and must start its trip at 0, not carry the last one's sum.
+        // The gate, the witness and the ledger counters go with it; the ledger's
+        // ring does not (it is evidence, see [rejectedFrames]).
+        tripSumMeters = 0.0
+        odometerGate = newOdometerGate()
+        witnessPowerOnM = null
+        liveStamp = 0L
+        lastAcceptedStepM = 0L
+        resetLedger()
         // A reconnect may face a healthy wheel: the previous one's alerts must
         // not survive it, or a cleared fault would keep firing.
         alertBitmap = 0
@@ -1294,6 +1360,7 @@ class BegodeProtocol(
                 continue
             }
 
+            noteLedgerFrame()
             parseFrame(current)
             buffer.trimLeading(FRAME_SIZE)
         }
@@ -1438,6 +1505,9 @@ class BegodeProtocol(
             // [signedSpeedKmh].
             speedKmhValue = abs(signedSpeedKmhValue)
             powerOnMetersValue = powerOnMeters
+            // The newest genuine counter: the witness that judges the next 0x04's odometer (R1).
+            witnessPowerOnM = powerOnMeters
+            liveStamp++
             // Bytes 14..15, RAW and only for [deviceFacts]: not [dutyPercentValue], not [motion].
             // On the ET Max capture this word is a constant 0x00a9 (16.9 %) on a standing wheel,
             // so it is not a duty there; whether an older wheel's tracks load is exactly what the
@@ -1541,7 +1611,36 @@ class BegodeProtocol(
         // zero-padded boot 0x04 mid-stream republished the wheel's lifetime
         // mileage as 0.0 km and reset the trip baseline under a rider.
         if (isZeroPaddedPayload(frame)) return
-        odometerMetersValue = frame.u32BE(2)
+        val point = OdometerPoint(frame.u32BE(2), witnessPowerOnM, liveStamp, frame.copyOf(), currentLedgerFrame)
+        // A frame the gate has not accepted writes NO state: not the odometer, not the alert byte, no observation.
+        // Decisions can lag (a held point is decided by the next one) and arrive in order.
+        for (decision in odometerGate.offer(point)) {
+            when (decision) {
+                is CounterDecision.Accepted -> {
+                    // A witnessed step may be a few metres negative inside the tolerance; the trip never decreases.
+                    tripSumMeters += max(0.0, decision.incrementM)
+                    lastAcceptedStepM = decision.incrementM.toLong()
+                    applyOdometerFrame(decision.point)
+                }
+                is CounterDecision.Rebased -> {
+                    tripSumMeters += max(0.0, decision.creditedM)
+                    applyOdometerFrame(decision.point)
+                    recordRebase(0x04, PlausibilityRule.R1_ODOMETER_WITNESS, decision.point.frame,
+                        "jump ${decision.jumpM.toLong()} m", null, decision.point.arrivedAt)
+                }
+                is CounterDecision.Rejected -> {
+                    val witnessM = witnessStep(decision.reference, decision.point)
+                    recordRejection(0x04, PlausibilityRule.R1_ODOMETER_WITNESS, decision.point.frame,
+                        odometerText(decision.reference), witnessM?.let { "+$it m" }, decision.point.arrivedAt)
+                }
+            }
+        }
+    }
+
+    /** Publish an odometer frame the gate accepted: everything [parseOdometerFrame] used to do unconditionally. */
+    private fun applyOdometerFrame(point: OdometerPoint) {
+        val frame = point.frame
+        odometerMetersValue = point.meters
         val tiltbackRaw = frame.i16BE(10)
         // WheelLog's own rule: >= 100 is the wheel's "unset" marker rather than
         // a speed. 0 is unset too — a wheel that tilts back at a standstill is
@@ -1551,11 +1650,6 @@ class BegodeProtocol(
         alertBitmap = frame.u8(14)
         faultsValue = alertLabels(alertBitmap and FAULT_BITS)
         sawOdometer = true
-        // The trip's session baseline: the FIRST genuine odometer reading of
-        // this connection, so `tripKm` counts from where the rider connected
-        // rather than from where the wheel was last switched on. See
-        // [sessionTripKm].
-        if (tripBaselineMeters == null) tripBaselineMeters = odometerMetersValue
         rebuildMotion()
         observeControllerFrame(0x04)
     }
@@ -1975,6 +2069,10 @@ class BegodeProtocol(
          * Max capture reads 200 in every 0x04 frame. See [tiltbackSpeed].
          */
         private const val TILTBACK_UNSET_AT = 100
+
+        private const val R1_TOLERANCE_FLOOR_M = 40L
+        private const val R1_POWER_ON_RESET_BELOW_M = 100L
+        private const val R1_POWER_ON_RESET_JUMP_M = 1000L
 
         /**
          * Rider-readable labels for every bit of the 0x04 alert byte, in bit

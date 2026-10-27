@@ -117,10 +117,16 @@ class BegodeTelemetryObservationTest {
 
     @Test fun odometerBaselineIsOnlyRefreshedByRealDistanceFrames() {
         val protocol = BegodeProtocol(); val events = capture(protocol)
+        // Retraction (telemetry-plausibility Task 4): the trip is now the sum of ACCEPTED increments, and with no
+        // witness (the first 0x04 preceded any live frame) a step is decided one 0x04 late. This test used to
+        // assert TRIP 1.0 on the second 0x04 itself; that frame is now held until the next one confirms it.
         protocol.onNotification(odometer(100_000) + live() + motion() + odometer(101_000))
         assertEquals(0.0, events.first().read(TelemetryMetric.TRIP).value)
+        assertEquals(3, events.size, "the second 0x04 is held one frame without a witness")
+        protocol.onNotification(odometer(101_000))
+        assertEquals(4, events.size)
         assertEquals(1.0, events.last().read(TelemetryMetric.TRIP).value)
-        protocol.onNotification(frame(4)) // boot placeholder does not reset baseline or publish distance zero.
+        protocol.onNotification(frame(4)) // boot placeholder does not reset the sum or publish distance zero.
         assertEquals(4, events.size)
         protocol.reset(); protocol.onNotification(odometer(110_000))
         assertEquals(0.0, events.last().read(TelemetryMetric.TRIP).value)

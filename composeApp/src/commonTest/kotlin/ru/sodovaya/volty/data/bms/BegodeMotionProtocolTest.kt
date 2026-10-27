@@ -1033,10 +1033,10 @@ class BegodeMotionProtocolTest {
         // wheel permanently faulted after one over-temperature — and the NEXT
         // genuine fault would raise nothing.
         val protocol = BegodeProtocol()
-        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x20))
+        protocol.witnessed(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x20))
         assertEquals(listOf("Over temperature"), assertNotNull(protocol.latestMotion(0)).faults)
 
-        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x00))
+        protocol.witnessed(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x00))
         assertEquals(
             emptyList(), assertNotNull(protocol.latestMotion(0)).faults,
             "the wheel stopped reporting it, so the fault is over"
@@ -1057,7 +1057,7 @@ class BegodeMotionProtocolTest {
         // They are still decoded, and this asserts BOTH halves: present in
         // wheelAlerts(), absent from faults.
         val protocol = BegodeProtocol()
-        protocol.onNotification(
+        protocol.witnessed(
             odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x01 or 0x02 or 0x04 or 0x80)
         )
         assertEquals(
@@ -1072,7 +1072,7 @@ class BegodeMotionProtocolTest {
 
         // The genuine faults of the same byte still get through, so this is a
         // filter and not a mute.
-        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0xFF))
+        protocol.witnessed(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0xFF))
         assertEquals(
             listOf("Low voltage", "Over voltage", "Over temperature", "Hall sensor error"),
             assertNotNull(protocol.latestMotion(0)).faults
@@ -1424,6 +1424,9 @@ class BegodeMotionProtocolTest {
         assertEquals(30_000L, assertNotNull(protocol.powerOnDistanceMeters()))
 
         // 2.5 km further on, and the trip is that 2.5 km.
+        // (Telemetry-plausibility Task 4: a live frame carrying the wheel's own counter precedes the 0x04, as on a
+        // real wheel; it is the witness that lets the step publish at once.)
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 100, tripMeters = 32_500))
         protocol.onNotification(odometerFrame(meterBytes = odometerBytes(32_500)))
         assertEquals(2.5f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f)
         assertEquals(32.5f, assertNotNull(protocol.latestMotion(0)).odometerKm, 1e-3f)
@@ -1435,12 +1438,15 @@ class BegodeMotionProtocolTest {
         // so it wraps at 65 535 m and the TRIP tile silently restarted at 0.0
         // for a rider past 65.5 km. The odometer is a 32-bit metre count, so
         // the derived trip simply keeps counting.
+        // Telemetry-plausibility Task 4: the old fixture jumped 70 km between two consecutive 0x04 frames, which the
+        // witness now (rightly) refuses as a needle. The ride is walked in 5 km steps instead, each witnessed by the
+        // wheel's own 16-bit counter, which wraps to 0 on the way; the odometer does not.
         val protocol = BegodeProtocol()
-        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 65_535))
-        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(8_565_341)))
-        // The wheel wraps; the odometer does not.
+        for (k in 0..14) {
+            protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = (65_535 + 5_000 * k) % 65_536))
+            protocol.onNotification(odometerFrame(meterBytes = odometerBytes(8_565_341L + 5_000L * k)))
+        }
         protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 0))
-        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(8_635_341)))
 
         assertEquals(
             70f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f,
@@ -1451,24 +1457,33 @@ class BegodeMotionProtocolTest {
 
     @Test
     fun syntheticTheTripCannotGoNegativeAndAResetStartsANewSession() {
+        // Telemetry-plausibility Task 4: each 0x04 follows a live frame whose own counter witnesses the step.
         val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 100))
         protocol.onNotification(odometerFrame(meterBytes = odometerBytes(10_000)))
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 2_100))
         protocol.onNotification(odometerFrame(meterBytes = odometerBytes(12_000)))
         assertEquals(2f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f)
 
-        // A lifetime counter that went BACKWARDS means the wheel contradicted
-        // itself; a negative distance helps nobody. Same guard VescProtocol has.
-        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(9_000)))
-        assertEquals(0f, assertNotNull(protocol.latestMotion(0)).tripKm, 0f)
+        // A lifetime counter that went BACKWARDS while the wheel's counter kept going means the wheel contradicted
+        // itself: the frame is held out (never published), so the trip neither goes negative nor moves.
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 2_110))
+        // (5 000, not 9 000: the tolerance is twice the last step, 4 000 m here, so a smaller backward step would
+        // sit inside it.)
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(5_000)))
+        assertEquals(2f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f)
+        assertEquals(12_000L, protocol.odometerMeters())
 
-        // A reconnect is a NEW session: the baseline must not survive it, or
+        // A reconnect is a NEW session: the sum must not survive it, or
         // the next session would open at the previous one's distance.
         protocol.reset()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 2_200))
         protocol.onNotification(odometerFrame(meterBytes = odometerBytes(12_000)))
         assertEquals(
             0f, assertNotNull(protocol.latestMotion(0)).tripKm, 0f,
             "a reconnect starts the trip over, whatever the odometer reads"
         )
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 3_700))
         protocol.onNotification(odometerFrame(meterBytes = odometerBytes(13_500)))
         assertEquals(1.5f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f)
     }
@@ -1484,6 +1499,7 @@ class BegodeMotionProtocolTest {
         // measurements: 8 565 km of lifetime mileage became 0.0 km, and the
         // trip baseline reset under the rider.
         val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 0))
         protocol.onNotification(odometerFrame(meterBytes = etMaxOdometerBytes(), tiltbackRaw = 50))
         val real = assertNotNull(protocol.latestMotion(0))
 
@@ -1493,6 +1509,7 @@ class BegodeMotionProtocolTest {
         assertEquals(50f, assertNotNull(protocol.tiltbackSpeed()), 0f)
 
         // …and a genuine frame right after it is decoded normally.
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 59))
         protocol.onNotification(odometerFrame(meterBytes = odometerBytes(8_565_400)))
         assertEquals(8_565_400L, assertNotNull(protocol.odometerMeters()))
     }
@@ -1618,6 +1635,16 @@ class BegodeMotionProtocolTest {
         p[12] = alertBitmap.toByte()
         p[13] = lightMode.toByte()
         return frame(0x04, 24, p)
+    }
+
+    /**
+     * Feed [odometer] behind a live frame, as a real wheel does. Without a live frame between two 0x04 frames the
+     * odometer has no witness and publishes one 0x04 late (telemetry-plausibility Task 4); the live frame's own
+     * power-on counter is constant here, which matches the constant odometer of the tests that use this.
+     */
+    private fun BegodeProtocol.witnessed(odometer: ByteArray) {
+        onNotification(liveFrame(voltageRaw = 5892))
+        onNotification(odometer)
     }
 
     /** The capture's own odometer bytes, so a test can vary everything else. */

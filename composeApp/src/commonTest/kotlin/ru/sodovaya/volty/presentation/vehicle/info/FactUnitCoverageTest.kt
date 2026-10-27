@@ -29,7 +29,9 @@ import kotlin.test.assertTrue
 class FactUnitCoverageTest {
     private fun tiltbackFrame(): ByteArray {
         val p = ByteArray(16)
-        p[3] = 1; p[9] = 40 // odometer 1 m, tiltback raw 40 (< 100 means set)
+        // Telemetry-plausibility Task 4: the odometer must agree with the dump's last one (8 565 341 m), or R1 holds
+        // the frame out. It used to be 1 m, a step backwards that no wheel makes.
+        p[1] = 0x82.toByte(); p[2] = 0xB2.toByte(); p[3] = 0x5D; p[9] = 40 // tiltback raw 40 (< 100 means set)
         return byteArrayOf(0x55, 0xAA.toByte()) + p + byteArrayOf(0x04, 24, 0x5A, 0x5A, 0x5A, 0x5A)
     }
 
@@ -38,6 +40,9 @@ class FactUnitCoverageTest {
         val t4 = BegodeProtocol().also { p -> BegodeT4Fixture.notifications.forEach { p.onNotification(it) } }
         val tilt = BegodeProtocol().also { p ->
             BegodeDumpFixture.chunks().forEach { p.onNotification(it) }
+            // No live frame sits between these 0x04 frames, so the odometer has no witness and the first is
+            // published once the second confirms it (telemetry-plausibility Task 4).
+            p.onNotification(tiltbackFrame())
             p.onNotification(tiltbackFrame())
         }
         return etMax.deviceFacts() + t4.deviceFacts() + tilt.deviceFacts()
