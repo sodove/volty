@@ -142,7 +142,9 @@ class AlarmDriver(
     private val modalities: Flow<AlarmModalities>,
     private val alarm: AlarmOutput,
     private val controller: AlarmController = AlarmController(),
-    private val silencer: AlarmSilencer = AlarmSilencer()
+    private val silencer: AlarmSilencer = AlarmSilencer(),
+    /** True while a PWM calibration runs: duty and speed are left out of the alarm (see [CalibrationMute]). */
+    private val calibrationMuted: () -> Boolean = { false }
 ) {
 
     /** Which stream produced a tick. See the class doc for why all four share one collector. */
@@ -249,9 +251,11 @@ class AlarmDriver(
      * disconnect reaches.
      */
     private fun onSample(motion: ControllerData, vehicle: Vehicle?) {
-        val rules =
+        val armed =
             if (vehicle == null) ArmedRules.NONE
             else armedRules(vehicle, motion, vehicle.motionAlertRules)
+        // A calibration spins the lifted wheel on purpose: duty and speed do not sound, temperatures still do.
+        val rules = if (calibrationMuted()) armed.withoutCalibrationMuted() else armed
         // Through the silencer on the way out, never into the engine: a silence
         // must not disturb hysteresis, so the engine goes on grading the ride and
         // only what reaches the speaker is suppressed. That is also what lets the

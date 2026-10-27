@@ -211,6 +211,7 @@ class DefaultRideDashboardComponent(
     private val onDisconnectRequested: () -> Unit,
     private val onEditVehicleRequested: (String) -> Unit = {},
     private val rangeSource: ru.sodovaya.volty.data.energy.RangeSource? = null,
+    private val calibrationMute: ru.sodovaya.volty.domain.alert.CalibrationMute = ru.sodovaya.volty.domain.alert.CalibrationMute(),
 ) : RideDashboardComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -782,7 +783,7 @@ class DefaultRideDashboardComponent(
                 observeFaults(FaultSource.CONTROLLER, motion.faults, motion.timestamp)
                 val faults = observeAlerts(
                     FaultSource.MOTION_ALERTS,
-                    alertTracker.updateMotion(motion, _state.value.vehicle),
+                    alertTracker.updateMotion(motion, _state.value.vehicle, calibrationMute.isActive()),
                     motion.timestamp
                 )
                 _state.update { current ->

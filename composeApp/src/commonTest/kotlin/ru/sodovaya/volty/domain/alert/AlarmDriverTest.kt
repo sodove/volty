@@ -733,4 +733,41 @@ class AlarmDriverTest {
         runCurrent()
         assertEquals(2, alarm.level, "a silence pressed against silence must not mute the next real alarm")
     }
+
+    // ------------------------------------------------- PWM calibration mutes duty and speed
+
+    @Test
+    fun a_calibration_silences_duty_and_speed_but_not_temperature_and_lifts_after() = runTest {
+        val repo = ridingOn(
+            vehicle(
+                rule(MotionAlertKind.DUTY, 80f, 90f),
+                rule(MotionAlertKind.SPEED, 40f),
+                rule(MotionAlertKind.ESC_TEMP, 80f)
+            )
+        )
+        var calibrating = false
+        val alarm = RecordingAlarm()
+        AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm, calibrationMuted = { calibrating })
+            .start(backgroundScope)
+        runCurrent()
+
+        calibrating = true
+        // The lifted wheel spun in the air: duty 93 and 80 km/h, both far over their steps.
+        repo.activeMotion.value = motion(dutyPercent = 93f, speedKmh = 80f)
+        runCurrent()
+        assertEquals(0, alarm.level, "no duty or speed alarm while the wizard runs")
+
+        // Incoherent on purpose: the same sample also carries an overheating controller. Temperature is not muted.
+        repeat(3) { i ->
+            repo.activeMotion.value = motion(dutyPercent = 93f, speedKmh = 80f, escTempC = 95f + i)
+            runCurrent()
+        }
+        val contributors = alarm.states.last().contributors.map { it.kind }
+        assertEquals(listOf(MotionAlertKind.ESC_TEMP), contributors, "only the temperature sounds during calibration")
+
+        calibrating = false
+        repo.activeMotion.value = motion(dutyPercent = 95f, speedKmh = 80f)
+        runCurrent()
+        assertEquals(2, alarm.level, "after the wizard the duty alarm works again")
+    }
 }

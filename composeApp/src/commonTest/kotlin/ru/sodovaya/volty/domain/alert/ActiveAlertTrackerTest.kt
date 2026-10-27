@@ -216,4 +216,32 @@ class ActiveAlertTrackerTest {
         assertEquals(emptyList(), t.updateMotion(motion().copy(wheelPwmAlarm = true, isConnected = false), vehicle()))
         assertEquals(emptyList(), t.updateMotion(motion().copy(wheelPwmAlarm = true), null))
     }
+
+    // ---- a PWM calibration mutes duty, speed and the wheel's own row -----------------------------
+
+    @Test
+    fun `calibrating hides duty speed and the wheel row but keeps the temperatures`() {
+        val t = ActiveAlertTracker()
+        val v = vehicle()
+        val spinning = motion(duty = 93f, speed = 80f, esc = 20f).copy(wheelPwmAlarm = true)
+        assertEquals(
+            setOf(AlertKind.DUTY_HIGH, AlertKind.SPEED_HIGH, AlertKind.WHEEL_PWM_ALARM),
+            t.updateMotion(spinning, v).map { it.kind }.toSet(),
+            "fixture guard: without calibration all three show"
+        )
+        assertEquals(emptyList(), t.updateMotion(spinning, v, calibrating = true))
+
+        // not muted: the temperature, three agreeing frames
+        var rows = emptyList<ActiveAlert>()
+        repeat(3) { rows = t.updateMotion(motion(duty = 93f, speed = 80f, esc = 95f).copy(wheelPwmAlarm = true), v, calibrating = true) }
+        assertEquals(listOf(AlertKind.ESC_TEMP_HIGH), rows.map { it.kind })
+    }
+
+    @Test
+    fun `after calibration the rows work again`() {
+        val t = ActiveAlertTracker()
+        val v = vehicle()
+        t.updateMotion(motion(duty = 93f), v, calibrating = true)
+        assertEquals(listOf(AlertKind.DUTY_HIGH), t.updateMotion(motion(duty = 93f), v).map { it.kind })
+    }
 }

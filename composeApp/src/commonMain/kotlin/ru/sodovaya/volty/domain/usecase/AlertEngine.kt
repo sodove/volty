@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.domain.usecase
 
 import ru.sodovaya.volty.domain.alert.AlertRule
+import ru.sodovaya.volty.domain.alert.CalibrationMute
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.alert.NotifyKind
 import ru.sodovaya.volty.domain.alert.TemperatureGate
@@ -65,7 +66,8 @@ import kotlin.time.Instant
 class AlertEngine(
     private val bmsRepository: BmsRepository,
     private val notifier: Notifier,
-    private val clock: () -> Instant = { Clock.System.now() }
+    private val clock: () -> Instant = { Clock.System.now() },
+    private val calibrationMute: CalibrationMute = CalibrationMute()
 ) {
 
     private val lastFired = mutableMapOf<Pair<String, AlertKind>, Instant>()
@@ -325,6 +327,7 @@ class AlertEngine(
         // obligation for the alarm). It also follows the vehicle: the rules and
         // the availability both come from the `vehicle` this sample arrived with.
         val rules = armedRules(vehicle, motion, vehicle.motionAlertRules)
+        val calibrating = calibrationMute.isActive()
         for (rule in rules.rules) when (rule.kind) {
             MotionAlertKind.MOTOR_TEMP -> gate(vehicle, AlertKind.MOTOR_TEMP_HIGH)
                 .confirm(motion.motorTempC)?.let { confirmed ->
@@ -347,7 +350,7 @@ class AlertEngine(
             // Speed and duty are not gated (decision 1: unchanged) - one raw
             // reading is its own min, max and latest. Switched off by default,
             // in which case fireLevelled posts nothing.
-            MotionAlertKind.DUTY -> motion.dutyPercent.let { v ->
+            MotionAlertKind.DUTY -> if (calibrating) markNotifiedForCalibration(vehicle, AlertKind.DUTY_HIGH, rule, motion.dutyPercent) else motion.dutyPercent.let { v ->
                 fireLevelled(
                     AlertKind.DUTY_HIGH, rule, vehicle, now,
                     value = TemperatureGate.Confirmed(min = v, max = v, latest = v),
@@ -355,7 +358,7 @@ class AlertEngine(
                     message = AlertMessage(AlertKind.DUTY_HIGH, vehicle.name, value = v)
                 )
             }
-            MotionAlertKind.SPEED -> motion.speedKmh.let { v ->
+            MotionAlertKind.SPEED -> if (calibrating) markNotifiedForCalibration(vehicle, AlertKind.SPEED_HIGH, rule, motion.speedKmh) else motion.speedKmh.let { v ->
                 fireLevelled(
                     AlertKind.SPEED_HIGH, rule, vehicle, now,
                     value = TemperatureGate.Confirmed(min = v, max = v, latest = v),
@@ -364,6 +367,19 @@ class AlertEngine(
                 )
             }
         }
+    }
+
+    /**
+     * A PWM calibration spins the lifted wheel on purpose: duty and speed raise nothing while it runs. A reading
+     * over one of the kind's levels is an episode that began during calibration, so the kind is left DISARMED, as if
+     * it had already notified: when the wizard ends with the wheel still spinning that is not a "new episode" (no
+     * burst at the moment the rider reads the result). It re-arms the normal way, once a sample falls below every
+     * level ([fire]'s `recovered`). A reading under every level leaves the arming alone, so a calibration that
+     * ends at rest does not swallow the next real crossing.
+     */
+    private fun markNotifiedForCalibration(vehicle: Vehicle, kind: AlertKind, rule: AlertRule, value: Float) {
+        if (rule.engagedLevel(value) > 0) armed[vehicle.id to kind] = false
+        peakLevel.remove(vehicle.id to kind)
     }
 
     /**

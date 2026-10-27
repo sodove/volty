@@ -75,7 +75,8 @@ val appModule = module {
         ru.sodovaya.volty.data.bms.LearnedCellCountSource::class,
         BleDiagnosticsRepository::class
     )
-    single { AlertEngine(get(), get()) }
+    single { ru.sodovaya.volty.domain.alert.CalibrationMute() }
+    single { AlertEngine(get(), get(), calibrationMute = get()) }
     single<SocialTransport> { HttpSocialTransport() }
     // Android replaces the public repository binding with the hybrid online /
     // embedded-BRouter implementation. Keep the concrete online repository

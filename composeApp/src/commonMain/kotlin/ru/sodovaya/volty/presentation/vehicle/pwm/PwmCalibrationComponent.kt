@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import ru.sodovaya.volty.domain.alert.CalibrationMute
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DEFAULT_PWM_ALARM_THRESHOLD_PERCENT
@@ -83,6 +84,7 @@ class DefaultPwmCalibrationComponent(
     private val bms: BmsRepository,
     private val onBackRequested: () -> Unit,
     private val ioContext: CoroutineContext = Dispatchers.Default,
+    private val calibrationMute: CalibrationMute = CalibrationMute(),
 ) : PwmCalibrationComponent, ComponentContext by componentContext {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
@@ -105,7 +107,15 @@ class DefaultPwmCalibrationComponent(
     override val state: StateFlow<PwmCalibrationUi> = _state.asStateFlow()
 
     init {
-        lifecycle.doOnDestroy { lifetime.cancel() }
+        lifecycle.doOnDestroy { lifetime.cancel(); calibrationMute.end() }
+        // While the rider is spinning the lifted wheel (THRESHOLD / PLATEAU) the duty and speed alarms are muted;
+        // every state change is a heartbeat that renews the signal's time box. INTRO, RESULT and BLOCKED release it.
+        scope.launch {
+            _state.collect { ui ->
+                if (ui.wizard.step == PwmWizardStep.THRESHOLD || ui.wizard.step == PwmWizardStep.PLATEAU) calibrationMute.begin()
+                else calibrationMute.end()
+            }
+        }
         scope.launch {
             val v = try { vehicles.get(vehicleId) } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
             _state.update { it.copy(vehicleName = v?.name) }

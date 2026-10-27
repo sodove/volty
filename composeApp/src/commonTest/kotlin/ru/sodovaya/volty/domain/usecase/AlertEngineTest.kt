@@ -1268,4 +1268,58 @@ class AlertEngineTest {
             assertEquals(notified, shown, "fixture '$name'")
         }
     }
+
+    // ---- a PWM calibration mutes duty and speed notifications --------------------------------
+
+    private class MuteClock { var now = 0L }
+
+    @Test
+    fun `during a calibration duty and speed raise nothing but a temperature still does`() {
+        val notifier = TestNotifier()
+        val clock = MuteClock()
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute { clock.now }
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing(), calibrationMute = mute)
+        val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.DUTY + NotifyKind.SPEED)
+            .let { it.copy(motionAlerts = listOf(rule(MotionAlertKind.DUTY, 80f, 90f), rule(MotionAlertKind.SPEED, 50f), rule(MotionAlertKind.ESC_TEMP, 90f))) }
+        mute.begin()
+        repeat(5) { engine.evaluateMotionForTest(motion(dutyPercent = 93f, speedKmh = 80f), v) }
+        assertEquals(0, notifier.messages.size, "the lifted wheel spinning is not an alert")
+        repeat(3) { engine.evaluateMotionForTest(motion(dutyPercent = 93f, speedKmh = 80f, escTempC = 99f), v) }
+        assertEquals(listOf(AlertKind.ESC_TEMP_HIGH), notifier.messages.map { it.first.kind })
+    }
+
+    @Test
+    fun `ending a calibration while still above the threshold is not a new episode`() {
+        val notifier = TestNotifier()
+        val clock = MuteClock()
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute { clock.now }
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing(), calibrationMute = mute)
+        val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.DUTY + NotifyKind.SPEED)
+            .copy(motionAlerts = listOf(rule(MotionAlertKind.DUTY, 80f, 90f), rule(MotionAlertKind.SPEED, 50f)))
+        mute.begin()
+        repeat(3) { engine.evaluateMotionForTest(motion(dutyPercent = 93f, speedKmh = 80f), v) }
+        mute.end()
+        repeat(4) { engine.evaluateMotionForTest(motion(dutyPercent = 91f, speedKmh = 70f), v) }
+        assertEquals(0, notifier.messages.size, "the episode began during calibration: no burst when it ends")
+
+        // It re-arms the normal way: below every level, then a genuine new crossing notifies.
+        engine.evaluateMotionForTest(motion(dutyPercent = 10f, speedKmh = 10f), v)
+        engine.evaluateMotionForTest(motion(dutyPercent = 93f, speedKmh = 80f), v)
+        assertEquals(setOf(AlertKind.DUTY_HIGH, AlertKind.SPEED_HIGH), notifier.messages.map { it.first.kind }.toSet())
+    }
+
+    @Test
+    fun `a stuck calibration signal stops muting after its time box`() {
+        val notifier = TestNotifier()
+        val clock = MuteClock()
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute { clock.now }
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing(), calibrationMute = mute)
+        val v = motionVehicle().copy(notifyKinds = NotifyKind.DEFAULTS + NotifyKind.SPEED)
+            .copy(motionAlerts = listOf(rule(MotionAlertKind.SPEED, 50f)))
+        mute.begin()
+        engine.evaluateMotionForTest(motion(speedKmh = 10f), v)
+        clock.now += ru.sodovaya.volty.domain.alert.CalibrationMute.TIME_BOX_MS
+        engine.evaluateMotionForTest(motion(speedKmh = 70f), v)
+        assertEquals(listOf(AlertKind.SPEED_HIGH), notifier.messages.map { it.first.kind })
+    }
 }

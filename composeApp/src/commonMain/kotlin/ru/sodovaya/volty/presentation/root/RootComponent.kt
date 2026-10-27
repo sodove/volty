@@ -805,7 +805,8 @@ class DefaultRootComponent(
                         goTo(configForCreateVehicle(CreateVehicleEntry.RIDE))
                     },
                     onDisconnectRequested = { replaceAll(configAfterDisconnect()) },
-                    rangeSource = get<ru.sodovaya.volty.data.energy.RangeSource>()
+                    rangeSource = get<ru.sodovaya.volty.data.energy.RangeSource>(),
+                    calibrationMute = get()
                 )
             )
             is Config.Dashboard -> RootComponent.Child.Dashboard(
@@ -947,6 +948,7 @@ class DefaultRootComponent(
                     vehicles = get(),
                     bms = get(),
                     onBackRequested = { nav.pop() },
+                    calibrationMute = get(),
                 )
             )
             is Config.VehicleInfo -> RootComponent.Child.VehicleInfo(

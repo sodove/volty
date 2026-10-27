@@ -62,6 +62,7 @@ class MonitoringService : Service() {
     private val notifier: Notifier by inject()
     private val appPrefs: AppPrefs by inject()
     private val alarms: AudibleAlarmHolder by inject()
+    private val calibrationMute: ru.sodovaya.volty.domain.alert.CalibrationMute by inject()
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     /**
@@ -162,7 +163,8 @@ class MonitoringService : Service() {
         val driver = AlarmDriver(
             repository = bmsRepository,
             modalities = appPrefs.alarmModalities,
-            alarm = alarms.openOutput()
+            alarm = alarms.openOutput(),
+            calibrationMuted = { calibrationMute.isActive() }
         ).also { it.start(scope) }
         alarmDriver = driver
 

@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.vehicle.pwm
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.Lifecycle
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import com.arkivanov.essenty.lifecycle.destroy
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -111,12 +112,12 @@ class PwmCalibrationComponentTest {
         }
     }
 
-    private fun TestScope.rig(vehicle: Vehicle = t4, vehicles: Vehicles = Vehicles(vehicle), evidence: PwmEvidence = PwmEvidence.NEVER_REPORTED): Rig {
+    private fun TestScope.rig(vehicle: Vehicle = t4, vehicles: Vehicles = Vehicles(vehicle), evidence: PwmEvidence = PwmEvidence.NEVER_REPORTED, mute: ru.sodovaya.volty.domain.alert.CalibrationMute = ru.sodovaya.volty.domain.alert.CalibrationMute(), lifecycle: LifecycleRegistry = LifecycleRegistry(Lifecycle.State.RESUMED)): Rig {
         val bms = FakeBms().also { it.evidence.value = evidence }
         lateinit var rig: Rig
         val component = DefaultPwmCalibrationComponent(
-            DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, "t4",
-            vehicles, bms, onBackRequested = { rig.backs++ }, ioContext = StandardTestDispatcher(testScheduler),
+            DefaultComponentContext(lifecycle), backgroundScope, "t4",
+            vehicles, bms, onBackRequested = { rig.backs++ }, ioContext = StandardTestDispatcher(testScheduler), calibrationMute = mute,
         )
         rig = Rig(bms, component)
         return rig
@@ -279,5 +280,40 @@ class PwmCalibrationComponentTest {
         r.component.onSave(); runCurrent()
         assertTrue(r.component.state.value.saveFailed)
         assertEquals(0, r.backs)
+    }
+
+    @Test fun theDutyAndSpeedAlarmsAreMutedFromStartUntilTheResultAndCancelAndBlockedAndDestroyRelease() = runTest {
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute()
+        val r = rig(mute = mute); connect(r); r.send(0f, false); runCurrent()
+        assertFalse(mute.isActive(), "INTRO: the rider is not spinning anything yet")
+        r.component.onStart(); runCurrent()
+        assertTrue(mute.isActive(), "a run started")
+        r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        assertTrue(mute.isActive())
+        r.component.onFinish(); runCurrent()
+        assertEquals(PwmWizardStep.RESULT, r.component.state.value.wizard.step)
+        assertFalse(mute.isActive(), "RESULT releases")
+        r.component.onCancel(); runCurrent()
+        assertFalse(mute.isActive())
+    }
+
+    @Test fun aBlockedWizardReleasesTheMute() = runTest {
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute()
+        val r = rig(mute = mute); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart(); runCurrent()
+        assertTrue(mute.isActive())
+        r.bms.evidence.value = PwmEvidence.REPORTS; runCurrent()
+        assertEquals(PwmWizardStep.BLOCKED, r.component.state.value.wizard.step)
+        assertFalse(mute.isActive())
+    }
+
+    @Test fun leavingTheScreenMidRunReleasesTheMute() = runTest {
+        val mute = ru.sodovaya.volty.domain.alert.CalibrationMute()
+        val lifecycle = LifecycleRegistry(Lifecycle.State.RESUMED)
+        val r = rig(mute = mute, lifecycle = lifecycle); connect(r); r.send(0f, false); runCurrent()
+        r.component.onStart(); runCurrent()
+        assertTrue(mute.isActive())
+        lifecycle.destroy()
+        assertFalse(mute.isActive(), "back or process teardown mid-run must not leave the alarms muted")
     }
 }

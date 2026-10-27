@@ -79,12 +79,14 @@ class ActiveAlertTracker {
     }
 
     /** The motion kinds engaged by [motion]. A disconnected sample or no vehicle: none. */
-    fun updateMotion(motion: ControllerData, vehicle: Vehicle?): List<ActiveAlert> {
+    fun updateMotion(motion: ControllerData, vehicle: Vehicle?, calibrating: Boolean = false): List<ActiveAlert> {
         if (vehicle == null || !motion.isConnected) {
             alarm.reset()
             return emptyList()
         }
-        val rules = armedRules(vehicle, motion, vehicle.motionAlertRules)
+        // During a PWM calibration the lifted wheel is spun on purpose: no duty, speed or wheel-PWM rows.
+        val armed = armedRules(vehicle, motion, vehicle.motionAlertRules)
+        val rules = if (calibrating) armed.withoutCalibrationMuted() else armed
         val state = alarm.update(motion, rules)
         val engaged = state.contributors.map { contributor ->
             val rule = rules.rules.first { it.kind == contributor.kind }
@@ -98,7 +100,7 @@ class ActiveAlertTracker {
         // The wheel's own PWM alarm is a fact the wheel reports, not a rule of ours: it needs no armed rule, no
         // duty availability and no notify switch (those gate sound and notifications, not what the banner tells the
         // rider). Its row carries the configured threshold, the number the wheel's alarm stands for.
-        return if (motion.wheelPwmAlarm == true) {
+        return if (motion.wheelPwmAlarm == true && !calibrating) {
             engaged + ActiveAlert(AlertKind.WHEEL_PWM_ALARM, vehicle.pwmAlarmThresholdPercent.toFloat(), AlertSeverity.WARNING)
         } else engaged
     }
