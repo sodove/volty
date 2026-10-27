@@ -267,7 +267,7 @@ class HistoryComponentTest {
     }
     @Test fun selectedRideShowsWholeRideTotalsAndLeavingClearsThem() = runTest {
         val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
-            Repo(), { HistoryTick(6000, 5010, 1) }, {}, totalsRepository = Repo())
+            Repo(), { HistoryTick(6000, 5010, 1) }, {}, totalsRepository = Repo(), totalsDispatcher = StandardTestDispatcher(testScheduler))
         try {
             c.openRide("a"); runCurrent()
             assertEquals("a", c.state.value.totals.rideId)

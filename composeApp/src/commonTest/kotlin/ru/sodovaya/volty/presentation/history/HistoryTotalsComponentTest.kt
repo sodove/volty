@@ -39,7 +39,8 @@ class HistoryTotalsComponentTest {
     }
 
     private fun TestScope.component(repo: Repo) =
-        HistoryTotalsComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo, refreshMillis = 15_000)
+        HistoryTotalsComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo, refreshMillis = 15_000,
+            computeDispatcher = StandardTestDispatcher(testScheduler))
 
     @Test fun loadsWholeRideTotalsAndAFailedStatOnlyDropsItsTile() = runTest {
         val repo = Repo(); val c = component(repo)
@@ -78,5 +79,21 @@ class HistoryTotalsComponentTest {
         c.open("s", listOf(esc), whole)
         assertEquals("s", c.state.value.rideId); assertTrue(c.state.value.totals.isEmpty()); assertTrue(c.state.value.loading)
         runCurrent(); assertFalse(c.state.value.totals.isEmpty())
+    }
+
+    @Test fun theReadRunsOnTheInjectedComputeDispatcherNotOnTheParentScope() = runTest {
+        // Final review I1: the paging and walking is compute work; the parent scope here stands for the UI dispatcher.
+        val inner = StandardTestDispatcher(testScheduler)
+        var dispatched = 0
+        val counting = object : CoroutineDispatcher() {
+            override fun dispatch(context: kotlin.coroutines.CoroutineContext, block: Runnable) { dispatched++; inner.dispatch(context, block) }
+        }
+        val repo = Repo()
+        val c = HistoryTotalsComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo,
+            computeDispatcher = counting)
+        c.open("r", listOf(esc), whole); runCurrent()
+        assertTrue(dispatched > 0, "the read was dispatched to the compute dispatcher")
+        assertTrue(repo.statsReads.isNotEmpty())
+        assertEquals(10.0, c.state.value.totals.single { it.kind == HistoryTotalKind.DISTANCE_KM }.value, "the result still lands on the state")
     }
 }

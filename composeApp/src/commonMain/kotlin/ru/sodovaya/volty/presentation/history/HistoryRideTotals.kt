@@ -135,12 +135,21 @@ fun historyRideTotals(
     val duration = durationMillis?.takeIf { it > 0 }
     duration?.let { result += HistoryTotal(HistoryTotalKind.DURATION_MILLIS, it.toDouble()) }
     moving?.let { result += HistoryTotal(HistoryTotalKind.MOVING_MILLIS, it.millis.toDouble(), it.approximate) }
+    val topSpeed = peak(motion, "speed_kmh")
     if (distanceTotal != null && moving != null) {
-        if (moving.millis > 0) result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH,
-            distanceTotal.value / (moving.millis / 3_600_000.0), distanceTotal.approximate || moving.approximate)
+        if (moving.millis > 0) {
+            val perMoving = distanceTotal.value / (moving.millis / 3_600_000.0)
+            // Final guard (final review I2): an average above the ride's own top speed is impossible, whatever produced it
+            // (GPS distance over a wheel gap, standstill jitter). An earlier revision showed it, 45 km/h over a 32 km/h
+            // peak; that was wrong because the distance and the moving time may describe different parts of the ride.
+            // Fall back to the wall-clock average, marked approximate. While recording the peak is the stats maximum.
+            if (topSpeed != null && perMoving > topSpeed.value && duration != null)
+                result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH, distanceTotal.value / (duration / 3_600_000.0), true)
+            else result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH, perMoving, distanceTotal.approximate || moving.approximate)
+        }
     } else if (distanceTotal != null && duration != null)
         result += HistoryTotal(HistoryTotalKind.AVERAGE_KMH, distanceTotal.value / (duration / 3_600_000.0), true)
-    peak(motion, "speed_kmh")?.let { result += it.copy(kind = HistoryTotalKind.MAX_KMH) }
+    topSpeed?.let { result += it.copy(kind = HistoryTotalKind.MAX_KMH) }
 
     // Battery energy is the pack's own measurement; the controller's is the fallback.
     val packEnergy = summaries(battery, "power_w").filter { it.energy.value != null }
@@ -207,7 +216,7 @@ fun historyGpsDistanceKm(fixes: List<HistoryGpsFix>): Double {
 private const val GPS_GAP_SECONDS = 30.0
 private const val GPS_MAX_ACCURACY_M = 50.0
 
-private fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+internal fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
     val r = 6_371_000.0
     val dLat = (lat2 - lat1) * PI / 180; val dLon = (lon2 - lon1) * PI / 180
     val h = sin(dLat / 2).pow(2) + cos(lat1 * PI / 180) * cos(lat2 * PI / 180) * sin(dLon / 2).pow(2)

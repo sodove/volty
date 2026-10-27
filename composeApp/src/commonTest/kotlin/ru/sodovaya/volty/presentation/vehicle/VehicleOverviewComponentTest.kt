@@ -60,7 +60,7 @@ class VehicleOverviewComponentTest {
 
     private fun TestScope.component(history: History, vehicles: List<Vehicle> = listOf(bike), maxRides: Int = 10) =
         DefaultVehicleOverviewComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
-            "bike", Vehicles(vehicles), VehicleHistoryReader(history, { HistoryTick(40_000_000, 40_000_000, 1) }), {}, {}, {}, {}, {}, maxRides = maxRides)
+            "bike", Vehicles(vehicles), VehicleHistoryReader(history, { HistoryTick(40_000_000, 40_000_000, 1) }, computeDispatcher = Dispatchers.Unconfined), {}, {}, {}, {}, {}, maxRides = maxRides)
 
     @Test fun showsOnlyThisVehiclesRidesAndTheLastKnownBatteryOfTheNewest() = runTest {
         val history = History(); val c = component(history); runCurrent()

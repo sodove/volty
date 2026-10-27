@@ -13,11 +13,18 @@ import ru.sodovaya.volty.domain.plausibility.historyRobustPeak
 data class HistoryTotalsState(val rideId: String? = null, val totals: List<HistoryTotal> = emptyList(), val loading: Boolean = false)
 
 /** Whole-ride headline numbers, independent of the selected metrics and window.
- * A growing recording reloads at most every [refreshMillis]; a failed stat only drops its tiles.
+ * A growing recording reloads at most every [refreshMillis]; a failed stat only drops its tiles. The read runs on
+ * [computeDispatcher] (default `Dispatchers.Default`), never on the parent scope's UI dispatcher.
+ *
+ * Known cost, left as is (final review I1, optional part): while RECORDING, a series that holds only explicit unknowns
+ * for the ride (a T4's battery `current_a`) is still paged to its end on every refresh and then discarded. Stopping after
+ * the first all-unknown page would be wrong for a source that comes up mid-ride (a later page may hold the first known
+ * value), so it is not done; moving the work off the UI thread is what removes the jank. Measure on a device.
  */
 class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: CoroutineScope,
     private val repository: HistoryReadRepository, private val refreshMillis: Long = 15_000,
-    private val maxGpsPages: Int = 16, private val maxDetailPages: Int = 16) {
+    private val maxGpsPages: Int = 16, private val maxDetailPages: Int = 16,
+    private val computeDispatcher: CoroutineDispatcher = Dispatchers.Default) {
     private val peakCache = HistoryPeakCache()
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
@@ -39,7 +46,12 @@ class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: Co
         job = scope.launch {
             // The same ride growing while recorded: keep the shown tiles and coalesce the updates.
             if (sameRide) delay(refreshMillis)
-            val totals = readHistoryTotals(repository, rideId, sources, range, maxGpsPages, maxDetailPages, peakCache)
+            // Final review I1: the whole read pages tens of thousands of samples per series and walks them; that is compute,
+            // not UI work. The parent scope is Main, so the body moves to [computeDispatcher] and only the state write
+            // below lands back on the parent's context.
+            val totals = withContext(computeDispatcher) {
+                readHistoryTotals(repository, rideId, sources, range, maxGpsPages, maxDetailPages, peakCache)
+            }
             if (requested == next) mutableState.value = HistoryTotalsState(rideId = rideId, totals = totals)
         }
     }
@@ -140,7 +152,7 @@ internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId
     val distance = if (walked != null) walked.distance
     else historyStatsDistance(sources, stats, duration, route?.fixes?.let(::historyGpsDistanceKm), robustPeaks)
         ?.let { if (budgetRanOut) it.copy(approximate = true) else it }
-    val moving = try { readMovingTime(sources, detail) }
+    val moving = try { readMovingTime(sources, detail, route?.fixes.orEmpty(), ride?.started) }
     catch (cancel: CancellationException) { throw cancel }
     catch (_: Exception) { null }
     val batteryUsed = try { readBatteryUsed(repository, rideId, sources, range, maxDetailPages) }
@@ -212,14 +224,15 @@ private suspend fun readRobustPeaks(sources: List<HistorySource>,
 /**
  * Moving time from the motion tier's paged `speed_kmh` detail, through the same pager and budget as the counter. Null (the
  * average then falls back to wall duration, marked approximate) when the reader cannot page detail, the budget ran out
- * (a prefix is not the ride) or no source has a known speed sample.
+ * (a prefix is not the ride) or no source has a known speed sample. The GPS [gps] of the ride credits moving time over
+ * wheel-speed gaps it covers ([historyMovingMillis]).
  */
 private suspend fun readMovingTime(sources: List<HistorySource>,
-    detail: suspend (HistorySeriesKey) -> HistoryDetailRead?): HistoryMovingTime? {
+    detail: suspend (HistorySeriesKey) -> HistoryDetailRead?, gps: List<HistoryGpsFix>, origin: HistoryTick?): HistoryMovingTime? {
     for (source in tier(sources, motionTiers)) {
         val read = detail(HistorySeriesKey(source.id, "speed_kmh")) ?: return null
         if (!read.complete) return null
-        if (read.samples.any { it.value != null }) return historyMovingMillis(read.samples)
+        if (read.samples.any { it.value != null }) return historyMovingMillis(read.samples, gps, origin)
     }
     return null
 }

@@ -1,6 +1,9 @@
 package ru.sodovaya.volty.presentation.vehicle
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.presentation.history.*
 
@@ -52,6 +55,7 @@ class VehicleHistoryReader(
     private val history: HistoryReadRepository,
     private val readTick: () -> HistoryTick,
     private val maxCatalogPages: Int = 20,
+    private val computeDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     private val peakCache = ru.sodovaya.volty.presentation.history.HistoryPeakCache()
     data class Recorded(val sources: List<HistorySource>, val range: HistoryRange)
@@ -95,8 +99,10 @@ class VehicleHistoryReader(
         return if (volts.isEmpty() || volts.any { it == null }) emptyList() else volts.map { it!! }
     }
 
-    suspend fun totals(rideId: String, recorded: Recorded): List<HistoryTotal> =
+    /** Whole-ride totals; the paging and walking run on [computeDispatcher], not the caller's (UI) dispatcher (final review I1). */
+    suspend fun totals(rideId: String, recorded: Recorded): List<HistoryTotal> = withContext(computeDispatcher) {
         readHistoryTotals(history, rideId, recorded.sources, recorded.range, peakCache = peakCache)
+    }
 
     suspend fun route(rideId: String, recorded: Recorded): List<Pair<Double, Double>> =
         tolerant { readHistoryRouteFixes(history, rideId, recorded.range, ROUTE_PAGES) }?.let(::vehicleRouteShape).orEmpty()

@@ -80,7 +80,9 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     /** Open this ride first (a restored view still wins); replaces the newest-ride default. */
     initialRideId: String? = null,
     /** Chart speed and power when a ride opens with nothing chosen, instead of an empty chart panel. */
-    private val defaultMetrics: Boolean = false) : HistoryComponent {
+    private val defaultMetrics: Boolean = false,
+    /** Where the whole-ride totals compute (final review I1); the preview's dispatcher by default. */
+    totalsDispatcher: CoroutineDispatcher = previewDispatcher) : HistoryComponent {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val catalog = HistoryCatalogComponent(componentContext, scope, repository)
@@ -94,7 +96,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     private val deletion = HistoryRideDeletionComponent(componentContext, scope, deletionRepository)
     private val exports = HistoryExportComponent(componentContext, scope, exportRepository)
     private val recording = HistoryRecordingComponent(componentContext, scope, recordingRepository) { refresh() }
-    private val totals = totalsRepository?.let { HistoryTotalsComponent(componentContext, scope, it) }
+    private val totals = totalsRepository?.let { HistoryTotalsComponent(componentContext, scope, it, computeDispatcher = totalsDispatcher) }
     override fun startRecording(observed: HistoryRecordingStatus) { if (lifetime.isActive) recording.start(observed) }
     override fun stopRecording(observed: HistoryRecordingStatus) { if (lifetime.isActive) recording.stop(observed) }
     override fun retryRecordingLocation() { if (lifetime.isActive) recording.retryLocation() }

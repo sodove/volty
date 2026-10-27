@@ -159,4 +159,13 @@ class HistoryRideDistanceTest {
             odo to HistoryStats(100.0, 104.0, null, true))
         assertEquals(3.0, checkNotNull(historyStatsDistance(listOf(esc), stats, 3_600_000, null)).km, 1e-9)
     }
+
+    @Test fun aMarkerOfAnotherSourceDoesNotEndTheCountersRunButAGlobalOrItsOwnDoes() {
+        // Final review M5: a BMS link gap says nothing about the controller's odometer.
+        val samples = listOf(at(0, 100.000), at(500, 100.003), at(10_000, 100.010), at(10_500, 100.013))
+        fun km(marker: HistoryMarker) = checkNotNull(historyRideDistance(samples, emptyList(), origin, null, 11_000, listOf(marker))).km
+        assertEquals(0.013, km(HistoryMarker(tick(5_000), HistoryMarkerKind.BLE_GAP, "bms")), 1e-6, "another source's marker: the run continues")
+        assertEquals(0.006, km(HistoryMarker(tick(5_000), HistoryMarkerKind.BLE_GAP, "esc")), 1e-6, "its own marker ends the run")
+        assertEquals(0.006, km(HistoryMarker(tick(5_000), HistoryMarkerKind.BLE_GAP, null)), 1e-6, "a global marker ends the run")
+    }
 }

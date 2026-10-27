@@ -140,7 +140,7 @@ class HistoryTotalsReadTest {
     private fun movingSpeed(unknownFrom: Long? = null) = (0..1900L).map { i ->
         val t = i * 500L
         val v = when { unknownFrom != null && t in unknownFrom until unknownFrom + 100_000 -> null
-            t < 100_000 -> 0.0; t < 900_000 -> 25.0; else -> 1.5 }
+            t < 100_000 -> 0.0; t < 900_000 -> 27.0; else -> 1.5 }  // 27, not 25: 5.7 km in 800 s moving is 25.65 km/h, above a 25 km/h top speed (the guard rightly fired on that incoherent fixture)
         HistorySample(HistoryTick(1_000_000 + t, t, 1), speed, v, if (v == null) HistoryUnknownReason.UNAVAILABLE else null)
     }
 
@@ -443,5 +443,52 @@ class HistoryTotalsReadTest {
     @Test fun theCardLineNeverCarriesBothMarks() {
         fun m(estimated: Boolean, approximate: Boolean) = historyCardMark(HistoryTotal(HistoryTotalKind.MAX_DUTY_PERCENT, 80.0, approximate, estimated))
         assertEquals("~ ", m(true, true)); assertEquals("~ ", m(true, false)); assertEquals("≈ ", m(false, true)); assertEquals("", m(false, false))
+    }
+
+    /** Fixes every second along a meridian at [kmh]; from [standFromSec] on it stands and alternates the latitude by +- [jitterM] metres. */
+    private fun track(seconds: LongRange, kmh: Double, standFromSec: Long? = null, jitterM: Double = 0.0) = seconds.map { s ->
+        val standing = standFromSec != null && s > standFromSec
+        val travelled = if (standing) kmh / 3.6 * standFromSec!! else kmh / 3.6 * s
+        val jitter = if (standing) (if (s % 2 == 0L) jitterM else -jitterM) else 0.0
+        HistoryGpsFix(HistoryTick(1_000_000 + s * 1000, s * 1000, 1), 55.0 + (travelled + jitter) / 111_194.9, 37.0, 5.0, null)
+    }
+    private fun constantSpeed(kmh: Double, seconds: LongRange, skip: LongRange? = null) = (seconds.first * 2..seconds.last * 2).mapNotNull { i ->
+        val t = i * 500L
+        if (skip != null && t in skip.first * 1000..skip.last * 1000) null else HistorySample(HistoryTick(1_000_000 + t, t, 1), speed, kmh)
+    }
+
+    @Test fun aWheelLinkGapThatGpsCoversStillCountsAsMovingSoTheAverageIsNotAbovePeak() = runTest {
+        // Final review I2: 30 min at 30 km/h with GPS throughout and the wheel's BLE link down for 10 minutes (600..1200 s).
+        // GPS distance 15 km over wheel-only moving time of 20 min was 45 km/h against a 30 km/h peak.
+        val repo = Repo(origin).apply {
+            fixes = track(0..1800L, 30.0)
+            series = mapOf(speed to constantSpeed(30.0, 0..1800L, skip = 601L..1199L))
+        }
+        val totals = readHistoryTotals(repo, "r", listOf(esc), HistoryRange(1_000_000, 1_000_000 + 1_800_000))
+        assertEquals(1_800_000.0, totals.of(HistoryTotalKind.MOVING_MILLIS)!!.value, 1_000.0, "GPS credits the gap (moving without it: 1 200 000)")
+        assertTrue(totals.of(HistoryTotalKind.MOVING_MILLIS)!!.approximate, "reconstructed over the gap")
+        val average = totals.of(HistoryTotalKind.AVERAGE_KMH)!!.value
+        assertEquals(30.0, average, 0.5)
+        assertTrue(average <= totals.of(HistoryTotalKind.MAX_KMH)!!.value + 0.01, "average $average never above the top speed")
+    }
+
+    @Test fun standstillJitterThatInflatesTheAverageFallsBackToWallClockAndIsApproximate() = runTest {
+        // 10 min at 20 km/h, then 20 min standing while GPS jitters +-2 m every second: distance without moving time.
+        // Moving time cannot explain it (no wheel gap), so the final guard fires: distance / wall duration, approximate.
+        val repo = Repo(origin).apply {
+            fixes = track(0..1800L, 20.0, standFromSec = 600, jitterM = 2.0)
+            series = mapOf(speed to (0..3600L).map { i ->
+                val t = i * 500L
+                HistorySample(HistoryTick(1_000_000 + t, t, 1), speed, if (t < 600_000) 20.0 else 0.0)
+            })
+        }
+        val totals = readHistoryTotals(repo, "r", listOf(esc), HistoryRange(1_000_000, 1_000_000 + 1_800_000))
+        val distance = totals.of(HistoryTotalKind.DISTANCE_KM)!!.value
+        val perMoving = distance / (600.0 / 3600.0)
+        assertTrue(perMoving > 20.0, "the fixture really produces an impossible per-moving average ($perMoving)")
+        val average = totals.of(HistoryTotalKind.AVERAGE_KMH)!!
+        assertEquals(distance / 0.5, average.value, 1e-6)
+        assertTrue(average.value <= totals.of(HistoryTotalKind.MAX_KMH)!!.value)
+        assertTrue(average.approximate)
     }
 }

@@ -34,17 +34,17 @@ class VehicleHistoryReaderTest {
 
     @Test fun oneCatalogPassFindsEveryVehiclesNewestRides() = runTest {
         val repo = Repo(listOf(listOf(ride("w2", "wheel", 9), ride("b1", "bike", 8)), listOf(ride("w1", "wheel", 7)), listOf(ride("s1", "scooter", 6))))
-        val found = VehicleHistoryReader(repo, tick).newestRides(setOf("wheel", "bike"), perVehicle = 1)
+        val found = VehicleHistoryReader(repo, tick, computeDispatcher = kotlinx.coroutines.Dispatchers.Unconfined).newestRides(setOf("wheel", "bike"), perVehicle = 1)
         assertEquals(listOf("w2"), found.getValue("wheel").map { it.id }); assertEquals(listOf("b1"), found.getValue("bike").map { it.id })
         assertEquals(1, repo.pages, "stops as soon as every vehicle has enough")
-        val all = VehicleHistoryReader(repo, tick).newestRides(setOf("wheel", "nope"), perVehicle = 5)
+        val all = VehicleHistoryReader(repo, tick, computeDispatcher = kotlinx.coroutines.Dispatchers.Unconfined).newestRides(setOf("wheel", "nope"), perVehicle = 5)
         assertEquals(listOf("w2", "w1"), all.getValue("wheel").map { it.id }); assertTrue(all.getValue("nope").isEmpty())
     }
 
     @Test fun cellsAreReadInOrderAndAHoleShowsNoCells() = runTest {
         val repo = Repo(listOf(listOf(ride("r", "bike", 0))))
         repo.cellKeys = listOf(2, 0, 1).map { HistorySeriesKey("pack", "cell_v", it) }
-        val reader = VehicleHistoryReader(repo, tick)
+        val reader = VehicleHistoryReader(repo, tick, computeDispatcher = kotlinx.coroutines.Dispatchers.Unconfined)
         val r = ride("r", "bike", 0)
         assertEquals(listOf(4.0, 4.001, 4.002), reader.battery("r", reader.recorded(r), withCells = true).single().cells)
         repo.missingCell = 1

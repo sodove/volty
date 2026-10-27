@@ -27,11 +27,15 @@ data class HistoryRideCardText(val title: String, val subtitle: String, val deta
 
 /** The upstream row hierarchy/preview proportions, adapted to Volty typography,
  * source-aware segmented routes and content that may grow with system font size.
+ *
+ * The peak-PWM line comes from a one-page budget per duty series (`readCardMaxDuty`, about 1.5 to 3 h at Begode cadence):
+ * on a longer ride the card shows the stats maximum marked approximate (a needle included) while the summary shows the
+ * robust peak, so the two may disagree by design (final review M3).
  */
 @Composable
 fun HistoryRideCard(text: HistoryRideCardText, segments: List<HistoryMapSegment>, selected: Boolean,
     onClick: () -> Unit, modifier: Modifier = Modifier, previewLoading: Boolean = false,
-    previewPartial: Boolean = false, previewError: Boolean = false, onRetry: () -> Unit = {},
+    previewPartial: Boolean = false, previewError: Boolean = false, statsError: Boolean = false, onRetry: () -> Unit = {},
     image: HistoryPreviewImage? = null, onDelete: (() -> Unit)? = null) {
     val accent = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
     Surface(onClick = onClick, modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
@@ -49,6 +53,11 @@ fun HistoryRideCard(text: HistoryRideCardText, segments: List<HistoryMapSegment>
                     else -> {
                         HistoryRoutePreview(segments, accent, Modifier.fillMaxSize())
                         image?.let { PlatformHistoryPreviewImage(it,Modifier.fillMaxSize()) }
+                        // Final review M2: the card line (peak PWM) failed while the preview did not; retry stays reachable.
+                        // Layout judged on a device (Compose is not unit-testable here).
+                        if (statsError) IconButton(onClick = onRetry, Modifier.align(Alignment.BottomEnd).size(32.dp)) {
+                            Icon(Icons.Default.Refresh, stringResource(Res.string.history_retry), Modifier.size(18.dp))
+                        }
                     }
                 }
             }

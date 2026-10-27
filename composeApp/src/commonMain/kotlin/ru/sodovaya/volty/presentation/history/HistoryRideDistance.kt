@@ -64,7 +64,10 @@ internal fun historyRideWalk(
     var acceptedMetres = 0.0
     val covered = coveredIntervals(gps, origin)
     val gpsKm = historyGpsDistanceKm(gps)
-    val breaks = markers.filter { it.kind != HistoryMarkerKind.GPS_GAP }
+    // Final review M5: only this counter's own markers end a run (a BMS link gap or a media marker of another source says
+    // nothing about it); a marker with no source is global and still counts. An earlier revision took every source's.
+    val counterSource = counter.firstOrNull()?.key?.sourceId
+    val breaks = markers.filter { it.kind != HistoryMarkerKind.GPS_GAP && (it.sourceId == null || it.sourceId == counterSource) }
         .mapNotNull { historyAxisEpochMillis(origin, it.tick) }.sorted()
 
     var fillMetres = 0.0
@@ -164,8 +167,8 @@ internal fun historyPeakSpeedKmh(sources: List<HistorySource>, stats: Map<Histor
 /** Slack over the top speed: the stored peak is a 500 ms window maximum and the clock of a window is coarse. */
 private const val CROSS_CHECK_TOLERANCE = 1.05
 private const val RUN_CONFIRMATIONS = 3
-private const val GPS_COVER_GAP_MILLIS = 30_000L
-private const val GPS_COVER_MAX_ACCURACY_M = 50.0
+internal const val GPS_COVER_GAP_MILLIS = 30_000L
+internal const val GPS_COVER_MAX_ACCURACY_M = 50.0
 
 private data class CounterPoint(val index: Int, val axis: Long, val metres: Double)
 

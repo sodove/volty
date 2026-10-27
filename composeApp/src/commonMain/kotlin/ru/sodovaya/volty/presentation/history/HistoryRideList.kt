@@ -22,6 +22,17 @@ import ru.sodovaya.volty.domain.history.*
 import volty.composeapp.generated.resources.*
 import kotlin.math.roundToInt
 
+/**
+ * Whether the card shows a retry affordance. It is offered when EITHER read failed; before this (final review M2) only a preview failure showed it, and a failed
+ * duty read silently left the PWM line absent until a pull-to-refresh bumped the revision. `retryPreview` retries both.
+ */
+internal fun historyCardRetryVisible(rideId: String, previews: HistoryPreviewsState, cardStats: HistoryCardStatsState): Boolean =
+    rideId in previews.errors || rideId in cardStats.errors
+
+/** The part of [historyCardRetryVisible] that the preview's own retry icon does not already cover. */
+internal fun historyCardStatsRetryOnly(rideId: String, previews: HistoryPreviewsState, cardStats: HistoryCardStatsState): Boolean =
+    historyCardRetryVisible(rideId, previews, cardStats) && rideId !in previews.errors
+
 /** Paged recorded catalog. Preview ownership stays with the caller; drawing a
  * row never starts a route/series query or allocates a native map.
  */
@@ -88,7 +99,7 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
                 cardStats.stats[ride.id]?.maxDuty?.let { stringResource(Res.string.history_card_max_duty, historyCardMark(it) + it.text()) }),
                 previews.previews[ride.id]?.segments.orEmpty(), ride.id == selectedRideId, { onOpen(ride.id) },
                 if (reduceMotion) Modifier else Modifier.animateItem(), previewLoading = ride.id in previews.loading,
-                previewPartial = previews.previews[ride.id]?.partial == true, previewError = ride.id in previews.errors,
+                previewPartial = previews.previews[ride.id]?.partial == true, previewError = ride.id in previews.errors, statsError = historyCardStatsRetryOnly(ride.id, previews, cardStats),
                 onRetry = { onRetryPreview(ride.id) }, image = previewImages.images[ride.id]?.takeIf {
                     renderKeys[ride.id] != null && previewImages.renderKeys[ride.id] == renderKeys[ride.id]
                 }, onDelete = onDelete?.takeIf { ride.status == HistoryRideStatus.LEGACY ||

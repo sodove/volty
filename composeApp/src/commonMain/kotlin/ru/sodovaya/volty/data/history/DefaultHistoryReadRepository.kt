@@ -1,16 +1,21 @@
 package ru.sodovaya.volty.data.history
 
 import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.history.*
 
 /** V2 read path only; legacy recording remains on its existing compatibility path. */
 class DefaultHistoryReadRepository(
     private val store: HistoryStore,
     private val maxReadPages: Int = 8,
+    /** Where the multi-page energy repair computes (final review I1); the stores do their own IO. */
+    private val computeDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : HistoryReadRepository {
     init { require(maxReadPages in 1..64) }
 
@@ -108,7 +113,7 @@ class DefaultHistoryReadRepository(
         // ride to be computed on the next ask: an earlier revision cached that null, so a screen cancelled mid-read
         // lost the ride's energy until the process restarted.
         val computed = try {
-            computeRepairedEnergy(rideId, key, range)
+            withContext(computeDispatcher) { computeRepairedEnergy(rideId, key, range) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
