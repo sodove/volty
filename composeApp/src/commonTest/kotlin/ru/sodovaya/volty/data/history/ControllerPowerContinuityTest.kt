@@ -188,6 +188,25 @@ class ControllerPowerContinuityTest {
         assertEquals(pages, counting.samplePages, "the second read is served from the cache")
     }
 
+    private class FlakyMarkersStore(val inner: HistoryStore, var failure: Exception?) : HistoryStore by inner {
+        override suspend fun markers(rideId: String, range: HistoryRange) =
+            failure?.let { failure = null; throw it } ?: inner.markers(rideId, range)
+    }
+
+    @Test fun aFailedRepairIsNotCachedSoTheNextReadRepairs() = runTest {
+        val flaky = FlakyMarkersStore(recorded(artefactRide()), IllegalStateException("db busy"))
+        val repository = DefaultHistoryReadRepository(flaky)
+        assertNull(repository.stats("ride", power, range).energyWh, "a failed read is not guessed at")
+        assertNotNull(repository.stats("ride", power, range).energyWh, "and not remembered as a negative either")
+    }
+
+    @Test fun aCancelledRepairPropagatesAndIsNotCached() = runTest {
+        val flaky = FlakyMarkersStore(recorded(artefactRide()), kotlinx.coroutines.CancellationException("screen left"))
+        val repository = DefaultHistoryReadRepository(flaky)
+        assertFailsWith<kotlinx.coroutines.CancellationException> { repository.stats("ride", power, range) }
+        assertNotNull(repository.stats("ride", power, range).energyWh)
+    }
+
     @Test fun aRideStillRecordingIsNeverRepaired() = runTest {
         val stats = DefaultHistoryReadRepository(recorded(artefactRide(), finish = false)).stats("ride", power, range)
         assertNull(stats.energyWh)

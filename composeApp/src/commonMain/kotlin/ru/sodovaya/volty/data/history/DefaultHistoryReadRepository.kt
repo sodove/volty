@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.history
 
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.Mutex
@@ -103,7 +104,17 @@ class DefaultHistoryReadRepository(
     private suspend fun repairedEnergy(rideId: String, key: HistorySeriesKey, range: HistoryRange): Double? {
         val cacheKey = Triple(rideId, key, range)
         repairMutex.withLock { if (repairCache.containsKey(cacheKey)) return repairCache[cacheKey] }
-        val computed = computeRepairedEnergy(rideId, key, range)
+        // Only a definitive answer is cached. A failed read (or a cancelled caller, which must propagate) leaves the
+        // ride to be computed on the next ask: an earlier revision cached that null, so a screen cancelled mid-read
+        // lost the ride's energy until the process restarted.
+        val computed = try {
+            computeRepairedEnergy(rideId, key, range)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            println("[VOLTY] history energy repair failed: $e")
+            return null
+        }
         repairMutex.withLock {
             if (repairCache.size >= REPAIR_CACHE_SIZE) repairCache.clear()
             repairCache[cacheKey] = computed
@@ -123,8 +134,8 @@ class DefaultHistoryReadRepository(
             if (++pages >= REPAIR_MAX_PAGES) return null
         }
         if (rows.none { it.unknown == HistoryUnknownReason.PARTIAL_SOURCE }) return null
-        val markers = runCatching { read { store.markers(rideId, range) }.toList() }.getOrNull()
-            ?.filter { it.sourceId == null || it.sourceId == key.sourceId } ?: return null
+        val markers = read { store.markers(rideId, range) }.toList()
+            .filter { it.sourceId == null || it.sourceId == key.sourceId }
         return historyStats(bridgePartialSourceArtefact(rows), markers, multiplier).energyWh
     }
 
