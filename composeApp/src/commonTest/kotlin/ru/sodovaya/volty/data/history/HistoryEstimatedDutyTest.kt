@@ -54,4 +54,29 @@ class HistoryEstimatedDutyTest {
         val battery = TelemetryObservation(TelemetryOrigin.BATTERY, 0, listOf(TelemetryReading.measured(TelemetryMetric.VOLTAGE, 70.0)))
         assertSame(battery, withHistoryEstimatedDuty(battery, "v") { view(PwmEvidence.NEVER_REPORTED, 10f) })
     }
+
+    private fun motion(duty: Float, source: DutySource, hasDuty: Boolean = true, connected: Boolean = true) =
+        ControllerData(dutyPercent = duty, hasDuty = hasDuty, dutySource = source, isConnected = connected)
+
+    @Test fun aMeasuredDutyIsNeverRelabelledAsAnEstimate() {
+        // Incoherent on purpose: a measured 40 % under NEVER_REPORTED evidence.
+        val v = assertNotNull(historyPwmView("v", PwmEvidence.NEVER_REPORTED, true, motion(40f, DutySource.MEASURED)))
+        assertNull(v.estimatePercent)
+    }
+
+    @Test fun noViewUntilTheEstimatorMemoryIsReady() {
+        assertNull(historyPwmView("v", PwmEvidence.NEVER_REPORTED, false, motion(40f, DutySource.ESTIMATED)))
+    }
+
+    @Test fun anEstimateFromAnotherVehicleDoesNotReachThisVehiclesRecording() {
+        val viewOfA = historyPwmView("A", PwmEvidence.NEVER_REPORTED, true, motion(40f, DutySource.ESTIMATED))
+        val out = withHistoryEstimatedDuty(controller(rawZero()), "B") { viewOfA }
+        assertEquals(0.0, out.duty().value)
+    }
+
+    @Test fun theHappyPathCarriesTheEstimateAndAnUnconnectedOrDutylessSnapshotCarriesNone() {
+        assertEquals(40f, historyPwmView("v", PwmEvidence.NEVER_REPORTED, true, motion(40f, DutySource.ESTIMATED))?.estimatePercent)
+        assertNull(historyPwmView("v", PwmEvidence.NEVER_REPORTED, true, motion(40f, DutySource.ESTIMATED, hasDuty = false))?.estimatePercent)
+        assertNull(historyPwmView("v", PwmEvidence.NEVER_REPORTED, true, motion(40f, DutySource.ESTIMATED, connected = false))?.estimatePercent)
+    }
 }

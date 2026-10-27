@@ -21,7 +21,9 @@ import ru.sodovaya.volty.data.bms.JbdBmsProtocol
 import ru.sodovaya.volty.data.bms.JkBmsProtocol
 import ru.sodovaya.volty.data.bms.VeteranProtocol
 import ru.sodovaya.volty.data.demo.DemoBmsSimulator
+import ru.sodovaya.volty.data.history.HistoryPwmView
 import ru.sodovaya.volty.data.history.RideTelemetryRecorder
+import ru.sodovaya.volty.data.history.historyPwmView
 import ru.sodovaya.volty.data.memory.SampleRingBuffer
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.typedDerivedCellCount
@@ -245,7 +247,7 @@ class KableBmsRepository private constructor(
     private fun makeHistoryTelemetryCapture(protocol: BmsProtocol, link: PackLink,
         ownership: SampleSessionOwnership, channel: Channel<Sample>): SessionTelemetryCapture? =
         historyTelemetryIngress?.capture(protocol, Uuid.random().toString(), link.spec, link.vehicle, ownership, channel,
-            pwmView = { historyPwmView })
+            pwmView = { historyPwmViewFromActivePipeline() })
 
     /**
      * The live PWM estimator's evidence and latest estimate, for the history enrichment ([withHistoryEstimatedDuty]).
@@ -254,15 +256,20 @@ class KableBmsRepository private constructor(
      * to another vehicle ignores it.
      */
     @Volatile
-    private var historyPwmView: ru.sodovaya.volty.data.history.HistoryPwmView? = null
+    private var historyPwmOwned: Pair<VehicleConnection, HistoryPwmView?>? = null
+
+    /**
+     * The view belongs to the orchestrator that published it: once [vehicleConnection] moves on (a reconnect, a
+     * disconnect, the demo) the pair no longer matches and nothing is read, so a superseded orchestrator's late
+     * publish can never be mistaken for the active one's. True by construction, with no clear sites to forget.
+     */
+    private fun historyPwmViewFromActivePipeline(): HistoryPwmView? =
+        historyPwmOwned?.takeIf { ownsActivePipeline(it.first) }?.second
 
     private fun publishHistoryPwmView(orchestrator: VehicleConnection, vd: VehicleData) {
         val estimator = orchestrator.pwm
-        historyPwmView = if (estimator == null || !estimator.memoryReady) null else {
-            val motion = vd.motion
-            ru.sodovaya.volty.data.history.HistoryPwmView(estimator.vehicleId, estimator.evidence,
-                motion.dutyPercent.takeIf { motion.isConnected && motion.hasDuty && motion.dutySource == DutySource.ESTIMATED })
-        }
+        historyPwmOwned = orchestrator to
+            if (estimator == null) null else historyPwmView(estimator.vehicleId, estimator.evidence, estimator.memoryReady, vd.motion)
     }
 
     private suspend fun prepareHistoryForInstalledLinks(installed: List<PackLink>, vehicleId: String, vehicle: Vehicle?) {
@@ -1618,7 +1625,6 @@ class KableBmsRepository private constructor(
         val stored = storedPacks(vehicle, address, type)
         val expanded = expandedVehiclePacks(vehicle, address, type)
         lateinit var orchestrator: VehicleConnection
-        historyPwmView = null
         val energy = buildEnergyTracker(vehicle, address, type) { orchestrator }
         val pwm = buildPwmEstimator(vehicle) { orchestrator }
         orchestrator = VehicleConnection(
