@@ -124,50 +124,79 @@ class ControllerPowerContinuityTest {
     private val drivers = mutableListOf<JdbcSqliteDriver>()
     @AfterTest fun close() { drivers.forEach { it.close() } }
 
-    private suspend fun recorded(rows: List<HistorySample>): SqlDelightHistoryStore {
+    private suspend fun recorded(rows: List<HistorySample>, finish: Boolean = true): SqlDelightHistoryStore {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY); drivers += driver
         driver.execute(null, "PRAGMA foreign_keys=ON", 0)
         VoltyDatabase.Schema.create(driver)
         val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver))
         store.begin(HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING), listOf(source))
-        // Exactly what the recorder did before the fix: the gate thins detail, the accumulator sees every row.
+        // Exactly what the recorder did: the gate thins detail, the accumulator sees every row.
         val gate = HistoryDetailGate(origin, power)
         val accumulator = HistoryBucketAccumulator(origin, power)
         val detail = rows.flatMap(gate::offer) + gate.flush()
         val buckets = rows.flatMap(accumulator::offer).groupBy { it.slot }.map { (_, group) -> group.last() }
         store.append(HistoryBatch("ride", detail, emptyList(), emptyList(), "r1", buckets))
-        store.finish("ride", tick(rows.last().tick.elapsedMillis), HistoryRideStatus.COMPLETED)
+        if (finish) store.finish("ride", tick(rows.last().tick.elapsedMillis), HistoryRideStatus.COMPLETED)
         return store
+    }
+
+    private class CountingStore(val inner: HistoryStore) : HistoryStore by inner {
+        var samplePages = 0
+        override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange,
+            after: HistoryCursor?, limit: Int): HistoryPage<HistorySample> { samplePages++; return inner.samples(rideId, key, range, after, limit) }
     }
 
     private val range get() = HistoryRange(origin.epochMillis, origin.epochMillis + 60_000)
 
-    @Test fun anAlreadyRecordedRideGetsItsEnergyBackAtReadTime() = runTest {
-        val rows = (0..40L).map { if (it % 2 == 0L) known(it * 100) else unknown(it * 100, HistoryUnknownReason.PARTIAL_SOURCE) }
+    /** Known every 100 ms with a varying value, an artefact unknown between: thinning to first/min/max/last matters. */
+    private fun artefactRide(count: Long = 400) = (0 until count).flatMap { i ->
+        listOf(known(i * 100, 1000.0 + (i * 37 % 11) * 300.0 + (i % 5) * 120.0),
+            unknown(i * 100 + 50, HistoryUnknownReason.PARTIAL_SOURCE))
+    }.dropLast(1)
+
+    @Test fun anAlreadyRecordedRideGetsApproximateEnergyBackAtReadTime() = runTest {
+        val rows = artefactRide()
         val store = recorded(rows)
         // The stored buckets carry no energy at all (no pair was ever usable): that is what cannot be fixed in place.
         assertTrue(store.buckets("ride", power, range, null, 100).items.all { it.energyWh == null })
-        val stats = store.stats("ride", power, range)
-        assertEquals(1000.0 * 4.0 / 3600.0, assertNotNull(stats.energyWh), 1e-6)
-        assertTrue(stats.complete)
-        val series = DefaultHistoryReadRepository(store).series("ride", power, range, 600)
-        assertTrue(series.samples.all { it.value != null })
+        val stats = DefaultHistoryReadRepository(store).stats("ride", power, range)
+        val exact = assertNotNull(historyStats(bridgePartialSourceArtefact(rows), emptyList(), 1.0).energyWh)
+        val repaired = assertNotNull(stats.energyWh)
+        assertTrue(kotlin.math.abs(repaired - exact) / exact < 0.05, "repaired $repaired vs exact $exact")
+        assertFalse(stats.complete, "thinned-detail energy is approximate, so never complete")
+        assertTrue(DefaultHistoryReadRepository(store).series("ride", power, range, 600).samples.all { it.value != null })
     }
 
-    @Test fun genuineUnknownsStillLeaveTheRideWithoutEnergyAndIncomplete() = runTest {
-        val rows = (0..40L).map { if (it % 2 == 0L) known(it * 100) else unknown(it * 100, HistoryUnknownReason.UNAVAILABLE) }
-        val stats = recorded(rows).stats("ride", power, range)
+    @Test fun storedEnergyIsNeverOverwrittenAndNeverTriggersAPage() = runTest {
+        // A post-fix ride: values every 100 ms plus ONE stale-join PARTIAL_SOURCE unknown. Buckets keep exact energy.
+        val rows = (0..40L).map { if (it == 20L) unknown(it * 100, HistoryUnknownReason.PARTIAL_SOURCE) else known(it * 100, 500.0 + it * 40) }
+        val store = recorded(rows)
+        val stored = store.stats("ride", power, range)
+        assertNotNull(stored.energyWh)
+        val counting = CountingStore(store)
+        assertEquals(stored, DefaultHistoryReadRepository(counting).stats("ride", power, range))
+        assertEquals(0, counting.samplePages, "no recompute when the stored energy exists")
+    }
+
+    @Test fun twoReadsOfTheSameArtefactRidePageTheDetailOnce() = runTest {
+        val counting = CountingStore(recorded(artefactRide()))
+        val repository = DefaultHistoryReadRepository(counting)
+        val first = repository.stats("ride", power, range)
+        val pages = counting.samplePages
+        assertTrue(pages > 0)
+        assertEquals(first, repository.stats("ride", power, range))
+        assertEquals(pages, counting.samplePages, "the second read is served from the cache")
+    }
+
+    @Test fun aRideStillRecordingIsNeverRepaired() = runTest {
+        val stats = DefaultHistoryReadRepository(recorded(artefactRide(), finish = false)).stats("ride", power, range)
         assertNull(stats.energyWh)
-        assertFalse(stats.complete)
     }
 
-    @Test fun aRealGapInsideAnArtefactRideKeepsTheRideIncomplete() = runTest {
-        // Artefact unknowns, then a 5 s hole in acquisition: the bridge must not paper over it.
-        val first = (0..20L).map { if (it % 2 == 0L) known(it * 100) else unknown(it * 100, HistoryUnknownReason.PARTIAL_SOURCE) }
-        val second = (0..20L).map { 7000 + it * 100 }.mapIndexed { i, ms ->
-            if (i % 2 == 0) known(ms) else unknown(ms, HistoryUnknownReason.PARTIAL_SOURCE) }
-        val stats = recorded(first + second).stats("ride", power, range)
-        assertNotNull(stats.energyWh)
+    @Test fun genuineUnknownsAreNotTheArtefactSoNothingIsRepaired() = runTest {
+        val rows = (0..40L).map { if (it % 2 == 0L) known(it * 100) else unknown(it * 100, HistoryUnknownReason.UNAVAILABLE) }
+        val stats = DefaultHistoryReadRepository(recorded(rows)).stats("ride", power, range)
+        assertNull(stats.energyWh)
         assertFalse(stats.complete)
     }
 }
