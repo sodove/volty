@@ -31,9 +31,17 @@ private const val NEEDLE_RETURN_RATIO = 0.25
 private const val NEEDLE_NOISE_MULTIPLE = 6.0
 private const val NEEDLE_NOISE_STEPS = 8
 
-/** [value] is the largest non-needle value; [needlesExcluded] is how many samples were left out to get it. */
-class RobustPeak(val value: Double, val needlesExcluded: Int) {
-    val approximate: Boolean get() = needlesExcluded > 0
+/**
+ * [value] is the largest non-needle value; [needlesExcluded] is how many samples were left out to get it and
+ * [largestExcluded] the highest of them (null when none).
+ *
+ * [approximate] only when an excluded needle was above [value], i.e. when keeping it would have changed the peak. An
+ * earlier revision marked the peak approximate whenever any needle was excluded; that was wrong because the measured
+ * needles are standstill blips and negative dips that can never be a maximum, so most rides would have carried the mark
+ * with their number unchanged, and a mark that is always on says nothing (controller ruling 7).
+ */
+class RobustPeak(val value: Double, val needlesExcluded: Int, val largestExcluded: Double? = null) {
+    val approximate: Boolean get() = largestExcluded != null && largestExcluded > value
 }
 
 /** Indices (into [samples], in order) of the needles. Samples must be one series, ordered by time. */
@@ -70,7 +78,12 @@ fun historyNeedleIndices(samples: List<HistorySample>): Set<Int> {
     return found
 }
 
-/** The largest known value that is not a needle, or null when no sample is known. Reusable for any metric. */
+/**
+ * The largest known value that is not a needle, or null when no sample is known. Reusable for any metric.
+ * The first and last sample are never needles (the rule needs two neighbours), so a corrupt first or last frame can still
+ * be the peak. Where fewer than eight steps surround a needle the median is taken over those few, so two needles a sample
+ * apart near the ride's start can mask each other. Both are known limits of the rule as specified, not bugs.
+ */
 fun historyRobustPeak(samples: List<HistorySample>): RobustPeak? {
     val needles = historyNeedleIndices(samples)
     var best: Double? = null
@@ -78,5 +91,6 @@ fun historyRobustPeak(samples: List<HistorySample>): RobustPeak? {
         val v = s.value ?: return@forEachIndexed
         if (i !in needles && (best == null || v > best!!)) best = v
     }
-    return best?.let { RobustPeak(it, needles.size) }
+    val largestExcluded = needles.mapNotNull { samples[it].value }.maxOrNull()
+    return best?.let { RobustPeak(it, needles.size, largestExcluded) }
 }

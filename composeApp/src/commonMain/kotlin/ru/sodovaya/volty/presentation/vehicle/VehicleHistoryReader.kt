@@ -53,6 +53,7 @@ class VehicleHistoryReader(
     private val readTick: () -> HistoryTick,
     private val maxCatalogPages: Int = 20,
 ) {
+    private val peakCache = ru.sodovaya.volty.presentation.history.HistoryPeakCache()
     data class Recorded(val sources: List<HistorySource>, val range: HistoryRange)
 
     /** One pass over the shared catalog, newest first, collecting up to [perVehicle] rides of each vehicle. */
@@ -95,7 +96,7 @@ class VehicleHistoryReader(
     }
 
     suspend fun totals(rideId: String, recorded: Recorded): List<HistoryTotal> =
-        readHistoryTotals(history, rideId, recorded.sources, recorded.range)
+        readHistoryTotals(history, rideId, recorded.sources, recorded.range, peakCache = peakCache)
 
     suspend fun route(rideId: String, recorded: Recorded): List<Pair<Double, Double>> =
         tolerant { readHistoryRouteFixes(history, rideId, recorded.range, ROUTE_PAGES) }?.let(::vehicleRouteShape).orEmpty()

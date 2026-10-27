@@ -18,7 +18,7 @@ class HistoryTotalsReadTest {
         HistorySample(HistoryTick(1_000_000 + millis, millis, 1), key, km)
     private fun fix(sec: Long) = HistoryGpsFix(HistoryTick(1_000_000 + sec * 1000, sec * 1000, 1), 55.0 + 6.0 * sec / 111_194.9, 37.0, 5.0, null)
 
-    private class Repo(val rideStarted: HistoryTick?) : HistoryReadRepository {
+    private class Repo(val rideStarted: HistoryTick?, var status: HistoryRideStatus = HistoryRideStatus.COMPLETED) : HistoryReadRepository {
         var series = mapOf<HistorySeriesKey, List<HistorySample>>()
         var detailSupported = true
         var pageSize = 1000
@@ -28,7 +28,7 @@ class HistoryTotalsReadTest {
         override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int) = HistoryRecordedKeys(emptyList(), false)
         override suspend fun rides(before: HistoryCursor?) = HistoryPage(emptyList<HistoryRide>(), null, false)
         override suspend fun ride(rideId: String): HistoryRide? =
-            rideStarted?.let { HistoryRide(rideId, "v", it, null, HistoryRideStatus.COMPLETED) }
+            rideStarted?.let { HistoryRide(rideId, "v", it, null, status) }
         override suspend fun sources(rideId: String) = emptyList<HistorySource>()
         override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int) = error("unused")
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?) = error("unused")
@@ -283,5 +283,69 @@ class HistoryTotalsReadTest {
         }
         val repo = Repo(origin).apply { series = mapOf(power to unavailable); stats = mapOf(power to HistoryStats(0.0, 5000.0, null, true)) }
         assertEquals(5000.0, readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.MAX_POWER_W)!!.value)
+    }
+
+    // ---- Ruling 7: a recording ride pages no peak detail; a finished ride's peaks are read once ----
+    private val motor = HistorySeriesKey("esc", "motor_temperature_c")
+    private fun motorSeries(needleAtMillis: Long? = null) = (0..1900).map { i ->
+        val t = i * 500L
+        at(t, motor, if (t == needleAtMillis) 130.0 else 45.0 + (i % 3))
+    }
+
+    @Test fun aRecordingRideUsesTheStoredMaximumAndPagesNoPeakDetail() = runTest {
+        // Only the motor temperature is a peak-only series (moving time reads speed on its own, as it always did).
+        val repo = Repo(origin, HistoryRideStatus.RECORDING).apply {
+            series = mapOf(motor to motorSeries(500_000), speed to steadySpeed(500_000))
+            stats = mapOf(motor to HistoryStats(40.0, 130.0, null, true), speed to HistoryStats(0.0, 1180.0, null, true))
+        }
+        val totals = readHistoryTotals(repo, "r", listOf(esc), range, peakCache = HistoryPeakCache())
+        assertEquals(130.0, totals.of(HistoryTotalKind.MOTOR_TEMP_C)!!.value, "stored maximum while recording")
+        assertEquals(1180.0, totals.of(HistoryTotalKind.MAX_KMH)!!.value, "stored maximum while recording")
+        assertTrue(repo.issued.none { it.first == motor }, "no peak detail paged for a recording ride: ${repo.issued.map { it.first }}")
+    }
+
+    @Test fun theDistanceCrossCheckStillRunsWhileRecordingAgainstTheStatsPeak() = runTest {
+        // 67 km in 950 s against a stats peak of 55.1 km/h: unearned; with no GPS there is no tile.
+        val fast = (0..1900).map { i -> at(i * 500L, odo, 2816.4 + 67.0 * i / 1900.0) }
+        val repo = Repo(origin, HistoryRideStatus.RECORDING).apply {
+            series = mapOf(odo to fast)
+            stats = mapOf(odo to HistoryStats(2816.4, 2883.4, null, true), speed to HistoryStats(0.0, 55.1, null, true))
+        }
+        assertNull(readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.DISTANCE_KM))
+    }
+
+    @Test fun twoTotalsReadsOfAFinishedRidePageThePeakDetailOnce() = runTest {
+        val repo = Repo(origin).apply {
+            series = mapOf(motor to motorSeries(500_000), speed to steadySpeed(500_000))
+            stats = mapOf(motor to HistoryStats(40.0, 130.0, null, true), speed to HistoryStats(0.0, 1180.0, null, true))
+        }
+        val cache = HistoryPeakCache()
+        val first = readHistoryTotals(repo, "r", listOf(esc), range, peakCache = cache)
+        val pagesAfterFirst = repo.issued.count { it.first == motor }
+        assertTrue(pagesAfterFirst > 0, "the first read pages the peak series")
+        val second = readHistoryTotals(repo, "r", listOf(esc), range, peakCache = cache)
+        assertEquals(pagesAfterFirst, repo.issued.count { it.first == motor }, "the second read is served from the cache")
+        for (totals in listOf(first, second)) {
+            assertEquals(44.0, totals.of(HistoryTotalKind.MAX_KMH)!!.value)
+            assertTrue(totals.of(HistoryTotalKind.MAX_KMH)!!.approximate)
+            assertEquals(47.0, totals.of(HistoryTotalKind.MOTOR_TEMP_C)!!.value)
+        }
+    }
+
+    @Test fun aFinishedRideWithoutACacheIsReadEveryTime() = runTest {
+        val repo = Repo(origin).apply { series = mapOf(motor to motorSeries()); stats = mapOf(motor to HistoryStats(40.0, 47.0, null, true)) }
+        readHistoryTotals(repo, "r", listOf(esc), range)
+        val once = repo.issued.count { it.first == motor }
+        readHistoryTotals(repo, "r", listOf(esc), range)
+        assertEquals(once * 2, repo.issued.count { it.first == motor })
+    }
+
+    @Test fun aSpeedStandstillBlipBelowTheMaximumKeepsTheTileExact() = runTest {
+        val blip = (0..1900).map { i ->
+            at(i * 500L, speed, if (i < 100) (if (i == 50) 0.5 else 0.0) else 40.0 + (i % 5))
+        }
+        val repo = Repo(origin).apply { series = mapOf(speed to blip); stats = mapOf(speed to HistoryStats(0.0, 44.0, null, true)) }
+        val top = readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.MAX_KMH)!!
+        assertEquals(44.0, top.value); assertFalse(top.approximate)
     }
 }

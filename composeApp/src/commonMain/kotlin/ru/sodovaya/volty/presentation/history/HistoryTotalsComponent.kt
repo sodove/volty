@@ -5,6 +5,7 @@ import com.arkivanov.essenty.lifecycle.doOnDestroy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.withLock
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.domain.plausibility.RobustPeak
 import ru.sodovaya.volty.domain.plausibility.historyRobustPeak
@@ -17,6 +18,7 @@ data class HistoryTotalsState(val rideId: String? = null, val totals: List<Histo
 class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: CoroutineScope,
     private val repository: HistoryReadRepository, private val refreshMillis: Long = 15_000,
     private val maxGpsPages: Int = 16, private val maxDetailPages: Int = 16) {
+    private val peakCache = HistoryPeakCache()
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
     private val mutableState = MutableStateFlow(HistoryTotalsState())
@@ -37,7 +39,7 @@ class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: Co
         job = scope.launch {
             // The same ride growing while recorded: keep the shown tiles and coalesce the updates.
             if (sameRide) delay(refreshMillis)
-            val totals = readHistoryTotals(repository, rideId, sources, range, maxGpsPages, maxDetailPages)
+            val totals = readHistoryTotals(repository, rideId, sources, range, maxGpsPages, maxDetailPages, peakCache)
             if (requested == next) mutableState.value = HistoryTotalsState(rideId = rideId, totals = totals)
         }
     }
@@ -47,7 +49,29 @@ class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: Co
 }
 
 /**
+ * Needle-free peaks of FINISHED rides, kept so that re-opening a ride (or the 15 s refresh of a screen that is not
+ * recording any more) does not page every peak series again. Owned by the totals reader's caller; a reader given none
+ * computes afresh each time. Only a definitive answer is stored (no series failed or was unpageable), and a ride that is
+ * still recording is never stored: its detail grows. A finished ride's detail is immutable, the same argument as the
+ * energy repair cache in DefaultHistoryReadRepository (Task 6). That cache lives in the data layer because the repair is
+ * a data-layer computation behind `stats`; this one lives with the reader that computes the peaks, because it holds a
+ * presentation type and the reader's own paging budget decided its content. Small, cleared wholesale when full.
+ */
+class HistoryPeakCache(private val capacity: Int = 32) {
+    private val mutex = kotlinx.coroutines.sync.Mutex()
+    private val entries = HashMap<Triple<String, List<HistorySource>, HistoryRange>, HistoryRobustPeaks>()
+    internal suspend fun get(rideId: String, sources: List<HistorySource>, range: HistoryRange): HistoryRobustPeaks? =
+        mutex.withLock { entries[Triple(rideId, sources, range)] }
+    internal suspend fun put(rideId: String, sources: List<HistorySource>, range: HistoryRange, peaks: HistoryRobustPeaks) =
+        mutex.withLock { if (entries.size >= capacity) entries.clear(); entries[Triple(rideId, sources, range)] = peaks }
+}
+
+/**
  * Whole-ride totals read from storage; a failed stat only drops its tiles.
+ *
+ * Peak tiles: while the ride is RECORDING they use the stored stats maximum and page no peak detail (the totals refresh
+ * every 15 s and the detail grows); the distance cross-check then judges against that stats peak too. A finished ride
+ * reads its needle-free peaks once and keeps them in [peakCache].
  *
  * The distance is the part that must be earned. The GPS track is always read; the counter (trip, else odometer, of the
  * motion tier) is paged as detail samples through at most [maxDetailPages] pages and walked by [historyRideDistance].
@@ -56,7 +80,7 @@ class HistoryTotalsComponent(componentContext: ComponentContext, parentScope: Co
  * ran out makes that distance approximate; a capped GPS read gives no GPS at all (a partial track would mislead).
  */
 internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId: String, sources: List<HistorySource>,
-    range: HistoryRange, maxGpsPages: Int = 16, maxDetailPages: Int = 16): List<HistoryTotal> {
+    range: HistoryRange, maxGpsPages: Int = 16, maxDetailPages: Int = 16, peakCache: HistoryPeakCache? = null): List<HistoryTotal> {
     val stats = historyTotalsKeys(sources).mapNotNull { key ->
         try { key to repository.stats(rideId, key, range) }
         catch (cancel: CancellationException) { throw cancel }
@@ -73,13 +97,23 @@ internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId
         else readHistoryDetail(repository, rideId, key, range, maxDetailPages).also { detailCache[key] = it }
     }
     // Needle-free peaks first: the distance cross-check below must judge against the robust top speed too.
-    val robustPeaks = readRobustPeaks(sources, detail)
+    val ride = try { repository.ride(rideId) }
+    catch (cancel: CancellationException) { throw cancel }
+    catch (_: Exception) { null }
+    val robustPeaks = when {
+        ride?.status == HistoryRideStatus.RECORDING -> HistoryRobustPeaks.NONE
+        else -> peakCache?.takeIf { ride != null }?.get(rideId, sources, range)
+            ?: readRobustPeaks(sources, detail).let { (peaks, definitive) ->
+                if (definitive && ride != null) peakCache?.put(rideId, sources, range, peaks)
+                peaks
+            }
+    }
     val peak = historyPeakSpeedKmh(sources, stats, robustPeaks)
 
     var budgetRanOut = false
     var walked: HistoryRideWalk? = null
     try {
-        val origin = repository.ride(rideId)?.started
+        val origin = ride?.started
         if (origin != null) {
             // Trip and odometer of the motion tier, both gated. A series the cross-check judged unearned loses to any that
             // was not; among the rest the larger accepted sum wins (a trip that restarted and rose a few metres must not
@@ -153,17 +187,18 @@ private suspend fun readBatteryUsed(repository: HistoryReadRepository, rideId: S
  * MAX_DUTY (Task 11) reuses [historyRobustPeak] the same way.
  */
 private suspend fun readRobustPeaks(sources: List<HistorySource>,
-    detail: suspend (HistorySeriesKey) -> HistoryDetailRead?): HistoryRobustPeaks {
+    detail: suspend (HistorySeriesKey) -> HistoryDetailRead?): Pair<HistoryRobustPeaks, Boolean> {
     val keys = (tier(sources, motionTiers).flatMap { s -> listOf("speed_kmh", "motor_temperature_c", "esc_temperature_c",
             "controller_power_w").map { HistorySeriesKey(s.id, it) } } +
         tier(sources, batteryTiers).map { HistorySeriesKey(it.id, "power_w") } +
         tier(sources, batteryTemperatureTiers).map { HistorySeriesKey(it.id, "battery_temperature_c") }).distinct()
     val peaks = HashMap<HistorySeriesKey, RobustPeak>()
     val over = HashSet<HistorySeriesKey>()
+    var definitive = true
     for (key in keys) {
         val read = try { detail(key) }
         catch (cancel: CancellationException) { throw cancel }
-        catch (_: Exception) { null } ?: continue
+        catch (_: Exception) { null } ?: run { definitive = false; null } ?: continue
         if (!read.complete) { over += key; continue }
         val multiplier = HistoryMetricRegistry.descriptor(key.metricId)?.displayMultiplier ?: 1.0
         val display = bridgePartialSourceArtefact(read.samples).map { sample ->
@@ -171,7 +206,7 @@ private suspend fun readRobustPeaks(sources: List<HistorySource>,
         }
         historyRobustPeak(display)?.let { peaks[key] = it }
     }
-    return HistoryRobustPeaks(peaks, over)
+    return HistoryRobustPeaks(peaks, over) to definitive
 }
 
 /**

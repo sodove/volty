@@ -63,8 +63,47 @@ class HistoryNeedlesTest {
         assertNull(historyRobustPeak(series(listOf(null, null))))
     }
 
-    @Test fun aNegativeNeedleBelowTheSeriesIsAlsoANeedleButNeverRaisesThePeak() {
+    @Test fun aNegativeNeedleLeavesThePeakExactBecauseItCouldNeverHaveBeenTheMaximum() {
+        // Retraction: an earlier revision of this test pinned `approximate` for any excluded needle. That was wrong: the
+        // needle was below the maximum, so the number is unchanged and a mark on it would only dilute the sign
+        // (controller ruling 7).
         val peak = historyRobustPeak(series(listOf(45.0, 45.0, -900.0, 45.0)))!!
-        assertEquals(45.0, peak.value); assertEquals(1, peak.needlesExcluded)
+        assertEquals(45.0, peak.value); assertEquals(1, peak.needlesExcluded); assertFalse(peak.approximate)
+    }
+
+    @Test fun aStandstillBlipBelowTheRidesMaximumLeavesThePeakExact() {
+        val values = List(5) { 0.0 } + 0.5 + List(5) { 0.0 } + listOf(40.0, 41.0, 42.0, 43.0, 44.0)
+        val peak = historyRobustPeak(series(values))!!
+        assertEquals(44.0, peak.value); assertEquals(1, peak.needlesExcluded); assertFalse(peak.approximate)
+    }
+
+    @Test fun anExcludedNeedleAboveThePeakMarksItApproximateEvenBesideOneBelow() {
+        val values = List(5) { 0.0 } + 0.5 + List(5) { 0.0 } + listOf(40.0, 41.0, 42.0, 43.0, 44.0, 45.0, 1180.0, 44.0, 45.0, 44.0, 45.0, 44.0)
+        val both = historyRobustPeak(series(values))!!
+        assertEquals(45.0, both.value); assertEquals(2, both.needlesExcluded); assertTrue(both.approximate)
+        assertEquals(1180.0, both.largestExcluded)
+    }
+
+    // ---- threshold boundaries: each pinned at "exactly the limit" and one step past it ----
+    @Test fun aNeighbourExactlyTwoSecondsAwayStillVouchesButOneMillisecondMoreDoesNot() {
+        val values = listOf(40.0, 41.0, 42.0, 1180.0, 43.0, 44.0)
+        assertEquals(44.0, historyRobustPeak(series(values, gapBefore = mapOf(3 to 2000L)))!!.value)
+        assertEquals(1180.0, historyRobustPeak(series(values, gapBefore = mapOf(3 to 2001L)))!!.value)
+        assertEquals(44.0, historyRobustPeak(series(values, gapBefore = mapOf(4 to 2000L)))!!.value)
+        assertEquals(1180.0, historyRobustPeak(series(values, gapBefore = mapOf(4 to 2001L)))!!.value)
+    }
+
+    @Test fun aReturnToExactlyAQuarterOfTheExcursionIsStillANeedleAndBeyondItIsNot() {
+        // a = 100, x = 200, b = 100 + d: excursion = 100 - d, the limit is d <= 0.25 * (100 - d), i.e. d <= 20.
+        fun top(d: Double) = historyRobustPeak(series(listOf(100.0, 100.0, 100.0, 100.0, 200.0, 100.0 + d, 100.0 + d, 100.0 + d, 100.0 + d)))!!.value
+        assertEquals(120.0, top(20.0))
+        assertEquals(200.0, top(21.0))
+    }
+
+    @Test fun anExcursionOfExactlySixTimesTheMedianStepIsKeptAndAboveItIsExcluded() {
+        // Steps of 10 everywhere: 6 x 10 = 60, and the test is `excursion > 60`.
+        fun top(x: Double) = historyRobustPeak(series(listOf(100.0, 110.0, 100.0, 110.0, 100.0, x, 100.0, 110.0, 100.0, 110.0, 100.0)))!!
+        assertEquals(160.0, top(160.0).value); assertFalse(top(160.0).approximate)
+        assertEquals(110.0, top(161.0).value); assertTrue(top(161.0).approximate)
     }
 }
