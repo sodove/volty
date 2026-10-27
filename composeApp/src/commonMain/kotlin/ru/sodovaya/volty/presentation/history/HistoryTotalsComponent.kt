@@ -99,7 +99,38 @@ internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId
     val moving = try { readMovingTime(repository, rideId, sources, range, maxDetailPages) }
     catch (cancel: CancellationException) { throw cancel }
     catch (_: Exception) { null }
-    return historyVisibleTotals(historyRideTotals(sources, stats, duration, distance, moving))
+    val batteryUsed = try { readBatteryUsed(repository, rideId, sources, range, maxDetailPages) }
+    catch (cancel: CancellationException) { throw cancel }
+    catch (_: Exception) { null }
+    return historyVisibleTotals(historyRideTotals(sources, stats, duration, distance, moving, batteryUsed))
+}
+
+/**
+ * Charge used per battery source of the battery tier from paged `soc_percent` detail ([historyBatteryUsed]), through the
+ * same pager and budget as the counter. The current to judge calm stretches by is the source's own `current_a`, else the
+ * motion tier's `battery_current_a` (a T4's pack current is unknown), the latter never an own-current. A source whose
+ * detail cannot be paged, ran out of budget, or has no known charge sample contributes nothing and makes the total
+ * approximate; no source at all gives no tile.
+ */
+private suspend fun readBatteryUsed(repository: HistoryReadRepository, rideId: String, sources: List<HistorySource>,
+    range: HistoryRange, maxPages: Int): HistoryBatteryUsed? {
+    val parts = ArrayList<HistoryBatteryUsed>()
+    var skipped = false
+    for (source in tier(sources, batteryTiers)) {
+        val soc = readHistoryDetail(repository, rideId, HistorySeriesKey(source.id, "soc_percent"), range, maxPages)
+        if (soc == null || !soc.complete) { skipped = true; continue }
+        if (soc.samples.none { it.value != null }) continue
+        var current = readHistoryDetail(repository, rideId, HistorySeriesKey(source.id, "current_a"), range, maxPages)
+            ?.takeIf { it.complete && it.samples.any { s -> s.value != null } }
+        val own = current != null
+        if (current == null) for (motion in tier(sources, motionTiers)) {
+            current = readHistoryDetail(repository, rideId, HistorySeriesKey(motion.id, "battery_current_a"), range, maxPages)
+                ?.takeIf { it.complete && it.samples.any { s -> s.value != null } }
+            if (current != null) break
+        }
+        historyBatteryUsed(soc.samples, current?.samples, own)?.let(parts::add)
+    }
+    return historyBatteryUsedTotal(parts)?.let { if (skipped) it.copy(approximate = true) else it }
 }
 
 /**

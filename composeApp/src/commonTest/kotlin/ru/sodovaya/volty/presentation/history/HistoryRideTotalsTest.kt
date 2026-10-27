@@ -11,8 +11,8 @@ class HistoryRideTotalsTest {
     private fun Map<HistoryTotalKind, HistoryTotal>.v(kind: HistoryTotalKind) = getValue(kind).value
     private fun totals(sources: List<HistorySource>, stats: Map<HistorySeriesKey, HistoryStats>,
         duration: Long? = 3_600_000, gps: Double? = null,
-        moving: HistoryMovingTime? = duration?.let { HistoryMovingTime(it, false) }) =
-        historyRideTotals(sources, stats, duration, historyStatsDistance(sources, stats, duration, gps), moving).associateBy { it.kind }
+        moving: HistoryMovingTime? = duration?.let { HistoryMovingTime(it, false) }, batteryUsed: HistoryBatteryUsed? = null) =
+        historyRideTotals(sources, stats, duration, historyStatsDistance(sources, stats, duration, gps), moving, batteryUsed).associateBy { it.kind }
 
     @Test fun controllerAndPackGiveTheFullSet() {
         val t = totals(listOf(controller, pack), mapOf(
@@ -22,13 +22,14 @@ class HistoryRideTotalsTest {
             HistorySeriesKey("esc", "esc_temperature_c") to stats(20.0, 44.0),
             // Battery power is negative while discharging; the stored energy is already consumption.
             HistorySeriesKey("pack", "power_w") to stats(-2500.0, 300.0, energy = 400.0),
+            // Incoherent on purpose: stats a max - min would read as 28 %. The tile no longer reads them.
             HistorySeriesKey("pack", "soc_percent") to stats(52.0, 80.0),
             HistorySeriesKey("pack", "battery_temperature_c") to stats(18.0, 31.0),
-        ))
+        ), batteryUsed = HistoryBatteryUsed(3.0, false))
         assertEquals(20.0, t.v(HistoryTotalKind.DISTANCE_KM)); assertEquals(3_600_000.0, t.v(HistoryTotalKind.DURATION_MILLIS))
         assertEquals(20.0, t.v(HistoryTotalKind.AVERAGE_KMH)); assertEquals(48.5, t.v(HistoryTotalKind.MAX_KMH))
         assertEquals(400.0, t.v(HistoryTotalKind.ENERGY_WH)); assertEquals(20.0, t.v(HistoryTotalKind.WH_PER_KM))
-        assertEquals(28.0, t.v(HistoryTotalKind.BATTERY_USED_PERCENT)); assertEquals(2500.0, t.v(HistoryTotalKind.MAX_POWER_W))
+        assertEquals(3.0, t.v(HistoryTotalKind.BATTERY_USED_PERCENT)); assertEquals(2500.0, t.v(HistoryTotalKind.MAX_POWER_W))
         assertEquals(61.0, t.v(HistoryTotalKind.MOTOR_TEMP_C)); assertEquals(44.0, t.v(HistoryTotalKind.CONTROLLER_TEMP_C))
         assertEquals(31.0, t.v(HistoryTotalKind.BATTERY_TEMP_C))
         assertTrue(t.values.none { it.approximate })
@@ -172,11 +173,18 @@ class HistoryRideTotalsTest {
 
     @Test fun valuesThatWouldPrintAsZeroAreNotShown() {
         val shown = historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.DISTANCE_KM, 0.04), HistoryTotal(HistoryTotalKind.AVERAGE_KMH, 1.2),
-            HistoryTotal(HistoryTotalKind.ENERGY_WH, 0.3), HistoryTotal(HistoryTotalKind.BATTERY_USED_PERCENT, 0.2),
+            HistoryTotal(HistoryTotalKind.ENERGY_WH, 0.3), HistoryTotal(HistoryTotalKind.BATTERY_USED_PERCENT, 0.2), HistoryTotal(HistoryTotalKind.BATTERY_USED_PERCENT, -0.4),
             HistoryTotal(HistoryTotalKind.DURATION_MILLIS, 120_000.0), HistoryTotal(HistoryTotalKind.MAX_KMH, 1.9))).map { it.kind }
         assertEquals(listOf(HistoryTotalKind.DURATION_MILLIS, HistoryTotalKind.MAX_KMH), shown,
             "an average over a distance too short to show is hidden with it")
         assertEquals(2, historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.DISTANCE_KM, 0.1), HistoryTotal(HistoryTotalKind.AVERAGE_KMH, 6.0))).size)
+    }
+
+    @Test fun aChargingSessionsSignedTileIsShownAndTheStatsAloneMakeNoBatteryTile() {
+        val stats = mapOf(HistorySeriesKey("pack", "soc_percent") to stats(52.0, 80.0))
+        assertNull(totals(listOf(pack), stats)[HistoryTotalKind.BATTERY_USED_PERCENT], "max - min of stats is not what a ride used")
+        val shown = historyVisibleTotals(listOf(HistoryTotal(HistoryTotalKind.BATTERY_USED_PERCENT, -12.0)))
+        assertEquals(listOf(-12.0), shown.map { it.value })
     }
 
     @Test fun aRideWithNothingChosenChartsSpeedAndPower() {

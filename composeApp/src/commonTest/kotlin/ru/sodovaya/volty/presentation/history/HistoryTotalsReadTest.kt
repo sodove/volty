@@ -191,4 +191,28 @@ class HistoryTotalsReadTest {
         val repo = Repo(null).apply { series = mapOf(odo to counterRide(odo)); stats = mapOf(odo to HistoryStats(10.0, 12.0, null, true)) }
         assertEquals(2.0, readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.DISTANCE_KM)!!.value, 1e-9)
     }
+
+    @Test fun batteryUsedIsReadFromPagedChargeAndTheBatterysOwnCurrentAndIsSigned() = runTest {
+        val pack = HistorySource("pack", HistorySourceKind.BATTERY, "Pack")
+        val soc = HistorySeriesKey("pack", "soc_percent"); val amps = HistorySeriesKey("pack", "current_a")
+        val repo = Repo(origin).apply {
+            pageSize = 300 // several pages through the shared pager
+            series = mapOf(
+                soc to (0..900).map { t -> HistorySample(HistoryTick(1_000_000L + t * 1000, t * 1000L, 1), soc, if (t == 400) 40.0 else if (t > 840) 79.0 else 80.0) },
+                amps to (0..900).map { t -> HistorySample(HistoryTick(1_000_000L + t * 1000, t * 1000L, 1), amps, if (t == 400) -45.0 else -0.5) })
+        }
+        val used = readHistoryTotals(repo, "r", listOf(esc, pack), range).of(HistoryTotalKind.BATTERY_USED_PERCENT)!!
+        assertEquals(1.0, used.value, 1e-9)
+        assertFalse(used.approximate)
+        assertTrue(repo.issued.count { it.first == soc } > 1, "the charge was paged through the cursor")
+        // Without the pack's own current the controller's battery current is read, and the tile is approximate.
+        val bat = HistorySeriesKey("esc", "battery_current_a")
+        repo.series = repo.series - amps + (bat to repo.series.getValue(amps).map { it.copy(key = bat) })
+        val viaController = readHistoryTotals(repo, "r", listOf(esc, pack), range).of(HistoryTotalKind.BATTERY_USED_PERCENT)!!
+        assertEquals(1.0, viaController.value, 1e-9); assertTrue(viaController.approximate)
+        // A reader that cannot page detail gives no tile rather than the stats' max - min.
+        repo.detailSupported = false
+        repo.stats = mapOf(soc to HistoryStats(40.0, 80.0, null, true))
+        assertNull(readHistoryTotals(repo, "r", listOf(esc, pack), range).of(HistoryTotalKind.BATTERY_USED_PERCENT))
+    }
 }

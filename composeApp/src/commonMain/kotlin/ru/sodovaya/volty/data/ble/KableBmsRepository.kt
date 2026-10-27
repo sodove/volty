@@ -22,6 +22,8 @@ import ru.sodovaya.volty.data.bms.JkBmsProtocol
 import ru.sodovaya.volty.data.bms.VeteranProtocol
 import ru.sodovaya.volty.data.demo.DemoBmsSimulator
 import ru.sodovaya.volty.data.history.HistoryPwmView
+import ru.sodovaya.volty.data.history.HistorySocView
+import ru.sodovaya.volty.data.history.historySocView
 import ru.sodovaya.volty.data.history.RideTelemetryRecorder
 import ru.sodovaya.volty.data.history.historyPwmView
 import ru.sodovaya.volty.data.memory.SampleRingBuffer
@@ -247,7 +249,7 @@ class KableBmsRepository private constructor(
     private fun makeHistoryTelemetryCapture(protocol: BmsProtocol, link: PackLink,
         ownership: SampleSessionOwnership, channel: Channel<Sample>): SessionTelemetryCapture? =
         historyTelemetryIngress?.capture(protocol, Uuid.random().toString(), link.spec, link.vehicle, ownership, channel,
-            pwmView = { historyPwmViewFromActivePipeline() })
+            pwmView = { historyPwmViewFromActivePipeline() }, socView = { historySocViewFromActivePipeline() })
 
     /**
      * The live PWM estimator's evidence and latest estimate, for the history enrichment ([withHistoryEstimatedDuty]).
@@ -265,6 +267,21 @@ class KableBmsRepository private constructor(
      */
     private fun historyPwmViewFromActivePipeline(): HistoryPwmView? =
         historyPwmOwned?.takeIf { ownsActivePipeline(it.first) }?.second
+
+    /**
+     * The energy tracker's charge for the history enrichment ([withHistoryEstimatedSoc]), published and owned exactly
+     * like [historyPwmOwned]: written after each publish of the active orchestrator, read lock-free, dead with it.
+     */
+    @Volatile
+    private var historySocOwned: Pair<VehicleConnection, HistorySocView?>? = null
+
+    private fun historySocViewFromActivePipeline(): HistorySocView? =
+        historySocOwned?.takeIf { ownsActivePipeline(it.first) }?.second
+
+    private fun publishHistorySocView(orchestrator: VehicleConnection, vd: VehicleData) {
+        val tracker = orchestrator.energy
+        historySocOwned = orchestrator to if (tracker == null) null else historySocView(tracker.vehicleId, vd.energy)
+    }
 
     private fun publishHistoryPwmView(orchestrator: VehicleConnection, vd: VehicleData) {
         val estimator = orchestrator.pwm
@@ -1655,6 +1672,7 @@ class KableBmsRepository private constructor(
                 maybeSavePwm(orchestrator)
                 publishPwmEvidence(orchestrator)
                 publishHistoryPwmView(orchestrator, vd)
+                publishHistorySocView(orchestrator, vd)
             },
             clock = orchestratorClockForTest ?: { Clock.System.now() },
             energy = energy,

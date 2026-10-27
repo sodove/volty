@@ -8,7 +8,7 @@ enum class HistoryTotalKind {
     BATTERY_USED_PERCENT, MAX_POWER_W, MOTOR_TEMP_C, CONTROLLER_TEMP_C, BATTERY_TEMP_C,
 }
 
-/** [approximate] when a contributing stat was incomplete; a missing input omits the tile instead. */
+/** [approximate] when a contributing stat was incomplete; [HistoryTotalKind.BATTERY_USED_PERCENT] is SIGNED (positive = discharged); a missing input omits the tile instead. */
 data class HistoryTotal(val kind: HistoryTotalKind, val value: Double, val approximate: Boolean = false)
 
 internal val motionTiers = listOf(setOf(HistorySourceKind.VEHICLE_MOTION), setOf(HistorySourceKind.CONTROLLER))
@@ -61,6 +61,7 @@ fun historyRideTotals(
     durationMillis: Long?,
     distance: HistoryRideDistance?,
     moving: HistoryMovingTime? = null,
+    batteryUsed: HistoryBatteryUsed? = null,
 ): List<HistoryTotal> {
     fun values(tierSources: List<HistorySource>, metric: String) =
         tierSources.mapNotNull { source -> stats[HistorySeriesKey(source.id, metric)]?.let { metric to it } }
@@ -100,11 +101,10 @@ fun historyRideTotals(
     if (energy != null && distanceTotal != null && distanceTotal.value >= MIN_CONSUMPTION_DISTANCE_KM)
         result += HistoryTotal(HistoryTotalKind.WH_PER_KM, energy.value / distanceTotal.value, energy.approximate || distanceTotal.approximate)
 
-    val soc = values(battery, "soc_percent").mapNotNull { (_, s) ->
-        val low = s.minimum; val high = s.maximum
-        if (low == null || high == null) null else (high - low) to !s.complete
-    }
-    if (soc.isNotEmpty()) result += HistoryTotal(HistoryTotalKind.BATTERY_USED_PERCENT, soc.map { it.first }.average(), soc.any { it.second })
+    // Signed start - end of the charge on calm stretches ([historyBatteryUsed]), read from detail by the caller. An earlier
+    // revision was max - min of the stored stats with a hard-coded minus ("-39 %" on a pack that ended at 79 %); that was
+    // wrong because the extremes of a voltage-estimated charge are its load-sag dips. Without detail there is no tile.
+    batteryUsed?.let { result += HistoryTotal(HistoryTotalKind.BATTERY_USED_PERCENT, it.percent, it.approximate) }
 
     // A summed peak of several packs is not knowable from their separate peaks: only a single source counts.
     val packPower = summaries(battery, "power_w").filter { it.maximum.value != null }
@@ -127,7 +127,9 @@ fun historyVisibleTotals(totals: List<HistoryTotal>): List<HistoryTotal> {
     return totals.filter { t -> when (t.kind) {
         HistoryTotalKind.DISTANCE_KM -> t.value >= 0.05
         HistoryTotalKind.AVERAGE_KMH -> distance >= 0.05 && t.value >= 0.05
-        HistoryTotalKind.ENERGY_WH, HistoryTotalKind.BATTERY_USED_PERCENT, HistoryTotalKind.MAX_POWER_W -> t.value >= 0.5
+        HistoryTotalKind.ENERGY_WH, HistoryTotalKind.MAX_POWER_W -> t.value >= 0.5
+        // Signed: a charging session (+12 %) is as much news as a ride (-12 %).
+        HistoryTotalKind.BATTERY_USED_PERCENT -> abs(t.value) >= 0.5
         HistoryTotalKind.MOVING_MILLIS -> t.value >= 1_000.0
         else -> true
     } }
