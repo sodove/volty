@@ -89,6 +89,11 @@ import volty.composeapp.generated.resources.settings_dashboard_style
 import volty.composeapp.generated.resources.settings_connection
 import volty.composeapp.generated.resources.settings_fault_display_duration
 import volty.composeapp.generated.resources.settings_fault_display_duration_active
+import volty.composeapp.generated.resources.settings_fault_display_duration_hint
+import volty.composeapp.generated.resources.settings_critical_alert_display_duration
+import volty.composeapp.generated.resources.settings_critical_alert_display_duration_hint
+import volty.composeapp.generated.resources.settings_warning_alert_display_duration
+import volty.composeapp.generated.resources.settings_warning_alert_display_duration_hint
 import volty.composeapp.generated.resources.settings_minutes
 import volty.composeapp.generated.resources.settings_delete
 import volty.composeapp.generated.resources.settings_delete_text
@@ -627,9 +632,26 @@ private fun ColumnScope.DashboardControls(state: SettingsComponent.State, compon
         SettingsRowDivider()
         SettingsChoiceRow(
             title = stringResource(Res.string.settings_fault_display_duration),
+            hint = stringResource(Res.string.settings_fault_display_duration_hint),
             options = LINGER_OPTIONS_SEC.map { it to lingerLabel(it) },
             selected = lingerOptionFor(state.faultDisplayDurationSec),
             onSelect = component::onFaultDisplayDurationChanged,
+        )
+        SettingsRowDivider()
+        SettingsChoiceRow(
+            title = stringResource(Res.string.settings_critical_alert_display_duration),
+            hint = stringResource(Res.string.settings_critical_alert_display_duration_hint),
+            options = LINGER_OPTIONS_SEC.map { it to lingerLabel(it) },
+            selected = lingerOptionFor(state.criticalAlertDisplayDurationSec),
+            onSelect = component::onCriticalAlertDisplayDurationChanged,
+        )
+        SettingsRowDivider()
+        SettingsChoiceRow(
+            title = stringResource(Res.string.settings_warning_alert_display_duration),
+            hint = stringResource(Res.string.settings_warning_alert_display_duration_hint),
+            options = LINGER_OPTIONS_SEC.map { it to lingerLabel(it) },
+            selected = lingerOptionFor(state.warningAlertDisplayDurationSec),
+            onSelect = component::onWarningAlertDisplayDurationChanged,
         )
     }
 }

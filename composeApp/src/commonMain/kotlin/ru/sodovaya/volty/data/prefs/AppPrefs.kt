@@ -81,10 +81,24 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         .map { DashboardStyle.fromPersistedName(it[Keys.DASHBOARD_STYLE]) ?: DashboardStyle.LIGHT }
         .stateIn(scope, SharingStarted.Eagerly, DashboardStyle.LIGHT)
 
-    /** How long a cleared controller/BMS fault remains readable on the ride dashboard. */
+    /**
+     * How long a cleared controller/BMS **fault** remains readable on the ride dashboard. The key is
+     * the original single linger pref, so an install keeps what the rider had chosen; our own alert
+     * rows have their own two ([criticalAlertDisplayDurationSec], [warningAlertDisplayDurationSec]).
+     */
     val faultDisplayDurationSec: StateFlow<Int> = store.data
         .map { (it[Keys.FAULT_DISPLAY_DURATION_SEC] ?: DEFAULT_FAULT_DISPLAY_DURATION_SEC).coerceAtLeast(0) }
         .stateIn(scope, SharingStarted.Eagerly, DEFAULT_FAULT_DISPLAY_DURATION_SEC)
+
+    /** How long a cleared **critical** alert row (worst severity of its episode) stays in the banner. */
+    val criticalAlertDisplayDurationSec: StateFlow<Int> = store.data
+        .map { (it[Keys.CRITICAL_ALERT_DISPLAY_DURATION_SEC] ?: DEFAULT_CRITICAL_ALERT_DISPLAY_DURATION_SEC).coerceAtLeast(0) }
+        .stateIn(scope, SharingStarted.Eagerly, DEFAULT_CRITICAL_ALERT_DISPLAY_DURATION_SEC)
+
+    /** How long a cleared **warning** alert row stays in the banner: the frequent first-level rows leave quickly. */
+    val warningAlertDisplayDurationSec: StateFlow<Int> = store.data
+        .map { (it[Keys.WARNING_ALERT_DISPLAY_DURATION_SEC] ?: DEFAULT_WARNING_ALERT_DISPLAY_DURATION_SEC).coerceAtLeast(0) }
+        .stateIn(scope, SharingStarted.Eagerly, DEFAULT_WARNING_ALERT_DISPLAY_DURATION_SEC)
 
     val voiceMicrophoneSource: StateFlow<VoiceMicrophoneSource> = store.data
         .map { VoiceMicrophoneSource.fromPersisted(it[Keys.VOICE_MICROPHONE_SOURCE]) }
@@ -229,6 +243,12 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     suspend fun setFaultDisplayDurationSec(seconds: Int) = store.edit {
         it[Keys.FAULT_DISPLAY_DURATION_SEC] = seconds.coerceAtLeast(0)
     }
+    suspend fun setCriticalAlertDisplayDurationSec(seconds: Int) = store.edit {
+        it[Keys.CRITICAL_ALERT_DISPLAY_DURATION_SEC] = seconds.coerceAtLeast(0)
+    }
+    suspend fun setWarningAlertDisplayDurationSec(seconds: Int) = store.edit {
+        it[Keys.WARNING_ALERT_DISPLAY_DURATION_SEC] = seconds.coerceAtLeast(0)
+    }
     suspend fun setVoiceMicrophoneSource(source: VoiceMicrophoneSource) = store.edit {
         it[Keys.VOICE_MICROPHONE_SOURCE] = source.name
     }
@@ -323,6 +343,8 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         val UNIT_SYSTEM = stringPreferencesKey("unit_system")
         val DASHBOARD_STYLE = stringPreferencesKey("dashboard_style")
         val FAULT_DISPLAY_DURATION_SEC = intPreferencesKey("fault_display_duration_sec")
+        val CRITICAL_ALERT_DISPLAY_DURATION_SEC = intPreferencesKey("critical_alert_display_duration_sec")
+        val WARNING_ALERT_DISPLAY_DURATION_SEC = intPreferencesKey("warning_alert_display_duration_sec")
         val VOICE_MICROPHONE_SOURCE = stringPreferencesKey("voice_microphone_source")
         val VOICE_OUTPUT_PREFERENCE = stringPreferencesKey("voice_output_preference")
         val OFFLINE_SKIP_METERED_CONFIRMATION =
@@ -350,6 +372,8 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
 }
 
 private const val DEFAULT_FAULT_DISPLAY_DURATION_SEC = 60
+private const val DEFAULT_CRITICAL_ALERT_DISPLAY_DURATION_SEC = 30
+private const val DEFAULT_WARNING_ALERT_DISPLAY_DURATION_SEC = 10
 private const val DEFAULT_NAVIGATION_TOP_SPEED_KPH = 50
 private const val MIN_NAVIGATION_TOP_SPEED_KPH = 20
 private const val MAX_NAVIGATION_TOP_SPEED_KPH = 130

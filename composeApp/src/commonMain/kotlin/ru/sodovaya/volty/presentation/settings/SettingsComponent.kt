@@ -46,6 +46,8 @@ interface SettingsComponent {
     fun onUnitSystemChanged(system: UnitSystem)
     fun onDefaultDashboardStyleChanged(style: DashboardStyle)
     fun onFaultDisplayDurationChanged(seconds: Int)
+    fun onCriticalAlertDisplayDurationChanged(seconds: Int)
+    fun onWarningAlertDisplayDurationChanged(seconds: Int)
     fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource)
     fun onVoiceOutputPreferenceChanged(preference: VoiceOutputPreference)
     fun onVoiceMasterGainChanged(db: Float)
@@ -88,6 +90,8 @@ interface SettingsComponent {
         val unitSystem: UnitSystem = UnitSystem.METRIC,
         val defaultDashboardStyle: DashboardStyle = DashboardStyle.LIGHT,
         val faultDisplayDurationSec: Int = 60,
+        val criticalAlertDisplayDurationSec: Int = 30,
+        val warningAlertDisplayDurationSec: Int = 10,
         val voiceMicrophoneSource: VoiceMicrophoneSource = VoiceMicrophoneSource.AUTO,
         val voiceOutputPreference: VoiceOutputPreference? = null,
         val voiceMasterGainDb: Float = 0f,
@@ -134,6 +138,8 @@ class DefaultSettingsComponent(
             unitSystem = appPrefs.unitSystem.value,
             defaultDashboardStyle = appPrefs.defaultDashboardStyle.value,
             faultDisplayDurationSec = appPrefs.faultDisplayDurationSec.value,
+            criticalAlertDisplayDurationSec = appPrefs.criticalAlertDisplayDurationSec.value,
+            warningAlertDisplayDurationSec = appPrefs.warningAlertDisplayDurationSec.value,
             voiceMicrophoneSource = appPrefs.voiceMicrophoneSource.value,
             voiceMasterGainDb = appPrefs.voiceListenSettings.value.masterGainDb,
             voiceDuckMusic = appPrefs.voiceListenSettings.value.duckMusicWhileSpeaking,
@@ -161,6 +167,8 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.unitSystem.collect { v -> _state.update { it.copy(unitSystem = v) } } }
         scope.launch { appPrefs.defaultDashboardStyle.collect { v -> _state.update { it.copy(defaultDashboardStyle = v) } } }
         scope.launch { appPrefs.faultDisplayDurationSec.collect { v -> _state.update { it.copy(faultDisplayDurationSec = v) } } }
+        scope.launch { appPrefs.criticalAlertDisplayDurationSec.collect { v -> _state.update { it.copy(criticalAlertDisplayDurationSec = v) } } }
+        scope.launch { appPrefs.warningAlertDisplayDurationSec.collect { v -> _state.update { it.copy(warningAlertDisplayDurationSec = v) } } }
         // One actual storage snapshot supplies both choices; initial AUTO is not loaded evidence.
         scope.launch { appPrefs.voiceListenSettings.collect { listen ->
             _state.update { it.copy(voiceMasterGainDb = listen.masterGainDb, voiceDuckMusic = listen.duckMusicWhileSpeaking) }
@@ -190,6 +198,8 @@ class DefaultSettingsComponent(
     override fun onUnitSystemChanged(system: UnitSystem) { scope.launch { appPrefs.setUnitSystem(system) } }
     override fun onDefaultDashboardStyleChanged(style: DashboardStyle) { scope.launch { appPrefs.setDefaultDashboardStyle(style) } }
     override fun onFaultDisplayDurationChanged(seconds: Int) { scope.launch { appPrefs.setFaultDisplayDurationSec(seconds) } }
+    override fun onCriticalAlertDisplayDurationChanged(seconds: Int) { scope.launch { appPrefs.setCriticalAlertDisplayDurationSec(seconds) } }
+    override fun onWarningAlertDisplayDurationChanged(seconds: Int) { scope.launch { appPrefs.setWarningAlertDisplayDurationSec(seconds) } }
     override fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource) { scope.launch { appPrefs.setVoiceMicrophoneSource(source) } }
     override fun onVoiceMasterGainChanged(db: Float) { scope.launch { appPrefs.setMasterListenGainDb(db) } }
     override fun onMicAutoGainChanged(on: Boolean) { scope.launch { appPrefs.setMicAutoGain(on) } }

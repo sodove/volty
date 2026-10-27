@@ -227,12 +227,16 @@ class RideDashboardComponentTest {
     private suspend fun appPrefsWith(
         units: UnitSystem,
         style: DashboardStyle,
-        faultLingerSeconds: Int = 60
+        faultLingerSeconds: Int = 60,
+        criticalLingerSeconds: Int = 30,
+        warningLingerSeconds: Int = 10
     ): AppPrefs {
         val prefs = mutablePreferencesOf(
             stringPreferencesKey("unit_system") to units.name,
             stringPreferencesKey("dashboard_style") to style.name,
-            intPreferencesKey("fault_display_duration_sec") to faultLingerSeconds
+            intPreferencesKey("fault_display_duration_sec") to faultLingerSeconds,
+            intPreferencesKey("critical_alert_display_duration_sec") to criticalLingerSeconds,
+            intPreferencesKey("warning_alert_display_duration_sec") to warningLingerSeconds
         )
         val appPrefs = AppPrefs(FakePreferencesDataStore(prefs))
         appPrefs.unitSystem.first { it == units }
@@ -240,6 +244,8 @@ class RideDashboardComponentTest {
         // The linger too: its eager collector is just as asynchronous, and a test that configures a
         // non-default linger would otherwise race it (it did, under full-suite load).
         appPrefs.faultDisplayDurationSec.first { it == faultLingerSeconds }
+        appPrefs.criticalAlertDisplayDurationSec.first { it == criticalLingerSeconds }
+        appPrefs.warningAlertDisplayDurationSec.first { it == warningLingerSeconds }
         return appPrefs
     }
 
@@ -262,6 +268,9 @@ class RideDashboardComponentTest {
         appDefault: DashboardStyle = DashboardStyle.LIGHT,
         units: UnitSystem = UnitSystem.METRIC,
         faultLingerSeconds: Int = 60,
+        criticalLingerSeconds: Int = 30,
+        warningLingerSeconds: Int = 10,
+        prefs: AppPrefs? = null,
         vehicleRepo: FakeVehicleRepo = FakeVehicleRepo(),
         onOpenGraphRequested: () -> Unit = {},
         onOpenSettingsRequested: () -> Unit = {},
@@ -273,7 +282,9 @@ class RideDashboardComponentTest {
         if (repo.activeVehicle.value == null) {
             repo.activeVehicle.value = vehicleWith(vehicleStyle, secondary)
         }
-        val appPrefs = appPrefsWith(units, appDefault, faultLingerSeconds)
+        val appPrefs = prefs ?: appPrefsWith(
+            units, appDefault, faultLingerSeconds, criticalLingerSeconds, warningLingerSeconds
+        )
         return DefaultRideDashboardComponent(
             componentContext = DefaultComponentContext(LifecycleRegistry()),
             bmsRepository = repo,
@@ -566,7 +577,7 @@ class RideDashboardComponentTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeBmsRepo()
         repo.activeVehicle.value = alertVehicle()
-        val c = component(repo, faultLingerSeconds = 10)
+        val c = component(repo, criticalLingerSeconds = 10)
         advanceUntilIdle()
         val start = Instant.fromEpochSeconds(50_000)
         fun emit(atMs: Long, duty: Float) { repo.emitMotion(dutySample(start, atMs, duty)); }
@@ -585,6 +596,74 @@ class RideDashboardComponentTest {
         )
         emit(13_000, 50f); advanceUntilIdle()
         assertTrue(alertRows(c).isEmpty(), "gone ten seconds after it cleared")
+    }
+
+    @Test
+    fun a_warning_row_leaves_after_ten_seconds_while_a_fault_row_stays_for_sixty() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val c = component(repo) // defaults: faults 60, critical 30, warnings 10
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(70_000)
+        fun emit(atMs: Long, duty: Float, faults: List<String> = emptyList()) {
+            repo.emitMotion(dutySample(start, atMs, duty).copy(faults = faults))
+        }
+        emit(0, 85f, listOf("over-voltage")); advanceUntilIdle()
+        emit(1_000, 50f); advanceUntilIdle() // both clear at t = 1 s
+        emit(10_900, 50f); advanceUntilIdle()
+        assertEquals(1, alertRows(c).size, "9.9 s after: the warning row is still held")
+        emit(11_100, 50f); advanceUntilIdle()
+        assertTrue(alertRows(c).isEmpty(), "10.1 s after: the warning row is gone")
+        assertEquals(listOf("over-voltage"), c.state.value.faults.map { it.message }, "the fault row stays")
+        emit(60_900, 50f); advanceUntilIdle()
+        assertEquals(1, c.state.value.faults.size, "59.9 s after: the fault is still there")
+        emit(61_100, 50f); advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "60.1 s after: the fault is gone")
+    }
+
+    @Test
+    fun a_warning_row_that_escalated_to_critical_uses_the_critical_linger() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val c = component(repo) // critical 30, warnings 10
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(71_000)
+        fun emit(atMs: Long, duty: Float) { repo.emitMotion(dutySample(start, atMs, duty)); }
+        emit(0, 85f); advanceUntilIdle()
+        emit(500, 95f); advanceUntilIdle()
+        emit(1_000, 50f); advanceUntilIdle() // clears at 1 s; the episode's worst is CRITICAL
+        emit(12_000, 50f); advanceUntilIdle()
+        assertEquals(1, alertRows(c).size, "11 s after: past the warning linger, held by the critical one")
+        emit(30_900, 50f); advanceUntilIdle()
+        assertEquals(1, alertRows(c).size, "29.9 s after: still held")
+        emit(31_100, 50f); advanceUntilIdle()
+        assertTrue(alertRows(c).isEmpty(), "30.1 s after: gone")
+    }
+
+    @Test
+    fun changing_an_alert_linger_pref_re_renders_the_banner_at_once() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        repo.activeVehicle.value = alertVehicle()
+        val prefs = appPrefsWith(UnitSystem.METRIC, DashboardStyle.LIGHT, warningLingerSeconds = 60)
+        val c = component(repo, prefs = prefs)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(72_000)
+        repo.emitMotion(dutySample(start, 0, 85f)); advanceUntilIdle()
+        repo.emitMotion(dutySample(start, 1_000, 50f)); advanceUntilIdle()
+        repo.emitMotion(dutySample(start, 6_000, 50f)); advanceUntilIdle()
+        assertEquals(1, alertRows(c).size, "held: the warning linger is 60 s")
+
+        prefs.setWarningAlertDisplayDurationSec(0)
+        // No new sample: the pref change itself re-renders. Bounded wait for the cross-dispatcher hop.
+        var tries = 0
+        while (alertRows(c).isNotEmpty() && tries++ < 200) {
+            advanceUntilIdle()
+            kotlinx.coroutines.withContext(Dispatchers.Default) { kotlinx.coroutines.delay(10) }
+        }
+        assertTrue(alertRows(c).isEmpty(), "linger 0 + episode over: gone without waiting for a sample")
     }
 
     @Test
@@ -613,7 +692,7 @@ class RideDashboardComponentTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeBmsRepo()
         repo.activeVehicle.value = alertVehicle()
-        val c = component(repo, faultLingerSeconds = 0)
+        val c = component(repo, faultLingerSeconds = 0, criticalLingerSeconds = 0, warningLingerSeconds = 0)
         advanceUntilIdle()
         val start = Instant.fromEpochSeconds(52_000)
         val seen = mutableListOf<Int>()
@@ -726,7 +805,7 @@ class RideDashboardComponentTest {
         repo.activeVehicle.value = alertVehicle().copy(
             alertConfig = ru.sodovaya.volty.domain.model.AlertConfig(socCutoffPercent = 8)
         )
-        val c = component(repo, faultLingerSeconds = 60)
+        val c = component(repo, faultLingerSeconds = 60, criticalLingerSeconds = 60, warningLingerSeconds = 60)
         advanceUntilIdle()
         return repo to c
     }

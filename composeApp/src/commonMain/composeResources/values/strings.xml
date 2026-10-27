@@ -259,6 +259,11 @@
     <string name="settings_dashboard_style">Dashboard style</string>
     <string name="settings_fault_display_duration">Fault display duration</string>
     <string name="settings_fault_display_duration_active">While the fault is active</string>
+    <string name="settings_fault_display_duration_hint">How long a device fault stays in the banner after it clears</string>
+    <string name="settings_critical_alert_display_duration">Critical alert display duration</string>
+    <string name="settings_critical_alert_display_duration_hint">Alerts that reached the critical level, such as a high PWM or a cut-off charge</string>
+    <string name="settings_warning_alert_display_duration">Warning display duration</string>
+    <string name="settings_warning_alert_display_duration_hint">First-level warnings come often, so keep this short</string>
     <string name="settings_minutes">%1$d min</string>
     <string name="settings_my_batteries">My vehicles</string>
     <string name="settings_add_new_battery">+ Add new vehicle</string>

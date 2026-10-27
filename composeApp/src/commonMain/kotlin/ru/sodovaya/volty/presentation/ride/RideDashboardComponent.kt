@@ -221,6 +221,8 @@ class DefaultRideDashboardComponent(
      * waiting on the other. */
     private var appDefaultStyle: DashboardStyle = appPrefs.defaultDashboardStyle.value
     private var faultDisplayDurationSec: Int = appPrefs.faultDisplayDurationSec.value
+    private var criticalAlertDisplayDurationSec: Int = appPrefs.criticalAlertDisplayDurationSec.value
+    private var warningAlertDisplayDurationSec: Int = appPrefs.warningAlertDisplayDurationSec.value
 
     /**
      * Who reported a row. The two alert sources are separate from the fault ones because each
@@ -347,14 +349,20 @@ class DefaultRideDashboardComponent(
     /**
      * Re-render/prune against a new duration without counting the current sample twice.
      *
-     * A cleared row is held for the linger **or the episode gap, whichever is longer**: with linger 0
+     * A cleared row is held for its linger (by kind and severity, [lingerSecFor]) **or the episode gap, whichever is longer**: with linger 0
      * ("while active") the row used to be dropped at the first absent sample and recreated by the next
      * present one, blinking inside the 2 s window in which the episode rule says nothing ended (Task 1
      * review finding). It now leaves when the episode is over.
      */
     private fun renderFaults(now: Instant): List<RideDashboardComponent.FaultEntry> {
-        val hold = maxOf(faultDisplayDurationSec.seconds, EPISODE_GAP)
+        // The linger is per row: faults use theirs, alert rows the one of the episode's worst severity.
         faultHistory.entries.removeIf { (_, record) ->
+            val hold = maxOf(
+                lingerSecFor(
+                    record.alert, faultDisplayDurationSec, criticalAlertDisplayDurationSec, warningAlertDisplayDurationSec
+                ).seconds,
+                EPISODE_GAP
+            )
             !record.active && record.clearedAt?.let { now - it >= hold } != false
         }
         // The charge row steps aside CHARGE_ROW_HIDE_AFTER after it appeared, judged by sample time.
@@ -984,6 +992,22 @@ class DefaultRideDashboardComponent(
         scope.launch {
             appPrefs.faultDisplayDurationSec.collect { seconds ->
                 faultDisplayDurationSec = seconds.coerceAtLeast(0)
+                _state.update { current ->
+                    current.copy(faults = renderFaults(current.motion.timestamp))
+                }
+            }
+        }
+        scope.launch {
+            appPrefs.criticalAlertDisplayDurationSec.collect { seconds ->
+                criticalAlertDisplayDurationSec = seconds.coerceAtLeast(0)
+                _state.update { current ->
+                    current.copy(faults = renderFaults(current.motion.timestamp))
+                }
+            }
+        }
+        scope.launch {
+            appPrefs.warningAlertDisplayDurationSec.collect { seconds ->
+                warningAlertDisplayDurationSec = seconds.coerceAtLeast(0)
                 _state.update { current ->
                     current.copy(faults = renderFaults(current.motion.timestamp))
                 }

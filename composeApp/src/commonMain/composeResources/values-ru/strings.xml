@@ -257,6 +257,11 @@
     <string name="settings_dashboard_style">Стиль приборной панели</string>
     <string name="settings_fault_display_duration">Время показа ошибок</string>
     <string name="settings_fault_display_duration_active">Пока ошибка активна</string>
+    <string name="settings_fault_display_duration_hint">Сколько неисправность устройства остаётся в баннере после того, как пропала</string>
+    <string name="settings_critical_alert_display_duration">Время показа критических тревог</string>
+    <string name="settings_critical_alert_display_duration_hint">Тревоги, дошедшие до критического уровня: высокий PWM, отсечка по заряду</string>
+    <string name="settings_warning_alert_display_duration">Время показа предупреждений</string>
+    <string name="settings_warning_alert_display_duration_hint">Предупреждения первого уровня приходят часто, лучше покороче</string>
     <string name="settings_minutes">%1$d мин</string>
     <string name="settings_my_batteries">Мой транспорт</string>
     <string name="settings_add_new_battery">+ Добавить новый транспорт</string>

@@ -14,3 +14,20 @@ internal fun lingerOptionFor(seconds: Int): Int {
     val value = seconds.coerceAtLeast(0)
     return LINGER_OPTIONS_SEC.minWith(compareBy({ kotlin.math.abs(it - value) }, { it }))
 }
+
+/**
+ * How long a cleared banner row stays, in seconds. A **fault** row (no [alert]) uses [faultSec]; one of
+ * our own alert rows uses the linger of its episode's **worst** severity - an escalated warning ->
+ * critical row is a critical row (the record's alert is already folded to the worst) - so a
+ * frequent first-level warning leaves quickly while a device fault stays longer.
+ */
+internal fun lingerSecFor(
+    alert: ru.sodovaya.volty.domain.alert.ActiveAlert?,
+    faultSec: Int,
+    criticalSec: Int,
+    warningSec: Int
+): Int = when (alert?.severity) {
+    null -> faultSec
+    ru.sodovaya.volty.domain.usecase.AlertSeverity.CRITICAL -> criticalSec
+    else -> warningSec
+}

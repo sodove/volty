@@ -33,4 +33,15 @@ class FaultEpisodesTest {
     fun aTieGoesToTheShorterOption() {
         assertEquals(60, lingerOptionFor(90))
     }
+
+    @Test
+    fun lingerIsChosenByRowKindAndTheEpisodesWorstSeverity() {
+        fun alert(sev: ru.sodovaya.volty.domain.usecase.AlertSeverity) = ru.sodovaya.volty.domain.alert.ActiveAlert(
+            ru.sodovaya.volty.domain.usecase.AlertKind.DUTY_HIGH, 90f, sev
+        )
+        // three distinct values so a swapped argument cannot hide
+        assertEquals(61, lingerSecFor(null, faultSec = 61, criticalSec = 31, warningSec = 11))
+        assertEquals(31, lingerSecFor(alert(ru.sodovaya.volty.domain.usecase.AlertSeverity.CRITICAL), 61, 31, 11))
+        assertEquals(11, lingerSecFor(alert(ru.sodovaya.volty.domain.usecase.AlertSeverity.WARNING), 61, 31, 11))
+    }
 }
