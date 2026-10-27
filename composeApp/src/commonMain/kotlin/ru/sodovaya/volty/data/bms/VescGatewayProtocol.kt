@@ -844,8 +844,13 @@ class VescGatewayProtocol(
      * arithmetic on unrelated numbers. It reads as a plausible trip, which is
      * the worst kind of wrong.
      */
-    @Volatile private var tripBaselineKm: Map<Int, Float> = emptyMap()
-    private var historyTripBaselineKm: Map<Int, Float> = emptyMap()
+    // Task 12 retraction: these were per-controller `odometer - firstOdometer` baselines clamped at 0. That was
+    // wrong because `tachometer_abs` is a since-boot counter (after a controller reboot the trip sat at 0 until the
+    // counter passed the old baseline) and a torn read added its whole size. Each controller now has its own
+    // [TripCounter] (two nodes' tachometers are still two counters), replaced on change like every map here.
+    @Volatile private var tripCounters: Map<Int, TripCounter> = emptyMap()
+    /** The history observation's gates: silent, the same counter is already in the ledger through [tripCounters]. */
+    private var historyTripCounters: Map<Int, TripCounter> = emptyMap()
     private var historyBmsCellSpan: Map<Int, Int> = emptyMap()
 
     // ---- the request plan, built once ---------------------------------
@@ -1010,7 +1015,7 @@ class VescGatewayProtocol(
             VescValues.decodeSetupValues(payload)?.let {
                 recordReplyFacts(c.globalIndex, payload)
                 val attributed = observeControllerReply(c, payload, it, setup = true)
-                applySetup(c.globalIndex, it, historyEligible = attributed)
+                applySetup(c.globalIndex, it, historyEligible = attributed, payload = payload)
             }
         },
         // A speed this controller is no longer reporting must not stay on the
@@ -1096,10 +1101,10 @@ class VescGatewayProtocol(
         // with no forwarded controller replies can certify native facts.
         val attributed = controllerReplyAttributed(source, payload, setup)
         val trip = if (attributed && setup && decoded.hasDistance) {
-            val baseline = historyTripBaselineKm[source.globalIndex] ?: decoded.odometerKm.also {
-                historyTripBaselineKm = historyTripBaselineKm + (source.globalIndex to it)
+            val counter = historyTripCounters[source.globalIndex] ?: TripCounter(VescValues.OPCODE_GET_VALUES_SETUP, recordLedger = false).also {
+                historyTripCounters = historyTripCounters + (source.globalIndex to it)
             }
-            (decoded.odometerKm - baseline).coerceAtLeast(0f)
+            (counter.offer(decoded.odometerKm * 1000.0, payload) / 1000.0).toFloat()
         } else null
         observeTelemetry(TelemetryOrigin.CONTROLLER, controllers.indexOf(source)) {
             val readings = observedVescController(decoded, setup, trip)
@@ -1787,21 +1792,24 @@ class VescGatewayProtocol(
         publishController(global)
     }
 
-    private fun applySetup(global: Int, decoded: ControllerData, historyEligible: Boolean) {
+    private fun applySetup(global: Int, decoded: ControllerData, historyEligible: Boolean, payload: ByteArray) {
         val receivedAt = nowMs()
         if (historyEligible) {
             setupDecodeReceipts = setupDecodeReceipts + (global to ++nextDecodeReceipt)
             historySetupDecodes = historySetupDecodes + (global to AcceptedControllerDecode(decoded, receivedAt))
         }
         val odometerKm = decoded.odometerKm
-        val baseline = tripBaselineKm[global]
-            ?: odometerKm.also { tripBaselineKm = tripBaselineKm + (global to it) }
+        val counter = tripCounters[global] ?: TripCounter(VescValues.OPCODE_GET_VALUES_SETUP).also {
+            tripCounters = tripCounters + (global to it)
+        }
+        // The overlay's speed, odometer and battery level are published whatever the gate says; only the trip is gated.
+        val tripKm = (counter.offer(odometerKm * 1000.0, payload) / 1000.0).toFloat()
         val overlay = SetupOverlay(
             speedKmh = decoded.speedKmh,
             speedSource = decoded.speedSource,
             speedUnknownReason = decoded.speedUnknownReason,
             odometerKm = odometerKm,
-            tripKm = (odometerKm - baseline).coerceAtLeast(0f),
+            tripKm = tripKm,
             batteryLevelFraction = decoded.batteryLevelFraction
         )
         overlays = overlays + (global to overlay)
@@ -1925,8 +1933,9 @@ class VescGatewayProtocol(
         // [valuesRequest]'s `onSilence`: `motion` above is, and the two are only
         // ever read together.
         overlays = emptyMap()
-        tripBaselineKm = emptyMap()
-        historyTripBaselineKm = emptyMap()
+        tripCounters = emptyMap()
+        historyTripCounters = emptyMap()
+        resetLedger()
         historyBmsCellSpan = emptyMap()
         // "Re-probe on reconnect, always." A node's refusal is evidence about
         // the session it was collected in and nothing more: the next connection

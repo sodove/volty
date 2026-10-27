@@ -76,7 +76,12 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
     private var smartBmsSeen = false
     private var liveData: BmsData? = null
     private var motion: ControllerData? = null
-    private var distanceBaselineMeters: Long? = null
+    /**
+     * Session trip over A9's lifetime distance. An earlier revision kept `distance - firstDistance` clamped at 0;
+     * that was wrong because a torn distance (valid on this protocol: the frame has no checksum, only a tail) added
+     * its whole size to the trip, and a persistent backward step sat at 0 until it passed the old baseline.
+     */
+    private val tripCounter = TripCounter(TYPE_LIVE)
     private var rideStatsTemperatureC: Float? = null
     private var dutyPercentValue: Float? = null
 
@@ -161,7 +166,8 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         smartBmsSeen = false
         liveData = null
         motion = null
-        distanceBaselineMeters = null
+        tripCounter.reset()
+        resetLedger()
         rideStatsTemperatureC = null
         dutyPercentValue = null
     }
@@ -242,7 +248,8 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
 
         val speedKmh = abs(frame.i16Le(4) / 100f)
         val distanceMeters = frame.kingSongDistance(6)
-        val baseline = distanceBaselineMeters ?: distanceMeters.also { distanceBaselineMeters = it }
+        // The frame's live values and the raw odometer are published whatever the gate says; only the trip is gated.
+        val tripKm = (tripCounter.offer(distanceMeters.toDouble(), frame) / 1000.0).toFloat()
         val decodedMotion = ControllerData(
             speedKmh = speedKmh,
             speedSource = SpeedSource.REPORTED,
@@ -258,7 +265,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
             escTempC = rideStatsTemperatureC ?: temperature,
             hasMotorTemp = false,
             odometerKm = distanceMeters / 1000f,
-            tripKm = (distanceMeters - baseline).coerceAtLeast(0L) / 1000f,
+            tripKm = tripKm,
             hasDistance = true,
             hasEnergyCounters = false,
             isConnected = true

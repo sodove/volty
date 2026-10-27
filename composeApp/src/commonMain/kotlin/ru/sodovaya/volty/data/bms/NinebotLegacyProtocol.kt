@@ -54,7 +54,13 @@ class NinebotLegacyProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
     private val buffer = ByteArrayAccumulator()
     private var latest: BmsData? = null
     private var latestMotion: ControllerData? = null
-    private var tripBaselineMeters: Long? = null
+
+    /**
+     * Session trip over B0's distance. An earlier revision re-baselined to 0 on any backward step; that was wrong
+     * for the same reason as Veteran's: a torn read (the frame has a valid checksum over it) zeroed the trip. Now a
+     * sum of plausible increments; the raw odometer and the live values stay raw.
+     */
+    private val tripCounter = TripCounter(PARAM_LIVE_DATA)
 
     override val controllerCount: Int get() = 1
 
@@ -80,7 +86,8 @@ class NinebotLegacyProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         buffer.reset()
         latest = null
         latestMotion = null
-        tripBaselineMeters = null
+        tripCounter.reset()
+        resetLedger()
     }
 
     private fun parseBufferedFrames() {
@@ -161,15 +168,7 @@ class NinebotLegacyProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
             )
         )
 
-        val baseline = tripBaselineMeters ?: distanceMeters.also { tripBaselineMeters = it }
-        val tripKm = if (distanceMeters >= baseline) {
-            (distanceMeters - baseline) / 1000f
-        } else {
-            // A reboot/reset can move a lifetime counter backwards; do not
-            // turn that into a negative session distance.
-            tripBaselineMeters = distanceMeters
-            0f
-        }
+        val tripKm = (tripCounter.offer(distanceMeters.toDouble(), payload) / 1000.0).toFloat()
         latestMotion = publishControllerUpdate(
             ControllerData(
                 speedKmh = speedKmh,

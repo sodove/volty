@@ -842,6 +842,52 @@ class VescGatewayProtocolTest {
         }
 
     /**
+     * Task 12. One uBox reboots (its `tachometer_abs` restarts near zero and keeps counting), the other does not.
+     * Each controller's trip is its own counter gate: the rebooted one re-baselines after three frames and keeps
+     * growing from where it was (it used to sit at 0 until the counter passed the old baseline), the other is
+     * untouched. The live values of every frame stay raw throughout.
+     */
+    @Test
+    fun `a controller reboot rebaselines that controller's trip only and the trip keeps growing`() =
+        runTest {
+            var odoARaw = 1_284_600_000
+            var odoBRaw = 500_000_000
+            val p = protocol()
+            val link = FakeGateway(p) { canId, opcode ->
+                if (opcode == VescValues.OPCODE_GET_VALUES_SETUP) {
+                    ScriptedReply(LATENCY_MS, setupFrame(tachAbsMRaw = if (canId == CAN_A) odoARaw else odoBRaw))
+                } else {
+                    healthyScript()(canId, opcode)
+                }
+            }
+            val device = link.runDevice(this)
+            val loop = launch { p.runPollLoop(link.send) }
+
+            runCycles(1)
+            odoARaw += 2_500_000; odoBRaw += 1_200_000
+            runCycles(2)
+            assertTrue(abs(assertNotNull(p.latestMotion(0)).tripKm - 2.5f) < 0.01f)
+
+            odoARaw = 10_000                                  // controller A rebooted
+            runCycles(1)
+            odoARaw += 1_000_000; runCycles(1)
+            odoARaw += 1_000_000; runCycles(1)                // the third agreeing frame: re-baselined
+            odoARaw += 1_000_000; runCycles(1)
+            odoARaw += 1_000_000; runCycles(1)
+            // 2.5 km before + the confirmed chain (2 km, the jump adds 0) + 1 km accepted; the newest frame is held.
+            assertTrue(
+                abs(assertNotNull(p.latestMotion(0)).tripKm - 5.5f) < 0.01f,
+                "the rebooted controller's trip keeps growing, got ${assertNotNull(p.latestMotion(0)).tripKm}"
+            )
+            assertTrue(
+                abs(assertNotNull(p.latestMotion(1)).tripKm - 1.2f) < 0.01f,
+                "the other controller's trip is untouched"
+            )
+            assertEquals(1L, p.rebaseCount)
+            loop.cancel(); device.cancel()
+        }
+
+    /**
      * A torn-down session must not leave its ground speed behind for the next
      * one — on this app the next session can be a DIFFERENT vehicle.
      *

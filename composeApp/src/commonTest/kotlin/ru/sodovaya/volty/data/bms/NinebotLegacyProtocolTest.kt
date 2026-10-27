@@ -177,6 +177,37 @@ class NinebotLegacyProtocolTest {
         assertEquals(emptyList(), protocol.deviceFacts())
     }
 
+    @Test
+    fun `a torn B0 distance adds nothing to the trip and the same page's live values stay raw`() {
+        val protocol = NinebotLegacyProtocol()
+        protocol.onNotification(liveFrame(distanceMeters = 5_000, speedCentiKmh = 1_000))
+        protocol.onNotification(liveFrame(distanceMeters = 5_100, speedCentiKmh = 1_100))
+        // +65 536 m on the distance only (the checksum is computed over the torn value, so it is valid).
+        protocol.onNotification(liveFrame(distanceMeters = 5_100 + 65_536, speedCentiKmh = 1_200, voltageCentiV = 6_150))
+        val needle = requireNotNull(protocol.latestMotion(0))
+        assertEquals(12f, needle.speedKmh, 0.001f, "live values of a needle page stay raw")
+        assertEquals(61.5f, needle.inputVoltageV, 0.001f)
+        assertEquals(70.636f, needle.odometerKm, 0.001f, "the raw odometer is published as today")
+        protocol.onNotification(liveFrame(distanceMeters = 5_200))
+        protocol.onNotification(liveFrame(distanceMeters = 5_300))
+
+        assertEquals(0.2f, requireNotNull(protocol.latestMotion(0)).tripKm, 0.001f)
+        assertEquals(1L, protocol.rejectedFrameCount)
+    }
+
+    @Test
+    fun `a persistent backward reset re-baselines after three pages and the trip keeps growing`() {
+        val protocol = NinebotLegacyProtocol()
+        listOf(9_000L, 9_100L, 9_200L, 100L, 200L, 300L, 400L, 500L).forEach {
+            protocol.onNotification(liveFrame(distanceMeters = it))
+        }
+        val motion = requireNotNull(protocol.latestMotion(0))
+        assertEquals(0.5f, motion.odometerKm, 0.001f)
+        // 9 000 -> 9 200 (0.2) + the confirmed chain 100 -> 300 (0.2) + 300 -> 400 (0.1); 500 is held.
+        assertEquals(0.5f, motion.tripKm, 0.001f, "previously the trip restarted from 0 on the first backward step")
+        assertEquals(1L, protocol.rebaseCount)
+    }
+
     private fun liveFrame(
         batteryPercent: Int = 0,
         distanceMeters: Long = 0,

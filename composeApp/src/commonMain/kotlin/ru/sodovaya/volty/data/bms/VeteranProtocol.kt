@@ -96,7 +96,14 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
     private var versionRaw: Int = 0
     private var hardwareCodeValue: String? = null
     private var reportedSoc: Float? = null
-    private var tripBaselineMeters: Long? = null
+
+    /**
+     * Session trip over the lifetime distance. An earlier revision re-baselined the trip to 0 on ANY backward step
+     * of the counter; that was wrong because a single torn read (a CRC over a torn value is valid) zeroed the trip
+     * and the next good frame then credited the whole odometer-sized difference. Now a sum of plausible increments:
+     * a needle adds nothing, a persistent reset re-baselines after 3 frames and the trip keeps growing.
+     */
+    private val tripCounter = TripCounter(0x00)
 
     /** Model name derived from the firmware revision, or generic before a frame. */
     val model: String get() = modelName(majorVersion)
@@ -168,7 +175,8 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
         versionRaw = 0
         hardwareCodeValue = null
         reportedSoc = null
-        tripBaselineMeters = null
+        tripCounter.reset()
+        resetLedger()
     }
 
     private fun parseAvailable() {
@@ -279,14 +287,8 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
             )
         }
 
-        val baseline = tripBaselineMeters ?: totalDistanceMeters.also { tripBaselineMeters = it }
-        val tripKm = if (totalDistanceMeters >= baseline) {
-            (totalDistanceMeters - baseline) / METERS_PER_KM
-        } else {
-            // Counter reset/reboot: begin a fresh connection baseline.
-            tripBaselineMeters = totalDistanceMeters
-            0f
-        }
+        // Live values and the raw odometer below are published whatever the gate says; only the trip is gated.
+        val tripKm = (tripCounter.offer(totalDistanceMeters.toDouble(), frame) / METERS_PER_KM.toDouble()).toFloat()
         motion = ControllerData(
             speedKmh = if (speedKnown) speed else 0f,
             speedSource = if (speedKnown) SpeedSource.REPORTED else SpeedSource.NONE,

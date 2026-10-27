@@ -75,10 +75,25 @@ class VescProtocol(
      * Deliberately based on the ABSOLUTE counter rather than the signed `tachometer`:
      * the absolute counter only ever accumulates, so a reversing vehicle adds to the
      * trip instead of subtracting from it, and the delta can never go negative.
+     *
+     * Task 12 retraction: the trip used to be `odometerKm - firstOdometerKm` clamped at 0 (and a baseline kept
+     * until [reset]). That was wrong on two counts: `tachometer_abs` is a SINCE-BOOT counter, so after a controller
+     * reboot the trip sat at 0 until the counter passed the old baseline, and a torn read added its whole size.
+     * The trip is now a [TripCounter] sum: a needle adds nothing, a persistent backward reset re-baselines after
+     * three frames and the trip keeps growing from where it was.
      */
-    @Volatile private var tripBaselineKm: Float? = null
-    /** History's metre-counter baseline cannot be seeded by GET_VALUES' undecoded rotor counts. */
-    @Volatile private var observedTripBaselineKm: Float? = null
+    /**
+     * One gate per values opcode, not one for the link: during the opcode probe both replies arrive and their
+     * odometers are not one counter (GET_VALUES' is a different derivation), so a shared gate would read the
+     * alternation as a storm of needles and re-baselines. Each opcode's frames are judged against their own history.
+     */
+    private val setupTripCounter = TripCounter(VescValues.OPCODE_GET_VALUES_SETUP)
+    private val valuesTripCounter = TripCounter(VescValues.OPCODE_GET_VALUES)
+    /**
+     * History's metre-counter cannot be seeded by GET_VALUES' undecoded rotor counts, so it has its own gate over
+     * SETUP frames only. Silent: the same counter is already in the ledger through [setupTripCounter].
+     */
+    private val observedTripCounter = TripCounter(VescValues.OPCODE_GET_VALUES_SETUP, recordLedger = false)
 
     /**
      * The one outstanding [scanCanBus], armed while its `PING_CAN` is on the
@@ -227,14 +242,15 @@ class VescProtocol(
                     if (controllerId != null) controllerIdValue = controllerId
                     cachedFacts = null
                 }
-                val baseline = tripBaselineKm ?: decoded.odometerKm.also { tripBaselineKm = it }
-                val withSessionTrip = decoded.copy(tripKm = (decoded.odometerKm - baseline).coerceAtLeast(0f))
+                // The frame's live values and the raw odometer are published whatever the gate says; only the trip is gated.
+                val liveCounter = if (payload[0].toInt() == VescValues.OPCODE_GET_VALUES_SETUP) setupTripCounter else valuesTripCounter
+                val sessionTripKm = (liveCounter.offer(decoded.odometerKm * 1000.0, payload) / 1000.0).toFloat()
+                val withSessionTrip = decoded.copy(tripKm = sessionTripKm)
                 motion = withSessionTrip
                 if (deriveBattery) battery = derivedBatteryFrom(withSessionTrip)
                 val setup = payload[0].toInt() == VescValues.OPCODE_GET_VALUES_SETUP
                 val observedTrip = if (setup && decoded.hasDistance) {
-                    val observedBaseline = observedTripBaselineKm ?: decoded.odometerKm.also { observedTripBaselineKm = it }
-                    (decoded.odometerKm - observedBaseline).coerceAtLeast(0f)
+                    (observedTripCounter.offer(decoded.odometerKm * 1000.0, payload) / 1000.0).toFloat()
                 } else null
                 observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedVescController(decoded, setup, observedTrip) }
                 if (setup) observeTelemetry(TelemetryOrigin.CONTROLLER, 0, TelemetryRole.REPORTED_CAN) {
@@ -281,8 +297,10 @@ class VescProtocol(
         configHandshakeSent = false
         selectedValuesOpcode = if (useSetupFrame) null else VescValues.OPCODE_GET_VALUES
         valueOpcodeProbePolls = 0
-        tripBaselineKm = null
-        observedTripBaselineKm = null
+        setupTripCounter.reset()
+        valuesTripCounter.reset()
+        observedTripCounter.reset()
+        resetLedger()
         controllerIdValue = null
         faultCodeValue = null
         canIdsValue = null

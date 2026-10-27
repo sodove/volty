@@ -181,6 +181,7 @@ class VescProtocolTest {
         val p = VescProtocol()
         p.onNotification(setupFrame(tachAbsM = 1284600000))         // session baseline: 1284.6 km on the ESC's odometer
         p.onNotification(setupFrame(tachAbsM = 1289600000))         // ESC odometer advanced 5.0 km
+        p.onNotification(setupFrame(tachAbsM = 1289600000))         // the trip is decided one frame late (counter gate lookahead)
         val m = p.latestMotion(0)!!
         assertTrue(abs(m.tripKm - 5.0f) < 0.01f, "expected ~5.0 km travelled this session, got ${m.tripKm}")
         // and NOT the raw absolute odometer reading itself:
@@ -193,6 +194,7 @@ class VescProtocolTest {
         // The vehicle backs up: the signed tachometer moves backwards, but the
         // absolute counter that tripKm is derived from only ever adds distance.
         p.onNotification(setupFrame(tachM = 12000000, tachAbsM = 1284700000))
+        p.onNotification(setupFrame(tachM = 12000000, tachAbsM = 1284700000)) // lookahead frame, see above
         val m = p.latestMotion(0)!!
         assertTrue(m.tripKm >= 0f, "trip must never go negative on reverse, got ${m.tripKm}")
         assertTrue(abs(m.tripKm - 0.1f) < 0.01f, "expected 0.1 km of (reverse) travel, got ${m.tripKm}")
@@ -202,6 +204,7 @@ class VescProtocolTest {
         val p = VescProtocol()
         p.onNotification(setupFrame(tachAbsM = 1284600000))
         p.onNotification(setupFrame(tachAbsM = 1289600000))
+        p.onNotification(setupFrame(tachAbsM = 1289600000)) // lookahead frame, see above
         assertTrue(p.latestMotion(0)!!.tripKm > 0f)
 
         p.reset()
@@ -210,6 +213,43 @@ class VescProtocolTest {
         // first frame of a brand-new connection, so the session must start over at 0.
         p.onNotification(setupFrame(tachAbsM = 1289600000))
         assertEquals(0f, p.latestMotion(0)!!.tripKm, "a new connection must start a fresh session at 0")
+    }
+
+    // --- Task 12: the trip is a sum of plausible increments (counter gate) ---
+
+    @Test fun a_torn_tachometer_needle_adds_nothing_and_the_same_frames_live_values_stay_raw() {
+        val p = VescProtocol()
+        p.onNotification(setupFrame(tachAbsM = 1000000000))
+        p.onNotification(setupFrame(tachAbsM = 1001000000))                 // +1.0 km
+        // The counter is torn upwards by 600 km; the same frame's speed and voltage are real.
+        val needleFrame = setupFrame(tachAbsM = 1001000000 + 600_000_000, speedMs = 5000, vIn = 700)
+        p.onNotification(needleFrame)
+        val needle = p.latestMotion(0)!!
+        val live = VescProtocol().also { it.onNotification(setupFrame(speedMs = 5000, vIn = 700)) }.latestMotion(0)!!
+        val other = VescProtocol().also { it.onNotification(setupFrame()) }.latestMotion(0)!!
+        assertTrue(live.speedKmh != other.speedKmh && live.inputVoltageV != other.inputVoltageV, "fixture must differ")
+        assertEquals(live.speedKmh, needle.speedKmh, "live values of a needle frame stay raw")
+        assertEquals(live.inputVoltageV, needle.inputVoltageV)
+        assertTrue(needle.odometerKm > 1500f, "the raw odometer is published as today, got ${needle.odometerKm}")
+        p.onNotification(setupFrame(tachAbsM = 1002000000))                 // +1.0 km, back in step
+        p.onNotification(setupFrame(tachAbsM = 1002000000))
+        assertEquals(2.0f, p.latestMotion(0)!!.tripKm, 0.01f, "2 km ridden; the needle must not add its 600 km")
+        assertEquals(1L, p.rejectedFrameCount)
+        assertEquals(ru.sodovaya.volty.domain.plausibility.PlausibilityRule.TRIP_COUNTER_STEP, p.rejectedFrames().single().rule)
+    }
+
+    @Test fun a_controller_reboot_rebaselines_after_three_frames_and_the_trip_keeps_growing_instead_of_sitting_at_zero() {
+        val p = VescProtocol()
+        p.onNotification(setupFrame(tachAbsM = 1000000000))
+        p.onNotification(setupFrame(tachAbsM = 1001000000))
+        p.onNotification(setupFrame(tachAbsM = 1002000000))                 // 2 km ridden before the reboot
+        // tachometer_abs is a SINCE-BOOT counter: after the reboot it restarts near zero and keeps counting.
+        listOf(10_000, 1_010_000, 2_010_000, 3_010_000, 4_010_000, 5_010_000).forEach { p.onNotification(setupFrame(tachAbsM = it)) }
+        val m = p.latestMotion(0)!!
+        assertEquals(5.01f, m.odometerKm, 0.01f, "the raw odometer follows the controller")
+        // 2 km before + the confirmed chain (2 km, the jump adds 0) + 3.01 and 4.01 accepted (2 km); 5.01 is still held.
+        assertEquals(6.0f, m.tripKm, 0.01f, "previously this sat at 0 until the counter passed the old baseline")
+        assertEquals(1L, p.rebaseCount)
     }
 
     @Test fun a_frame_split_across_chunks_still_decodes() {

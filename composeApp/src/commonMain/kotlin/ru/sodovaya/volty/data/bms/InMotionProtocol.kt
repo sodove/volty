@@ -47,7 +47,14 @@ class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
     private var modelId: Int? = null
     private var data: BmsData? = null
     private var motion: ControllerData? = null
-    private var tripBaselineMeters: Long? = null
+
+    /**
+     * Session trip over the realtime page's distance (a since-power-on counter on some models). An earlier
+     * revision re-baselined to 0 on any backward step; that was wrong because a torn read zeroed the trip. A model
+     * change is a different counter, so [parseMainInfo] starts a new gate (the ledger ring is kept). Now a sum of
+     * plausible increments; the live values stay raw.
+     */
+    private val tripCounter = TripCounter(COMMAND_REAL_TIME_INFO)
     private var modelValue: String = "InMotion"
     private var serialValue: String? = null
     private var firmwareValue: String? = null
@@ -103,7 +110,8 @@ class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         modelId = null
         data = null
         motion = null
-        tripBaselineMeters = null
+        tripCounter.reset()
+        resetLedger()
         modelValue = "InMotion"
         serialValue = null
         firmwareValue = null
@@ -166,7 +174,7 @@ class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
                 val series = payload[2].toInt() and 0xFF
                 val type = payload[3].toInt() and 0xFF
                 val nextModelId = series * 10 + type
-                if (modelId != nextModelId) tripBaselineMeters = null
+                if (modelId != nextModelId) tripCounter.reset()
                 modelId = nextModelId
                 modelValue = modelName(series, type)
             }
@@ -212,15 +220,7 @@ class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         } ?: return
 
         val distanceMeters = values.distanceMeters
-        val baseline = tripBaselineMeters ?: distanceMeters.also { tripBaselineMeters = it }
-        val tripKm = if (distanceMeters >= baseline) {
-            (distanceMeters - baseline) / 1000f
-        } else {
-            // A reboot can reset the wheel's since-power-on counter. Do not
-            // publish a negative session distance; start a new baseline.
-            tripBaselineMeters = distanceMeters
-            0f
-        }
+        val tripKm = (tripCounter.offer(distanceMeters.toDouble(), payload) / 1000.0).toFloat()
         val power = values.powerW
         val current = values.currentA
 

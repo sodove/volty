@@ -116,6 +116,9 @@ class VescTelemetryObservationTest {
         protocol.onNotification(values())
         assertTrue(events.last().readings.none { it.metric == TelemetryMetric.TRIP })
         protocol.onNotification(setup(101_000_000))
+        // The trip is decided one frame late (counter gate lookahead): this step is held until the next SETUP frame.
+        assertEquals(0.0, events.last().read(TelemetryMetric.TRIP).value)
+        protocol.onNotification(setup(101_000_000))
         assertEquals(1.0, events.last().read(TelemetryMetric.TRIP).value)
         protocol.reset(); protocol.onNotification(setup(110_000_000))
         assertEquals(0.0, events.last().read(TelemetryMetric.TRIP).value)

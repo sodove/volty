@@ -62,6 +62,8 @@ class VescForwardRideConsumptionTest {
         protocol.onNotification(setupFrame(speedMsRaw = speedMsRaw, rpm = rpm, tachAbsMRaw = 1_284_600_000))
         // 1000 m further on: tripKm = 1.0, so `sessionWhPerKm` = 980 Wh / 1 km.
         protocol.onNotification(setupFrame(speedMsRaw = speedMsRaw, rpm = rpm, tachAbsMRaw = 1_285_600_000))
+        // The trip is decided one frame late (counter gate lookahead): one more in-step frame settles that 1000 m.
+        protocol.onNotification(setupFrame(speedMsRaw = speedMsRaw, rpm = rpm, tachAbsMRaw = 1_285_600_000))
         return protocol
     }
 

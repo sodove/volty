@@ -74,8 +74,10 @@ class VescGatewayTelemetryObservationTest {
         val events = mutableListOf<TelemetryObservation>(); p.telemetryObserver = { if (it.role == TelemetryRole.CONTRIBUTOR) events += it }
         cycle(p) { _, op -> reply(op, distance = 1000000) }
         cycle(p) { _, op -> reply(op, distance = 1200000) }
-        assertEquals(4, events.size)
-        assertEquals(0.2, assertNotNull(events[2].reading(TelemetryMetric.TRIP).value), 0.00001)
+        assertEquals(0.0, assertNotNull(events[2].reading(TelemetryMetric.TRIP).value), "decided one frame late (counter gate lookahead)")
+        cycle(p) { _, op -> reply(op, distance = 1200000) }
+        assertEquals(6, events.size)
+        assertEquals(0.2, assertNotNull(events[4].reading(TelemetryMetric.TRIP).value), 0.00001)
         p.reset(); events.clear()
         cycle(p) { _, op -> reply(op, distance = 1800000) }
         assertEquals(0.0, events.first().reading(TelemetryMetric.TRIP).value)

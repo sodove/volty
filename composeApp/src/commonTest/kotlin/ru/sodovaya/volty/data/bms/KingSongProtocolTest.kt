@@ -14,6 +14,8 @@ import ru.sodovaya.volty.domain.model.TelemetryObservation
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryRole
 import ru.sodovaya.volty.domain.model.TelemetryUnknown
+import ru.sodovaya.volty.domain.plausibility.LedgerKind
+import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 
 class KingSongProtocolTest {
 
@@ -228,9 +230,47 @@ class KingSongProtocolTest {
         assertEquals(0f, firstMotion.tripKm, 0.001f)
 
         protocol.onNotification(second)
+        protocol.onNotification(second) // the trip is decided one frame late (counter gate lookahead)
         val secondMotion = assertNotNull(protocol.latestMotion(0))
         assertEquals(123.556f, secondMotion.odometerKm, 0.001f)
         assertEquals(0.1f, secondMotion.tripKm, 0.001f)
+    }
+
+    @Test
+    fun `a torn distance needle adds nothing to the trip and the same frame's live values stay raw`() {
+        val protocol = KingSongProtocol()
+        protocol.onNotification(liveFrame(distanceMeters = 123_456, speedCentiKmh = 1000))
+        protocol.onNotification(liveFrame(distanceMeters = 123_556, speedCentiKmh = 1100))
+        // +65 536 m on the distance only; the speed and voltage of this frame are real and must reach the display.
+        protocol.onNotification(liveFrame(distanceMeters = 123_556 + 65_536, speedCentiKmh = 1200, voltageCv = 12_300))
+        val needleMotion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(12f, needleMotion.speedKmh, 0.001f, "live values of a needle frame stay raw")
+        assertEquals(123.0f, needleMotion.inputVoltageV, 0.001f)
+        assertEquals(189.092f, needleMotion.odometerKm, 0.001f, "the raw odometer is published as today")
+        protocol.onNotification(liveFrame(distanceMeters = 123_656, speedCentiKmh = 1300))
+        protocol.onNotification(liveFrame(distanceMeters = 123_756, speedCentiKmh = 1300))
+
+        // 123 456 -> 123 656 m decided (123 756 is still held); the needle contributes nothing: 0.2 km, not 65.7 km.
+        assertEquals(0.2f,assertNotNull(protocol.latestMotion(0)).tripKm, 0.001f)
+        assertEquals(1, protocol.rejectedFrameCount)
+        val entry = protocol.rejectedFrames().single()
+        assertEquals(PlausibilityRule.TRIP_COUNTER_STEP, entry.rule)
+        assertEquals(LedgerKind.REJECTED, entry.kind)
+    }
+
+    @Test
+    fun `a persistent backward reset re-baselines after three frames and the trip keeps growing`() {
+        val protocol = KingSongProtocol()
+        listOf(1_000L, 1_100L, 1_200L).forEach { protocol.onNotification(liveFrame(distanceMeters = it)) }
+        // The wheel rebooted: its counter restarts near zero and stays there.
+        listOf(10L, 110L, 210L, 310L, 410L).forEach { protocol.onNotification(liveFrame(distanceMeters = it)) }
+
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(0.41f, motion.odometerKm, 0.001f, "the raw odometer follows the wheel")
+        // 1000 -> 1200 (0.2 km) + the confirmed chain 10 -> 310 (0.3 km); the jump adds 0; 410 is still held.
+        assertEquals(0.5f, motion.tripKm, 0.001f, "the trip is not stuck at 0 and not zeroed")
+        assertEquals(1, protocol.rebaseCount)
+        assertEquals(LedgerKind.REBASED, protocol.rejectedFrames().last().kind)
     }
 
     @Test

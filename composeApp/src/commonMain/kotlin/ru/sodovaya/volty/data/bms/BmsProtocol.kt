@@ -8,6 +8,8 @@ import ru.sodovaya.volty.domain.model.TelemetryObservation
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryReading
 import ru.sodovaya.volty.domain.model.TelemetryRole
+import ru.sodovaya.volty.domain.plausibility.CounterDecision
+import ru.sodovaya.volty.domain.plausibility.CounterStepGate
 import ru.sodovaya.volty.domain.plausibility.LedgerKind
 import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 import ru.sodovaya.volty.domain.plausibility.RejectedFrame
@@ -100,6 +102,57 @@ abstract class BmsProtocol {
         rejectedCount = 0L
         rebases = 0L
         lastRejection = null
+    }
+
+    /**
+     * A session trip that is a sum of plausible counter increments (Task 12): the [CounterStepGate] with the monotone
+     * predicate, for protocols whose frame carries a lifetime / since-power-on distance counter beside the live values.
+     *
+     * Why CRC protocols need it too: a torn counter is a firmware property, and a checksum computed over a torn value
+     * is valid. The trip used to be `counter - baseline`, so a needle either added its whole size to the trip or (for
+     * the protocols that re-baselined on any backward step) zeroed it; and a persistent reset (controller reboot) sat
+     * at 0 until the counter passed the old baseline. Now a needle adds nothing, and a reset re-baselines after
+     * 3 agreeing frames and the trip keeps growing from where it was (the jump adds 0).
+     *
+     * ONLY the trip goes through the gate. The counter sits in the SAME frame as speed, voltage and current, and the
+     * frame's live values stay raw: the caller publishes the frame whatever the gate says (unlike Begode, whose
+     * odometer is a frame of its own and is withheld whole). The raw odometer the caller publishes is unchanged.
+     *
+     * One-frame lookahead (no witness exists in these frames): a point is decided by the next one, so [offer] returns
+     * the trip up to the previous frame. False-positive risk: a healthy counter never runs backwards, so nothing fires
+     * on it; it would show as a trip that stops growing. Three identical torn reads in a row re-baseline to the needle
+     * but the jump adds 0, so only the raw odometer is wrong until the next re-baseline.
+     *
+     * [recordLedger] false makes a counter silent (a second gate over the same counter, for the history observation,
+     * must not record every needle twice and must not advance the ledger clock).
+     */
+    protected inner class TripCounter(private val frameType: Int, private val recordLedger: Boolean = true) {
+        private inner class Point(val meters: Double, val raw: ByteArray, val atFrame: Long)
+
+        private fun newGate() = CounterStepGate<Point>(value = { it.meters }, agrees = { a, b -> b.meters >= a.meters })
+        private var gate = newGate()
+
+        /** The trip so far, in metres. */
+        val tripMeters: Double get() = gate.acceptedSumM
+
+        /** Offer this frame's counter reading; returns the trip in metres including every point decided so far. */
+        fun offer(meters: Double, raw: ByteArray): Double {
+            if (recordLedger) noteLedgerFrame()
+            for (decision in gate.offer(Point(meters, raw, ledgerFrameIndex))) {
+                if (!recordLedger) continue
+                when (decision) {
+                    is CounterDecision.Accepted -> Unit
+                    is CounterDecision.Rejected -> recordRejection(frameType, PlausibilityRule.TRIP_COUNTER_STEP,
+                        decision.point.raw, "${decision.reference.meters.toLong()} m", null, decision.point.atFrame)
+                    is CounterDecision.Rebased -> recordRebase(frameType, PlausibilityRule.TRIP_COUNTER_STEP,
+                        decision.point.raw, "jump ${decision.jumpM.toLong()} m", null, decision.point.atFrame)
+                }
+            }
+            return gate.acceptedSumM
+        }
+
+        /** A new connection: a new gate. The ledger ring is not touched ([resetLedger] is the protocol's own call). */
+        fun reset() { gate = newGate() }
     }
 
     private fun push(entry: RejectedFrame) { ring = (ring + entry).takeLast(LEDGER_CAPACITY) }

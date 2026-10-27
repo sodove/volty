@@ -10,6 +10,9 @@ enum class PlausibilityRule(val token: String) {
 
     /** Begode 0x01 pack voltage contradicted by the scaled live (0x00) voltage once the branch ratio is certified. */
     R13_PACK_VOLTAGE_WITNESS("pack_voltage_witness"),
+
+    /** A session trip's distance counter (VESC, Veteran, KingSong, Ninebot legacy, InMotion) stepped backwards and was held by the counter gate. */
+    TRIP_COUNTER_STEP("trip_counter_step"),
 }
 
 /**

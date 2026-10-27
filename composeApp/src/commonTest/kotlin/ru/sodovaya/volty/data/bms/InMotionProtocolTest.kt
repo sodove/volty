@@ -98,6 +98,8 @@ class InMotionProtocolTest {
         assertEquals(0f, shortMotion.tripKm, 0.001f)
         shortData.putInt16Le(12, 223)
         shortProtocol.onNotification(buildFrame(0x14, 0x04, shortData))
+        // The trip is decided one frame late (counter gate lookahead): a third in-step frame settles the second.
+        shortProtocol.onNotification(buildFrame(0x14, 0x04, shortData))
         assertEquals(1f, assertNotNull(shortProtocol.latestMotion(0)).tripKm, 0.001f)
 
         val longProtocol = InMotionProtocol()
@@ -137,6 +139,7 @@ class InMotionProtocolTest {
         assertEquals(0f, longMotion.tripKm, 0.001f)
         longData.putInt16Le(26, 223)
         longProtocol.onNotification(buildFrame(0x14, 0x04, longData))
+        longProtocol.onNotification(buildFrame(0x14, 0x04, longData)) // one-frame lookahead, see above
         assertEquals(1f, assertNotNull(longProtocol.latestMotion(0)).tripKm, 0.001f)
         assertEquals(35f, longMotion.escTempC, 0.001f)
         assertTrue(longMotion.hasMotorTemp)
@@ -172,6 +175,7 @@ class InMotionProtocolTest {
             assertEquals(30f, motion.escTempC, 0.001f, "model $modelId")
             data.putInt16Le(22, 223)
             protocol.onNotification(buildFrame(0x14, 0x04, data))
+            protocol.onNotification(buildFrame(0x14, 0x04, data)) // one-frame lookahead, see above
             assertEquals(1f, assertNotNull(protocol.latestMotion(0)).tripKm, 0.001f, "model $modelId")
         }
     }
@@ -207,8 +211,52 @@ class InMotionProtocolTest {
             assertEquals(listOf(35f), bms.temperatures, "model $modelId")
             data.putInt16Le(28, 223)
             protocol.onNotification(buildFrame(0x14, 0x04, data))
+            protocol.onNotification(buildFrame(0x14, 0x04, data)) // one-frame lookahead, see above
             assertEquals(1f, assertNotNull(protocol.latestMotion(0)).tripKm, 0.001f, "model $modelId")
         }
+    }
+
+    private fun v12Page(distance: Int, speedRaw: Int = -1_234, voltageRaw: Int = 7_542) = ByteArray(47).apply {
+        putInt16Le(0, voltageRaw)
+        putInt16Le(2, -150)
+        putInt16Le(4, speedRaw)
+        putInt16Le(8, 4_200)
+        putInt16Le(10, 321)
+        putInt16Le(22, distance)
+        putInt16Le(24, 7_650)
+        this[40] = celsius(30)
+    }
+
+    @Test
+    fun aTornDistanceAddsNothingToTheTripAndTheSamePagesLiveValuesStayRaw() {
+        val protocol = InMotionProtocol()
+        protocol.onNotification(modelFrame(71))
+        protocol.onNotification(buildFrame(0x14, 0x04, v12Page(123)))
+        protocol.onNotification(buildFrame(0x14, 0x04, v12Page(223)))
+        // The counter jumps by 20 000 units on this page only; its speed and voltage are real.
+        protocol.onNotification(buildFrame(0x14, 0x04, v12Page(20_223, speedRaw = -2_000, voltageRaw = 7_600)))
+        val needle = assertNotNull(protocol.latestMotion(0))
+        assertEquals(20f, needle.speedKmh, 0.001f, "live values of a needle page stay raw")
+        assertEquals(76f, needle.inputVoltageV, 0.001f)
+        protocol.onNotification(buildFrame(0x14, 0x04, v12Page(323)))
+        protocol.onNotification(buildFrame(0x14, 0x04, v12Page(423)))
+
+        // 123 -> 323 = 200 units = 2 km decided (423 is held); the 20 000-unit needle adds nothing.
+        assertEquals(2f, assertNotNull(protocol.latestMotion(0)).tripKm, 0.001f)
+        assertEquals(1L, protocol.rejectedFrameCount)
+    }
+
+    @Test
+    fun aPersistentBackwardResetRebaselinesAfterThreePagesAndTheTripKeepsGrowing() {
+        val protocol = InMotionProtocol()
+        protocol.onNotification(modelFrame(71))
+        listOf(5_000, 5_100, 5_200, 10, 110, 210, 310, 410).forEach {
+            protocol.onNotification(buildFrame(0x14, 0x04, v12Page(it)))
+        }
+        // 5 000 -> 5 200 (2 km) + the confirmed chain 10 -> 210 (2 km) + 210 -> 310 (1 km); 410 is held.
+        assertEquals(5f, assertNotNull(protocol.latestMotion(0)).tripKm, 0.001f,
+            "previously the trip restarted from 0 on the first backward step")
+        assertEquals(1L, protocol.rebaseCount)
     }
 
     @Test

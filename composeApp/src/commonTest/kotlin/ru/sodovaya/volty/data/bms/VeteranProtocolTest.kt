@@ -8,6 +8,8 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.*
+import ru.sodovaya.volty.domain.plausibility.LedgerKind
+import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 
 class VeteranProtocolTest {
 
@@ -418,6 +420,42 @@ class VeteranProtocolTest {
         protocol.reset()
         assertEquals(emptyList(), protocol.deviceFacts())
     }
+    @Test
+    fun `a torn total distance adds nothing to the trip, does not zero it and the same frame's live values stay raw`() {
+        val protocol = VeteranProtocol()
+        protocol.onNotification(controllerFrame(totalDistanceRaw = 10_000, speedRaw = 100))
+        protocol.onNotification(controllerFrame(totalDistanceRaw = 10_100, speedRaw = 200))
+        // +65 536 m on the counter only; this frame's speed and voltage are real (the CRC is valid over the needle).
+        protocol.onNotification(controllerFrame(totalDistanceRaw = 10_100 + 65_536, speedRaw = 321, voltageRaw = 12_525))
+        val needle = assertNotNull(protocol.latestMotion(0))
+        assertEquals(32.1f, needle.speedKmh, 0.001f, "live values of a needle frame stay raw")
+        assertEquals(125.25f, needle.inputVoltageV, 0.001f)
+        assertEquals(75.636f, needle.odometerKm, 0.001f, "the raw odometer is published as today")
+        protocol.onNotification(controllerFrame(totalDistanceRaw = 10_200, speedRaw = 300))
+        protocol.onNotification(controllerFrame(totalDistanceRaw = 10_300, speedRaw = 300))
+
+        // Today a backward step zeroes the trip and re-baselines; now 10 000 -> 10 200 m is decided (10 300 is held).
+        assertEquals(0.2f, assertNotNull(protocol.latestMotion(0)).tripKm, 0.001f)
+        assertEquals(1L, protocol.rejectedFrameCount)
+        assertEquals(PlausibilityRule.TRIP_COUNTER_STEP, protocol.rejectedFrames().single().rule)
+    }
+
+    @Test
+    fun `a persistent backward reset re-baselines after three frames and the trip keeps growing from where it was`() {
+        val protocol = VeteranProtocol()
+        listOf(50_000, 50_100, 50_200).forEach { protocol.onNotification(controllerFrame(totalDistanceRaw = it)) }
+        listOf(100, 200, 300, 400, 500).forEach { protocol.onNotification(controllerFrame(totalDistanceRaw = it)) }
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(0.5f, motion.odometerKm, 0.001f)
+        // 50 000 -> 50 200 (0.2 km) + the confirmed chain 100 -> 300 (0.2 km) + 300 -> 400 (0.1 km); 500 is held.
+        assertEquals(0.5f, motion.tripKm, 0.001f, "previously the trip restarted from 0 on the first backward step")
+        assertEquals(1L, protocol.rebaseCount)
+        assertEquals(LedgerKind.REBASED, protocol.rejectedFrames().last().kind)
+        protocol.reset()
+        assertEquals(0L, protocol.rebaseCount, "the ledger counters are per connection")
+        assertEquals(1, protocol.rejectedFrames().size, "and the ring survives")
+    }
+
     private companion object {
         fun controllerFrame(
             len: Int = 32,
