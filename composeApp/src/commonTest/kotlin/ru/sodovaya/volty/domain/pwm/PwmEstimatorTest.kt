@@ -140,6 +140,33 @@ class PwmEstimatorTest {
         assertEquals(PwmEvidence.UNKNOWN, r.est.evidence)
     }
 
+    private val survivor = AlarmOnset(65f, 96f, null, 1L)
+
+    @Test
+    fun `a loaded ONSET fit is refit from its surviving onsets, not trusted at its stored k`() {
+        // k = 0.5 is what a fit over since-dropped legacy onsets might have left; the one survivor says 0.8 * 96 / 65.
+        val stale = PwmCalibration(0.5f, 0f, 3, PwmCalibrationSource.RIDING, null, PwmBasis.ONSET, listOf(survivor))
+        val r = Rig(awaitMemory = true)
+        r.est.installMemory(PwmMemory(stale, PwmEvidence.NEVER_REPORTED))
+        r.step(speed = 60f, alarm = false)
+        val expectedK = 0.8f * 96f / 65f
+        assertEquals(expectedK, r.est.memory().calibration!!.k, 1e-4f)
+        assertEquals(expectedK * 60f / 96f * 100f, r.motion.dutyPercent, 0.1f, "published from the refit k (73.8 %), not the stored one (31 %)")
+        assertTrue(r.est.dirty, "the corrected fit is marked for saving")
+    }
+
+    @Test
+    fun `loaded FREE_SPIN and MANUAL calibrations keep their k beside onsets`() {
+        for (source in listOf(PwmCalibrationSource.WIZARD, PwmCalibrationSource.MANUAL)) {
+            val free = PwmCalibration(1.2f, 0f, 1, source, null, PwmBasis.FREE_SPIN, listOf(survivor))
+            val r = Rig(awaitMemory = true)
+            r.est.installMemory(PwmMemory(free, PwmEvidence.NEVER_REPORTED))
+            r.step(speed = 60f, alarm = false)
+            assertEquals(1.2f, r.est.memory().calibration!!.k, "$source: k untouched")
+            assertFalse(r.est.dirty, "$source: nothing to save")
+        }
+    }
+
     @Test
     fun `a rising edge of the wheel alarm at speed teaches one onset and persists it`() {
         val r = Rig(memory = neverReported)

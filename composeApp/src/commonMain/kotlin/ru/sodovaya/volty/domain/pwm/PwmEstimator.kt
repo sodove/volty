@@ -119,7 +119,7 @@ class PwmEstimator(
      */
     private fun refitOnLoad(c: PwmCalibration): PwmCalibration {
         val refit = PwmCalibrationLearner.refit(c, vehicle.pwmAlarmThresholdPercent.toFloat())
-        if (refit != c) dirty = true
+        if (kotlin.math.abs(refit.k - c.k) > 1e-4f || kotlin.math.abs(refit.r - c.r) > 1e-4f) dirty = true
         return refit
     }
 
