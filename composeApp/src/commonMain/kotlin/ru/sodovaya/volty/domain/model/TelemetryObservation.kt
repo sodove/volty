@@ -36,6 +36,12 @@ enum class TelemetryMetric(val id: String, val origin: TelemetryOrigin, val inde
     /**
      * History records the duty the DECODER reported (the per-controller raw value), never the per-wheel PWM estimate:
      * the estimate is a vehicle-level display value ([ControllerData.dutySource]) and is not a measurement.
+     *
+     * Retraction (ride fixes after 0.7.54): that was too strict for a wheel PROVEN not to report PWM. Its raw
+     * duty is a constant 0, so history stored a flat zero while the dashboard showed the estimate. History now
+     * records the estimate for such a wheel (`withHistoryEstimatedDuty`), UNMARKED - a sample has no per-reading
+     * flag and a marker needs a schema migration, which is left for later. A wheel that reports its own duty is
+     * still recorded raw.
      */
     DUTY("duty_percent", TelemetryOrigin.CONTROLLER),
     MOTOR_CURRENT("motor_current_a", TelemetryOrigin.CONTROLLER),

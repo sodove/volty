@@ -125,6 +125,13 @@ class BegodeProtocol(
     /** True once a genuine (non-boot) live frame supplied speed and trip. */
     private var sawLiveMotion = false
 
+    /**
+     * The protocol's own receipt state for the 0x00/0x07 power join (see [observedBegodeController]): how many
+     * 0x07 frames have been decoded since the last genuine live frame supplied a voltage. [NO_LIVE_FRAME] until
+     * the first one (and again after [reset]). Counted in frames, not wall-clock: the frames carry no timestamps.
+     */
+    private var motionFramesSinceLive = NO_LIVE_FRAME
+
     /** Last decoded lifetime odometer in metres — see [odometerMeters]. */
     private var odometerMetersValue: Long = 0L
 
@@ -1212,6 +1219,7 @@ class BegodeProtocol(
         signedSpeedKmhValue = 0f
         powerOnMetersValue = 0L
         sawLiveMotion = false
+        motionFramesSinceLive = NO_LIVE_FRAME
         odometerMetersValue = 0L
         sawOdometer = false
         // The trip is per-CONNECTION by definition: a reconnect starts a new
@@ -1450,6 +1458,7 @@ class BegodeProtocol(
             // synthetic pack below is built inside its own `liveVoltageRaw > 0`
             // test); this puts motion on equal footing. Spec D §7.1.
             rebuildMotion()
+            motionFramesSinceLive = 0
             observeControllerFrame(0x00)
         }
         // While no smart-BMS frame has arrived, this frame IS the battery
@@ -1613,12 +1622,14 @@ class BegodeProtocol(
         // pinned by a test.
         rebuildMotion()
         rebuildLiveData()
+        if (motionFramesSinceLive < NO_LIVE_FRAME) motionFramesSinceLive++
         observeControllerFrame(0x07)
     }
 
     private fun observeControllerFrame(type: Int) {
         val decoded = motion ?: return
-        observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedBegodeController(type, decoded) }
+        val powerJoinFresh = motionFramesSinceLive in 1..POWER_JOIN_MAX_MOTION_FRAMES
+        observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedBegodeController(type, decoded, powerJoinFresh) }
     }
 
     /**
@@ -1829,6 +1840,17 @@ class BegodeProtocol(
     }
 
     companion object {
+        /** [motionFramesSinceLive] before any genuine live frame (and after a reset). */
+        private const val NO_LIVE_FRAME = Int.MAX_VALUE
+
+        /**
+         * The staleness bound of the 0x07 power join, in 0x07 frames since the live frame that supplied the voltage.
+         * The brief's bound is 1 000 ms of wheel-frame time; the frames carry no timestamps, so it is counted in
+         * frames at the ~300 ms the wheel spaces its frames by (an assumption from the captures, not a measurement
+         * of every firmware): 3 x 300 ms = 900 ms stays inside the second.
+         */
+        private const val POWER_JOIN_MAX_MOTION_FRAMES = 3
+
         /** Slots of the cache stamp in [deviceFacts]: eleven scalars and two per branch. */
         private const val FACTS_STAMP_SIZE = 15
         private const val FRAME_SIZE = 24

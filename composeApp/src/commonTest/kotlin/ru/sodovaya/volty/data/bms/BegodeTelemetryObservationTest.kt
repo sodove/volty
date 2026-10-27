@@ -45,12 +45,49 @@ class BegodeTelemetryObservationTest {
         val configured = BegodeProtocol(cellCount = 40); val events = capture(configured)
         configured.onNotification(live(phase = -999) + motion(current = 500) + live(phase = -1000))
         assertEquals(150.0, events[0].read(TelemetryMetric.INPUT_VOLTAGE).value)
-        assertTrue(events.all { it.read(TelemetryMetric.CONTROLLER_POWER).unknown == TelemetryUnknown.PARTIAL_SOURCE })
+        // Phase current never feeds power; the 0x07 right after a live frame joins that frame's voltage with ITS OWN current.
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, events[0].read(TelemetryMetric.CONTROLLER_POWER).unknown)
+        assertEquals(750.0, assertNotNull(events[1].read(TelemetryMetric.CONTROLLER_POWER).value), 0.01)
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, events[2].read(TelemetryMetric.CONTROLLER_POWER).unknown)
         assertEquals(5.0, events[1].read(TelemetryMetric.CONTROLLER_BATTERY_CURRENT).value)
         assertTrue(events[2].readings.none { it.metric == TelemetryMetric.CONTROLLER_BATTERY_CURRENT })
         val unconfigured = BegodeProtocol(); val unknown = capture(unconfigured)
         unconfigured.onNotification(live())
         assertEquals(TelemetryUnknown.UNAVAILABLE, unknown.single().read(TelemetryMetric.INPUT_VOLTAGE).unknown)
+    }
+
+    @Test fun t4ShapedSequenceRecordsPowerAsVoltageTimesCurrentOnTheMotionFrame() {
+        val protocol = BegodeProtocol(cellCount = 40); val events = capture(protocol)
+        protocol.onNotification(live()); protocol.onNotification(motion(current = 220))
+        val power = events.last().read(TelemetryMetric.CONTROLLER_POWER)
+        assertNull(power.unknown)
+        assertEquals(150.0 * 2.2, assertNotNull(power.value), 0.05)
+        // The live frame itself still cannot pair: its battery current is the previous 0x07's.
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, events.first().read(TelemetryMetric.CONTROLLER_POWER).unknown)
+    }
+
+    @Test fun motionFrameWithoutARecentLiveFrameKeepsPowerUnknown() {
+        val fresh = BegodeProtocol(cellCount = 40); val alone = capture(fresh)
+        fresh.onNotification(motion(current = 220))
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, alone.single().read(TelemetryMetric.CONTROLLER_POWER).unknown)
+
+        // The voltage ages in wheel frames: three motion frames after the last live frame still pair, the fourth does not.
+        val aging = BegodeProtocol(cellCount = 40); val events = capture(aging)
+        aging.onNotification(live()); repeat(4) { aging.onNotification(motion(current = 220)) }
+        val motions = events.drop(1).map { it.read(TelemetryMetric.CONTROLLER_POWER) }
+        assertTrue(motions.take(3).all { it.value != null }, "within the bound")
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, motions[3].unknown)
+        aging.onNotification(live()); aging.onNotification(motion(current = 220))
+        assertNotNull(events.last().read(TelemetryMetric.CONTROLLER_POWER).value, "a new live frame renews the join")
+
+        aging.reset(); aging.onNotification(motion(current = 220))
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, events.last().read(TelemetryMetric.CONTROLLER_POWER).unknown, "reset forgets the live frame")
+    }
+
+    @Test fun anUnconfiguredWheelHasNoVoltageSoNoPower() {
+        val protocol = BegodeProtocol(); val events = capture(protocol)
+        protocol.onNotification(live()); protocol.onNotification(motion(current = 220))
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, events.last().read(TelemetryMetric.CONTROLLER_POWER).unknown)
     }
 
     @Test fun coalescedFramesRetainIntermediateSpeedAndCurrentPeaks() {

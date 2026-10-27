@@ -46,7 +46,8 @@ internal class HistoryTelemetryIngress(
     fun manualControls(): NativeHistoryRecordingLifecycle.ManualControls? = nativeLifecycle?.manualControls()
 
     fun capture(protocol: BmsProtocol, sessionId: String, spec: LinkSpec, vehicle: Vehicle?,
-        ownership: SampleSessionOwnership, channel: SendChannel<Sample>): SessionTelemetryCapture? {
+        ownership: SampleSessionOwnership, channel: SendChannel<Sample>,
+        pwmView: () -> HistoryPwmView? = { null }): SessionTelemetryCapture? {
         if (nativeLifecycle?.isAccepting == false) return null
         // Capture before the planner: control may replace this ride while setup runs.
         val recording = controller.captureTelemetryRecording()
@@ -67,8 +68,12 @@ internal class HistoryTelemetryIngress(
             } }
             historySessionTelemetryCapture(protocol, sessionId, controller, readTick, { ownership.isCurrent() && nativeLifecycle?.isAccepting != false },
                 binding, preparation, dispatchObservation = native?.dispatchObservation ?: { action -> action() },
-                enrich = { observation -> withHistoryEstimatedSoc(observation, vehicle, linkBatteryType, vehicle.typedDerivedCellCount(spec.address)) {
-                    (protocol as? BegodeProtocol)?.derivedCellCount() } }) { telemetry ->
+                enrich = { observation ->
+                    val withSoc = withHistoryEstimatedSoc(observation, vehicle, linkBatteryType, vehicle.typedDerivedCellCount(spec.address)) {
+                        (protocol as? BegodeProtocol)?.derivedCellCount() }
+                    // Only a saved vehicle has an estimator; a guest keeps the decoder's reading.
+                    if (vehicle == null) withSoc else withHistoryEstimatedDuty(withSoc, vehicle.id, pwmView)
+                }) { telemetry ->
                 if (nativeLifecycle != null) {
                     val offered = telemetry.offer(controller, ownership::isCurrent)
                     if (offered != HistoryOffer.ACCEPTED) {

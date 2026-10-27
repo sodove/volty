@@ -12,6 +12,7 @@ import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.ProtocolDiagnosticValues
 import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.data.bms.LearnedCellCountSource
 import ru.sodovaya.volty.data.bms.BmsTypeDetector
@@ -243,7 +244,26 @@ class KableBmsRepository private constructor(
 
     private fun makeHistoryTelemetryCapture(protocol: BmsProtocol, link: PackLink,
         ownership: SampleSessionOwnership, channel: Channel<Sample>): SessionTelemetryCapture? =
-        historyTelemetryIngress?.capture(protocol, Uuid.random().toString(), link.spec, link.vehicle, ownership, channel)
+        historyTelemetryIngress?.capture(protocol, Uuid.random().toString(), link.spec, link.vehicle, ownership, channel,
+            pwmView = { historyPwmView })
+
+    /**
+     * The live PWM estimator's evidence and latest estimate, for the history enrichment ([withHistoryEstimatedDuty]).
+     * Written on the sample funnel after each publish of the ACTIVE orchestrator (and cleared when a new one is
+     * built), read lock-free from the decoder's notification path; it carries its vehicle id so a reader scoped
+     * to another vehicle ignores it.
+     */
+    @Volatile
+    private var historyPwmView: ru.sodovaya.volty.data.history.HistoryPwmView? = null
+
+    private fun publishHistoryPwmView(orchestrator: VehicleConnection, vd: VehicleData) {
+        val estimator = orchestrator.pwm
+        historyPwmView = if (estimator == null || !estimator.memoryReady) null else {
+            val motion = vd.motion
+            ru.sodovaya.volty.data.history.HistoryPwmView(estimator.vehicleId, estimator.evidence,
+                motion.dutyPercent.takeIf { motion.isConnected && motion.hasDuty && motion.dutySource == DutySource.ESTIMATED })
+        }
+    }
 
     private suspend fun prepareHistoryForInstalledLinks(installed: List<PackLink>, vehicleId: String, vehicle: Vehicle?) {
         val ingress = historyTelemetryIngress ?: return
@@ -1598,6 +1618,7 @@ class KableBmsRepository private constructor(
         val stored = storedPacks(vehicle, address, type)
         val expanded = expandedVehiclePacks(vehicle, address, type)
         lateinit var orchestrator: VehicleConnection
+        historyPwmView = null
         val energy = buildEnergyTracker(vehicle, address, type) { orchestrator }
         val pwm = buildPwmEstimator(vehicle) { orchestrator }
         orchestrator = VehicleConnection(
@@ -1627,6 +1648,7 @@ class KableBmsRepository private constructor(
                 maybeSaveEnergy(orchestrator)
                 maybeSavePwm(orchestrator)
                 publishPwmEvidence(orchestrator)
+                publishHistoryPwmView(orchestrator, vd)
             },
             clock = orchestratorClockForTest ?: { Clock.System.now() },
             energy = energy,
