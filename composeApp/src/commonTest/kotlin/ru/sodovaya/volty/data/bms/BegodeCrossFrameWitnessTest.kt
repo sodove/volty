@@ -79,6 +79,26 @@ class BegodeCrossFrameWitnessTest {
         assertEquals(0L, p.rejectedFrameCount)
     }
 
+    @Test fun theThreePercentBoundaryIsExact() {
+        val p = certified() // expected 97.395 V
+        p.onNotification(packAt(1002)) // 100.2 V: +2.9 % accepted
+        assertEquals(0L, p.rejectedFrameCount)
+        p.onNotification(packAt(1004)) // 100.4 V: +3.1 % rejected
+        assertEquals(1L, p.rejectedFrameCount)
+        p.onNotification(packAt(945)) // 94.5 V: -3.0 % boundary side, 94.47 is the edge; 94.5 is inside
+        assertEquals(1L, p.rejectedFrameCount)
+        p.onNotification(packAt(944)) // 94.4 V: -3.07 % rejected
+        assertEquals(2L, p.rejectedFrameCount)
+    }
+
+    @Test fun theReferenceIsTheNewestGenuineLiveVoltageNotAZeroPaddedBootFrame() {
+        val p = certified()
+        // a zero-padded live frame zeroes liveVoltageRaw but is not a genuine voltage
+        p.onNotification(bytes("55 AA 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 18 5A 5A 5A 5A"))
+        p.onNotification(packAt(1200))
+        assertEquals(1L, p.rejectedFrameCount, "the last genuine live voltage still witnesses the 0x01")
+    }
+
     // --- latches -----------------------------------------------------------------------------------------------
 
     private fun motion(tempRaw: Int, dutyRaw: Int): ByteArray {
@@ -117,6 +137,16 @@ class BegodeCrossFrameWitnessTest {
         p.onNotification(motion(130, 37)); p.onNotification(motion(0, 0)); p.onNotification(motion(130, 37))
         val m = assertNotNull(p.latestMotion(0))
         assertFalse(m.hasMotorTemp); assertFalse(m.hasDuty)
+    }
+
+    @Test fun resetClearsTheLatchRuns() {
+        val p = BegodeProtocol()
+        p.onNotification(motion(130, 37))
+        p.reset()
+        p.onNotification(motion(130, 37))
+        val m = assertNotNull(p.latestMotion(0))
+        assertFalse(m.hasMotorTemp, "one frame before and one after a reset are not two consecutive frames")
+        assertFalse(m.hasDuty)
     }
 
     @Test fun theLiveMotionPathOfTheDutyLatchIsUnchanged() {

@@ -46,22 +46,24 @@ data class PwmEvidenceProgress(
      *
      * - A sample with `hasDuty = false` is **ignored entirely**, whatever duty number rides beside the flag
      *   (an incoherent `hasDuty = false, dutyPercent = 37f` is no evidence either way and counts no moving time).
-     * - A non-finite duty is ignored the same way.
+     * - A non-finite duty is ignored the same way, and so is a sample with `dutyFresh = false` (a duty a live-frame
+     *   rebuild republished from an earlier 0x07 is not a second measurement) or `dutySource = ESTIMATED`.
      * - A measured duty that is non-zero in **two consecutive** counted samples latches [PwmEvidence.REPORTS] for
      *   good; a zero sample between them breaks the run. **Retraction (Task 7):** an earlier revision latched on
      *   any single non-zero sample ("any non-zero sample latches"). That was wrong because the latch is persisted
      *   forever and switches the estimate off for good, and a wheel's frames carry no checksum, so one corrupt
      *   frame decided it. Cost: one more sample. False-positive risk: a wheel whose duty is non-zero only on
-     *   alternating samples never latches. Caveat: a live 0x00 rebuild republishes the last 0x07 duty, so on a
-     *   Begode a corrupt 0x07 followed by any live frame can still count twice; the protocol's own latch
-     *   (two consecutive 0x07 frames) is the stronger guard there.
+     *   alternating samples never latches. The two samples must both be FRESH (`dutyFresh`), otherwise a corrupt
+     *   0x07 plus the next live frame's republish of it would count twice (review I1).
      * - Otherwise (duty exactly 0), time spent moving at >= [MIN_MOVING_KMH] accumulates between consecutive
      *   moving samples no further apart than [MAX_GAP_MILLIS] (a long hole is no evidence of anything); at
      *   >= [PROOF_MILLIS] cumulative, with every duty sample 0, the evidence becomes [PwmEvidence.NEVER_REPORTED].
      */
     fun next(sample: ControllerData): PwmEvidenceProgress {
         if (evidence == PwmEvidence.REPORTS) return this
-        if (!sample.hasDuty || !sample.dutyPercent.isFinite()) return this
+        if (!sample.hasDuty || !sample.dutyFresh || !sample.dutyPercent.isFinite()) return this
+        // An estimated duty is the estimator's own output, never evidence about the wheel.
+        if (sample.dutySource == ru.sodovaya.volty.domain.model.DutySource.ESTIMATED) return this
         if (sample.dutyPercent != 0f) {
             return if (pendingNonZero) copy(evidence = PwmEvidence.REPORTS, lastMovingAtMillis = null, pendingNonZero = false)
             else copy(pendingNonZero = true, lastMovingAtMillis = null)

@@ -666,6 +666,7 @@ class KableBmsRepositoryBegodeFunnelTest {
         // wheel reading; this is a fold, and a fold must move every field
         // regardless of whether the combination could occur.
         hasDuty = false,
+        dutyFresh = false,
         motorCurrentA = 61.25f,
         batteryCurrentA = 33.75f,
         hasBatteryCurrent = false,

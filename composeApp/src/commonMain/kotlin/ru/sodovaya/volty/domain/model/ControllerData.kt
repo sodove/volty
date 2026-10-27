@@ -93,6 +93,15 @@ data class ControllerData(
      * reading.
      */
     val hasDuty: Boolean = true,
+    /**
+     * Whether [dutyPercent] was decoded from THIS sample's own frame (true) or is the last value a different frame
+     * left behind and a rebuild republished (false). Only the PWM evidence ([ru.sodovaya.volty.domain.pwm.PwmEvidenceProgress])
+     * reads it: a republished stale duty is not a second measurement, so it must not help a single corrupt frame
+     * latch the persisted REPORTS evidence (Task 7 review I1). Defaults to `true`: a protocol whose every sample
+     * carries a newly decoded duty (VESC) says nothing here. Begode sets it false on every rebuild that is not
+     * a 0x07 frame.
+     */
+    val dutyFresh: Boolean = true,
     val motorCurrentA: Float = 0f,
     val batteryCurrentA: Float = 0f,
     /**

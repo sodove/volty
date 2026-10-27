@@ -108,6 +108,9 @@ object MotionAggregator {
             // outright the moment the wheel's truePWM latch is still open —
             // a worse bug than the unmeasured-duty one the flag exists for.
             hasDuty = d.any { it.hasDuty },
+            // Fresh only if every contributor that measures duty is fresh: the max above may come from any of them,
+            // and a stale one must not be counted as a new measurement (PwmEvidenceProgress ignores !dutyFresh).
+            dutyFresh = d.measuring { it.hasDuty }.all { it.dutyFresh },
             // Null stays null: no contributor with an alarm signal means the vehicle has none. Otherwise
             // `any` over those that do - one wheel sounding its alarm is the vehicle sounding it.
             wheelPwmAlarm = d.mapNotNull { it.wheelPwmAlarm }.let { signals ->

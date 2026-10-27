@@ -306,6 +306,9 @@ class BegodeProtocol(
      * whole-pack voltage as real volts on this wheel, so history may record it.
      */
     private var branchVoltageCertified = false
+
+    /** The voltage word of the newest GENUINE live frame (set inside the genuineness gate); R13's reference. 0 = none. */
+    private var genuineLiveVoltageRaw = 0
     private var voltageRatioCandidate: Int? = null
     private var voltageRatioStreak = 0
     /** Any 0x02/0x03 page this connection: such a wheel proves its count from cells, never from the ratio. */
@@ -918,7 +921,7 @@ class BegodeProtocol(
      * GROUND speed directly, so [SpeedSource] is REPORTED and no `MotorConfig`
      * is involved.
      */
-    private fun rebuildMotion() {
+    private fun rebuildMotion(dutyFresh: Boolean = false) {
         val speed = speedKmh()
         val batteryCurrent = batteryCurrentA()
         val motorTemp = motorTempC()
@@ -937,6 +940,8 @@ class BegodeProtocol(
             // flag is what stops Part F arming the ШИМ alarm against a
             // placeholder — see [ControllerData.hasDuty] and the KDoc below.
             hasDuty = dutyPercent() != null,
+            // True only when this rebuild follows a 0x07 frame; a live/odometer rebuild republishes the old duty.
+            dutyFresh = dutyFresh,
             // The live frame's PHASE current (bytes 10..11) — a different
             // quantity from the battery current, and both are wanted (D §6.3).
             // Read from [phaseCurrentA]/[boardTempC], which [parseLiveFrame]
@@ -1392,6 +1397,7 @@ class BegodeProtocol(
         boardTempFactC = null
         sawAnyFrame = false
         branchVoltageCertified = false
+        genuineLiveVoltageRaw = 0
         voltageRatioCandidate = null
         voltageRatioStreak = 0
         cellPagesSeen = false
@@ -1579,6 +1585,7 @@ class BegodeProtocol(
             powerOnMetersValue = powerOnMeters
             // The newest genuine counter: the witness that judges the next 0x04's odometer (R1).
             witnessPowerOnM = powerOnMeters
+            genuineLiveVoltageRaw = liveVoltageRaw
             liveStamp++
             // Bytes 14..15, RAW and only for [deviceFacts]: not [dutyPercentValue], not [motion].
             // On the ET Max capture this word is a constant 0x00a9 (16.9 %) on a standing wheel,
@@ -1863,7 +1870,7 @@ class BegodeProtocol(
         // its own bytes before the only read — but the controller sample below
         // reads them right here, so a leak would now be observable, and it is
         // pinned by a test.
-        rebuildMotion()
+        rebuildMotion(dutyFresh = true)
         rebuildLiveData()
         if (motionFramesSinceLive < NO_LIVE_FRAME) motionFramesSinceLive++
         observeControllerFrame(0x07)
@@ -1875,12 +1882,6 @@ class BegodeProtocol(
         observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedBegodeController(type, decoded, powerJoinFresh) }
     }
 
-    /**
-     * Smart-BMS telemetry (0x01). Byte 19 is bmsnum 0..3: bit 1 selects the
-     * branch, bit 0 the section within it — confirmed against the ET Max
-     * capture (semiVoltage 74.1 V at even bmsnum, 74.2 V at odd; both branches
-     * report the same 147.2 V pack voltage because they are parallel).
-     */
     /**
      * **R13 (witness).** Once the series count is certified from the branch ratio ([branchVoltageCertified]), a 0x01
      * whose pack voltage differs from the live frame's voltage scaled by `count / 16` by more than [R13_TOLERANCE]
@@ -1895,9 +1896,9 @@ class BegodeProtocol(
      * the rejection counter growing on a healthy wheel. Read-only; nothing is sent.
      */
     private fun rejectedByPackVoltageWitness(frame: ByteArray): Boolean {
-        if (!branchVoltageCertified || liveVoltageRaw <= 0 || isZeroPaddedPayload(frame)) return false
+        if (!branchVoltageCertified || genuineLiveVoltageRaw <= 0 || isZeroPaddedPayload(frame)) return false
         val count = derivedCellCountValue ?: return false
-        val expectedV = liveVoltageRaw * 0.01f * count / 16f
+        val expectedV = genuineLiveVoltageRaw * 0.01f * count / 16f
         val packV = frame.u16BE(6) * 0.1f
         if (abs(packV - expectedV) <= expectedV * R13_TOLERANCE) return false
         recordRejection(0x01, PlausibilityRule.R13_PACK_VOLTAGE_WITNESS, frame,
@@ -1905,6 +1906,12 @@ class BegodeProtocol(
         return true
     }
 
+    /**
+     * Smart-BMS telemetry (0x01). Byte 19 is bmsnum 0..3: bit 1 selects the
+     * branch, bit 0 the section within it — confirmed against the ET Max
+     * capture (semiVoltage 74.1 V at even bmsnum, 74.2 V at odd; both branches
+     * report the same 147.2 V pack voltage because they are parallel).
+     */
     private fun parseBmsTelemetry(frame: ByteArray) {
         val bmsnum = frame.u8(19)
         if (bmsnum > 3) return
@@ -2520,12 +2527,13 @@ class BegodeProtocol(
          */
         private const val LIVE_FRAME_CONVENTION_TOLERANCE = 0.05f
 
-        /** A quarter of one series cell: 1 % at 24S, still far from the neighbouring whole counts. */
         /** Consecutive genuine 0x07 frames a one-way latch needs (Task 7). */
         private const val LATCH_CONFIRM_FRAMES = 2
 
         /** R13: how far a 0x01 pack voltage may sit from the scaled live voltage (fraction). Measured spread 0.01 %. */
         private const val R13_TOLERANCE = 0.03f
+
+        /** A quarter of one series cell: 1 % at 24S, still far from the neighbouring whole counts. */
         private const val BRANCH_RATIO_TOLERANCE = 0.25f
         private const val BRANCH_RATIO_STREAK = 3
         private const val BRANCH_RATIO_MIN_FRAMES = 4
