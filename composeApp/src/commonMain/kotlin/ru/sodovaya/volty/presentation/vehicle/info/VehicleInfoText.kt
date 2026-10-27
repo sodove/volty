@@ -170,7 +170,9 @@ fun InfoChoice.stringRes(): StringResource = when (this) {
         InfoChoice.CURRENT_FROM_CONTROLLER -> Res.string.info_choice_current_from_controller
         InfoChoice.CURRENT_FROM_PACKS -> Res.string.info_choice_current_from_packs
         InfoChoice.CURRENT_NONE -> Res.string.info_choice_current_none
-        InfoChoice.RANGE_EARNED -> Res.string.info_choice_range_earned
+        InfoChoice.SERIES_PROOF_CELLS -> Res.string.info_choice_series_proof_cells
+        InfoChoice.SERIES_PROOF_BRANCH_RATIO -> Res.string.info_choice_series_proof_branch_ratio
+        InfoChoice.SERIES_PROOF_NONE -> Res.string.info_choice_series_proof_none
         InfoChoice.PWM_EVIDENCE_UNKNOWN -> Res.string.info_choice_pwm_evidence_unknown
         InfoChoice.PWM_EVIDENCE_NEVER_REPORTED -> Res.string.info_choice_pwm_evidence_never_reported
         InfoChoice.PWM_EVIDENCE_REPORTS -> Res.string.info_choice_pwm_evidence_reports
@@ -215,6 +217,15 @@ fun DeviceFactKey.stringRes(): StringResource = when (this) {
         DeviceFactKey.PHASE_C_CURRENT_A -> Res.string.info_fact_phase_c_current_a
         DeviceFactKey.VCU_CHARGE_PERCENT -> Res.string.info_fact_vcu_charge_percent
 }
+
+/**
+ * The label of a device-fact row. `LIVE_PWM_RAW` is emitted twice: the raw integer (no index) and the
+ * same number x 0.1 as a percent (`index = 1`); the second gets its own words, since two rows under one
+ * label read as a duplicate. The distinction is by index, not a second key: the protocol's fact list and
+ * its tests already speak that shape.
+ */
+fun factLabelRes(key: DeviceFactKey, index: Int?): StringResource =
+    if (key == DeviceFactKey.LIVE_PWM_RAW && index != null) Res.string.info_fact_live_pwm_percent else key.stringRes()
 
 /**
  * The unit word for [this], following the rider's [system] for the three that convert. The numbers

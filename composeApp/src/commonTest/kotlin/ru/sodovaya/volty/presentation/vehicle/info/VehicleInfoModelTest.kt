@@ -14,6 +14,7 @@ import ru.sodovaya.volty.domain.energy.EnergyState
 import ru.sodovaya.volty.domain.energy.LearnedCapacity
 import ru.sodovaya.volty.domain.energy.PersistedCharge
 import ru.sodovaya.volty.domain.energy.RangeDetail
+import ru.sodovaya.volty.domain.energy.RangeEstimate
 import ru.sodovaya.volty.domain.energy.RangeUnearnedReason
 import ru.sodovaya.volty.domain.model.*
 import ru.sodovaya.volty.util.UnitSystem
@@ -46,9 +47,10 @@ class VehicleInfoModelTest {
         links: List<BleDiagnosticLink> = emptyList(),
         stored: EnergyRecord? = null,
         range: RangeDetail? = null,
+        rangeEstimate: RangeEstimate? = null,
         units: UnitSystem = UnitSystem.METRIC,
         now: Long = 100_000L,
-    ) = vehicleInfoOf(vehicle, connected, data, motion, links, stored, range, availabilityFor(vehicle, motion), units, now)
+    ) = vehicleInfoOf(vehicle, connected, data, motion, links, stored, range, availabilityFor(vehicle, motion), units, now, rangeEstimate = rangeEstimate)
 
     private fun VehicleInfo.section(kind: InfoSectionKind) = sections.filter { it.kind == kind }
     private fun VehicleInfo.row(kind: InfoSectionKind, label: InfoLabel, title: String? = null) =
@@ -278,11 +280,59 @@ class VehicleInfoModelTest {
 
     @Test fun anEarnedRangeInImperialUnits() {
         val r = RangeDetail(20.0, 25.0, 22.0, tripKm = 16.09344, unearnedReason = null)
-        val i = info(wheel, data = t4Data(), range = r, units = UnitSystem.IMPERIAL)
-        assertEquals(InfoChoice.RANGE_EARNED, i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_STATUS).choice)
+        val i = info(wheel, data = t4Data(), range = r, rangeEstimate = RangeEstimate(km = 32.18688f, whPerKm = 22.0), units = UnitSystem.IMPERIAL)
+        // The estimate row carries the RANGE (20 mi), not the trip distance (10 mi) in the row beside it.
+        assertEquals("20.0" to InfoUnit.DISTANCE, i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_STATUS).vu())
         assertEquals("10.00" to InfoUnit.DISTANCE, i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_TRIP_KM).vu())
         assertEquals("35.4" to InfoUnit.CONSUMPTION, i.row(InfoSectionKind.RANGE, InfoLabel.BLENDED_CONSUMPTION).vu())
         assertEquals("13" to InfoUnit.SPEED, i.row(InfoSectionKind.CONTROLLERS, InfoLabel.SPEED).vu())
+    }
+
+    @Test fun anEarnedRangeShowsItsKmNotTheTripDistance() {
+        val r = RangeDetail(20.0, 25.0, 22.0, tripKm = 2.74, unearnedReason = null)
+        val i = info(wheel, data = t4Data(), range = r, rangeEstimate = RangeEstimate(km = 41.6f, whPerKm = 22.0))
+        assertEquals("41.6" to InfoUnit.DISTANCE, i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_STATUS).vu())
+        assertEquals("2.74" to InfoUnit.DISTANCE, i.row(InfoSectionKind.RANGE, InfoLabel.RANGE_TRIP_KM).vu())
+    }
+
+    @Test fun anEarnedDetailWithoutAnEstimateIsNotEarnedNotABlankOk() {
+        // Deliberately incoherent: a detail that says "earned" (no reason) beside no estimate.
+        val r = RangeDetail(20.0, 25.0, 22.0, tripKm = 2.74, unearnedReason = null)
+        val row = info(wheel, data = t4Data(), range = r, rangeEstimate = null).row(InfoSectionKind.RANGE, InfoLabel.RANGE_STATUS)
+        assertNull(row.value); assertNull(row.choice); assertEquals(InfoAbsence.NOT_EARNED, row.reason)
+    }
+
+    @Test fun anUnearnedReasonWinsOverAnEstimate() {
+        // Deliberately incoherent: a reason AND an estimate. The reason is the detail's verdict.
+        val r = RangeDetail(null, null, null, tripKm = 0.4, unearnedReason = RangeUnearnedReason.TOO_SHORT)
+        val row = info(wheel, data = t4Data(), range = r, rangeEstimate = RangeEstimate(30f, 20.0)).row(InfoSectionKind.RANGE, InfoLabel.RANGE_STATUS)
+        assertNull(row.value); assertEquals(InfoAbsence.RANGE_TOO_SHORT, row.reason)
+    }
+
+    @Test fun deviceFactBooleansAndTokensBecomeChoicesAndUnknownTextStaysVerbatim() {
+        val facts = listOf(
+            DeviceFact(DeviceFactKey.SMART_BMS_SEEN, "true"),
+            DeviceFact(DeviceFactKey.SMART_BMS_SEEN, "false", index = 1),
+            DeviceFact(DeviceFactKey.SERIES_CELLS_PROOF, "branch_ratio"),
+            DeviceFact(DeviceFactKey.SERIES_CELLS_PROOF, "cells", index = 1),
+            DeviceFact(DeviceFactKey.SERIES_CELLS_PROOF, "none", index = 2),
+            DeviceFact(DeviceFactKey.SERIES_CELLS_PROOF, "something_new", index = 3),
+            DeviceFact(DeviceFactKey.SERIES_CELLS, "24"),
+        )
+        val rows = info(wheel, data = t4Data(), links = listOf(link(facts))).section(InfoSectionKind.DEVICE_FACTS).single().rows
+        assertEquals(InfoChoice.YES, rows[0].choice); assertNull(rows[0].value)
+        assertEquals(InfoChoice.NO, rows[1].choice)
+        assertEquals(InfoChoice.SERIES_PROOF_BRANCH_RATIO, rows[2].choice); assertNull(rows[2].value)
+        assertEquals(InfoChoice.SERIES_PROOF_CELLS, rows[3].choice)
+        assertEquals(InfoChoice.SERIES_PROOF_NONE, rows[4].choice)
+        assertNull(rows[5].choice); assertEquals("something_new", rows[5].value)
+        assertNull(rows[6].choice); assertEquals("24", rows[6].value)
+    }
+
+    @Test fun aWordTokenOnAFactThatNeverCarriesOneIsNotMistakenForAChoice() {
+        val rows = info(wheel, data = t4Data(), links = listOf(link(listOf(DeviceFact(DeviceFactKey.WHEEL_ALERTS, "true")))))
+            .section(InfoSectionKind.DEVICE_FACTS).single().rows
+        assertNull(rows.single().choice); assertEquals("true", rows.single().value)
     }
 
     @Test fun alertsAreArmedUnavailableWithReasonOrActive() {

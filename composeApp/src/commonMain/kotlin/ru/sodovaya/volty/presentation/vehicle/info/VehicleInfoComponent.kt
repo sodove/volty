@@ -155,6 +155,7 @@ class DefaultVehicleInfoComponent(
             links = diagnostics.state.value.activeLinks,
             stored = stored.value,
             range = range.detail.value,
+            rangeEstimate = range.range.value,
             availability = availabilityFor(vehicle, motion),
             units = unitSystem.value,
             nowEpochMillis = nowEpochMillis(),

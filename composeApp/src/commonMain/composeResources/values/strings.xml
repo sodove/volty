@@ -1456,7 +1456,7 @@
     <string name="info_label_trip_consumption">Trip consumption</string>
     <string name="info_label_recent_consumption">Recent consumption</string>
     <string name="info_label_blended_consumption">Blended consumption</string>
-    <string name="info_label_range_trip_km">Range at trip consumption</string>
+    <string name="info_label_range_trip_km">Trip distance</string>
     <string name="info_label_range_status">Range estimate</string>
     <string name="info_label_alert_duty">Duty alert</string>
     <string name="info_label_alert_speed">Speed alert</string>
@@ -1508,7 +1508,9 @@
     <string name="info_choice_current_from_controller">controller</string>
     <string name="info_choice_current_from_packs">batteries</string>
     <string name="info_choice_current_none">none</string>
-    <string name="info_choice_range_earned">estimated</string>
+    <string name="info_choice_series_proof_cells">from the cell count</string>
+    <string name="info_choice_series_proof_branch_ratio">from the branch voltage ratio</string>
+    <string name="info_choice_series_proof_none">not proven</string>
     <string name="info_choice_link_online">Online</string>
     <string name="info_choice_link_offline">Offline</string>
     <string name="info_choice_alert_armed">armed</string>
@@ -1520,6 +1522,7 @@
     <string name="info_fact_wheel_alerts">Wheel alerts</string>
     <string name="info_fact_board_temp_c">Board temperature</string>
     <string name="info_fact_live_pwm_raw">Live frame bytes 14-15 (raw)</string>
+    <string name="info_fact_live_pwm_percent">Live frame bytes 14-15 (%)</string>
     <string name="info_fact_motion_duty_raw">Motion word 0x07 (raw)</string>
     <string name="info_fact_series_cells">Series cells</string>
     <string name="info_fact_series_cells_proof">Series cells, basis</string>

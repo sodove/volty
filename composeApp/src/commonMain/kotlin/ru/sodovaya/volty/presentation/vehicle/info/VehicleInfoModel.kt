@@ -8,6 +8,7 @@ import ru.sodovaya.volty.domain.energy.CapacitySource
 import ru.sodovaya.volty.domain.energy.CurrentSource
 import ru.sodovaya.volty.domain.energy.EnergyRecord
 import ru.sodovaya.volty.domain.energy.RangeDetail
+import ru.sodovaya.volty.domain.energy.RangeEstimate
 import ru.sodovaya.volty.domain.energy.RangeUnearnedReason
 import ru.sodovaya.volty.domain.model.BleDiagnosticLink
 import ru.sodovaya.volty.domain.model.BmsData
@@ -194,8 +195,8 @@ enum class InfoChoice {
     // energy
     CAPACITY_ENTERED, CAPACITY_REPORTED, CAPACITY_LEARNED, CAPACITY_NONE,
     CURRENT_FROM_CONTROLLER, CURRENT_FROM_PACKS, CURRENT_NONE,
-    // range
-    RANGE_EARNED,
+    // a Begode's series-cells basis, sent as a token
+    SERIES_PROOF_CELLS, SERIES_PROOF_BRANCH_RATIO, SERIES_PROOF_NONE,
     // PWM evidence (each carries its reason in its words), calibration source and basis, the estimate ceiling, the wheel alarm
     PWM_EVIDENCE_UNKNOWN, PWM_EVIDENCE_NEVER_REPORTED, PWM_EVIDENCE_REPORTS,
     PWM_SOURCE_WIZARD, PWM_SOURCE_RIDING, PWM_SOURCE_MANUAL,
@@ -235,12 +236,14 @@ fun vehicleInfoOf(
     nowEpochMillis: Long,
     /** What the repository knows about this vehicle PWM: the proven evidence and the calibration. */
     pwm: PwmMemory = PwmMemory.EMPTY,
+    /** The published range (km and the consumption behind it); null when none is earned. */
+    rangeEstimate: RangeEstimate? = null,
 ): VehicleInfo {
     val live = connected
     val d = if (live) data else null
     val m = if (live) motion else null
     val l = if (live) links else emptyList()
-    val ctx = Ctx(vehicle, live, d, m, l, stored, range, availability, units, nowEpochMillis, pwm)
+    val ctx = Ctx(vehicle, live, d, m, l, stored, range, rangeEstimate, availability, units, nowEpochMillis, pwm)
     return VehicleInfo(
         buildList {
             add(ctx.vehicleSection())
@@ -265,6 +268,7 @@ private class Ctx(
     val links: List<BleDiagnosticLink>,
     val stored: EnergyRecord?,
     val range: RangeDetail?,
+    val rangeEstimate: RangeEstimate?,
     val availability: Map<MotionAlertKind, AlertAvailability>,
     val units: UnitSystem,
     val now: Long,
@@ -639,7 +643,14 @@ private class Ctx(
             cons(InfoLabel.BLENDED_CONSUMPTION, r.blendedWhPerKm),
             if (r.tripKm == null) InfoRow(InfoLabel.RANGE_TRIP_KM, reason = why ?: InfoAbsence.NOT_EARNED)
             else InfoRow(InfoLabel.RANGE_TRIP_KM, value = UnitFormatter.distance(r.tripKm.toFloat(), units, 2), unit = InfoUnit.DISTANCE),
-            if (why != null) InfoRow(InfoLabel.RANGE_STATUS, reason = why) else InfoRow(InfoLabel.RANGE_STATUS, choice = InfoChoice.RANGE_EARNED),
+            // The range itself. An earlier revision showed only "estimated" here, with no km, and labelled the
+            // trip distance above as the range; the estimate's km is the range and the detail's tripKm is the trip.
+            // A reason always wins; an "earned" detail with no estimate beside it is not earned.
+            when {
+                why != null -> InfoRow(InfoLabel.RANGE_STATUS, reason = why)
+                rangeEstimate == null -> InfoRow(InfoLabel.RANGE_STATUS, reason = InfoAbsence.NOT_EARNED)
+                else -> InfoRow(InfoLabel.RANGE_STATUS, value = UnitFormatter.distance(rangeEstimate.km, units, 1), unit = InfoUnit.DISTANCE)
+            },
         ))
     }
 
@@ -707,9 +718,30 @@ private class Ctx(
     fun factSections(): List<InfoSection> = links.filter { it.facts.isNotEmpty() }.map { link ->
         val fresh = statsFresh(link)
         InfoSection(InfoSectionKind.DEVICE_FACTS, title = link.deviceAddress, rows = link.facts.map { f ->
-            if (fresh) InfoRow(InfoLabel.DEVICE_FACT, value = f.value, unit = factUnit(f.unit), fact = f.key, index = f.index)
+            if (fresh) factChoice(f.key, f.value)?.let { InfoRow(InfoLabel.DEVICE_FACT, choice = it, fact = f.key, index = f.index) }
+                ?: InfoRow(InfoLabel.DEVICE_FACT, value = f.value, unit = factUnit(f.unit), fact = f.key, index = f.index)
             else InfoRow(InfoLabel.DEVICE_FACT, reason = InfoAbsence.STALE, fact = f.key, index = f.index)
         })
+    }
+
+    /**
+     * The protocol-sent token of a fact that is a word, not a number ("true", "branch_ratio"), as an
+     * [InfoChoice] the screen can translate. By key, so a text fact that happens to say "true" stays
+     * verbatim; an unknown token is null and shown as sent.
+     */
+    private fun factChoice(key: DeviceFactKey, value: String): InfoChoice? = when (key) {
+        DeviceFactKey.SMART_BMS_SEEN -> when (value) {
+            "true" -> InfoChoice.YES
+            "false" -> InfoChoice.NO
+            else -> null
+        }
+        DeviceFactKey.SERIES_CELLS_PROOF -> when (value) {
+            "cells" -> InfoChoice.SERIES_PROOF_CELLS
+            "branch_ratio" -> InfoChoice.SERIES_PROOF_BRANCH_RATIO
+            "none" -> InfoChoice.SERIES_PROOF_NONE
+            else -> null
+        }
+        else -> null
     }
 
     private fun chemistryChoice(c: Chemistry) = when (c) {

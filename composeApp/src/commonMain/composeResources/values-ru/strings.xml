@@ -1454,7 +1454,7 @@
     <string name="info_label_trip_consumption">Расход за поездку</string>
     <string name="info_label_recent_consumption">Недавний расход</string>
     <string name="info_label_blended_consumption">Усреднённый расход</string>
-    <string name="info_label_range_trip_km">Запас хода по расходу поездки</string>
+    <string name="info_label_range_trip_km">Дистанция поездки</string>
     <string name="info_label_range_status">Оценка запаса хода</string>
     <string name="info_label_alert_duty">Алерт загрузки</string>
     <string name="info_label_alert_speed">Алерт скорости</string>
@@ -1506,7 +1506,9 @@
     <string name="info_choice_current_from_controller">контроллер</string>
     <string name="info_choice_current_from_packs">батареи</string>
     <string name="info_choice_current_none">нет</string>
-    <string name="info_choice_range_earned">оценка есть</string>
+    <string name="info_choice_series_proof_cells">по числу ячеек</string>
+    <string name="info_choice_series_proof_branch_ratio">по отношению напряжений ветвей</string>
+    <string name="info_choice_series_proof_none">не подтверждено</string>
     <string name="info_choice_link_online">в сети</string>
     <string name="info_choice_link_offline">не в сети</string>
     <string name="info_choice_alert_armed">включён</string>
@@ -1518,6 +1520,7 @@
     <string name="info_fact_wheel_alerts">Предупреждения колеса</string>
     <string name="info_fact_board_temp_c">Температура платы</string>
     <string name="info_fact_live_pwm_raw">Байты 14-15 кадра (сырые)</string>
+    <string name="info_fact_live_pwm_percent">Байты 14-15 кадра (%)</string>
     <string name="info_fact_motion_duty_raw">Слово движения 0x07 (сырое)</string>
     <string name="info_fact_series_cells">Ячеек последовательно</string>
     <string name="info_fact_series_cells_proof">Ячеек последовательно, основание</string>

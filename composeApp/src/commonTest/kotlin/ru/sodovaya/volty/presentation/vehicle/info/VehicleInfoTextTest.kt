@@ -35,4 +35,15 @@ class VehicleInfoTextTest {
             assertEquals(unit.stringRes(UnitSystem.METRIC).key, unit.stringRes(UnitSystem.IMPERIAL).key, "$unit")
         }
     }
+
+    @Test
+    fun the_two_forms_of_the_live_pwm_fact_are_labelled_apart() {
+        val raw = factLabelRes(DeviceFactKey.LIVE_PWM_RAW, null).key
+        val percent = factLabelRes(DeviceFactKey.LIVE_PWM_RAW, 1).key
+        assertNotEquals(raw, percent)
+        // Every other key is labelled the same whatever its index (the screen appends a branch number itself).
+        for (k in DeviceFactKey.entries - DeviceFactKey.LIVE_PWM_RAW) {
+            assertEquals(k.stringRes().key, factLabelRes(k, 1).key, "$k")
+        }
+    }
 }
