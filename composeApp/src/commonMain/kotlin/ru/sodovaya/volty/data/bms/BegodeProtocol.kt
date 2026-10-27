@@ -2235,10 +2235,11 @@ class BegodeProtocol(
 
         /**
          * R13's freshness bound, in 0x07 frames since the live frame that supplied the reference voltage. A 0x01 follows
-         * its 0x00 by about 3 ms, so 0 is the healthy case; one 0x07 in between is tolerated, two or more means the live
-         * frame was lost (a reference 600 ms old or more) and the witness is skipped.
+         * its 0x00 by about 3 ms, so 0 is the only healthy case: any 0x07 in between means this cycle's 0x00 was lost and
+         * the reference is a cycle (~310 ms) old or more, so the witness is skipped. An earlier revision tolerated one
+         * 0x07 (bound 1); that let exactly the one-lost-0x00 case through, which is the case the bound exists for.
          */
-        private const val R13_MAX_MOTION_FRAMES_SINCE_LIVE = 1
+        private const val R13_MAX_MOTION_FRAMES_SINCE_LIVE = 0
 
         /** Slots of the cache stamp in [deviceFacts]: eleven scalars, two per branch, three of the plausibility ledger and R12's unconfirmed-bit count. */
         private const val FACTS_STAMP_SIZE = 19

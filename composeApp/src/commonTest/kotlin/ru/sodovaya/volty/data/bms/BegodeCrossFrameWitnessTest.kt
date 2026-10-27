@@ -161,9 +161,11 @@ class BegodeCrossFrameWitnessTest {
     // --- final review M1: R13 only against a reference of this frame cycle -------------------------------------------
 
     @Test fun aStaleLiveReferenceSkipsR13AndAFreshOneStillJudges() {
-        // Two 0x07 frames since the live frame mean the 0x00 was lost (a reference 600 ms old or more): the 3 ms witness
-        // does not hold, so a correct 0x01 that sagged away from it must not be rejected. Incoherent on purpose: the
-        // 0x01 voltage is the same wild 120 V that is rejected against a fresh reference.
+        // A 0x07 between the live frame and the 0x01 means this cycle's 0x00 was lost (a 0x01 follows its 0x00 by ~3 ms):
+        // the reference is a cycle old or more, the 3 ms witness does not hold, so a correct 0x01 that sagged away from it
+        // must not be rejected. Incoherent on purpose: the 0x01 voltage is the same wild 120 V that is rejected against a
+        // fresh reference. An earlier revision of this test pinned "one 0x07 between is still the same cycle"; that was
+        // the one-lost-0x00 case itself, so it now skips too.
         val stale = certified()
         stale.onNotification(motion(0, 0)); stale.onNotification(motion(0, 0))
         stale.onNotification(packAt(1200))
@@ -171,7 +173,7 @@ class BegodeCrossFrameWitnessTest {
         val oneBetween = certified()
         oneBetween.onNotification(motion(0, 0))
         oneBetween.onNotification(packAt(1200))
-        assertEquals(1L, oneBetween.rejectedFrameCount, "one 0x07 between the pair is still the same cycle")
+        assertEquals(0L, oneBetween.rejectedFrameCount, "one lost 0x00 (one 0x07 between) is already a stale reference")
         val fresh = certified()
         fresh.onNotification(packAt(1200))
         assertEquals(1L, fresh.rejectedFrameCount)
