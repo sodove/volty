@@ -175,6 +175,18 @@ class HistoryTotalsReadTest {
         assertTrue(moving.approximate); assertEquals(700_000.0, moving.value, 1_500.0)
     }
 
+    @Test fun aFirstSourceWithNoKnownSpeedLeavesTheChoiceToTheNextOne() = runTest {
+        val second = HistorySource("esc2", HistorySourceKind.CONTROLLER, "ESC 2")
+        val speed2 = HistorySeriesKey("esc2", "speed_kmh")
+        val unknownOnly = movingSpeed().map { it.copy(value = null, unknown = HistoryUnknownReason.UNAVAILABLE) }
+        val repo = Repo(origin).apply {
+            series = mapOf(odo to counterRide(odo), speed to unknownOnly, speed2 to movingSpeed().map { it.copy(key = speed2) }); stats = incoherentStats
+        }
+        val moving = readHistoryTotals(repo, "r", listOf(esc, second), range).of(HistoryTotalKind.MOVING_MILLIS)!!
+        assertEquals(800_000.0, moving.value, 500.0)
+        assertTrue(repo.issued.any { it.first == speed2 }, "the second source's speed was read")
+    }
+
     @Test fun aRideThatIsMissingFromStorageFallsBackToStats() = runTest {
         val repo = Repo(null).apply { series = mapOf(odo to counterRide(odo)); stats = mapOf(odo to HistoryStats(10.0, 12.0, null, true)) }
         assertEquals(2.0, readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.DISTANCE_KM)!!.value, 1e-9)

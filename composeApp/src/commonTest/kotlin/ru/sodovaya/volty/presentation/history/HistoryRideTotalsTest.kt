@@ -63,7 +63,7 @@ class HistoryRideTotalsTest {
     @Test fun unknownSpeedIsNeitherMovingNorStandingAndMakesTheAverageApproximate() {
         // Incoherent on purpose: the counter keeps rising through the 300-400 s the speed is unknown for.
         val moving = historyMovingMillis(rideSpeed(unknown = 300L..400L))
-        assertEquals(700_000.0, moving.millis.toDouble(), 500.0); assertTrue(moving.approximate)
+        assertEquals(700_000L, moving.millis); assertTrue(moving.approximate)
         val t = historyRideTotals(listOf(controller), rideStats, ride, HistoryRideDistance(5.556, false), moving).associateBy { it.kind }
         assertTrue(t.getValue(HistoryTotalKind.AVERAGE_KMH).approximate)
         assertTrue(t.getValue(HistoryTotalKind.MOVING_MILLIS).approximate)
@@ -75,6 +75,27 @@ class HistoryRideTotalsTest {
         val other = HistorySample(HistoryTick(1_001_000, 1_000, 2), HistorySeriesKey("esc", "speed_kmh"), 20.0)
         assertEquals(0L, historyMovingMillis(listOf(speedAt(0, 20.0), other)).millis)
         assertEquals(0L, historyMovingMillis(listOf(speedAt(0, 3.0), speedAt(500, 3.0), speedAt(1000, 3.0))).millis, "3.0 is not above 3")
+    }
+
+    @Test fun anUnknownEndOnEitherSideCreditsNothingExactly() {
+        val toNull = historyMovingMillis(listOf(speedAt(0, 20.0), speedAt(1_000, null)))
+        assertEquals(0L, toNull.millis); assertTrue(toNull.approximate)
+        val fromNull = historyMovingMillis(listOf(speedAt(0, null), speedAt(1_000, 20.0)))
+        assertEquals(0L, fromNull.millis); assertTrue(fromNull.approximate)
+        val around = historyMovingMillis(listOf(speedAt(0, 20.0), speedAt(1_000, null), speedAt(2_000, 20.0)))
+        assertEquals(0L, around.millis); assertTrue(around.approximate)
+    }
+
+    @Test fun aSampleThatGoesBackwardsInTimeCreditsNothing() {
+        val back = historyMovingMillis(listOf(speedAt(2_000, 20.0), speedAt(1_000, 20.0)))
+        assertEquals(0L, back.millis); assertTrue(back.approximate)
+    }
+
+    @Test fun anApproximateDistanceStaysApproximateOverAnExactMovingTime() {
+        val t = historyRideTotals(listOf(controller), rideStats, ride, HistoryRideDistance(5.556, true), HistoryMovingTime(800_000, false))
+            .associateBy { it.kind }
+        assertTrue(t.getValue(HistoryTotalKind.AVERAGE_KMH).approximate)
+        assertFalse(t.getValue(HistoryTotalKind.MOVING_MILLIS).approximate)
     }
 
     @Test fun noSpeedSeriesKeepsTheWallClockAverageAndSaysApproximate() {
