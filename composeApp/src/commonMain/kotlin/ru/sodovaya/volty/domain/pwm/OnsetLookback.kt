@@ -64,13 +64,19 @@ data class OnsetLookback(
         // direction. So the edge is re-judged AS IF it were the newest sample strictly BEFORE the first raw set frame
         // (the sample whose speed that frame arrived beside: a held 0x04 publishes no sample of its own, so "the
         // first sample after it" would already be a cycle faster), and the onset comes from before that one.
-        // Strictly before: a tie in milliseconds takes the earlier sample, which errs high.
+        // Strictly before: a tie in milliseconds takes the earlier sample, which errs high; the jump check then runs one
+        // cycle early (a jump into the first-set cycle can go unchecked). Known and accepted: wall-clock ms ties are
+        // rare, and the onset stays on the safe (slower) side.
         if (firstSetAtMillis != null && firstSetAtMillis < edge.atMillis) {
             val i = recent.indexOfLast { it.atMillis < firstSetAtMillis }
-            if (i >= 0 && recent[i] !== recent.last()) {
-                val earlier = recent.subList(0, i + 1).fold(OnsetLookback()) { l, p -> l.push(p) }
-                return earlier.onsetFor(recent[i])
-            }
+            // No kept sample older than the first set frame (the lookback was reset between the two frames, or more
+            // than [HISTORY] samples landed in the window): where the alarm fired is unknown. NEVER fall back to the
+            // confirmed edge, that is the one-0x04-late, LOW onset this exists to prevent.
+            if (i < 0) return OnsetVerdict.NoPrevious
+            // The same 1 s stall guard as below, between the sample the first set frame arrived beside and that frame.
+            if (firstSetAtMillis - recent[i].atMillis > MAX_ONSET_GAP_MS) return OnsetVerdict.TooFast
+            val earlier = recent.subList(0, i + 1).fold(OnsetLookback()) { l, p -> l.push(p) }
+            return earlier.onsetFor(recent[i])
         }
         val prev = before ?: return OnsetVerdict.NoPrevious
         if (kotlin.math.abs(edge.speedKmh - prev.speedKmh) > MAX_ONSET_JUMP_KMH) return OnsetVerdict.TooFast

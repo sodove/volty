@@ -202,8 +202,12 @@ class BegodeProtocol(
     /** The raw byte 14 of the previous 0x04 frame (R12), 0 before one. */
     private var rawAlertPrevious: Int = 0
 
-    /** Bits set in the newest 0x04 but not yet confirmed (R12's `unconfirmedAlertBits` fact counts them). */
-    private var unconfirmedAlertBits: Int = 0
+    /**
+     * Per connection, how many set bits R12 swallowed: seen in one 0x04, clear in the next, never confirmed. Cumulative
+     * (zeroed by [reset]) so a false positive of the rule, or a wheel flickering a bit, leaves a trace the rider can read
+     * afterwards: it is 0 on a healthy wheel and a count that grows is the rule misfiring.
+     */
+    private var swallowedAlertBits: Long = 0L
 
     /**
      * When bit 0 (the wheel's PWM alarm) was FIRST set in a raw 0x04 of the current run, epoch ms; null while the
@@ -1324,7 +1328,7 @@ class BegodeProtocol(
         s[15] = rejectedFrameCount
         s[16] = rebaseCount
         s[17] = if (odometerWitnessDistrusted) 1L else 0L
-        s[18] = if (sawOdometer) Integer.bitCount(unconfirmedAlertBits).toLong() else Long.MIN_VALUE
+        s[18] = if (sawOdometer) swallowedAlertBits else Long.MIN_VALUE
         if (s.contentEquals(cachedStamp)) return cachedFacts
         cachedFacts = buildFacts()
         factsStamp = cachedStamp
@@ -1339,9 +1343,9 @@ class BegodeProtocol(
         if (sawOdometer) {
             val labels = alertLabels(alertBitmap)
             if (labels.isNotEmpty()) add(DeviceFact(DeviceFactKey.WHEEL_ALERTS, labels.joinToString(", ")))
-            // R12: bits seen once and waiting for a second frame; 0 on a healthy wheel, so a count that grows is
-            // either a wheel flickering a bit or a false positive of this rule.
-            add(DeviceFact(DeviceFactKey.UNCONFIRMED_ALERT_BITS, Integer.bitCount(unconfirmedAlertBits).toString()))
+            // R12: set bits swallowed this connection (seen once, never confirmed); 0 on a healthy wheel, so a count
+            // that grows is either a wheel flickering a bit or a false positive of this rule.
+            add(DeviceFact(DeviceFactKey.UNCONFIRMED_ALERT_BITS, swallowedAlertBits.toString()))
         }
         boardTempFactC?.let { add(DeviceFact(DeviceFactKey.BOARD_TEMP_C, factNumber(it, 1), "\u00B0C")) }
         livePwmRawValue?.let {
@@ -1418,7 +1422,7 @@ class BegodeProtocol(
         // not survive it, or a cleared fault would keep firing.
         alertBitmap = 0
         rawAlertPrevious = 0
-        unconfirmedAlertBits = 0
+        swallowedAlertBits = 0L
         pwmAlarmFirstSetAtMillis = null
         faultsValue = emptyList()
         tiltbackSpeedValue = null
@@ -1765,29 +1769,42 @@ class BegodeProtocol(
     }
 
     /**
-     * R12, the fault-bit debounce (kind 2, temporal confirmation). A bit becomes visible in [alertBitmap] (and so in
-     * [ControllerData.faults] and [ControllerData.wheelPwmAlarm]) only when it is set in this 0x04 AND the previous
-     * one; a bit that is clear in this frame clears at once. Begode only: KingSong and Veteran publish no `faults`.
+     * R12, the fault-bit debounce (kind 2, temporal confirmation), SYMMETRIC: a bit changes the confirmed bitmap
+     * [alertBitmap] (and so [ControllerData.faults] and [ControllerData.wheelPwmAlarm]) only when this 0x04 and the
+     * previous one AGREE: both set confirms it, both clear clears it, a disagreement leaves it as it was.
+     * Begode only: KingSong and Veteran publish no `faults`.
      *
-     * Why: the frames have no checksum, so one corrupt byte 14 would raise a CRITICAL CONTROLLER_FAULT push and a
-     * banner row, and a bit-0 blip would teach the PWM learner a false onset. Cost and false-positive analysis: a
-     * genuine fault shows one 0x04 (~310 ms) late; a genuine fault that lasts exactly one frame is never shown;
-     * the wheel's own beep is unaffected. On a healthy wheel `unconfirmedAlertBits` stays 0.
+     * Retraction: the brief (and the first revision of this function) cleared a confirmed bit AT ONCE. That was wrong
+     * because the frames have no checksum: one corrupt "clear" frame in the middle of a real fault re-armed
+     * CONTROLLER_FAULT (it re-arms on an empty list), and the next set frame pushed a second CRITICAL notification.
+     * Controller ruling 2026-10-28: a confirmed bit clears after two consecutive clear frames too.
+     *
+     * Why: one corrupt byte 14 would otherwise raise a CRITICAL push and a banner row, and a bit-0 blip would teach
+     * the PWM learner a false onset. Cost and false-positive analysis: a genuine fault shows one 0x04 (~310 ms) late
+     * and clears ~310 ms later than it ended (harmless: the notification is once per episode, the row lingers a
+     * frame); a genuine fault that lasts exactly one frame is never shown, and a genuine one-frame CLEAR inside a
+     * fault is ignored; the wheel's own beep is unaffected. Swallowed set bits are counted in [swallowedAlertBits].
+     * Nothing in PwmEstimator or the wizard depends on the alarm clearing at once: both learn only from a RISING edge.
      *
      * Not a rejected frame: nothing enters the ledger. A frame the odometer gate later REJECTS (a torn read) may
-     * already have counted toward this; acceptable, since two frames are required anyway.
+     * already have counted toward this; acceptable, since two frames are required anyway. A zero-padded 0x04 is not a
+     * genuine frame and is skipped before this: it neither counts nor breaks a run (set, padded, set confirms).
      *
      * PWM onset (Ruling 1): bit 0's rising edge calibrates the PWM estimate, and the onset is the sample before
      * the edge (OnsetLookback), erring HIGH. Confirming one 0x04 later would publish the edge later and the lookback
      * would then pick a faster sample, a LOW estimate. So the time the bit was first set raw is kept in
-     * [pwmAlarmFirstSetAtMillis] and published beside the confirmed alarm; the lookback measures from there.
+     * [pwmAlarmFirstSetAtMillis] (cleared only when bit 0 is confirmed clear, so a corrupt clear inside an alarm keeps
+     * it) and published beside the confirmed alarm; the lookback measures from there.
      */
     private fun confirmAlertBits(raw: Int) {
-        if ((raw and PWM_ALARM_BIT) == 0) pwmAlarmFirstSetAtMillis = null
-        else if ((rawAlertPrevious and PWM_ALARM_BIT) == 0 || pwmAlarmFirstSetAtMillis == null) pwmAlarmFirstSetAtMillis = nowMillis()
         val before = alertBitmap
-        alertBitmap = raw and rawAlertPrevious
-        unconfirmedAlertBits = raw and alertBitmap.inv()
+        val bothSet = raw and rawAlertPrevious
+        val bothClear = (raw or rawAlertPrevious).inv()
+        alertBitmap = (bothSet or (before and bothClear.inv())) and 0xFF
+        // Set bits that were seen last frame, are gone now and never made it into the confirmed bitmap.
+        swallowedAlertBits += Integer.bitCount(rawAlertPrevious and raw.inv() and alertBitmap.inv() and 0xFF)
+        if ((raw and PWM_ALARM_BIT) != 0) { if (pwmAlarmFirstSetAtMillis == null) pwmAlarmFirstSetAtMillis = nowMillis() }
+        else if ((alertBitmap and PWM_ALARM_BIT) == 0) pwmAlarmFirstSetAtMillis = null
         rawAlertPrevious = raw
         faultsValue = alertLabels(alertBitmap and FAULT_BITS)
         // A 0x04 the odometer gate is still holding has not published its sample; one already published must not

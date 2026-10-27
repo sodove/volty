@@ -1067,6 +1067,14 @@ class AlertEngineTest {
         val message = notifier.messages.single().first
         assertEquals(AlertKind.CONTROLLER_FAULT, message.kind)
         assertEquals(listOf("Over temperature"), message.details)
+        // M7: one corrupt CLEAR frame inside the fault must not re-arm it (it re-arms on an empty list) and push again.
+        engine.evaluateMotionForTest(alerted(0x00), v)
+        engine.evaluateMotionForTest(alerted(0x20), v)
+        engine.evaluateMotionForTest(alerted(0x20), v)
+        assertEquals(1, notifier.messages.size, "a corrupt clear frame produced a second notification")
+        // Two consecutive clear frames end the fault.
+        assertEquals(listOf("Over temperature"), alerted(0x00).faults)
+        assertEquals(emptyList(), alerted(0x00).faults)
     }
 
     @Test

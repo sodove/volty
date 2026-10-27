@@ -26,7 +26,7 @@ enum class DeviceFactKey {
     ODOMETER_REBASED,
     ODOMETER_WITNESS,
 
-    /** Begode R12: alert-byte bits seen set once and not yet confirmed by a second consecutive 0x04. */
+    /** Begode R12: per-connection count of alert-byte bits seen set in one 0x04 and never confirmed by a second. */
     UNCONFIRMED_ALERT_BITS,
 
     // VESC

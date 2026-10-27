@@ -105,6 +105,10 @@ class PwmOnsetCaptureTest {
             assertTrue(pub.dutyPercent <= 94f, "estimate ${pub.dutyPercent} within +6 of 88")
             assertEquals(DutySource.ESTIMATED, pub.dutySource)
         }
+        // M6: the retracted claim, pinned at every estimated cycle that is not saturated (75.7, 79.7, 80.5 km/h).
+        val estimated = out.filter { (s, pub) -> pub.hasDuty && s.motion.dutyPercent < 100f }
+        assertTrue(estimated.size >= 3)
+        for ((s, pub) in estimated) assertTrue(pub.dutyPercent >= s.motion.dutyPercent, "estimate ${pub.dutyPercent} below the true ${s.motion.dutyPercent} at ${s.motion.speedKmh} km/h")
         val plateau = out.last()
         assertEquals(100f, plateau.first.motion.dutyPercent, "the dump's true duty on the plateau")
         // Raw 99.4 % at the plateau against a true duty the wheel reports as the integer 100: one point of rounding.
