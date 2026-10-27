@@ -296,4 +296,4 @@ private fun known(value: Float, known: Boolean): String = if (known) value.toStr
 private const val MAX_COPY_CHARS = 256 * 1024
 
 private fun rejectedFrameLine(f: ru.sodovaya.volty.domain.plausibility.RejectedFrame): String =
-    "rejectedFrame atFrame=${f.atFrameIndex} kind=${f.kind} rule=${f.rule} type=0x${f.frameType.toString(16).padStart(2, '0')} reference=${f.reference ?: "-"} witness=${f.witness ?: "-"} raw=${f.rawHex}"
+    "rejectedFrame at=${f.atEpochMillis ?: "-"} atFrame=${f.atFrameIndex} kind=${f.kind} rule=${f.rule} type=0x${f.frameType.toString(16).padStart(2, '0')} reference=${f.reference ?: "-"} witness=${f.witness ?: "-"} raw=${f.rawHex}"

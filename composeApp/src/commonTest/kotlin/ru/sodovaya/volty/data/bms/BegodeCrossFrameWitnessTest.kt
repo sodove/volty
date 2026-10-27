@@ -157,4 +157,38 @@ class BegodeCrossFrameWitnessTest {
         assertTrue(m.hasDuty)
         assertFalse(m.hasMotorTemp)
     }
+
+    // --- final review M1: R13 only against a reference of this frame cycle -------------------------------------------
+
+    @Test fun aStaleLiveReferenceSkipsR13AndAFreshOneStillJudges() {
+        // Two 0x07 frames since the live frame mean the 0x00 was lost (a reference 600 ms old or more): the 3 ms witness
+        // does not hold, so a correct 0x01 that sagged away from it must not be rejected. Incoherent on purpose: the
+        // 0x01 voltage is the same wild 120 V that is rejected against a fresh reference.
+        val stale = certified()
+        stale.onNotification(motion(0, 0)); stale.onNotification(motion(0, 0))
+        stale.onNotification(packAt(1200))
+        assertEquals(0L, stale.rejectedFrameCount, "stale reference: the check is skipped, nothing rejected")
+        val oneBetween = certified()
+        oneBetween.onNotification(motion(0, 0))
+        oneBetween.onNotification(packAt(1200))
+        assertEquals(1L, oneBetween.rejectedFrameCount, "one 0x07 between the pair is still the same cycle")
+        val fresh = certified()
+        fresh.onNotification(packAt(1200))
+        assertEquals(1L, fresh.rejectedFrameCount)
+        stale.onNotification(live)
+        stale.onNotification(packAt(1200))
+        assertEquals(1L, stale.rejectedFrameCount, "a new live frame makes the reference fresh again")
+    }
+
+    // --- final review M4: ledger entries carry wall-clock time ---------------------------------------------------------
+
+    @Test fun aLedgerEntryIsStampedWithTheInjectedWallClock() {
+        var now = 1_700_000_000_123L
+        val p = BegodeProtocol(nowMillis = { now }).also { q ->
+            repeat(6) { q.onNotification(live); q.onNotification(pack) }
+        }
+        now = 1_700_000_000_999L
+        p.onNotification(packAt(1200))
+        assertEquals(1_700_000_000_999L, p.rejectedFrames().single().atEpochMillis)
+    }
 }

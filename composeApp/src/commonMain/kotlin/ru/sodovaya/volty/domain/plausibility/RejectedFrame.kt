@@ -26,8 +26,13 @@ enum class LedgerKind { REJECTED, REBASED, WITNESS_DISTRUSTED }
  * One entry of a protocol's rejection ledger: a frame the decoder refused to publish ([LedgerKind.REJECTED]) or the
  * point where a counter accepted a new baseline after confirmation ([LedgerKind.REBASED]).
  *
- * No clock here: a decoder has none and the frames carry no timestamps. [atFrameIndex] counts framed notifications
- * since the connection began; the repository stamps wall-clock time when it exports the ring.
+ * The frames carry no timestamps, so [atFrameIndex] counts framed notifications since the connection began, and
+ * [atEpochMillis] is the wall clock at the moment the protocol RECORDED the entry (an injected clock, `Clock.System` by
+ * default; a Begode uses the same clock as its PWM-alarm onset). An earlier revision of this comment said "no clock here;
+ * the repository stamps wall-clock time when it exports the ring". Nothing ever did, and a ring exported later cannot
+ * recover when a frame arrived, so the stamp is taken where the ledger records (final review M4). For a late decision
+ * (an odometer frame judged one frame after it arrived) the time is that of the decision, a frame or so after
+ * arrival. Null only for entries built without a clock.
  *
  * [reference] is what the frame was judged against and [witness] what contradicted it, both as short human text
  * ("2816164 m", "+7 m"); either is null when the rule has no such thing.
@@ -40,4 +45,5 @@ data class RejectedFrame(
     val reference: String?,
     val witness: String?,
     val kind: LedgerKind = LedgerKind.REJECTED,
+    val atEpochMillis: Long? = null,
 )

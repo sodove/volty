@@ -85,6 +85,9 @@ class BegodeProtocol(
     private val nowMillis: () -> Long = ::wallClockMillis,
 ) : BmsProtocol(), MotionSource, ProtocolFacts {
 
+    /** The ledger stamps with the same wall clock as the PWM-alarm onset. */
+    override fun ledgerNowMillis(): Long = nowMillis()
+
     override val uuids = BmsUuids(
         serviceUuid = "0000ffe0-0000-1000-8000-00805f9b34fb",
         notifyCharUuid = "0000ffe1-0000-1000-8000-00805f9b34fb",
@@ -1996,6 +1999,11 @@ class BegodeProtocol(
      */
     private fun rejectedByPackVoltageWitness(frame: ByteArray): Boolean {
         if (!branchVoltageCertified || genuineLiveVoltageRaw <= 0 || isZeroPaddedPayload(frame)) return false
+        // Only against a reference of THIS frame cycle (final review M1): the measured 0.01 % spread is for a pair about
+        // 3 ms apart, but a lost 0x00 leaves the reference 600 to 900 ms old, and a T4 sagging several volts under a hard
+        // pull would then reject a correct 0x01. An earlier revision judged against a live voltage of any age; that was
+        // wrong because the witness only holds for a simultaneous pair. A stale reference skips the check (nothing rejected).
+        if (motionFramesSinceLive > R13_MAX_MOTION_FRAMES_SINCE_LIVE) return false
         val count = derivedCellCountValue ?: return false
         val expectedV = genuineLiveVoltageRaw * 0.01f * count / 16f
         val packV = frame.u16BE(6) * 0.1f
@@ -2224,6 +2232,13 @@ class BegodeProtocol(
          * of every firmware): 3 x 300 ms = 900 ms stays inside the second.
          */
         private const val POWER_JOIN_MAX_MOTION_FRAMES = 3
+
+        /**
+         * R13's freshness bound, in 0x07 frames since the live frame that supplied the reference voltage. A 0x01 follows
+         * its 0x00 by about 3 ms, so 0 is the healthy case; one 0x07 in between is tolerated, two or more means the live
+         * frame was lost (a reference 600 ms old or more) and the witness is skipped.
+         */
+        private const val R13_MAX_MOTION_FRAMES_SINCE_LIVE = 1
 
         /** Slots of the cache stamp in [deviceFacts]: eleven scalars, two per branch, three of the plausibility ledger and R12's unconfirmed-bit count. */
         private const val FACTS_STAMP_SIZE = 19

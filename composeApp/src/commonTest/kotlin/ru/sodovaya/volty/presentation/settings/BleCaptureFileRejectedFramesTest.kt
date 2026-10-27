@@ -28,4 +28,11 @@ class BleCaptureFileRejectedFramesTest {
         val file = bleCaptureFile(state(RejectedFrame(1L, 0x01, PlausibilityRule.R13_PACK_VOLTAGE_WITNESS, "00ff", null, null, LedgerKind.REBASED)), emptyList())
         assertTrue(file.contains("kind=REBASED rule=R13_PACK_VOLTAGE_WITNESS type=0x01 reference=- witness=- raw=00ff"), file)
     }
+
+    @Test fun theDumpLineCarriesTheWallClockTimeOfTheEntry() {
+        val file = bleCaptureFile(state(RejectedFrame(7L, 0x04, PlausibilityRule.R1_ODOMETER_WITNESS, "00ff", null, null, atEpochMillis = 1_700_000_000_123L)), emptyList())
+        assertTrue(file.contains("rejectedFrame at=1700000000123 atFrame=7 kind=REJECTED"), file)
+        val unstamped = bleCaptureFile(state(RejectedFrame(7L, 0x04, PlausibilityRule.R1_ODOMETER_WITNESS, "00ff", null, null)), emptyList())
+        assertTrue(unstamped.contains("rejectedFrame at=- atFrame=7"), unstamped)
+    }
 }

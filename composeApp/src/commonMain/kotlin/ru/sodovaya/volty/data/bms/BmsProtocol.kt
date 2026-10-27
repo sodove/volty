@@ -15,6 +15,10 @@ import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 import ru.sodovaya.volty.domain.plausibility.RejectedFrame
 
 abstract class BmsProtocol {
+    /** Wall clock in epoch milliseconds that stamps ledger entries ([RejectedFrame.atEpochMillis]); a protocol with an injected clock overrides it. */
+    @OptIn(kotlin.time.ExperimentalTime::class)
+    protected open fun ledgerNowMillis(): Long = kotlin.time.Clock.System.now().toEpochMilliseconds()
+
     /** Fresh accepted decoder output. Consumer failure must not tear down the live BLE stream. */
     var telemetryObserver: ((TelemetryObservation) -> Unit)? = null
     var telemetryObserverFailures: Long = 0
@@ -78,7 +82,7 @@ abstract class BmsProtocol {
     protected fun recordRejection(frameType: Int, rule: PlausibilityRule, raw: ByteArray, reference: String?, witness: String?,
         atFrameIndex: Long = ledgerFrameIndex) {
         rejectedCount++
-        val entry = RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, LedgerKind.REJECTED)
+        val entry = RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, LedgerKind.REJECTED, ledgerNowMillis())
         lastRejection = entry
         push(entry)
     }
@@ -87,13 +91,13 @@ abstract class BmsProtocol {
     protected fun recordRebase(frameType: Int, rule: PlausibilityRule, raw: ByteArray, reference: String?, witness: String?,
         atFrameIndex: Long = ledgerFrameIndex) {
         rebases++
-        push(RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, LedgerKind.REBASED))
+        push(RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, LedgerKind.REBASED, ledgerNowMillis()))
     }
 
     /** Record a note that is neither a rejection nor a rebase (e.g. [LedgerKind.WITNESS_DISTRUSTED]); no counter moves. */
     protected fun recordLedgerNote(kind: LedgerKind, frameType: Int, rule: PlausibilityRule, raw: ByteArray,
         reference: String?, witness: String?, atFrameIndex: Long = ledgerFrameIndex) {
-        push(RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, kind))
+        push(RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, kind, ledgerNowMillis()))
     }
 
     /** Zero the per-connection counters. Subclasses call it from [reset]; the ring stays. */
