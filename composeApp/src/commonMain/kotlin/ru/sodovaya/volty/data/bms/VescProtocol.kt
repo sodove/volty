@@ -67,22 +67,16 @@ class VescProtocol(
     @Volatile private var cachedFacts: List<DeviceFact>? = null
 
     /**
-     * Session baseline for [ControllerData.tripKm]: the absolute odometer reading
-     * ([ControllerData.odometerKm], i.e. `tachometer_abs`) at the first decoded frame
-     * of this connection. Null until that first frame arrives, and cleared by [reset]
-     * so a new connection starts its trip over at 0.
+     * Session trip for [ControllerData.tripKm], over the ABSOLUTE odometer ([ControllerData.odometerKm], i.e.
+     * `tachometer_abs`) rather than the signed `tachometer`: the absolute counter only ever accumulates, so a
+     * reversing vehicle adds to the trip instead of subtracting from it. Cleared by [reset].
      *
-     * Deliberately based on the ABSOLUTE counter rather than the signed `tachometer`:
-     * the absolute counter only ever accumulates, so a reversing vehicle adds to the
-     * trip instead of subtracting from it, and the delta can never go negative.
-     *
-     * Task 12 retraction: the trip used to be `odometerKm - firstOdometerKm` clamped at 0 (and a baseline kept
+     * Task 12 retraction: the trip used to be `odometerKm - firstOdometerKm` clamped at 0 (a "session baseline" kept
      * until [reset]). That was wrong on two counts: `tachometer_abs` is a SINCE-BOOT counter, so after a controller
      * reboot the trip sat at 0 until the counter passed the old baseline, and a torn read added its whole size.
      * The trip is now a [TripCounter] sum: a needle adds nothing, a persistent backward reset re-baselines after
      * three frames and the trip keeps growing from where it was.
-     */
-    /**
+     *
      * One gate per values opcode, not one for the link: during the opcode probe both replies arrive and their
      * odometers are not one counter (GET_VALUES' is a different derivation), so a shared gate would read the
      * alternation as a storm of needles and re-baselines. Each opcode's frames are judged against their own history.

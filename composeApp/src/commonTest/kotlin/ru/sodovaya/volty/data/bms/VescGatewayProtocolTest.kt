@@ -841,6 +841,35 @@ class VescGatewayProtocolTest {
             loop.cancel(); device.cancel()
         }
 
+    /** Task 12: a torn tachometer_abs on one controller adds nothing to its trip and is exactly one ledger entry. */
+    @Test
+    fun `a torn odometer on one controller adds nothing to its trip and is one ledger entry`() =
+        runTest {
+            var odoARaw = 1_284_600_000
+            val p = protocol()
+            val link = FakeGateway(p) { canId, opcode ->
+                if (opcode == VescValues.OPCODE_GET_VALUES_SETUP) {
+                    ScriptedReply(LATENCY_MS, setupFrame(tachAbsMRaw = if (canId == CAN_A) odoARaw else 500_000_000))
+                } else {
+                    healthyScript()(canId, opcode)
+                }
+            }
+            val device = link.runDevice(this)
+            val loop = launch { p.runPollLoop(link.send) }
+
+            runCycles(1)
+            odoARaw += 1_000_000; runCycles(1)
+            odoARaw += 600_000_000; runCycles(1)              // torn: +600 km on this reply only
+            odoARaw = 1_286_600_000; runCycles(1)
+            runCycles(1)
+            val tripA = assertNotNull(p.latestMotion(0)).tripKm
+            assertTrue(abs(tripA - 2.0f) < 0.01f, "2 km ridden; the needle must not add 600 km, got $tripA")
+            assertEquals(1L, p.rejectedFrameCount)
+            assertEquals(ru.sodovaya.volty.domain.plausibility.PlausibilityRule.TRIP_COUNTER_STEP, p.rejectedFrames().single().rule)
+            assertEquals(0f, assertNotNull(p.latestMotion(1)).tripKm, "the other controller did not move")
+            loop.cancel(); device.cancel()
+        }
+
     /**
      * Task 12. One uBox reboots (its `tachometer_abs` restarts near zero and keeps counting), the other does not.
      * Each controller's trip is its own counter gate: the rebooted one re-baselines after three frames and keeps

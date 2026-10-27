@@ -55,6 +55,27 @@ class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
      * plausible increments; the live values stay raw.
      */
     private val tripCounter = TripCounter(COMMAND_REAL_TIME_INFO)
+    private var lastRawDistanceM: Long? = null
+    private var unwrappedDistanceM = 0L
+
+    private fun resetTrip() { tripCounter.reset(); lastRawDistanceM = null; unwrappedDistanceM = 0L }
+
+    /**
+     * The distance field is a u16 of 10 m units, so it legitimately wraps at 655.36 km. Feeding the gate the raw
+     * value would read the wrap as a backward step (3-page freeze, one step lost), so the gate gets an unwrapped
+     * value: a decrease whose modular forward step is under 1/8 of the range is a wrap (an ordinary increment);
+     * any other decrease stays a backward step for the gate to judge. Residual: a downward needle that happens to
+     * land within 1/8 range above the previous value modulo the range would be read as a wrap and credited; it
+     * would show as a trip that jumps. A needle UP is not unwrapped (raw increases are taken as they are).
+     */
+    private fun unwrapDistance(raw: Long): Long {
+        val prev = lastRawDistanceM
+        lastRawDistanceM = raw
+        if (prev == null) { unwrappedDistanceM = raw; return raw }
+        val forward = ((raw - prev) % DISTANCE_RANGE_M + DISTANCE_RANGE_M) % DISTANCE_RANGE_M
+        unwrappedDistanceM += if (raw >= prev || forward >= DISTANCE_RANGE_M / 8) raw - prev else forward
+        return unwrappedDistanceM
+    }
     private var modelValue: String = "InMotion"
     private var serialValue: String? = null
     private var firmwareValue: String? = null
@@ -110,7 +131,7 @@ class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         modelId = null
         data = null
         motion = null
-        tripCounter.reset()
+        resetTrip()
         resetLedger()
         modelValue = "InMotion"
         serialValue = null
@@ -174,7 +195,7 @@ class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
                 val series = payload[2].toInt() and 0xFF
                 val type = payload[3].toInt() and 0xFF
                 val nextModelId = series * 10 + type
-                if (modelId != nextModelId) tripCounter.reset()
+                if (modelId != nextModelId) resetTrip()
                 modelId = nextModelId
                 modelValue = modelName(series, type)
             }
@@ -220,7 +241,7 @@ class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         } ?: return
 
         val distanceMeters = values.distanceMeters
-        val tripKm = (tripCounter.offer(distanceMeters.toDouble(), payload) / 1000.0).toFloat()
+        val tripKm = (tripCounter.offer(unwrapDistance(distanceMeters).toDouble(), payload) / 1000.0).toFloat()
         val power = values.powerW
         val current = values.currentA
 
@@ -453,5 +474,7 @@ class InMotionProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         val V12_MODELS = setOf(71, 72, 73, 111)
         const val COMMAND_MAIN_INFO = 0x02
         const val COMMAND_REAL_TIME_INFO = 0x04
+        /** The u16 distance field counts 10 m units: it wraps at 65 536 x 10 m. */
+        const val DISTANCE_RANGE_M = 655_360L
     }
 }

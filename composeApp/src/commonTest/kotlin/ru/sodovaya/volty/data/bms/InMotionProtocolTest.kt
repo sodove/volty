@@ -247,6 +247,21 @@ class InMotionProtocolTest {
     }
 
     @Test
+    fun theSixteenBitDistanceWrapMidRideIsAnOrdinaryIncrementAndANeedleAfterItIsStillRejected() {
+        val protocol = InMotionProtocol()
+        protocol.onNotification(modelFrame(71))
+        // 65 536 units x 10 m is the field's range: 65 530 -> 20 is a +26 unit step, not a reset.
+        listOf(65_400, 65_500, 65_530, 20, 120).forEach { protocol.onNotification(buildFrame(0x14, 0x04, v12Page(it))) }
+        protocol.onNotification(buildFrame(0x14, 0x04, v12Page(30_000))) // a torn needle after the wrap
+        listOf(220, 320).forEach { protocol.onNotification(buildFrame(0x14, 0x04, v12Page(it))) }
+
+        // Unwrapped: 65 400 .. 65 756 decided = 356 units = 3.56 km (320 is held); the wrap lost nothing, froze nothing.
+        assertEquals(3.56f, assertNotNull(protocol.latestMotion(0)).tripKm, 0.001f)
+        assertEquals(0L, protocol.rebaseCount, "a legitimate wrap is not a re-baseline")
+        assertEquals(1L, protocol.rejectedFrameCount, "only the needle")
+    }
+
+    @Test
     fun aPersistentBackwardResetRebaselinesAfterThreePagesAndTheTripKeepsGrowing() {
         val protocol = InMotionProtocol()
         protocol.onNotification(modelFrame(71))

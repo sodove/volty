@@ -109,6 +109,21 @@ class VescTelemetryObservationTest {
         assertEquals(100.0, event.read(TelemetryMetric.ODOMETER).value)
     }
 
+    // Task 12: during the opcode probe SETUP and GET_VALUES replies interleave and their odometers are not one counter
+    // (GET_VALUES decodes none: 0). One gate per opcode keeps each judged against its own history; a shared gate would
+    // read 100 km / 0 / 101 km / 0 as a storm of needles and re-baselines.
+    @Test fun interleavedSetupAndValuesRepliesAreJudgedByTheirOwnGate() {
+        val protocol = VescProtocol(); capture(protocol, null)
+        listOf(100_000_000, 101_000_000, 102_000_000, 102_000_000).forEach {
+            protocol.onNotification(setup(it)); protocol.onNotification(values())
+        }
+        protocol.onNotification(setup(103_000_000))
+        // SETUP trip: 100 -> 102 km is decided (the newest frame is held) = 2 km; the values gate sees only zeros.
+        assertEquals(2.0f, assertNotNull(protocol.latestMotion(0)).tripKm, 0.001f)
+        assertEquals(0L, protocol.rejectedFrameCount)
+        assertEquals(0L, protocol.rebaseCount)
+    }
+
     @Test fun plainReplyCannotSeedSetupDistanceBaselineOrRestampSetupDistance() {
         val protocol = VescProtocol(); val events = capture(protocol)
         protocol.onNotification(values()); protocol.onNotification(setup(100_000_000))

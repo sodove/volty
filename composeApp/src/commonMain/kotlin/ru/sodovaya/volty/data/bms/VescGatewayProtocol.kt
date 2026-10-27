@@ -836,7 +836,7 @@ class VescGatewayProtocol(
      * Odometer at this connection's first SETUP frame **from that controller**,
      * so `tripKm` is distance since the link came up rather than the ESC's
      * since-boot counter — the same session-baseline rule (and the same
-     * "absolute counter only" reason) as [VescProtocol.tripBaselineKm].
+     * "absolute counter only" reason) as [VescProtocol]'s session trip (a per-controller counter gate since Task 12).
      * Cleared by [reset].
      *
      * Per controller, not vehicle-wide: two nodes' tachometers are two
