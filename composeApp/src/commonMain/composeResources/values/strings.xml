@@ -1604,6 +1604,7 @@
     <string name="pwm_wiz_notice_not_connected">Connect to this vehicle first.</string>
     <string name="pwm_wiz_notice_no_data">No data from the wheel yet.</string>
     <string name="pwm_wiz_notice_nothing">Nothing measured yet.</string>
+    <string name="pwm_wiz_notice_spin_slower">The alarm came on after too big a jump in speed, so that run was not counted. Spin up more slowly and let the alarm come on again.</string>
     <string name="pwm_reset_confirm">Reset</string>
     <string name="pwm_wiz_blocked_reports">This wheel reports its own PWM, so it needs no calibration.</string>
     <string name="pwm_wiz_blocked_unknown">It is not yet known whether this wheel reports its own PWM. Ride a little, then come back.</string>

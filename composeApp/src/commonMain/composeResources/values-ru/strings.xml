@@ -1602,6 +1602,7 @@
     <string name="pwm_wiz_notice_not_connected">Сначала подключись к этому ТС.</string>
     <string name="pwm_wiz_notice_no_data">От колеса пока нет данных.</string>
     <string name="pwm_wiz_notice_nothing">Пока ничего не замерено.</string>
+    <string name="pwm_wiz_notice_spin_slower">Раскрути помедленнее: сигнал сработал после слишком резкого скачка скорости, этот заход не засчитан. Разгоняй плавнее, чтобы сигнал сработал снова.</string>
     <string name="pwm_reset_confirm">Сбросить</string>
     <string name="pwm_wiz_blocked_reports">Это колесо отдаёт свой ШИМ, калибровка ему не нужна.</string>
     <string name="pwm_wiz_blocked_unknown">Пока не известно, отдаёт ли это колесо свой ШИМ. Проедь немного и вернись.</string>

@@ -37,9 +37,14 @@ import kotlin.time.Instant
  * **When no estimate can be made** for a NEVER_REPORTED wheel the published `hasDuty` is false (the wheel's
  * constant 0 is a placeholder, not a reading), so dials show a dash and duty alarms report unavailable.
  *
- * **Learning:** each false -> true edge of the wheel's alarm bit at >= 10 km/h teaches one onset
- * ([PwmCalibrationLearner.merge]). A first sample that is already true teaches nothing (the edge was not
- * seen); a held bit does not re-teach.
+ * **Learning:** each false -> true edge of the wheel's alarm bit teaches one onset
+ * ([PwmCalibrationLearner.merge]), taken from the last sample BEFORE the edge at >= 10 km/h ([OnsetLookback]), not
+ * from the sample where the bit is first seen. A first sample that is already true teaches nothing (the edge was not
+ * seen); a held bit does not re-teach; a speed jump of more than [OnsetLookback.MAX_ONSET_JUMP_KMH] into the edge,
+ * or a gap of more than a second, teaches nothing (the fire point is unknown).
+ * Retraction: an earlier revision took the speed, voltage and phase current of the edge sample itself. The rider's
+ * T4, after a firmware update that reports its true PWM, showed that sample is one frame late (70.8 km/h where the
+ * alarm fired at 65.1), which made the fitted `k` too small and the estimate read LOW, the dangerous direction.
  *
  * **Manual entry is never promoted into the store as a model.** [Vehicle.pwmManual] converts live with
  * [PwmCalibrationLearner.fromFreeSpin] (source MANUAL, FREE_SPIN basis). Onsets learned on top of it are kept
@@ -74,6 +79,8 @@ class PwmEstimator(
     private var started = false
     private var lastFedAtMillis: Long? = null
     private var prevAlarm: Boolean? = null
+    private var lookback = OnsetLookback()
+    private var lookbackStampMillis: Long? = null
 
     val vehicleId: String get() = vehicle.id
     val evidence: PwmEvidence get() = progress.evidence
@@ -119,15 +126,15 @@ class PwmEstimator(
     fun apply(snapshot: VehicleData, now: Instant): VehicleData {
         if (!started) { started = true; onFirstApply() }
         val motion = snapshot.motion
-        if (!motion.isConnected) { prevAlarm = null; return snapshot }
+        if (!motion.isConnected) { prevAlarm = null; lookback = OnsetLookback(); return snapshot }
         if (!memoryReady) return snapshot
 
         feedEvidence(motion)
-        if (progress.evidence != PwmEvidence.NEVER_REPORTED) { prevAlarm = motion.wheelPwmAlarm; return snapshot }
+        if (progress.evidence != PwmEvidence.NEVER_REPORTED) { prevAlarm = motion.wheelPwmAlarm; lookback = OnsetLookback(); return snapshot }
 
         val packV = packVoltage(snapshot)
         val phaseA = motion.motorCurrentA.takeIf { it.isFinite() }?.let { kotlin.math.abs(it) }
-        learn(motion, packV, phaseA, now)
+        learn(motion, packV, phaseA)
 
         val est = effectiveCalibration()?.let { cal ->
             if (motion.speedKnown && motion.speedKmh.isFinite() && packV != null) {
@@ -172,13 +179,24 @@ class PwmEstimator(
         return PwmCalibrationLearner.fromFreeSpin(m.freeSpinKmh, m.atVoltage)?.copy(source = PwmCalibrationSource.MANUAL)
     }
 
-    private fun learn(motion: ControllerData, packV: Float?, phaseA: Float?, now: Instant) {
+    private fun learn(motion: ControllerData, packV: Float?, phaseA: Float?) {
         val alarm = motion.wheelPwmAlarm
         val rising = alarm == true && prevAlarm == false
         prevAlarm = alarm
-        if (!rising || packV == null || !motion.speedKnown) return
-        if (!motion.speedKmh.isFinite() || motion.speedKmh < PwmCalibrationLearner.MIN_SPEED_KMH) return
-        val onset = AlarmOnset(motion.speedKmh, packV, phaseA, now.toEpochMilliseconds())
+        if (packV == null || !motion.speedKnown || !motion.speedKmh.isFinite()) { lookback = OnsetLookback(); return }
+        // One point per NEW motion sample: a battery-triggered republish re-applies the same motion with a later
+        // `now`, and counting it would refresh the previous point's time and blind the gap check on a stalled link.
+        val stamp = motion.timestamp.toEpochMilliseconds()
+        if (stamp == lookbackStampMillis) return
+        lookbackStampMillis = stamp
+        val edge = OnsetPoint(stamp, motion.speedKmh, packV, phaseA)
+        lookback = lookback.push(edge)
+        if (!rising) return
+        // The onset is the last sample BEFORE the edge: the bit is first seen one frame after it fired.
+        val before = (lookback.onsetFor(edge) as? OnsetVerdict.Take)?.point ?: return
+        val beforeV = before.packV ?: return
+        if (before.speedKmh < PwmCalibrationLearner.MIN_SPEED_KMH) return
+        val onset = AlarmOnset(before.speedKmh, beforeV, before.phaseA, edge.atMillis)
         val merged = PwmCalibrationLearner.merge(effectiveCalibration(), onset, vehicle.pwmAlarmThresholdPercent.toFloat())
         if (merged != null && merged != calibration) { calibration = merged; dirty = true }
     }

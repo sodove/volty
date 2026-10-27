@@ -44,6 +44,7 @@ import volty.composeapp.generated.resources.pwm_wiz_notice_disconnected
 import volty.composeapp.generated.resources.pwm_wiz_notice_no_data
 import volty.composeapp.generated.resources.pwm_wiz_notice_not_connected
 import volty.composeapp.generated.resources.pwm_wiz_notice_nothing
+import volty.composeapp.generated.resources.pwm_wiz_notice_spin_slower
 import volty.composeapp.generated.resources.pwm_wiz_plateau_caught
 import volty.composeapp.generated.resources.pwm_wiz_plateau_waiting
 import volty.composeapp.generated.resources.pwm_wiz_ratio_warn
@@ -184,6 +185,7 @@ private fun noticeText(n: PwmWizardNotice) = when (n) {
     PwmWizardNotice.NOT_CONNECTED -> Res.string.pwm_wiz_notice_not_connected
     PwmWizardNotice.NO_DATA -> Res.string.pwm_wiz_notice_no_data
     PwmWizardNotice.NOTHING_CAPTURED -> Res.string.pwm_wiz_notice_nothing
+    PwmWizardNotice.SPIN_SLOWER -> Res.string.pwm_wiz_notice_spin_slower
 }
 
 @Composable

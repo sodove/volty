@@ -148,12 +148,12 @@ class PwmEstimatorTest {
         r.step(speed = 68.4f, alarm = true)
         val cal = assertNotNull(r.est.memory().calibration)
         assertEquals(1, cal.onsets.size)
-        assertEquals(68.4f, cal.onsets[0].speedKmh)
+        assertEquals(66f, cal.onsets[0].speedKmh, "the sample BEFORE the edge, not the 68.4 km/h one that first showed the bit")
         assertEquals(96f, cal.onsets[0].packV)
-        assertEquals(0.8f * 96f / 68.4f, cal.k, 1e-4f)
+        assertEquals(0.8f * 96f / 66f, cal.k, 1e-4f)
         assertTrue(r.est.dirty)
         assertEquals(DutySource.ESTIMATED, r.motion.dutySource)
-        assertEquals(80f, r.motion.dutyPercent, 0.1f, "the estimate agrees with the alarm threshold at the onset")
+        assertEquals(80f * 68.4f / 66f, r.motion.dutyPercent, 0.1f, "the estimate is 80 % at the onset speed (66) and so a little above at the edge sample (68.4)")
     }
 
     @Test

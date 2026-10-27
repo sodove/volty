@@ -2,12 +2,19 @@ package ru.sodovaya.volty.domain.pwm
 
 import kotlin.math.sqrt
 
-/** The instant the wheel's own high-power alarm switched on. */
+/**
+ * The speed, pack voltage and phase current at the last sample BEFORE the wheel's own high-power alarm bit was first
+ * seen (see [OnsetLookback]). Retraction: this used to be "the instant the alarm switched on", captured at the sample
+ * where the bit was first seen. That sample is one frame late (the rider's T4 dump: bit seen at 70.8 km/h, fired at
+ * 65.1), so every `k` fitted from it was too small and the estimate read LOW, the dangerous direction.
+ * [atMillis] is when the bit was seen.
+ */
 data class AlarmOnset(val speedKmh: Float, val packV: Float, val phaseA: Float?, val atMillis: Long)
 
 /**
  * Learns [PwmCalibration] from the wheel's own alarm onsets (each satisfies
- * `threshold/100 * V = k * speed + R * I`) or from a free-spin plateau. Pure; no I/O.
+ * `threshold/100 * V = k * speed + R * I`, with speed, V and I of the sample BEFORE the bit was seen, not of the
+ * sample that first showed it) or from a free-spin plateau. Pure; no I/O.
  */
 object PwmCalibrationLearner {
     const val MIN_SPEED_KMH = 10f

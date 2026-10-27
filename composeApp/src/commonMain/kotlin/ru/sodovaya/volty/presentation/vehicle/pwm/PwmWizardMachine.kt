@@ -1,6 +1,9 @@
 package ru.sodovaya.volty.presentation.vehicle.pwm
 
 import ru.sodovaya.volty.domain.pwm.AlarmOnset
+import ru.sodovaya.volty.domain.pwm.OnsetLookback
+import ru.sodovaya.volty.domain.pwm.OnsetPoint
+import ru.sodovaya.volty.domain.pwm.OnsetVerdict
 import ru.sodovaya.volty.domain.pwm.PwmCalibration
 import ru.sodovaya.volty.domain.pwm.PwmCalibrationLearner
 import ru.sodovaya.volty.domain.pwm.PwmCalibrationSource
@@ -20,8 +23,12 @@ enum class PwmWizardStep {
  */
 enum class PwmWizardBlock { REPORTS, NOT_PROVEN, LOAD_FAILED }
 
-/** Why the wizard is not where the rider expects. Shown as a line of text, never an error dialog. */
-enum class PwmWizardNotice { DISCONNECTED, NOT_CONNECTED, NO_DATA, NOTHING_CAPTURED, LOADING }
+/**
+ * Why the wizard is not where the rider expects. Shown as a line of text, never an error dialog. SPIN_SLOWER: the
+ * alarm came on after a speed jump of more than [OnsetLookback.MAX_ONSET_JUMP_KMH] (or a stall), so the run was not
+ * counted and the wizard keeps waiting in the same run.
+ */
+enum class PwmWizardNotice { DISCONNECTED, NOT_CONNECTED, NO_DATA, NOTHING_CAPTURED, LOADING, SPIN_SLOWER }
 
 /**
  * One live reading as the wizard sees it. [packV] is null when the link has no voltage yet, [alarm] is null for a
@@ -54,7 +61,8 @@ data class PwmWizardResult(
  * live samples ([onSample]) and the rider's taps ([start], [runAgain], [toPlateau], [finish], [restart]) and
  * renders what it holds. Every decision about a calibration lives here so it can be tested without a device.
  *
- * INTRO -> THRESHOLD (first rising edge of the wheel's alarm at >= 10 km/h, up to 3 runs) -> PLATEAU (optional;
+ * INTRO -> THRESHOLD (first rising edge of the wheel's alarm, whose onset is the last sample BEFORE the edge at
+ * >= 10 km/h, see [OnsetLookback]; up to 3 runs) -> PLATEAU (optional;
  * the highest speed held >= 2 s within 1 km/h) -> RESULT. Phase current is never recorded: the wheel is lifted and
  * unloaded, so the fit is `k` only (R stays 0).
  */
@@ -77,6 +85,7 @@ data class PwmWizardState(
     val ready: Boolean = true,
     val blockReason: PwmWizardBlock? = null,
     private val prevAlarm: Boolean? = null,
+    private val lookback: OnsetLookback = OnsetLookback(),
     private val stretch: WizardStretch? = null,
 ) {
     val canRunAgain: Boolean
@@ -94,14 +103,29 @@ data class PwmWizardState(
         }
     }
 
+    /**
+     * The onset is the last sample BEFORE the alarm's rising edge, not the edge sample ([OnsetLookback]).
+     * Retraction: an earlier revision took the edge sample's speed and voltage; the rider's T4 dump (true PWM beside
+     * the alarm bit) proved it one frame late, so the fitted `k` came out too small and the estimate read LOW.
+     * A jump of more than [OnsetLookback.MAX_ONSET_JUMP_KMH] into the edge (or a stall) is not counted: notice
+     * SPIN_SLOWER, the same run keeps waiting. A bit already set on the first sample has no edge and no previous sample.
+     */
     private fun thresholdSample(s: WizardSample): PwmWizardState {
         val rising = s.alarm == true && prevAlarm == false
-        val next = copy(prevAlarm = s.alarm)
         val v = s.packV
-        if (!rising || runCaptured || v == null || !s.speedKmh.isFinite() || s.speedKmh < PwmCalibrationLearner.MIN_SPEED_KMH ||
-            !v.isFinite() || v <= 0f
-        ) return next
-        return next.copy(onsets = onsets + AlarmOnset(s.speedKmh, v, null, s.atMillis), runCaptured = true, notice = null)
+        val valid = v != null && v.isFinite() && v > 0f && s.speedKmh.isFinite()
+        val point = if (valid) OnsetPoint(s.atMillis, s.speedKmh, v, null) else null
+        val look = if (point != null) lookback.push(point) else OnsetLookback()
+        val next = copy(prevAlarm = s.alarm, lookback = look)
+        if (!rising || runCaptured || point == null) return next
+        val before = when (val verdict = look.onsetFor(point)) {
+            is OnsetVerdict.Take -> verdict.point
+            OnsetVerdict.NoPrevious -> return next
+            OnsetVerdict.TooFast -> return next.copy(notice = PwmWizardNotice.SPIN_SLOWER)
+        }
+        val beforeV = before.packV
+        if (beforeV == null || before.speedKmh < PwmCalibrationLearner.MIN_SPEED_KMH) return next
+        return next.copy(onsets = onsets + AlarmOnset(before.speedKmh, beforeV, null, s.atMillis), runCaptured = true, notice = null)
     }
 
     private fun plateauSample(s: WizardSample): PwmWizardState {
@@ -135,7 +159,7 @@ data class PwmWizardState(
         return copy(
             step = if (sample.alarm != null) PwmWizardStep.THRESHOLD else PwmWizardStep.PLATEAU,
             notice = null, onsets = emptyList(), runCaptured = false, plateau = null, result = null,
-            prevAlarm = null, stretch = null,
+            prevAlarm = null, lookback = OnsetLookback(), stretch = null,
         )
     }
 

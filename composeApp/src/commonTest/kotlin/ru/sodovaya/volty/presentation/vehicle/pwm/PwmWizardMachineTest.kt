@@ -17,9 +17,12 @@ class PwmWizardMachineTest {
     private fun fresh(threshold: Int = 80) = PwmWizardState(thresholdPercent = threshold)
     private fun s(at: Long, kmh: Float, v: Float? = 96.8f, alarm: Boolean? = false) = WizardSample(at, kmh, v, alarm)
 
-    /** One free-spin run of the T4: alarm off, then on at 68.4 km/h. */
+    /**
+     * One free-spin run of the T4: alarm off at [kmh], then the bit is first SEEN 3 km/h later. The onset is the sample
+     * BEFORE the edge, so it is [kmh] that is captured (see PwmOnsetCaptureTest for the rule and the real dump).
+     */
     private fun PwmWizardState.runToOnset(t0: Long = 0L, kmh: Float = 68.4f, v: Float = 96.8f): PwmWizardState =
-        onSample(s(t0, 60f, v, false)).onSample(s(t0 + 100, kmh, v, true))
+        onSample(s(t0, kmh, v, false)).onSample(s(t0 + 100, kmh + 3f, v, true))
 
     /** Holds [kmh] at [v] for 2.5 s of samples. */
     private fun PwmWizardState.holdFor(t0: Long, kmh: Float, v: Float): PwmWizardState {
@@ -104,7 +107,7 @@ class PwmWizardMachineTest {
         // the bit is still on from the first run: not an edge
         st = st.onSample(s(1_000, 70f, alarm = true))
         assertEquals(1, st.onsets.size)
-        st = st.onSample(s(1_100, 40f, alarm = false)).onSample(s(1_200, 68.4f, alarm = true))
+        st = st.onSample(s(1_100, 66f, alarm = false)).onSample(s(1_200, 68.4f, alarm = true))
         assertEquals(2, st.onsets.size)
     }
 

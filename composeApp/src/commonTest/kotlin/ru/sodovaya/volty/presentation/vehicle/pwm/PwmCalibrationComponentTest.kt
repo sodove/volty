@@ -160,7 +160,7 @@ class PwmCalibrationComponentTest {
         assertTrue(r.component.state.value.connected)
         r.component.onStart()
         assertEquals(PwmWizardStep.THRESHOLD, r.component.state.value.wizard.step)
-        r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         assertEquals(1, r.component.state.value.wizard.onsets.size)
         r.component.onFinish()
         val result = assertNotNull(r.component.state.value.wizard.result)
@@ -174,7 +174,7 @@ class PwmCalibrationComponentTest {
 
     @Test fun cancelWritesNothingAndLeaves() = runTest {
         val r = rig(); connect(r); r.send(0f, false); runCurrent()
-        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onStart(); r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         r.component.onFinish()
         r.component.onCancel(); runCurrent()
         assertTrue(r.bms.applied.isEmpty())
@@ -189,7 +189,7 @@ class PwmCalibrationComponentTest {
 
     @Test fun aDisconnectMidRunReturnsToIntroWithTheReason() = runTest {
         val r = rig(); connect(r); r.send(0f, false); runCurrent()
-        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onStart(); r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         assertEquals(1, r.component.state.value.wizard.onsets.size)
         r.bms.connectionState.value = ConnectionState.Idle; runCurrent()
         val w = r.component.state.value.wizard
@@ -201,7 +201,7 @@ class PwmCalibrationComponentTest {
 
     @Test fun aSaveThatFailsKeepsTheResultAndCanBeRetried() = runTest {
         val r = rig(); connect(r); r.send(0f, false); runCurrent()
-        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onStart(); r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         r.component.onFinish()
         r.bms.failApply = true
         r.component.onSave(); runCurrent()
@@ -214,7 +214,7 @@ class PwmCalibrationComponentTest {
 
     @Test fun aSecondSaveTapWhileTheFirstIsInFlightWritesOnce() = runTest {
         val r = rig(); connect(r); r.send(0f, false); runCurrent()
-        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onStart(); r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         r.component.onFinish()
         r.bms.applyGate = CompletableDeferred()
         r.component.onSave(); runCurrent(); r.component.onSave(); runCurrent()
@@ -224,7 +224,7 @@ class PwmCalibrationComponentTest {
 
     @Test fun evidenceFlippingToReportsMidRunBlocksTheWizardAndSaveIsImpossible() = runTest {
         val r = rig(); connect(r); r.send(0f, false); runCurrent()
-        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onStart(); r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         r.component.onFinish()
         assertEquals(PwmWizardStep.RESULT, r.component.state.value.wizard.step)
         r.bms.evidence.value = PwmEvidence.REPORTS; runCurrent()
@@ -261,11 +261,11 @@ class PwmCalibrationComponentTest {
 
     @Test fun aNinetyPercentVehicleIsFittedAgainstNinetyNotTheDefault() = runTest {
         val r = rig(vehicle = t4.copy(pwmAlarmThresholdPercent = 90)); connect(r); r.send(0f, false); runCurrent()
-        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onStart(); r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         r.component.onFinish()
         val k = assertNotNull(r.component.state.value.wizard.result).calibration.k
-        assertEquals(0.9f * 96.8f / 68.4f, k, 1e-4f)
-        assertTrue(kotlin.math.abs(k - 0.8f * 96.8f / 68.4f) > 0.05f, "not the 80 % fit")
+        assertEquals(0.9f * 96.8f / 66f, k, 1e-4f, "the onset is the sample before the edge: 66 km/h")
+        assertTrue(kotlin.math.abs(k - 0.8f * 96.8f / 66f) > 0.05f, "not the 80 % fit")
     }
 
     @Test fun aVehicleThatCannotBeReadBlocksInsteadOfRunningOnTheDefault() = runTest {
@@ -276,7 +276,7 @@ class PwmCalibrationComponentTest {
 
     @Test fun aSaveTheRepositoryRefusesKeepsTheResultAndReportsFailure() = runTest {
         val r = rig(); connect(r); r.send(0f, false); runCurrent()
-        r.component.onStart(); r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.component.onStart(); r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         r.component.onFinish()
         r.bms.refuse = true
         r.component.onSave(); runCurrent()
@@ -290,7 +290,7 @@ class PwmCalibrationComponentTest {
         assertFalse(mute.isActive(), "INTRO: the rider is not spinning anything yet")
         r.component.onStart(); runCurrent()
         assertTrue(mute.isActive(), "a run started")
-        r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         assertTrue(mute.isActive())
         r.component.onFinish(); runCurrent()
         assertEquals(PwmWizardStep.RESULT, r.component.state.value.wizard.step)
@@ -340,7 +340,7 @@ class PwmCalibrationComponentTest {
         val r = rig(mute = mute); connect(r); r.send(0f, false); runCurrent()
         r.component.onStart(); runCurrent()
         now += ru.sodovaya.volty.domain.alert.CalibrationMute.TIME_BOX_MS - 1000
-        r.send(60f, false); runCurrent(); r.send(68.4f, true); runCurrent()
+        r.send(66f, false); runCurrent(); r.send(68.4f, true); runCurrent()
         assertEquals(1, r.component.state.value.wizard.onsets.size)
         now += ru.sodovaya.volty.domain.alert.CalibrationMute.TIME_BOX_MS - 1000
         assertTrue(mute.isActive(), "progress renewed the box")
