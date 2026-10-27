@@ -85,7 +85,7 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
             })
             HistoryRideCard(HistoryRideCardText(vehicleNames[ride.vehicleId] ?: stringResource(Res.string.history_ride_title),
                 date ?: stringResource(Res.string.history_date_unknown), listOfNotNull(duration, status).joinToString(" · "),
-                cardStats.stats[ride.id]?.maxDuty?.let { stringResource(Res.string.history_card_max_duty, historyTotalPrefix(it) + it.text()) }),
+                cardStats.stats[ride.id]?.maxDuty?.let { stringResource(Res.string.history_card_max_duty, historyCardMark(it) + it.text()) }),
                 previews.previews[ride.id]?.segments.orEmpty(), ride.id == selectedRideId, { onOpen(ride.id) },
                 if (reduceMotion) Modifier else Modifier.animateItem(), previewLoading = ride.id in previews.loading,
                 previewPartial = previews.previews[ride.id]?.partial == true, previewError = ride.id in previews.errors,

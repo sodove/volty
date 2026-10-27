@@ -416,4 +416,32 @@ class HistoryTotalsReadTest {
         assertEquals("", p(false, false)); assertEquals("~ ", p(true, false))
         assertEquals("≈ ", p(false, true)); assertEquals("~≈ ", p(true, true))
     }
+
+    private fun total(v: Double, approximate: Boolean = false) = HistoryTotal(HistoryTotalKind.MAX_DUTY_PERCENT, v, approximate)
+
+    @Test fun anEqualPeakGoesToTheMeasurementNotTheEstimate() {
+        val tie = historyPeakDuty(listOf(total(80.0)), listOf(total(80.0)))!!
+        assertEquals(80.0, tie.value); assertFalse(tie.estimated)
+        // The list order is not what decides it: a larger estimate still wins.
+        assertTrue(historyPeakDuty(listOf(total(80.0)), listOf(total(81.0)))!!.estimated)
+    }
+
+    @Test fun aLosersApproximationLeaksOnlyWhenItsMaximumCouldBeTheWinner() {
+        // Exact estimate 87 beats an approximate measured series whose maximum is only 40: the tile stays exact.
+        val exact = historyPeakDuty(listOf(total(40.0, approximate = true)), listOf(total(87.0)))!!
+        assertEquals(87.0, exact.value); assertFalse(exact.approximate); assertTrue(exact.estimated)
+        // A loser at or above the winner may hide the real peak: approximate.
+        assertTrue(historyPeakDuty(listOf(total(87.0, approximate = true)), listOf(total(87.0)))!!.approximate)
+        // The winner's own flag always counts.
+        assertTrue(historyPeakDuty(listOf(total(40.0)), listOf(total(87.0, approximate = true)))!!.approximate)
+    }
+
+    @Test fun aSignedProducerIsComparedByMagnitude() {
+        assertEquals(90.0, historyPeakDuty(listOf(total(-90.0)), listOf(total(50.0)))!!.value)
+    }
+
+    @Test fun theCardLineNeverCarriesBothMarks() {
+        fun m(estimated: Boolean, approximate: Boolean) = historyCardMark(HistoryTotal(HistoryTotalKind.MAX_DUTY_PERCENT, 80.0, approximate, estimated))
+        assertEquals("~ ", m(true, true)); assertEquals("~ ", m(true, false)); assertEquals("≈ ", m(false, true)); assertEquals("", m(false, false))
+    }
 }

@@ -23,15 +23,27 @@ fun historyTotalPrefix(total: HistoryTotal): String =
 
 /**
  * The peak PWM of a ride from its two duty series: what the controller [measured] and what the estimator [estimated].
- * The larger wins; on a tie the measurement wins. The result is marked [HistoryTotal.estimated] only when the estimate won,
- * and approximate when any candidate was. No upper bound is applied: Sherman / SV wheels with field weakening show 105 %.
+ * The larger wins; on a tie the measurement wins. The result is marked [HistoryTotal.estimated] only when the estimate won.
+ * It is approximate when the winner is, or when a LOSER is approximate and its maximum is at or above the winner's (a loser's
+ * stats maximum is an upper bound, so one below the winner cannot change the number; an earlier revision flagged any
+ * approximate candidate, which put "~≈" on an exact estimate because an early raw-0 series was over budget).
+ *
+ * Values are compared by magnitude: every decoder in the repo already emits |duty| (VESC, Begode, InMotion abs at decode;
+ * KingSong and Veteran are unsigned; the estimator is 0..100), so this guards the invariant for a future signed producer.
+ * No upper bound is applied in this layer: Sherman / SV wheels with field weakening show 105 %. Two PRE-EXISTING clamps
+ * to 100 remain outside it (the InMotion decoder and the PWM estimator) and are not changed here.
  * An old ride (before the estimate had its own series) has only the first list and reads as measured.
  */
 internal fun historyPeakDuty(measured: List<HistoryTotal>, estimated: List<HistoryTotal>): HistoryTotal? {
     val all = measured.map { it to false } + estimated.map { it to true }
-    val (best, isEstimate) = all.maxByOrNull { it.first.value } ?: return null
-    return HistoryTotal(HistoryTotalKind.MAX_DUTY_PERCENT, best.value, all.any { it.first.approximate }, isEstimate)
+    val best = all.maxByOrNull { kotlin.math.abs(it.first.value) } ?: return null
+    val magnitude = kotlin.math.abs(best.first.value)
+    val approximate = best.first.approximate || all.any { it !== best && it.first.approximate && kotlin.math.abs(it.first.value) >= magnitude }
+    return HistoryTotal(HistoryTotalKind.MAX_DUTY_PERCENT, magnitude, approximate, best.second)
 }
+
+/** The single mark of the ride-card line: a tilde for an estimate, else an approximation sign, never both ("PWM ≤ ~≈ 87" is redundant). */
+fun historyCardMark(total: HistoryTotal): String = if (total.estimated) "~ " else if (total.approximate) "≈ " else ""
 
 /**
  * Needle-free peaks read from paged detail ([historyRobustPeaks] in the totals reader), in display units, per series.

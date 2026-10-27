@@ -148,4 +148,22 @@ class HistoryCardStatsComponentTest {
             assertTrue(c.state.value.errors.isEmpty()); assertEquals(70.0, c.state.value.stats.getValue("a").maxDuty!!.value)
         }
     }
+
+    @Test fun withBothSeriesPresentTheLargerWinsTheTieGoesToTheMeasurementAndAnApproximateLoserDoesNotLeak() = runTest {
+        suspend fun peak(measured: Double, estimate: Double, measuredStatsComplete: Boolean = true): HistoryTotal {
+            val repo = Repo().apply {
+                stats = mapOf(duty to HistoryStats(0.0, measured, null, measuredStatsComplete), estimated to HistoryStats(0.0, estimate, null, true))
+                detail = mapOf(duty to series(duty, measured), estimated to series(estimated, estimate))
+            }
+            var out: HistoryTotal? = null
+            withComponent(repo) { c -> c.setVisible(listOf(ride("a"))); runCurrent(); out = c.state.value.stats.getValue("a").maxDuty }
+            return out!!
+        }
+        assertTrue(peak(measured = 40.0, estimate = 87.0).estimated)
+        assertFalse(peak(measured = 92.0, estimate = 87.0).estimated)
+        assertFalse(peak(measured = 80.0, estimate = 80.0).estimated, "a tie goes to the measurement")
+        // Incoherent on purpose: incomplete stats on a loser far below the winner.
+        val exact = peak(measured = 40.0, estimate = 87.0, measuredStatsComplete = false)
+        assertEquals(87.0, exact.value); assertTrue(exact.estimated); assertFalse(exact.approximate)
+    }
 }
