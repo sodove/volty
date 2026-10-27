@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.presentation.vehicle.info
 
+import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 import ru.sodovaya.volty.domain.alert.AlertAvailability
 import ru.sodovaya.volty.domain.alert.AlertUnavailableReason
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
@@ -197,6 +198,7 @@ enum class InfoChoice {
     CURRENT_FROM_CONTROLLER, CURRENT_FROM_PACKS, CURRENT_NONE,
     // a Begode's series-cells basis, sent as a token
     SERIES_PROOF_CELLS, SERIES_PROOF_BRANCH_RATIO, SERIES_PROOF_NONE,
+    REJECTED_RULE_ODOMETER_WITNESS, REJECTED_RULE_PACK_VOLTAGE_WITNESS, ODOMETER_WITNESS_DISTRUSTED,
     // PWM evidence (each carries its reason in its words), calibration source and basis, the estimate ceiling, the wheel alarm
     PWM_EVIDENCE_UNKNOWN, PWM_EVIDENCE_NEVER_REPORTED, PWM_EVIDENCE_REPORTS,
     PWM_SOURCE_WIZARD, PWM_SOURCE_RIDING, PWM_SOURCE_MANUAL,
@@ -739,6 +741,15 @@ private class Ctx(
             "cells" -> InfoChoice.SERIES_PROOF_CELLS
             "branch_ratio" -> InfoChoice.SERIES_PROOF_BRANCH_RATIO
             "none" -> InfoChoice.SERIES_PROOF_NONE
+            else -> null
+        }
+        DeviceFactKey.REJECTED_LAST_RULE -> when (value) {
+            PlausibilityRule.R1_ODOMETER_WITNESS.token -> InfoChoice.REJECTED_RULE_ODOMETER_WITNESS
+            PlausibilityRule.R13_PACK_VOLTAGE_WITNESS.token -> InfoChoice.REJECTED_RULE_PACK_VOLTAGE_WITNESS
+            else -> null
+        }
+        DeviceFactKey.ODOMETER_WITNESS -> when (value) {
+            "distrusted" -> InfoChoice.ODOMETER_WITNESS_DISTRUSTED
             else -> null
         }
         else -> null

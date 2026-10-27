@@ -329,6 +329,26 @@ class VehicleInfoModelTest {
         assertNull(rows[6].choice); assertEquals("24", rows[6].value)
     }
 
+    @Test fun ledgerTokensBecomeLocalizedChoicesAndCountsAndNumbersStayPlain() {
+        val facts = listOf(
+            DeviceFact(DeviceFactKey.REJECTED_FRAMES, "3"),
+            DeviceFact(DeviceFactKey.REJECTED_LAST_RULE, "odometer_witness"),
+            DeviceFact(DeviceFactKey.REJECTED_LAST_RULE, "pack_voltage_witness", index = 1),
+            DeviceFact(DeviceFactKey.REJECTED_LAST_RULE, "rule_from_the_future", index = 2),
+            DeviceFact(DeviceFactKey.REJECTED_LAST_DETAIL, "2816164 m / +7 m"),
+            DeviceFact(DeviceFactKey.ODOMETER_REBASED, "1"),
+            DeviceFact(DeviceFactKey.ODOMETER_WITNESS, "distrusted"),
+        )
+        val rows = info(wheel, data = t4Data(), links = listOf(link(facts))).section(InfoSectionKind.DEVICE_FACTS).single().rows
+        assertNull(rows[0].choice); assertEquals("3", rows[0].value)
+        assertEquals(InfoChoice.REJECTED_RULE_ODOMETER_WITNESS, rows[1].choice); assertNull(rows[1].value)
+        assertEquals(InfoChoice.REJECTED_RULE_PACK_VOLTAGE_WITNESS, rows[2].choice)
+        assertNull(rows[3].choice); assertEquals("rule_from_the_future", rows[3].value)
+        assertNull(rows[4].choice); assertEquals("2816164 m / +7 m", rows[4].value)
+        assertNull(rows[5].choice); assertEquals("1", rows[5].value)
+        assertEquals(InfoChoice.ODOMETER_WITNESS_DISTRUSTED, rows[6].choice); assertNull(rows[6].value)
+    }
+
     @Test fun aWordTokenOnAFactThatNeverCarriesOneIsNotMistakenForAChoice() {
         val rows = info(wheel, data = t4Data(), links = listOf(link(listOf(DeviceFact(DeviceFactKey.WHEEL_ALERTS, "true")))))
             .section(InfoSectionKind.DEVICE_FACTS).single().rows

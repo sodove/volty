@@ -173,6 +173,9 @@ fun InfoChoice.stringRes(): StringResource = when (this) {
         InfoChoice.SERIES_PROOF_CELLS -> Res.string.info_choice_series_proof_cells
         InfoChoice.SERIES_PROOF_BRANCH_RATIO -> Res.string.info_choice_series_proof_branch_ratio
         InfoChoice.SERIES_PROOF_NONE -> Res.string.info_choice_series_proof_none
+        InfoChoice.REJECTED_RULE_ODOMETER_WITNESS -> Res.string.info_choice_rejected_rule_odometer_witness
+        InfoChoice.REJECTED_RULE_PACK_VOLTAGE_WITNESS -> Res.string.info_choice_rejected_rule_pack_voltage_witness
+        InfoChoice.ODOMETER_WITNESS_DISTRUSTED -> Res.string.info_choice_odometer_witness_distrusted
         InfoChoice.PWM_EVIDENCE_UNKNOWN -> Res.string.info_choice_pwm_evidence_unknown
         InfoChoice.PWM_EVIDENCE_NEVER_REPORTED -> Res.string.info_choice_pwm_evidence_never_reported
         InfoChoice.PWM_EVIDENCE_REPORTS -> Res.string.info_choice_pwm_evidence_reports
@@ -205,6 +208,11 @@ fun DeviceFactKey.stringRes(): StringResource = when (this) {
         DeviceFactKey.SMART_BMS_SEEN -> Res.string.info_fact_smart_bms_seen
         DeviceFactKey.BRANCH_VOLTAGE_V -> Res.string.info_fact_branch_voltage_v
         DeviceFactKey.BRANCH_CURRENT_A -> Res.string.info_fact_branch_current_a
+        DeviceFactKey.REJECTED_FRAMES -> Res.string.info_fact_rejected_frames
+        DeviceFactKey.REJECTED_LAST_RULE -> Res.string.info_fact_rejected_last_rule
+        DeviceFactKey.REJECTED_LAST_DETAIL -> Res.string.info_fact_rejected_last_detail
+        DeviceFactKey.ODOMETER_REBASED -> Res.string.info_fact_odometer_rebased
+        DeviceFactKey.ODOMETER_WITNESS -> Res.string.info_fact_odometer_witness
         DeviceFactKey.CONTROLLER_ID -> Res.string.info_fact_controller_id
         DeviceFactKey.FIRMWARE -> Res.string.info_fact_firmware
         DeviceFactKey.CAN_IDS -> Res.string.info_fact_can_ids

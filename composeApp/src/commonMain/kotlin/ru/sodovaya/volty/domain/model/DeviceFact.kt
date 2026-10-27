@@ -19,6 +19,13 @@ enum class DeviceFactKey {
     BRANCH_VOLTAGE_V,
     BRANCH_CURRENT_A,
 
+    /** Plausibility ledger (Begode): frames held back this connection, the newest rule and its numbers, re-baselines, witness state. */
+    REJECTED_FRAMES,
+    REJECTED_LAST_RULE,
+    REJECTED_LAST_DETAIL,
+    ODOMETER_REBASED,
+    ODOMETER_WITNESS,
+
     // VESC
     CONTROLLER_ID,
     FIRMWARE,

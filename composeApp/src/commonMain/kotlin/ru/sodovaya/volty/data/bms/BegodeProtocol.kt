@@ -1268,7 +1268,10 @@ class BegodeProtocol(
      * `SERIES_CELLS_PROOF` is `cells` (branch 0's own cell pages summed against the frame),
      * `branch_ratio` (the 0x01 branch voltage against the live frame, no cell pages), or `none`;
      * `SERIES_CELLS` the proven count, absent while the proof is `none` (a profile's configured
-     * count is not a proof); `SMART_BMS_SEEN` `true`/`false`; per decoded branch
+     * count is not a proof); `REJECTED_FRAMES` / `ODOMETER_REBASED` the per-connection ledger counts (0 on a healthy
+     * wheel; listed once a 0x04 was seen), `REJECTED_LAST_RULE` the [PlausibilityRule.token] of this connection's newest
+     * rejection and `REJECTED_LAST_DETAIL` its numbers ("reference / witness"), `ODOMETER_WITNESS` = `distrusted` only
+     * when the power-on counter stopped tracking the odometer (Ruling 4); `SMART_BMS_SEEN` `true`/`false`; per decoded branch
      * `BRANCH_VOLTAGE_V` / `BRANCH_CURRENT_A` at `index = branch + 1` (current: + = charging).
      *
      * **Cached.** This is read after every notification, so the list is rebuilt only when the
@@ -1294,6 +1297,9 @@ class BegodeProtocol(
             s[11 + i * 2] = tenths(data?.voltage)
             s[12 + i * 2] = tenths(data?.current)
         }
+        s[15] = rejectedFrameCount
+        s[16] = rebaseCount
+        s[17] = if (odometerWitnessDistrusted) 1L else 0L
         if (s.contentEquals(cachedStamp)) return cachedFacts
         cachedFacts = buildFacts()
         factsStamp = cachedStamp
@@ -1319,6 +1325,18 @@ class BegodeProtocol(
             add(DeviceFact(DeviceFactKey.SERIES_CELLS_PROOF, seriesCellsProof?.token ?: "none"))
             derivedCellCountValue?.let { add(DeviceFact(DeviceFactKey.SERIES_CELLS, it.toString())) }
             add(DeviceFact(DeviceFactKey.SMART_BMS_SEEN, smartBmsSeen.toString()))
+        }
+        // The plausibility ledger: listed once a 0x04 has been seen (or a rule already held something back, which is
+        // itself evidence), and 0 on a healthy wheel, so a counter that grows is visibly a false positive.
+        if (sawOdometer || rejectedFrameCount > 0 || rebaseCount > 0) {
+            add(DeviceFact(DeviceFactKey.REJECTED_FRAMES, rejectedFrameCount.toString()))
+            lastRejectedFrame?.let { last ->
+                add(DeviceFact(DeviceFactKey.REJECTED_LAST_RULE, last.rule.token))
+                listOfNotNull(last.reference, last.witness).takeIf { it.isNotEmpty() }
+                    ?.let { add(DeviceFact(DeviceFactKey.REJECTED_LAST_DETAIL, it.joinToString(" / "))) }
+            }
+            add(DeviceFact(DeviceFactKey.ODOMETER_REBASED, rebaseCount.toString()))
+            if (odometerWitnessDistrusted) add(DeviceFact(DeviceFactKey.ODOMETER_WITNESS, "distrusted"))
         }
         for (i in 0 until 2) {
             val data = branches[i].lastData ?: continue
@@ -2126,8 +2144,8 @@ class BegodeProtocol(
          */
         private const val POWER_JOIN_MAX_MOTION_FRAMES = 3
 
-        /** Slots of the cache stamp in [deviceFacts]: eleven scalars and two per branch. */
-        private const val FACTS_STAMP_SIZE = 15
+        /** Slots of the cache stamp in [deviceFacts]: eleven scalars, two per branch and three of the plausibility ledger. */
+        private const val FACTS_STAMP_SIZE = 18
         private const val FRAME_SIZE = 24
         private const val TAIL_OFFSET = 20
 

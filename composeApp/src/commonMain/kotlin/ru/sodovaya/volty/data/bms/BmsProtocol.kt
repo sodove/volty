@@ -49,9 +49,13 @@ abstract class BmsProtocol {
     @Volatile private var rejectedCount: Long = 0L
     @Volatile private var rebases: Long = 0L
     @Volatile private var ring: List<RejectedFrame> = emptyList()
+    @Volatile private var lastRejection: RejectedFrame? = null
 
     /** Frames a plausibility rule refused to publish on this connection. Zeroed by [resetLedger]. */
     val rejectedFrameCount: Long get() = rejectedCount
+
+    /** The newest [LedgerKind.REJECTED] entry of THIS connection: null before one and after [resetLedger] (the ring keeps older ones). */
+    val lastRejectedFrame: RejectedFrame? get() = lastRejection
 
     /** Counter re-baselines accepted after confirmation on this connection. A storm of them on a healthy device is a false positive. */
     val rebaseCount: Long get() = rebases
@@ -72,7 +76,9 @@ abstract class BmsProtocol {
     protected fun recordRejection(frameType: Int, rule: PlausibilityRule, raw: ByteArray, reference: String?, witness: String?,
         atFrameIndex: Long = ledgerFrameIndex) {
         rejectedCount++
-        push(RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, LedgerKind.REJECTED))
+        val entry = RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, LedgerKind.REJECTED)
+        lastRejection = entry
+        push(entry)
     }
 
     /** Record a confirmed counter re-baseline (the frame that became the new baseline). */
@@ -93,6 +99,7 @@ abstract class BmsProtocol {
         ledgerFrameIndex = 0L
         rejectedCount = 0L
         rebases = 0L
+        lastRejection = null
     }
 
     private fun push(entry: RejectedFrame) { ring = (ring + entry).takeLast(LEDGER_CAPACITY) }

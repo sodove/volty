@@ -2,14 +2,14 @@ package ru.sodovaya.volty.domain.plausibility
 
 /**
  * Which plausibility rule held a frame back. One entry per rule in the plan; later tasks append (R13 pack voltage,
- * the fault-bit debounce, ...). The name is exported in the BLE dump, so it is stable: never rename a constant.
+ * the fault-bit debounce, ...). [token] is what a protocol puts in a device fact (stable too). The name is exported in the BLE dump, so it is stable: never rename a constant.
  */
-enum class PlausibilityRule {
+enum class PlausibilityRule(val token: String) {
     /** Begode 0x04 lifetime odometer contradicted by the live frame's power-on counter (or by the counter gate). */
-    R1_ODOMETER_WITNESS,
+    R1_ODOMETER_WITNESS("odometer_witness"),
 
     /** Begode 0x01 pack voltage contradicted by the scaled live (0x00) voltage once the branch ratio is certified. */
-    R13_PACK_VOLTAGE_WITNESS,
+    R13_PACK_VOLTAGE_WITNESS("pack_voltage_witness"),
 }
 
 /**

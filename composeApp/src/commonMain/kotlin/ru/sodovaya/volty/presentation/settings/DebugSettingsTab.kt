@@ -277,6 +277,11 @@ private fun StringBuilder.appendBundleHeader(state: SettingsComponent.State) {
             appendLine("    voltage=${known(c.inputVoltageV, c.isConnected && c.hasInputVoltage)} speed=${known(c.speedKmh, c.isConnected && c.speedKnown)} pwm=${known(c.dutyPercent, c.isConnected && c.hasDuty)} batteryCurrent=${known(c.batteryCurrentA, c.isConnected && c.hasBatteryCurrent)} phaseCurrent=${known(c.motorCurrentA, phaseKnown)} power=${known(c.powerW, c.isConnected && c.hasPower)}")
             appendLine("    knownFlags inputVoltage=${c.isConnected && c.hasInputVoltage} speed=${c.isConnected && c.speedKnown} duty=${c.isConnected && c.hasDuty} batteryCurrent=${c.isConnected && c.hasBatteryCurrent} phaseCurrent=$phaseKnown power=${c.isConnected && c.hasPower}")
         }
+        // Always-on ring, independent of manual capture: what a plausibility rule held back, raw bytes included.
+        appendLine("  rejected frames (${link.rejectedFrames.size}, oldest first)")
+        for (f in link.rejectedFrames) {
+            appendLine("    rejectedFrame atFrame=${f.atFrameIndex} kind=${f.kind} rule=${f.rule} type=0x${f.frameType.toString(16).padStart(2, '0')} reference=${f.reference ?: "-"} witness=${f.witness ?: "-"} raw=${f.rawHex}")
+        }
     }
 }
 

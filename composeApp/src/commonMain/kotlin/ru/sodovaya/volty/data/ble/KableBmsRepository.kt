@@ -12,6 +12,7 @@ import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.ProtocolDiagnosticValues
 import ru.sodovaya.volty.domain.model.DeviceFact
+import ru.sodovaya.volty.domain.plausibility.RejectedFrame
 import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.data.bms.LearnedCellCountSource
@@ -315,7 +316,8 @@ class KableBmsRepository private constructor(
             protocol, checkNotNull(links.find { it.spec.address == address }), ownership, checkNotNull(sampleChannel))
     private val protocolDiagnosticsByAddress = mutableMapOf<String, ProtocolDiagnosticValues>()
     /** Per-link notification rate and protocol facts, stored by the session, published with the diagnostics. */
-    private class LinkStats(val framesPerSecond: Float?, val facts: List<DeviceFact>, val atEpochMillis: Long)
+    private class LinkStats(val framesPerSecond: Float?, val facts: List<DeviceFact>, val atEpochMillis: Long,
+        val rejectedFrames: List<RejectedFrame> = emptyList())
     private val linkStatsByAddress = mutableMapOf<String, LinkStats>()
     private val diagnosticBatteriesByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticBatterySample>>()
     private val diagnosticControllersByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticControllerSample>>()
@@ -2733,7 +2735,7 @@ class KableBmsRepository private constructor(
                     diagnosticBatteriesByAddress[link.spec.address]?.values?.sortedBy { it.localPackIndex }.orEmpty(),
                     diagnosticControllersByAddress[link.spec.address]?.values?.sortedBy { it.localControllerIndex }.orEmpty(),
                     facts = stats?.facts.orEmpty(), framesPerSecond = stats?.framesPerSecond, reconnects = link.reconnects,
-                    statsAtEpochMillis = stats?.atEpochMillis)
+                    statsAtEpochMillis = stats?.atEpochMillis, rejectedFrames = stats?.rejectedFrames.orEmpty())
             }
         }
         diagnosticBuffer.updateActiveLinks(snapshots)
@@ -3176,7 +3178,7 @@ class KableBmsRepository private constructor(
                 },
                 onLinkStats = { framesPerSecond, facts ->
                     synchronized(linkStateLock) {
-                        if (links.any { it === link }) linkStatsByAddress[address] = LinkStats(framesPerSecond, facts, Clock.System.now().toEpochMilliseconds())
+                        if (links.any { it === link }) linkStatsByAddress[address] = LinkStats(framesPerSecond, facts, Clock.System.now().toEpochMilliseconds(), protocol.rejectedFrames())
                     }
                 },
                 onProtocolDiagnostics = { values ->

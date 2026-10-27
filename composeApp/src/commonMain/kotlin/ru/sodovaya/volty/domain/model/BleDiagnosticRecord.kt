@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.domain.model
 
+import ru.sodovaya.volty.domain.plausibility.RejectedFrame
+
 
 /** One incoming BLE notification retained for an explicitly started capture. */
 data class BleDiagnosticRecord(
@@ -44,6 +46,11 @@ data class BleDiagnosticLink(
      * than a few seconds as unknown rather than current.
      */
     val statsAtEpochMillis: Long? = null,
+    /**
+     * The protocol's always-on rejection ring (newest 32, oldest first): frames a plausibility rule held back and
+     * counter re-baselines, with the raw bytes. Independent of manual capture; it exists so the next torn read is measured.
+     */
+    val rejectedFrames: List<RejectedFrame> = emptyList(),
 )
 
 /** Latest decoded battery sample attributed to one pack on this BLE link. */

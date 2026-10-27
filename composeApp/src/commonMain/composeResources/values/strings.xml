@@ -1517,6 +1517,9 @@
     <string name="info_choice_series_proof_cells">from the cell count</string>
     <string name="info_choice_series_proof_branch_ratio">from the branch voltage ratio</string>
     <string name="info_choice_series_proof_none">not proven</string>
+    <string name="info_choice_rejected_rule_odometer_witness">odometer did not match the since-power-on counter</string>
+    <string name="info_choice_rejected_rule_pack_voltage_witness">0x01 voltage did not match the live frame</string>
+    <string name="info_choice_odometer_witness_distrusted">the since-power-on counter does not match the odometer; the check is off</string>
     <string name="info_choice_link_online">Online</string>
     <string name="info_choice_link_offline">Offline</string>
     <string name="info_choice_alert_armed">armed</string>
@@ -1532,6 +1535,11 @@
     <string name="info_fact_motion_duty_raw">Motion word 0x07 (raw)</string>
     <string name="info_fact_series_cells">Series cells</string>
     <string name="info_fact_series_cells_proof">Series cells, basis</string>
+    <string name="info_fact_rejected_frames">Frames rejected (this connection)</string>
+    <string name="info_fact_rejected_last_rule">Last rejected</string>
+    <string name="info_fact_rejected_last_detail">Last rejected, numbers</string>
+    <string name="info_fact_odometer_rebased">Odometer re-based</string>
+    <string name="info_fact_odometer_witness">Since-power-on counter</string>
     <string name="info_fact_smart_bms_seen">Smart BMS seen</string>
     <string name="info_fact_branch_voltage_v">Branch voltage</string>
     <string name="info_fact_branch_current_a">Branch current</string>
