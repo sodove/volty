@@ -31,13 +31,13 @@ sealed interface CounterDecision<P> {
  * Rules are decided one point late (a held point), so decisions for earlier points are returned from a later
  * [offer]; [finish] settles what is still open at the end of a finite series. A live caller never calls it.
  *
- * False-positive analysis: with the default monotone predicate (a lifetime counter does not run backwards except
- * at a reset) every step of the three field dumps is monotone, so nothing fires; a test replays the dump-(3)
+ * False-positive analysis: with a monotone predicate, `agrees = { a, b -> value(b) >= value(a) }` (a lifetime counter does not run
+ * backwards except at a reset; there is no built-in default, each caller supplies it) every step of the three field dumps is monotone, so nothing fires; a test replays the dump-(3)
  * odometer. A false positive would show as a counter that stops growing on a healthy wheel. Three identical torn
  * reads in a row would re-baseline to the needle, but the jump contributes 0: only the published odometer is wrong
  * until the next re-baseline back. That is why "sum of increments" is safe where "last minus first" is not.
  *
- * Not thread-safe; owned by one collector.
+ * Not thread-safe; owned by one collector. Call [finish] once, at the end of a finite series; do not offer after it.
  */
 class CounterStepGate<P>(
     private val value: (P) -> Double,

@@ -138,6 +138,96 @@ class CounterStepGateTest {
         assertEquals(174.0, gate.acceptedSumM)
     }
 
+    private fun decisions(gate: CounterStepGate<Pt>, values: List<Double>) = run(gate, values)
+
+    @Test
+    fun provisional_third_outcome_accepts_x_and_y_starts_a_chain() {
+        // 107 agrees with A=100; 50 disagrees with both 107 and 100: 107 is accepted, 50 starts a chain.
+        val gate = monotone()
+        val d = decisions(gate, listOf(100.0, 107.0, 50.0, 57.0, 64.0))
+        assertEquals(
+            listOf(
+                CounterDecision.Accepted(Pt(0, 100.0), 0.0),
+                CounterDecision.Accepted(Pt(1, 107.0), 7.0),
+                CounterDecision.Rebased(Pt(4, 64.0), -57.0, 14.0),
+            ),
+            d,
+        )
+        assertEquals(21.0, gate.acceptedSumM)
+    }
+
+    @Test
+    fun chain_discarded_by_a_point_agreeing_with_anchor_which_is_then_held_and_accepted() {
+        val gate = monotone()
+        val d = decisions(gate, listOf(5000.0, 100.0, 101.0, 5007.0, 5014.0))
+        assertEquals(
+            listOf(
+                CounterDecision.Accepted(Pt(0, 5000.0), 0.0),
+                CounterDecision.Rejected(Pt(1, 100.0), Pt(0, 5000.0)),
+                CounterDecision.Rejected(Pt(2, 101.0), Pt(0, 5000.0)),
+                CounterDecision.Accepted(Pt(3, 5007.0), 7.0),
+                CounterDecision.Accepted(Pt(4, 5014.0), 7.0),
+            ),
+            d,
+        )
+        assertEquals(14.0, gate.acceptedSumM)
+    }
+
+    @Test
+    fun needle_right_after_a_rebase_is_judged_against_the_new_baseline() {
+        val gate = monotone()
+        val d = decisions(
+            gate,
+            listOf(2999990.0, 2650000.0, 2650007.0, 2650014.0, 2715550.0, 2650021.0, 2650028.0),
+        )
+        assertEquals(listOf(2715550.0), d.rejectedValues())
+        assertEquals(1, d.count { it is CounterDecision.Rejected })
+        assertEquals(1, d.count { it is CounterDecision.Rebased })
+        assertEquals(14.0 + 7.0 + 7.0, gate.acceptedSumM)
+    }
+
+    @Test
+    fun immediate_does_not_bypass_chain_discard_and_keeps_order() {
+        val gate = CounterStepGate<Pt>(
+            value = { it.m }, agrees = { a, b -> b.m >= a.m }, immediate = { _, _ -> true },
+        )
+        val d = decisions(gate, listOf(5000.0, 100.0, 101.0, 5007.0))
+        assertEquals(
+            listOf(
+                CounterDecision.Accepted(Pt(0, 5000.0), 0.0),
+                CounterDecision.Rejected(Pt(1, 100.0), Pt(0, 5000.0)),
+                CounterDecision.Rejected(Pt(2, 101.0), Pt(0, 5000.0)),
+                CounterDecision.Accepted(Pt(3, 5007.0), 7.0),
+            ),
+            d,
+        )
+    }
+
+    @Test
+    fun immediate_with_a_disagreeing_point_still_starts_a_chain_and_rebases() {
+        val gate = CounterStepGate<Pt>(
+            value = { it.m }, agrees = { a, b -> b.m >= a.m }, immediate = { _, _ -> true },
+        )
+        val d = decisions(gate, listOf(5000.0, 100.0, 107.0, 114.0))
+        assertEquals(CounterDecision.Rebased(Pt(3, 114.0), -4900.0, 14.0), d.last())
+        assertTrue(d.none { it is CounterDecision.Rejected })
+        assertEquals(14.0, gate.acceptedSumM)
+    }
+
+    @Test
+    fun witness_rebase_then_following_steps_are_credited_against_the_new_anchor() {
+        val gate = witnessGate()
+        val out = mutableListOf<CounterDecision<Pt>>()
+        listOf(
+            Pt(0, 2999990.0, 100.0), Pt(1, 3350000.0, 107.0), Pt(2, 3350007.0, 114.0),
+            Pt(3, 3350014.0, 121.0), Pt(4, 3350021.0, 128.0), Pt(5, 3350028.0, 135.0),
+        ).forEach { out += gate.offer(it) }
+        out += gate.finish()
+        assertEquals(1, out.count { it is CounterDecision.Rebased })
+        assertTrue(out.none { it is CounterDecision.Rejected })
+        assertEquals(28.0, gate.acceptedSumM)
+    }
+
     private companion object {
         // Type-0x04 frames (u32 BE, bytes 2..5), volty-ble-dump (3).txt, in order; metres.
         val DUMP3_ODOMETER_M: List<Double> = listOf(
