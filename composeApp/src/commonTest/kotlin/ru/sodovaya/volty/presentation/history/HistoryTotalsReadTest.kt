@@ -70,13 +70,39 @@ class HistoryTotalsReadTest {
         assertTrue(repo.issued.count { it.first == odo } > 1, "paged through the cursor")
     }
 
-    @Test fun theTripSeriesWinsWhenItRises() = runTest {
+    @Test fun theLargerAcceptedSumWinsSoATripThatRoseAFewMetresNeverBeatsAHealthyOdometer() = runTest {
         val repo = Repo(origin).apply {
             series = mapOf(trip to (0..100).map { at(it * 500L, trip, it * 0.003) }, odo to counterRide(odo)); stats = incoherentStats
         }
         val d = readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.DISTANCE_KM)!!
-        assertEquals(0.3, d.value, 0.001)
-        assertTrue(repo.issued.none { it.first == odo }, "the odometer was never needed")
+        assertEquals(5.70, d.value, 0.01)
+        assertTrue(repo.issued.any { it.first == trip } && repo.issued.any { it.first == odo }, "both series were walked")
+    }
+
+    @Test fun aHealthyTripCounterIsUsedWhenItCarriesTheRide() = runTest {
+        val repo = Repo(origin).apply {
+            series = mapOf(trip to counterRide(trip), odo to (0..100).map { at(it * 500L, odo, 2816.4 + it * 0.003) })
+        }
+        assertEquals(5.70, readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.DISTANCE_KM)!!.value, 0.01)
+    }
+
+    @Test fun aCounterTheCrossCheckJudgedUnearnedIsFinalAndTheStatsMaxMinCannotOverruleIt() = runTest {
+        // Incoherent on purpose: the samples carry a 67 km step (the gated sum is impossible at a 55 km/h peak) while the stats
+        // of the very same series say a plausible, complete 5.7 km (a reset hid the needle from max - min).
+        val needled = listOf(at(0, odo, 2816.4), at(1_000, odo, 2883.6), at(1_500, odo, 2883.603))
+        val repo = Repo(origin).apply {
+            series = mapOf(odo to needled)
+            stats = mapOf(odo to HistoryStats(2816.4, 2822.1, null, true), speed to HistoryStats(0.0, 55.1, null, true))
+        }
+        val totals = readHistoryTotals(repo, "r", listOf(esc), range)
+        assertNull(totals.of(HistoryTotalKind.DISTANCE_KM), "no GPS: no tile, not the stats' 5.7")
+        assertNull(totals.of(HistoryTotalKind.AVERAGE_KMH))
+        repo.fixes = (0..100L).map(::fix)
+        assertEquals(0.60, readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.DISTANCE_KM)!!.value, 0.01, "GPS alone")
+        // A healthy trip beside the needled odometer is preferred to the unearned one.
+        repo.fixes = emptyList()
+        repo.series = mapOf(odo to needled, trip to counterRide(trip))
+        assertEquals(5.70, readHistoryTotals(repo, "r", listOf(esc), range).of(HistoryTotalKind.DISTANCE_KM)!!.value, 0.01)
     }
 
     @Test fun gpsIsAlwaysReadAndWinsWhereItCovers() = runTest {

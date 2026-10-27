@@ -83,6 +83,20 @@ class HistoryRideDistanceTest {
         assertEquals(0.013, gpsGap.km, 1e-6, "a GPS gap says nothing about the wheel counter")
     }
 
+    @Test fun anIncrementIsFillOnlyWhenItsMidpointIsOutsideTheCoveredInterval() {
+        // One covered interval [100 s, 101 s] (two fixes at one spot: GPS length 0, so the distance is exactly the fill).
+        val fixes = listOf(HistoryGpsFix(tick(100_000), 55.0, 37.0, 5.0, null), HistoryGpsFix(tick(101_000), 55.0, 37.0, 5.0, null))
+        fun fill(from: Long, to: Long) = historyRideDistance(listOf(at(from, 100.000), at(to, 100.010)), fixes, origin, null, 200_000)?.km
+        assertNull(fill(99_000, 101_000), "midpoint exactly on the start edge is covered")
+        assertNull(fill(99_002, 101_000), "midpoint just inside")
+        assertEquals(0.010, fill(99_000, 100_998)!!, 1e-9, "midpoint 99 999 is just outside: filled")
+        assertNull(fill(100_000, 102_000), "midpoint exactly on the end edge is covered")
+        assertEquals(0.010, fill(100_002, 102_000)!!, 1e-9, "midpoint 101 001 is just outside: filled")
+        // The start of the increment is outside while its midpoint is inside: the midpoint decides, not either end.
+        assertNull(fill(99_500, 100_600))
+        assertEquals(0.010, fill(50_000, 51_000)!!, 1e-9)
+    }
+
     @Test fun aSampleOnAnotherClockGenerationIsNotOnTheRideAxisAndEndsTheRun() {
         val d = checkNotNull(historyRideDistance(
             listOf(at(0, 100.000), at(500, 100.003), HistorySample(tick(600, generation = 2), odo, 500.0),

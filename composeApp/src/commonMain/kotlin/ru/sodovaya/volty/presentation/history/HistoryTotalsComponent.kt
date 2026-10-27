@@ -67,30 +67,34 @@ internal suspend fun readHistoryTotals(repository: HistoryReadRepository, rideId
     val peak = historyPeakSpeedKmh(sources, stats)
 
     var budgetRanOut = false
-    val detailed = try {
+    var walked: HistoryRideWalk? = null
+    try {
         val origin = repository.ride(rideId)?.started
-        if (origin == null) null else {
-            var found: HistoryRideDistance? = null
-            // The counter series in order of preference; the first one that actually rises is the one to walk.
-            for (metric in listOf("trip_distance_km", "odometer_km")) {
+        if (origin != null) {
+            // Trip and odometer of the motion tier, both gated. A series the cross-check judged unearned loses to any that
+            // was not; among the rest the larger accepted sum wins (a trip that restarted and rose a few metres must not
+            // beat a healthy odometer).
+            val walks = ArrayList<HistoryRideWalk>()
+            search@ for (metric in listOf("trip_distance_km", "odometer_km")) {
                 for (source in tier(sources, motionTiers)) {
                     val read = readHistoryDetail(repository, rideId, HistorySeriesKey(source.id, metric), range, maxDetailPages)
-                        ?: return historyVisibleTotals(historyRideTotals(sources, stats, duration,
-                            historyStatsDistance(sources, stats, duration, route?.fixes?.let(::historyGpsDistanceKm))))
-                    if (!read.complete) { budgetRanOut = true; break }
-                    val known = read.samples.mapNotNull { it.value }
-                    if (known.isEmpty() || known.min() >= known.max()) continue
-                    found = historyRideDistance(read.samples, route?.fixes.orEmpty(), origin, peak, duration, route?.markers.orEmpty())
-                    break
+                        ?: break@search // this reader cannot page detail: the stats path decides
+                    if (!read.complete) { budgetRanOut = true; break@search }
+                    if (read.samples.mapNotNull { it.value }.distinct().size < 2) continue
+                    walks += historyRideWalk(read.samples, route?.fixes.orEmpty(), origin, peak, duration, route?.markers.orEmpty())
                 }
-                if (found != null || budgetRanOut) break
             }
-            found
+            if (!budgetRanOut) {
+                walked = walks.filter { !it.crossChecked && it.acceptedM > 0.0 }.maxByOrNull { it.acceptedM }
+                    ?: walks.firstOrNull { it.crossChecked }
+            }
         }
     } catch (cancel: CancellationException) { throw cancel }
-    catch (_: Exception) { null }
+    catch (_: Exception) { walked = null }
 
-    val distance = detailed ?: historyStatsDistance(sources, stats, duration, route?.fixes?.let(::historyGpsDistanceKm))
+    // A counter the cross-check judged unearned is final: GPS alone or no tile, never the stats' max - min.
+    val distance = if (walked != null) walked.distance
+    else historyStatsDistance(sources, stats, duration, route?.fixes?.let(::historyGpsDistanceKm))
         ?.let { if (budgetRanOut) it.copy(approximate = true) else it }
     return historyVisibleTotals(historyRideTotals(sources, stats, duration, distance))
 }

@@ -28,6 +28,10 @@ data class HistoryRideDistance(val km: Double, val approximate: Boolean)
  *    tile, therefore no average and no Wh/km). Never a clamped number.
  *  - [HistoryRideDistance.approximate]: any fill used, any step rejected or re-baselined, or the cross-check fired.
  *
+ * Known limit, inherited from the gate: two consecutive identical torn reads (a needle repeated once) agree with each
+ * other, so the gate accepts them and the step adds its ~65 km. Only the cross-check above catches that; when GPS is
+ * partial it then shows the GPS length alone and discards the good fill. Three repeats re-baseline instead.
+ *
  * False-positive risk: a ride with GPS everywhere shows the GPS length, which reads slightly long at walking pace.
  * The cross-check needs a genuine peak: a speed needle in [peakKmh] only loosens it (Task 10 removes those). A
  * persistent reset costs one increment (the jump itself), so a ride ends up at most a step short. A false positive of
@@ -40,7 +44,24 @@ fun historyRideDistance(
     peakKmh: Double?,
     durationMillis: Long,
     markers: List<HistoryMarker> = emptyList(),
-): HistoryRideDistance? {
+): HistoryRideDistance? = historyRideWalk(counter, gps, origin, peakKmh, durationMillis, markers).distance
+
+/**
+ * What one counter series gave: the [distance] (null: nothing earned), the gate's [acceptedM] sum over all runs (how
+ * much real progress the series carries, for choosing between trip and odometer) and whether the [crossChecked]
+ * witness fired (the counter was judged unearned: GPS alone or nothing, and no other source may overrule that).
+ */
+internal class HistoryRideWalk(val distance: HistoryRideDistance?, val acceptedM: Double, val crossChecked: Boolean)
+
+internal fun historyRideWalk(
+    counter: List<HistorySample>,
+    gps: List<HistoryGpsFix>,
+    origin: HistoryTick,
+    peakKmh: Double?,
+    durationMillis: Long,
+    markers: List<HistoryMarker> = emptyList(),
+): HistoryRideWalk {
+    var acceptedMetres = 0.0
     val covered = coveredIntervals(gps, origin)
     val gpsKm = historyGpsDistanceKm(gps)
     val breaks = markers.filter { it.kind != HistoryMarkerKind.GPS_GAP }
@@ -70,7 +91,7 @@ fun historyRideDistance(
             }
         }
     }
-    fun endRun() { settle(run.gate.finish()); run = CounterRun() }
+    fun endRun() { settle(run.gate.finish()); acceptedMetres += run.gate.acceptedSumM; run = CounterRun() }
 
     var lastTick: HistoryTick? = null
     var lastAxis: Long? = null
@@ -92,9 +113,9 @@ fun historyRideDistance(
     val total = gpsKm + fillMetres / 1000.0
     val limit = peakKmh?.let { it * (durationMillis / 3_600_000.0) * CROSS_CHECK_TOLERANCE }
     if (limit != null && durationMillis > 0 && total > limit) {
-        return if (gpsKm > 0.0) HistoryRideDistance(gpsKm, approximate = true) else null
+        return HistoryRideWalk(if (gpsKm > 0.0) HistoryRideDistance(gpsKm, approximate = true) else null, acceptedMetres, true)
     }
-    return total.takeIf { it > 0.0 }?.let { HistoryRideDistance(it, approximate) }
+    return HistoryRideWalk(total.takeIf { it > 0.0 }?.let { HistoryRideDistance(it, approximate) }, acceptedMetres, false)
 }
 
 /**
