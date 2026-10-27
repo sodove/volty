@@ -137,15 +137,97 @@ class BegodeOdometerWitnessTest {
         assertEquals(0L, p.rejectedFrameCount)
     }
 
-    @Test fun aPowerOnCounterResetFallsBackToTheMonotoneLookahead() {
+    @Test fun aPowerOnCounterResetOnATrustedWitnessFallsBackToTheMonotoneLookahead() {
+        // The witness must be TRUSTED first, or the reset rule is never reached (review I2: the earlier version of
+        // this test power-cycled an UNPROVEN witness, which falls back to monotone whatever the rule says).
         val p = BegodeProtocol(); val ev = capture(p)
-        p.pair(182, base)
-        p.pair(0, base + 3) // the wheel restarted its counter: no witness, held one 0x04
-        assertEquals(1, ev.odoEvents().size)
-        p.pair(7, base + 10)
+        p.inStep(3)
         assertEquals(3, ev.odoEvents().size)
-        assertEquals(0.010, p.trip(), 1e-6)
+        p.pair(0, base + 17) // the wheel restarted its counter: no witness for this step, so held one 0x04
+        assertEquals(3, ev.odoEvents().size, "held, not published, not buffered into a chain")
+        p.pair(7, base + 24)
+        assertEquals(5, ev.odoEvents().size, "both published once the witness works again")
+        assertEquals(0.024, p.trip(), 1e-6)
         assertEquals(0L, p.rejectedFrameCount)
+        assertEquals(0L, p.rebaseCount)
+        assertTrue(!p.odometerWitnessDistrusted)
+    }
+
+    @Test fun aTornDownFirstFrameDoesNotCreditSixtyFiveKilometresWhenTheWitnessIsProven() {
+        // INCOHERENT first frame torn the other way (-65 536 m). Review I1: the held next frame used to be accepted
+        // against it the moment the witness was proven, crediting +65.5 km.
+        val p = BegodeProtocol(); val ev = capture(p)
+        p.pair(101, base - 65_536)
+        for (i in 1..3) {
+            p.pair(pwron0 + 7 * i, base + 7 * i)
+            assertTrue(p.trip() < 0.1, "trip never exceeds 0.1 km")
+        }
+        assertEquals(2816.185, ev.odoEvents().last().value(TelemetryMetric.ODOMETER)!!, 1e-3)
+        assertEquals(0.014, p.trip(), 1e-6)
+        assertEquals(1L, p.rebaseCount)
+    }
+
+    @Test fun aTornUpFirstFrameBeforeAnyLiveFrameIsStillCaughtByTheMonotonePath() {
+        val p = BegodeProtocol()
+        p.onNotification(odo(base + 65_536)) // no live frame yet: no witness at all
+        for (i in 1..4) p.pair(pwron0 + 7 * i, base + 7 * i)
+        assertTrue(p.trip() < 0.1)
+        assertEquals(2816.192f, assertNotNull(p.latestMotion(0)).odometerKm, 1e-3f)
+    }
+
+    @Test fun aNeedleOnATrustedWitnessIsRejectedExactlyOnceAndNeverDemotesIt() {
+        val p = BegodeProtocol(); val ev = capture(p)
+        p.inStep(3) // the witness is proven: a riding wheel's normal state
+        val needle = odo(base + 21 + 65_536)
+        p.onNotification(live(pwron0 + 21)); p.onNotification(needle)
+        assertEquals(3, ev.odoEvents().size, "the needle publishes nothing")
+        p.pair(pwron0 + 28, base + 28)
+        assertEquals(4, ev.odoEvents().size)
+        assertEquals(0.028, p.trip(), 1e-6)
+        assertEquals(1L, p.rejectedFrameCount)
+        assertEquals(hex(needle), p.rejectedFrames().single().rawHex)
+        assertEquals("+7 m", p.rejectedFrames().single().witness)
+        assertTrue(!p.odometerWitnessDistrusted)
+    }
+
+    @Test fun aDownwardNeedleOnATrustedWitnessIsRejectedAndTheNextGoodFramePublishesOneLate() {
+        val p = BegodeProtocol()
+        p.inStep(3)
+        p.pair(pwron0 + 21, base + 21 - 65_536)
+        p.pair(pwron0 + 28, base + 28) // suspect against the needle: held back one frame
+        p.pair(pwron0 + 35, base + 35)
+        p.pair(pwron0 + 42, base + 42)
+        assertEquals(1L, p.rejectedFrameCount)
+        assertEquals(0.042, p.trip(), 1e-6)
+        assertTrue(!p.odometerWitnessDistrusted)
+    }
+
+    @Test fun twoNeedlesInARowOnATrustedWitnessAreBothRejected() {
+        val p = BegodeProtocol()
+        p.inStep(3)
+        p.pair(pwron0 + 21, base + 21 + 65_536)
+        p.pair(pwron0 + 28, base + 28 + 65_536)
+        p.pair(pwron0 + 35, base + 35)
+        assertEquals(2L, p.rejectedFrameCount)
+        assertEquals(0L, p.rebaseCount)
+        assertEquals(0.035, p.trip(), 1e-6)
+        assertTrue(!p.odometerWitnessDistrusted)
+    }
+
+    @Test fun twoCoherentDisagreementsDoNotDemoteTheWitnessButThreeDo() {
+        // R1_DISTRUST_AFTER = 3. The counter freezes for exactly N frames (odometer +50 m each, beyond the 40 m
+        // tolerance) and then resumes in step.
+        fun run(stuckFrames: Int): BegodeProtocol {
+            val p = BegodeProtocol()
+            p.inStep(3)
+            var o = base + 14
+            var w = pwron0 + 14
+            repeat(stuckFrames) { o += 50; p.pair(w, o) }
+            repeat(3) { o += 50; w += 50; p.pair(w, o) }
+            return p
+        }
+        assertTrue(!run(2).odometerWitnessDistrusted, "two disagreements are not enough")
+        assertTrue(run(3).odometerWitnessDistrusted, "three are")
     }
 
     @Test fun withoutALiveFrameBetweenThe0x04sAStepAndReturnIsRejected() {

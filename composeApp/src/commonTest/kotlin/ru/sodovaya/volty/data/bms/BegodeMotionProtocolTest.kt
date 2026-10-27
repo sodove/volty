@@ -1468,9 +1468,8 @@ class BegodeMotionProtocolTest {
         // A lifetime counter that went BACKWARDS while the wheel's counter kept going means the wheel contradicted
         // itself: the frame is held out (never published), so the trip neither goes negative nor moves.
         protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 2_110))
-        // (5 000, not 9 000: the tolerance is twice the last step, 4 000 m here, so a smaller backward step would
-        // sit inside it.)
-        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(5_000)))
+        // (The tolerance's "last step" is clamped to 100 m, so 9 000 is far outside it; review M2.)
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(9_000)))
         assertEquals(2f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f)
         assertEquals(12_000L, protocol.odometerMeters())
 

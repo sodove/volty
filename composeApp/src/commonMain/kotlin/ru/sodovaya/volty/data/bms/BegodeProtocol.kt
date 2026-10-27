@@ -568,6 +568,12 @@ class BegodeProtocol(
      *    the connection; those frames are re-decided by the monotone path and credited, and one
      *    [LedgerKind.WITNESS_DISTRUSTED] note is written ([odometerWitnessDistrusted]). A torn needle (one
      *    disagreement, then agreement) never gets here.
+     * Residuals (review of Task 4): (a) while the monotone path judges (UNPROVEN, DISTRUSTED, or no live frame
+     * between two 0x04), two identical torn reads in a row or a persistent forward jump ARE credited to the trip
+     * in full: only a needle that returns is caught there. (b) A first 0x04 that arrives before any live frame has
+     * no counter reading, so a first read torn DOWN is not caught by R1. (c) Distrust counts only CONSECUTIVE
+     * disagreements; a counter that disagrees on alternate frames would still see chains that never confirm (no
+     * realistic counter does this; [rejectedFrameCount] would climb).
      * The earlier revision of this task had no trust state; on a wheel whose counter does not track the odometer
      * every frame was rejected and the odometer and trip FROZE. That was wrong: a silent frozen trip is worse than
      * an unfiltered needle.
@@ -1669,6 +1675,10 @@ class BegodeProtocol(
         val point = OdometerPoint(frame.u32BE(2), witnessPowerOnM, liveStamp, frame.copyOf(), currentLedgerFrame)
         if (witnessTrust == WitnessTrust.UNPROVEN && (provesWitness(arrivedLast, point) || provesWitness(arrivedBeforeLast, point))) {
             witnessTrust = WitnessTrust.TRUSTED
+            // Points the gate is still holding were judged by the monotone path: re-judge them under R1. Without
+            // this a first 0x04 torn DOWN (-65 536 m) lets the held next frame be accepted against it, crediting
+            // +65.5 km to the trip (review I1; an earlier revision of this round had exactly that hole).
+            rebuildGateFromUndecided()
         }
         val previous = arrivedLast
         arrivedBeforeLast = arrivedLast
@@ -1698,14 +1708,22 @@ class BegodeProtocol(
         // A fresh gate, now judging by the monotone path alone. It starts from the last accepted point, then the
         // points the old gate had not yet decided, then the run: nothing is re-published, and nothing the run
         // contains was ever recorded as rejected.
+        rebuildGateFromUndecided()
+        run.forEach { offerOdometerPoint(it) }
+        recordLedgerNote(LedgerKind.WITNESS_DISTRUSTED, 0x04, PlausibilityRule.R1_ODOMETER_WITNESS, tipping.frame,
+            odometerText(beforeRun), rawWitnessStep(beforeRun, tipping)?.let { "+$it m" }, tipping.arrivedAt)
+    }
+
+    /**
+     * A fresh gate seeded with the last accepted point (its seed decision is discarded: nothing is re-published),
+     * then every point the old gate had not yet decided, re-offered in order under the CURRENT trust.
+     */
+    private fun rebuildGateFromUndecided() {
         odometerGate = newOdometerGate()
         lastAcceptedPoint?.let { odometerGate.offer(it) }
         val undecided = pendingPoints.toList()
         pendingPoints.clear()
         undecided.forEach { offerOdometerPoint(it) }
-        run.forEach { offerOdometerPoint(it) }
-        recordLedgerNote(LedgerKind.WITNESS_DISTRUSTED, 0x04, PlausibilityRule.R1_ODOMETER_WITNESS, tipping.frame,
-            odometerText(beforeRun), rawWitnessStep(beforeRun, tipping)?.let { "+$it m" }, tipping.arrivedAt)
     }
 
     /** Whether R1's witness was dropped for this connection; Task 8 surfaces it. */
@@ -1722,7 +1740,9 @@ class BegodeProtocol(
                 is CounterDecision.Accepted -> {
                     // A witnessed step may be a few metres negative inside the tolerance; the trip never decreases.
                     tripSumMeters += max(0.0, decision.incrementM)
-                    lastAcceptedStepM = decision.incrementM.toLong()
+                    // Clamped: a monotone-path acceptance can carry a huge step (a jump, a needle that was
+                    // credited) and must not blind R1's tolerance (2 x this) on the next frame (review M2).
+                    lastAcceptedStepM = decision.incrementM.toLong().coerceIn(0L, R1_STEP_CLAMP_M)
                     lastAcceptedPoint = decision.point
                     applyOdometerFrame(decision.point)
                 }
@@ -2179,6 +2199,7 @@ class BegodeProtocol(
         private const val R1_POWER_ON_RESET_BELOW_M = 100L
         private const val R1_POWER_ON_RESET_JUMP_M = 1000L
         private const val R1_DISTRUST_AFTER = 3
+        private const val R1_STEP_CLAMP_M = 100L
 
         /**
          * Rider-readable labels for every bit of the 0x04 alert byte, in bit
