@@ -31,7 +31,10 @@ class SqlDelightVehiclePwmStore(provider: VoltyDatabaseProvider) : VehiclePwmSto
             k = k, r = r, points = row.points.toInt(), source = source,
             spread = row.spread?.toFloat()?.takeIf { it.isFinite() },
             basis = basis, onsets = decodeOnsets(row.onsets)
-        )
+        ).takeUnless { basis == PwmBasis.ONSET && it.onsets.isEmpty() }
+        // An ONSET fit whose every onset was a legacy edge-sample one is dropped whole (the evidence is a separate
+        // column and stays), so the rider recalibrates. FREE_SPIN / MANUAL ones do not depend on the onsets.
+
     }
 
     override suspend fun save(vehicleId: String, memory: PwmMemory) {
@@ -78,19 +81,24 @@ class SqlDelightVehiclePwmStore(provider: VoltyDatabaseProvider) : VehiclePwmSto
 }
 
 /**
- * `speedKmh,packV,phaseA|-,atMillis` entries joined by `;`, newest last. Non-finite onsets are dropped and the
+ * `speedKmh,packV,phaseA|-,atMillis,v` entries joined by `;`, newest last. Non-finite onsets are dropped and the
  * list is cut to the newest [PwmCalibrationLearner.MAX_ONSETS]. Floats use Kotlin's shortest round-trip text.
+ * The trailing [ONSET_RULE] marks an onset captured under the current rule (the sample BEFORE the edge); an entry
+ * with only four fields predates it, was taken at the edge sample (one frame late, k too small) and [decodeOnsets]
+ * drops it. No SQL migration: old rows simply lack the field.
  */
+internal const val ONSET_RULE = "b"
+
 internal fun encodeOnsets(onsets: List<AlarmOnset>): String =
     onsets.filter { it.speedKmh.isFinite() && it.packV.isFinite() && (it.phaseA == null || it.phaseA.isFinite()) }
         .takeLast(PwmCalibrationLearner.MAX_ONSETS)
-        .joinToString(";") { "${it.speedKmh},${it.packV},${it.phaseA ?: "-"},${it.atMillis}" }
+        .joinToString(";") { "${it.speedKmh},${it.packV},${it.phaseA ?: "-"},${it.atMillis},$ONSET_RULE" }
 
-/** Inverse of [encodeOnsets]; a malformed or non-finite entry is skipped, never fatal. */
+/** Inverse of [encodeOnsets]; a malformed, non-finite or legacy (unmarked) entry is skipped, never fatal. */
 internal fun decodeOnsets(text: String): List<AlarmOnset> =
     text.split(';').mapNotNull { entry ->
         val p = entry.split(',')
-        if (p.size != 4) return@mapNotNull null
+        if (p.size != 5 || p[4] != ONSET_RULE) return@mapNotNull null
         val speed = p[0].toFloatOrNull()?.takeIf { it.isFinite() } ?: return@mapNotNull null
         val packV = p[1].toFloatOrNull()?.takeIf { it.isFinite() } ?: return@mapNotNull null
         val phase = if (p[2] == "-") null else (p[2].toFloatOrNull()?.takeIf { it.isFinite() } ?: return@mapNotNull null)

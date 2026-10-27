@@ -33,6 +33,10 @@ sealed interface OnsetVerdict {
  * sample's speed and would reintroduce the very error. So [push] keeps the last sample of the previous speed. A
  * protocol that reports a new speed in every sample degenerates to the plain previous sample.
  *
+ * Honesty about the margin: on the rider's dump the estimate was never below the true duty at the edge, but the
+ * single-onset fit varies about +-3 % across the points of that same dump (k from true duty: 1.171 at 65.1 km/h,
+ * 1.144 at 70.8, 1.193 on the plateau). "Not low" is a tendency of this rule, not a guarantee.
+ *
  * Immutable: the wizard state is a data class, the estimator holds a `var`.
  */
 data class OnsetLookback(val last: OnsetPoint? = null, val before: OnsetPoint? = null) {
@@ -50,7 +54,9 @@ data class OnsetLookback(val last: OnsetPoint? = null, val before: OnsetPoint? =
         val prev = before ?: return OnsetVerdict.NoPrevious
         if (kotlin.math.abs(edge.speedKmh - prev.speedKmh) > MAX_ONSET_JUMP_KMH) return OnsetVerdict.TooFast
         if (edge.atMillis - prev.atMillis > MAX_ONSET_GAP_MS) return OnsetVerdict.TooFast
-        return OnsetVerdict.Take(prev)
+        // Decelerating into the alarm (72.0 then the bit at 68.4) the previous sample is FASTER than where the bit
+        // rose; taking it would fit k too small and read LOW. The slower of the two always errs high.
+        return OnsetVerdict.Take(if (prev.speedKmh > edge.speedKmh) edge else prev)
     }
 
     companion object {

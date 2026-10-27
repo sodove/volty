@@ -80,7 +80,7 @@ class PwmEstimator(
     private var lastFedAtMillis: Long? = null
     private var prevAlarm: Boolean? = null
     private var lookback = OnsetLookback()
-    private var lookbackStampMillis: Long? = null
+    private var lastLearnStamp: Instant? = null
 
     val vehicleId: String get() = vehicle.id
     val evidence: PwmEvidence get() = progress.evidence
@@ -109,8 +109,18 @@ class PwmEstimator(
     fun installMemory(loaded: PwmMemory) {
         if (memoryReady) return
         progress = progress.copy(evidence = PwmEvidence.monotone(progress.evidence, loaded.evidence))
-        calibration = calibration ?: loaded.calibration
+        calibration = calibration ?: loaded.calibration?.let(::refitOnLoad)
         memoryReady = true
+    }
+
+    /**
+     * A loaded ONSET fit may have lost legacy (edge-sample) onsets in the store ([ru.sodovaya.volty.data.db.decodeOnsets]),
+     * so its k, fitted from all of them, is re-read from the onsets that are left, against this vehicle's threshold.
+     */
+    private fun refitOnLoad(c: PwmCalibration): PwmCalibration {
+        val refit = PwmCalibrationLearner.refit(c, vehicle.pwmAlarmThresholdPercent.toFloat())
+        if (refit != c) dirty = true
+        return refit
     }
 
     /** The wizard / editor wiped the calibration: forget it here too, so no stale model keeps estimating. */
@@ -126,7 +136,7 @@ class PwmEstimator(
     fun apply(snapshot: VehicleData, now: Instant): VehicleData {
         if (!started) { started = true; onFirstApply() }
         val motion = snapshot.motion
-        if (!motion.isConnected) { prevAlarm = null; lookback = OnsetLookback(); return snapshot }
+        if (!motion.isConnected) { prevAlarm = null; lookback = OnsetLookback(); lastLearnStamp = null; return snapshot }
         if (!memoryReady) return snapshot
 
         feedEvidence(motion)
@@ -180,16 +190,15 @@ class PwmEstimator(
     }
 
     private fun learn(motion: ControllerData, packV: Float?, phaseA: Float?) {
+        // One look per NEW motion sample (compared as the full Instant, so two distinct samples in the same
+        // millisecond are both seen): a battery-triggered republish re-applies the same motion and must not count.
+        if (motion.timestamp == lastLearnStamp) return
+        lastLearnStamp = motion.timestamp
         val alarm = motion.wheelPwmAlarm
         val rising = alarm == true && prevAlarm == false
         prevAlarm = alarm
         if (packV == null || !motion.speedKnown || !motion.speedKmh.isFinite()) { lookback = OnsetLookback(); return }
-        // One point per NEW motion sample: a battery-triggered republish re-applies the same motion with a later
-        // `now`, and counting it would refresh the previous point's time and blind the gap check on a stalled link.
-        val stamp = motion.timestamp.toEpochMilliseconds()
-        if (stamp == lookbackStampMillis) return
-        lookbackStampMillis = stamp
-        val edge = OnsetPoint(stamp, motion.speedKmh, packV, phaseA)
+        val edge = OnsetPoint(motion.timestamp.toEpochMilliseconds(), motion.speedKmh, packV, phaseA)
         lookback = lookback.push(edge)
         if (!rising) return
         // The onset is the last sample BEFORE the edge: the bit is first seen one frame after it fired.

@@ -120,11 +120,11 @@ data class PwmWizardState(
         if (!rising || runCaptured || point == null) return next
         val before = when (val verdict = look.onsetFor(point)) {
             is OnsetVerdict.Take -> verdict.point
-            OnsetVerdict.NoPrevious -> return next
+            OnsetVerdict.NoPrevious -> return next.copy(notice = null)
             OnsetVerdict.TooFast -> return next.copy(notice = PwmWizardNotice.SPIN_SLOWER)
         }
         val beforeV = before.packV
-        if (beforeV == null || before.speedKmh < PwmCalibrationLearner.MIN_SPEED_KMH) return next
+        if (beforeV == null || before.speedKmh < PwmCalibrationLearner.MIN_SPEED_KMH) return next.copy(notice = null)
         return next.copy(onsets = onsets + AlarmOnset(before.speedKmh, beforeV, null, s.atMillis), runCaptured = true, notice = null)
     }
 

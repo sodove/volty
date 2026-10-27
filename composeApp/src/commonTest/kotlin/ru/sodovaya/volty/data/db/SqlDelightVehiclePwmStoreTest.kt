@@ -115,13 +115,39 @@ class SqlDelightVehiclePwmStoreTest {
     fun `a corrupt onset text on load drops only the bad entries and non finite columns read as absent`() = runTest {
         val db = Db()
         val q = db.provider.database.vehiclePwmRowQueries
-        q.upsert("v1", "NEVER_REPORTED", 1.2, 0.0, 2L, "RIDING", null, "ONSET", "68.4,96.8,-,100;garbage;NaN,96,-,5;70,97,12.5,200")
+        q.upsert("v1", "NEVER_REPORTED", 1.2, 0.0, 2L, "RIDING", null, "ONSET", "68.4,96.8,-,100,b;garbage;NaN,96,-,5,b;70,97,12.5,200,b")
         assertEquals(
             listOf(AlarmOnset(68.4f, 96.8f, null, 100L), AlarmOnset(70f, 97f, 12.5f, 200L)),
             db.store.load("v1").calibration!!.onsets
         )
         q.upsert("v2", "NEVER_REPORTED", Double.NaN, 0.0, 2L, "RIDING", null, "ONSET", "")
         assertEquals(PwmMemory(null, PwmEvidence.NEVER_REPORTED), db.store.load("v2"))
+    }
+
+    @Test
+    fun `legacy edge-sample onsets are dropped on load, an ONSET fit made only of them is gone and the evidence stays`() = runTest {
+        val db = Db()
+        val q = db.provider.database.vehiclePwmRowQueries
+        q.upsert("v1", "NEVER_REPORTED", 1.089, 0.0, 2L, "RIDING", null, "ONSET", "70.8,96.4,-,100;68.4,96.8,12.5,200")
+        assertEquals(PwmMemory(null, PwmEvidence.NEVER_REPORTED), db.store.load("v1"))
+    }
+
+    @Test
+    fun `a mixed history keeps only the onsets marked as captured before the edge`() = runTest {
+        val db = Db()
+        val q = db.provider.database.vehiclePwmRowQueries
+        q.upsert("v1", "NEVER_REPORTED", 1.1, 0.0, 3L, "RIDING", null, "ONSET", "70.8,96.4,-,100;65.1,96.5,-,200,b;68.4,96.8,12.5,300")
+        assertEquals(listOf(AlarmOnset(65.1f, 96.5f, null, 200L)), db.store.load("v1").calibration!!.onsets)
+    }
+
+    @Test
+    fun `a free spin calibration survives its legacy onsets being dropped`() = runTest {
+        val db = Db()
+        val q = db.provider.database.vehiclePwmRowQueries
+        q.upsert("v1", "NEVER_REPORTED", 1.2, 0.0, 1L, "MANUAL", null, "FREE_SPIN", "70.8,96.4,-,100")
+        val cal = db.store.load("v1").calibration!!
+        assertEquals(PwmBasis.FREE_SPIN, cal.basis)
+        assertEquals(emptyList(), cal.onsets)
     }
 
     @Test

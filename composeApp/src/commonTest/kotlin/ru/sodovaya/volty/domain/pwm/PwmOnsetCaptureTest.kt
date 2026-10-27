@@ -46,7 +46,7 @@ class PwmOnsetCaptureTest {
             onVehicleData = { published += it }, clock = { Instant.fromEpochMilliseconds(nowMs) }, pwm = est,
         )
 
-        fun feed(atMs: Long, speed: Float, packV: Float, alarm: Boolean?, phase: Float = 0f) {
+        fun feed(atMs: Long, speed: Float, packV: Float, alarm: Boolean?, phase: Float = 0f, extraNanos: Long = 0L) {
             nowMs = atMs
             conn.submit(0, BmsData(voltage = packV, isConnected = true))
             conn.submitMotion(
@@ -55,7 +55,7 @@ class PwmOnsetCaptureTest {
                 // report PWM and the estimator keeps learning (the dump's true duty is kept apart as the truth).
                 ControllerData(
                     speedKmh = speed, speedSource = SpeedSource.REPORTED, dutyPercent = 0f, hasDuty = true, wheelPwmAlarm = alarm, motorCurrentA = phase,
-                    isConnected = true, timestamp = Instant.fromEpochMilliseconds(atMs),
+                    isConnected = true, timestamp = Instant.fromEpochSeconds(atMs / 1000, (atMs % 1000) * 1_000_000L + extraNanos),
                 ),
             )
         }
@@ -131,6 +131,31 @@ class PwmOnsetCaptureTest {
     }
 
     @Test
+    fun `riding decelerating into the alarm takes the slower speed, not the faster previous one`() {
+        val rig = Rig().apply { feed(1_000, 72f, 96f, false); feed(1_300, 68.4f, 96f, true) }
+        assertEquals(68.4f, rig.onsets().single().speedKmh)
+    }
+
+    @Test
+    fun `a battery-only republish of the same motion is not a new sample, and a stalled link stays rejected`() {
+        val rig = Rig().apply { feed(1_000, 60f, 96f, false) }
+        val before = rig.published.size
+        rig.nowMs = 3_000
+        rig.conn.submit(0, BmsData(voltage = 96f, isConnected = true))
+        assertTrue(rig.published.size > before, "the republish must actually have happened")
+        rig.feed(3_300, 63f, 96f, true)
+        assertTrue(rig.onsets().isEmpty(), "2.3 s since the last real motion sample")
+    }
+
+    @Test
+    fun `riding sees an edge in a distinct motion sample that shares the millisecond of the previous one`() {
+        val rig = Rig()
+        rig.feed(1_000, 60f, 96f, false)
+        rig.feed(1_000, 62f, 96f, true, extraNanos = 500_000L) // same epoch-ms, a different Instant
+        assertEquals(60f, rig.onsets().single().speedKmh)
+    }
+
+    @Test
     fun `riding skips the in-between samples that repeat the edge speed (a live frame, then the alarm frame)`() {
         val rig = Rig()
         rig.feed(1_000, 60f, 96f, false)
@@ -199,6 +224,21 @@ class PwmOnsetCaptureTest {
         val st = thresholdState().onSample(WizardSample(1_000, 60f, 96f, false))
             .onSample(WizardSample(1_300, 64f, 96f, false)).onSample(WizardSample(1_310, 64f, 96f, true))
         assertEquals(60f, st.onsets.single().speedKmh)
+    }
+
+    @Test
+    fun `the wizard decelerating into the alarm takes the slower speed`() {
+        val st = thresholdState().onSample(WizardSample(1_000, 72f, 96f, false)).onSample(WizardSample(1_300, 68.4f, 96f, true))
+        assertEquals(68.4f, st.onsets.single().speedKmh)
+    }
+
+    @Test
+    fun `the wizard clears a stale spin slower notice when the next edge has no usable previous sample`() {
+        var st = thresholdState().onSample(WizardSample(1_000, 60f, 96f, false)).onSample(WizardSample(1_300, 69f, 96f, true))
+        assertEquals(PwmWizardNotice.SPIN_SLOWER, st.notice)
+        // a fresh run at a standstill-ish speed: the edge below 10 km/h is ignored, and says nothing
+        st = st.onSample(WizardSample(1_600, 4f, 96f, false)).onSample(WizardSample(1_700, 5f, 96f, true))
+        assertNull(st.notice)
     }
 
     @Test
