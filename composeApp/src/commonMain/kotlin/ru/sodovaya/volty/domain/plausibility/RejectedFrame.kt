@@ -9,7 +9,12 @@ enum class PlausibilityRule {
     R1_ODOMETER_WITNESS,
 }
 
-enum class LedgerKind { REJECTED, REBASED }
+/**
+ * REJECTED: a frame held back. REBASED: a counter accepted a new baseline. WITNESS_DISTRUSTED: a witness that had
+ * proven itself disagreed with a coherent signal for several frames in a row, so its rule stopped judging for the
+ * rest of the connection (a note, not a rejection; the frame carried is the one that tipped it over).
+ */
+enum class LedgerKind { REJECTED, REBASED, WITNESS_DISTRUSTED }
 
 /**
  * One entry of a protocol's rejection ledger: a frame the decoder refused to publish ([LedgerKind.REJECTED]) or the

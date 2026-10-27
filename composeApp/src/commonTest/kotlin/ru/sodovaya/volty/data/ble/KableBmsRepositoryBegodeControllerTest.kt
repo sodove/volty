@@ -223,9 +223,10 @@ class KableBmsRepositoryBegodeControllerTest {
         val streamBytes = chunks.sumOf { it.size }
         assertEquals(0, streamBytes % BEGODE_FRAME_BYTES, "the capture is a whole number of frames")
         assertEquals(
-            streamBytes / BEGODE_FRAME_BYTES - 1,
+            // - 2: the capture's last 0x04 is held one frame by the unproven R1 witness (telemetry-plausibility Task 4).
+            streamBytes / BEGODE_FRAME_BYTES - 2,
             wire.calls.size,
-            "every frame of the capture but one must reach a funnel exactly once"
+            "every frame of the capture but two must reach a funnel exactly once"
         )
 
         val vd = repo.activeVehicleData.value

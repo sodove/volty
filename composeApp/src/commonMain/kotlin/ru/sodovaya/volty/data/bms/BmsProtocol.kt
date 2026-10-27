@@ -82,6 +82,12 @@ abstract class BmsProtocol {
         push(RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, LedgerKind.REBASED))
     }
 
+    /** Record a note that is neither a rejection nor a rebase (e.g. [LedgerKind.WITNESS_DISTRUSTED]); no counter moves. */
+    protected fun recordLedgerNote(kind: LedgerKind, frameType: Int, rule: PlausibilityRule, raw: ByteArray,
+        reference: String?, witness: String?, atFrameIndex: Long = ledgerFrameIndex) {
+        push(RejectedFrame(atFrameIndex, frameType, rule, raw.toLedgerHex(), reference, witness, kind))
+    }
+
     /** Zero the per-connection counters. Subclasses call it from [reset]; the ring stays. */
     protected fun resetLedger() {
         ledgerFrameIndex = 0L

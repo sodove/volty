@@ -265,9 +265,11 @@ class KableBmsRepositoryBegodeFunnelTest {
         // "all but one" rather than as a bare 189 so the exemption has to stay
         // true: a second unobservable frame fails this too.
         assertEquals(
-            framesInTheCapture - 1,
+            // - 2: the second unobservable frame is the capture's LAST 0x04, held one frame by the unproven R1 witness
+            // (the stationary odometer never moves; telemetry-plausibility Task 4).
+            framesInTheCapture - 2,
             atRealBoundaries.total,
-            "every frame of the capture but the one that precedes its branch's telemetry " +
+            "every frame of the capture but the one that precedes its branch's telemetry and the last 0x04 " +
                 "must produce exactly one decode ($framesInTheCapture frames in the stream)"
         )
         assertEquals(

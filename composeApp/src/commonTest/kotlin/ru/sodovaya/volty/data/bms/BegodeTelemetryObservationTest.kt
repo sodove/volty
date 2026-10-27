@@ -149,10 +149,12 @@ class BegodeTelemetryObservationTest {
         BegodeDumpFixture.chunks().forEach { protocol.onNotification(it) }
         assertTrue(events.any { it.origin == TelemetryOrigin.BATTERY })
         events.removeAll { it.origin != TelemetryOrigin.CONTROLLER }
-        assertEquals(114, events.size)
+        // Telemetry-plausibility Task 4: the stationary capture's odometer never moves, so R1's witness is never
+        // proven and the monotone lookahead holds the LAST 0x04 until a next one that never comes: 37 of 38.
+        assertEquals(113, events.size)
         assertTrue(events.all { it.origin == TelemetryOrigin.CONTROLLER && it.readings.none { reading -> reading.metric == TelemetryMetric.ERPM } })
         assertEquals(38, events.count { event -> event.readings.any { it.metric == TelemetryMetric.SPEED } })
-        assertEquals(38, events.count { event -> event.readings.any { it.metric == TelemetryMetric.ODOMETER } })
+        assertEquals(37, events.count { event -> event.readings.any { it.metric == TelemetryMetric.ODOMETER } })
         assertEquals(38, events.count { event -> event.readings.any { it.metric == TelemetryMetric.CONTROLLER_BATTERY_CURRENT } })
         assertTrue(protocol.handshakeCommands().isEmpty()); assertTrue(protocol.pollCommands().isEmpty())
     }

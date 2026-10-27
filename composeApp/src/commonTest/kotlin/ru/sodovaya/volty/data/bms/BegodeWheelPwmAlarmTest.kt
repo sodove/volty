@@ -47,9 +47,9 @@ class BegodeWheelPwmAlarmTest {
     @Test
     fun `true exactly while bit 0 is set`() {
         val p = BegodeProtocol()
-        // Telemetry-plausibility Task 4: every 0x04 follows a live frame, as on a real wheel; without one the
-        // odometer has no witness and the frame publishes one 0x04 late.
-        fun alerted(bits: Int) { p.onNotification(liveFrame()); p.onNotification(withAlert(bits)) }
+        // Telemetry-plausibility Task 4: the odometer never moves here, so R1's witness stays unproven and the
+        // monotone lookahead publishes a 0x04 when the next one arrives: each is sent twice.
+        fun alerted(bits: Int) { p.onNotification(withAlert(bits)); p.onNotification(withAlert(bits)) }
         alerted(0x00)
         assertEquals(false, p.latestMotion(0)!!.wheelPwmAlarm)
         alerted(0x01)

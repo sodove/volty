@@ -10,6 +10,7 @@ import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryRole
 import ru.sodovaya.volty.domain.plausibility.CounterDecision
 import ru.sodovaya.volty.domain.plausibility.CounterStepGate
+import ru.sodovaya.volty.domain.plausibility.LedgerKind
 import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 import kotlin.math.abs
 import kotlin.math.max
@@ -169,6 +170,21 @@ class BegodeProtocol(
     private var lastAcceptedStepM: Long = 0L
 
     private var odometerGate = newOdometerGate()
+
+    /** How far R1's witness is believed on this connection; see [newOdometerGate]. Back to UNPROVEN on [reset]. */
+    private enum class WitnessTrust { UNPROVEN, TRUSTED, DISTRUSTED }
+    private var witnessTrust = WitnessTrust.UNPROVEN
+
+    /** The last two 0x04 points in arrival order (offered or held back), for proof and suspicion. */
+    private var arrivedLast: OdometerPoint? = null
+    private var arrivedBeforeLast: OdometerPoint? = null
+
+    /** TRUSTED-witness disagreements on a coherent odometer, held back from the gate; see [distrustWitness]. */
+    private val suspects = ArrayList<OdometerPoint>()
+
+    /** Points offered to the gate and not yet decided, and the last accepted one: a fresh gate is rebuilt from them. */
+    private val pendingPoints = ArrayList<OdometerPoint>()
+    private var lastAcceptedPoint: OdometerPoint? = null
 
     /** Last decoded 0x04 alert bitmap (byte 14) — see [parseOdometerFrame]. */
     private var alertBitmap: Int = 0
@@ -542,22 +558,55 @@ class BegodeProtocol(
      * counter (`W_b < 100 && dW > 1000`: the wheel restarted its counter, which proves nothing about the odometer).
      * No metre bound is applied there (rider ruling 2026-10-27): the price is one 0x04 (~310 ms) of lag.
      *
-     * False-positive risk: R1 never fired on the 267 real frames. A wheel whose power-on counter does not track
-     * its odometer by more than 40 m per 0x04 would see every frame rejected and the odometer and trip FREEZE,
-     * with [rejectedFrameCount] climbing on a healthy wheel: that is how a false positive shows.
+     * False-positive risk: R1 never fired on the 267 real frames. The ET Max / EXN boards are unmeasured, so the
+     * witness is only believed after it has earned it ([WitnessTrust]):
+     *  - UNPROVEN (every connection starts here): the monotone lookahead judges. The witness becomes TRUSTED the
+     *    first time it AGREES on a step where both the odometer and the counter moved.
+     *  - TRUSTED: R1 judges as above.
+     *  - DISTRUSTED: a TRUSTED witness that disagreed on [R1_DISTRUST_AFTER] consecutive 0x04 frames whose odometer
+     *    steps were themselves monotone (the odometer is coherent, the witness is not) is dropped for the rest of
+     *    the connection; those frames are re-decided by the monotone path and credited, and one
+     *    [LedgerKind.WITNESS_DISTRUSTED] note is written ([odometerWitnessDistrusted]). A torn needle (one
+     *    disagreement, then agreement) never gets here.
+     * The earlier revision of this task had no trust state; on a wheel whose counter does not track the odometer
+     * every frame was rejected and the odometer and trip FROZE. That was wrong: a silent frozen trip is worse than
+     * an unfiltered needle.
      */
     private fun newOdometerGate() = CounterStepGate<OdometerPoint>(
         value = { it.meters.toDouble() },
         agrees = { a, b ->
             val dW = witnessStep(a, b)
-            if (dW != null) abs((b.meters - a.meters) - dW) <= max(R1_TOLERANCE_FLOOR_M, 2 * lastAcceptedStepM)
-            else b.meters >= a.meters
+            if (dW != null) agreesWithWitness(a, b, dW) else b.meters >= a.meters
         },
         immediate = { a, b -> witnessStep(a, b) != null },
     )
 
-    /** The power-on counter's advance from [a] to [b] when it is a usable witness, else null. See [newOdometerGate]. */
-    private fun witnessStep(a: OdometerPoint, b: OdometerPoint): Long? {
+    /**
+     * The power-on counter's advance from [a] to [b] when the witness is TRUSTED and usable, else null (the gate
+     * then falls back to the monotone lookahead). See [newOdometerGate] and [WitnessTrust].
+     */
+    private fun witnessStep(a: OdometerPoint, b: OdometerPoint): Long? =
+        if (witnessTrust == WitnessTrust.TRUSTED) rawWitnessStep(a, b) else null
+
+    /** Whether the odometer step [a] -> [b] agrees with the counter's advance [dW], within R1's tolerance. */
+    private fun agreesWithWitness(a: OdometerPoint, b: OdometerPoint, dW: Long): Boolean =
+        abs((b.meters - a.meters) - dW) <= max(R1_TOLERANCE_FLOOR_M, 2 * lastAcceptedStepM)
+
+    /** Does ([a], [b]) PROVE the counter tracks the odometer: a witnessed, non-zero step on both signals that R1 agrees with. */
+    private fun provesWitness(a: OdometerPoint?, b: OdometerPoint): Boolean {
+        a ?: return false
+        val dW = rawWitnessStep(a, b) ?: return false
+        return dW > 0 && b.meters > a.meters && agreesWithWitness(a, b, dW)
+    }
+
+    /** A coherent odometer step (monotone) that a usable witness nevertheless contradicts. */
+    private fun isSuspect(a: OdometerPoint, b: OdometerPoint): Boolean {
+        val dW = rawWitnessStep(a, b) ?: return false
+        return b.meters >= a.meters && !agreesWithWitness(a, b, dW)
+    }
+
+    /** The counter's advance regardless of trust, or null when there is no usable pair. */
+    private fun rawWitnessStep(a: OdometerPoint, b: OdometerPoint): Long? {
         val wa = a.powerOnM ?: return null
         val wb = b.powerOnM ?: return null
         if (a.liveStamp == b.liveStamp) return null
@@ -1289,6 +1338,12 @@ class BegodeProtocol(
         // ring does not (it is evidence, see [rejectedFrames]).
         tripSumMeters = 0.0
         odometerGate = newOdometerGate()
+        witnessTrust = WitnessTrust.UNPROVEN
+        arrivedLast = null
+        arrivedBeforeLast = null
+        suspects.clear()
+        pendingPoints.clear()
+        lastAcceptedPoint = null
         witnessPowerOnM = null
         liveStamp = 0L
         lastAcceptedStepM = 0L
@@ -1612,24 +1667,74 @@ class BegodeProtocol(
         // mileage as 0.0 km and reset the trip baseline under a rider.
         if (isZeroPaddedPayload(frame)) return
         val point = OdometerPoint(frame.u32BE(2), witnessPowerOnM, liveStamp, frame.copyOf(), currentLedgerFrame)
+        if (witnessTrust == WitnessTrust.UNPROVEN && (provesWitness(arrivedLast, point) || provesWitness(arrivedBeforeLast, point))) {
+            witnessTrust = WitnessTrust.TRUSTED
+        }
+        val previous = arrivedLast
+        arrivedBeforeLast = arrivedLast
+        arrivedLast = point
+        if (witnessTrust == WitnessTrust.TRUSTED && previous != null && isSuspect(previous, point)) {
+            // Coherent odometer, contradicting witness. Held back (not yet offered) so that, if this turns out to
+            // be a distrusted witness, those frames were never rejected; a needle is flushed on the next frame.
+            suspects += point
+            if (suspects.size >= R1_DISTRUST_AFTER) distrustWitness(point, previous)
+            return
+        }
+        flushSuspects()
+        offerOdometerPoint(point)
+    }
+
+    private fun flushSuspects() {
+        if (suspects.isEmpty()) return
+        val held = suspects.toList()
+        suspects.clear()
+        held.forEach { offerOdometerPoint(it) }
+    }
+
+    private fun distrustWitness(tipping: OdometerPoint, beforeRun: OdometerPoint) {
+        witnessTrust = WitnessTrust.DISTRUSTED
+        val run = suspects.toList()
+        suspects.clear()
+        // A fresh gate, now judging by the monotone path alone. It starts from the last accepted point, then the
+        // points the old gate had not yet decided, then the run: nothing is re-published, and nothing the run
+        // contains was ever recorded as rejected.
+        odometerGate = newOdometerGate()
+        lastAcceptedPoint?.let { odometerGate.offer(it) }
+        val undecided = pendingPoints.toList()
+        pendingPoints.clear()
+        undecided.forEach { offerOdometerPoint(it) }
+        run.forEach { offerOdometerPoint(it) }
+        recordLedgerNote(LedgerKind.WITNESS_DISTRUSTED, 0x04, PlausibilityRule.R1_ODOMETER_WITNESS, tipping.frame,
+            odometerText(beforeRun), rawWitnessStep(beforeRun, tipping)?.let { "+$it m" }, tipping.arrivedAt)
+    }
+
+    /** Whether R1's witness was dropped for this connection; Task 8 surfaces it. */
+    val odometerWitnessDistrusted: Boolean get() = witnessTrust == WitnessTrust.DISTRUSTED
+
+    private fun offerOdometerPoint(point: OdometerPoint) {
+        pendingPoints += point
         // A frame the gate has not accepted writes NO state: not the odometer, not the alert byte, no observation.
         // Decisions can lag (a held point is decided by the next one) and arrive in order.
         for (decision in odometerGate.offer(point)) {
+            val at = pendingPoints.indexOfFirst { it === decision.point }
+            if (at >= 0) repeat(at + 1) { pendingPoints.removeAt(0) }
             when (decision) {
                 is CounterDecision.Accepted -> {
                     // A witnessed step may be a few metres negative inside the tolerance; the trip never decreases.
                     tripSumMeters += max(0.0, decision.incrementM)
                     lastAcceptedStepM = decision.incrementM.toLong()
+                    lastAcceptedPoint = decision.point
                     applyOdometerFrame(decision.point)
                 }
                 is CounterDecision.Rebased -> {
                     tripSumMeters += max(0.0, decision.creditedM)
+                    lastAcceptedPoint = decision.point
                     applyOdometerFrame(decision.point)
                     recordRebase(0x04, PlausibilityRule.R1_ODOMETER_WITNESS, decision.point.frame,
                         "jump ${decision.jumpM.toLong()} m", null, decision.point.arrivedAt)
                 }
                 is CounterDecision.Rejected -> {
-                    val witnessM = witnessStep(decision.reference, decision.point)
+                    val witnessM = rawWitnessStep(decision.reference, decision.point)
                     recordRejection(0x04, PlausibilityRule.R1_ODOMETER_WITNESS, decision.point.frame,
                         odometerText(decision.reference), witnessM?.let { "+$it m" }, decision.point.arrivedAt)
                 }
@@ -2073,6 +2178,7 @@ class BegodeProtocol(
         private const val R1_TOLERANCE_FLOOR_M = 40L
         private const val R1_POWER_ON_RESET_BELOW_M = 100L
         private const val R1_POWER_ON_RESET_JUMP_M = 1000L
+        private const val R1_DISTRUST_AFTER = 3
 
         /**
          * Rider-readable labels for every bit of the 0x04 alert byte, in bit

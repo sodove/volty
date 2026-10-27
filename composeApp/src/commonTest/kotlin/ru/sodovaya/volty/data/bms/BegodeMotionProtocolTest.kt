@@ -1638,12 +1638,11 @@ class BegodeMotionProtocolTest {
     }
 
     /**
-     * Feed [odometer] behind a live frame, as a real wheel does. Without a live frame between two 0x04 frames the
-     * odometer has no witness and publishes one 0x04 late (telemetry-plausibility Task 4); the live frame's own
-     * power-on counter is constant here, which matches the constant odometer of the tests that use this.
+     * Feed [odometer] twice (telemetry-plausibility Task 4). These tests never move the odometer, so R1's witness
+     * stays UNPROVEN and the monotone lookahead judges: a 0x04 is published when the NEXT one arrives.
      */
     private fun BegodeProtocol.witnessed(odometer: ByteArray) {
-        onNotification(liveFrame(voltageRaw = 5892))
+        onNotification(odometer)
         onNotification(odometer)
     }
 

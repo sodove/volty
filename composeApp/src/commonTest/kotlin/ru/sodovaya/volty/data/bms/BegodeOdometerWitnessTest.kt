@@ -65,6 +65,7 @@ class BegodeOdometerWitnessTest {
         assertEquals(0.014, p.trip(), 1e-6)
         assertEquals(1L, p.rejectedFrameCount)
         assertEquals(0L, p.rebaseCount)
+        assertTrue(!p.odometerWitnessDistrusted, "a needle (one disagreement, then agreement) never demotes the witness")
         val entry = p.rejectedFrames().single()
         assertEquals(hex(torn), entry.rawHex)
         assertEquals(PlausibilityRule.R1_ODOMETER_WITNESS, entry.rule)
@@ -161,12 +162,46 @@ class BegodeOdometerWitnessTest {
         assertEquals(0.010, p.trip(), 1e-6)
     }
 
-    @Test fun aWheelWhoseCounterStandsStillStillGetsItsTrip() {
-        // False-positive pin: a counter that disagrees with the odometer by less than the 40 m tolerance is fine.
+    @Test fun aWheelWhoseCounterIsStuckFromTheStartStaysUnprovenAndKeepsItsTrip() {
+        // False-positive pin (INCOHERENT: the wheel moves, its counter does not). The witness is never proven (the
+        // counter never moved), so the monotone lookahead judges and the trip grows without a single rejection.
         val p = BegodeProtocol()
-        for (i in 0..5) p.pair(500, base + 7 * i)
-        assertEquals(0.035, p.trip(), 1e-6)
+        for (i in 0..5) p.pair(500, base + 50L * i)
+        assertEquals(0.200, p.trip(), 1e-6) // five of six points accepted; the last is held one 0x04
         assertEquals(0L, p.rejectedFrameCount)
+        assertTrue(p.rejectedFrames().isEmpty())
+        assertTrue(!p.odometerWitnessDistrusted)
+    }
+
+    @Test fun aProvenWitnessThatThenDisagreesOnACoherentOdometerIsDistrustedOnceAndTheTripKeepsGrowing() {
+        // INCOHERENT fixture: the counter tracked for three frames (proven), then froze while the odometer kept
+        // moving 50 m per 0x04, beyond the 40 m tolerance: R1 would reject every frame and freeze the trip.
+        val p = BegodeProtocol(); val ev = capture(p)
+        p.inStep(3)
+        assertEquals(0.014, p.trip(), 1e-6)
+        val frozen = pwron0 + 14
+        val trips = mutableListOf(p.trip())
+        for (i in 1..6) { p.pair(frozen, base + 14 + 50L * i); trips += p.trip() }
+        assertTrue(trips.zipWithNext().all { (a, b) -> b >= a })
+        assertEquals(0.014 + 0.250, p.trip(), 1e-6) // six frames, the newest held one 0x04
+        assertEquals(0L, p.rejectedFrameCount, "the run was re-decided by the monotone path, never rejected")
+        assertEquals(listOf(LedgerKind.WITNESS_DISTRUSTED), p.rejectedFrames().map { it.kind })
+        assertTrue(p.odometerWitnessDistrusted)
+        assertTrue(ev.odoEvents().size >= 6)
+        p.reset()
+        assertTrue(!p.odometerWitnessDistrusted, "reset returns to unproven")
+        assertEquals(1, p.rejectedFrames().size, "the note is evidence and survives reset")
+    }
+
+    @Test fun anUnprovenWitnessStillProtectsAgainstAPlus65536Needle() {
+        // The counter never moves (never proven), so the monotone lookahead is the only protection and it holds.
+        val p = BegodeProtocol(); val ev = capture(p)
+        val o = base
+        p.pair(500, o); p.pair(500, o + 65_536); p.pair(500, o + 10); p.pair(500, o + 20)
+        assertEquals(1L, p.rejectedFrameCount)
+        assertTrue(ev.odoEvents().all { it.value(TelemetryMetric.ODOMETER)!! < 2_900.0 }, "the needle never published")
+        assertEquals(0.010, p.trip(), 1e-6)
+        assertTrue(!p.odometerWitnessDistrusted)
     }
 
     @Test fun theRingKeepsTheNewest32AndSurvivesResetWhileTheCountersDoNot() {
