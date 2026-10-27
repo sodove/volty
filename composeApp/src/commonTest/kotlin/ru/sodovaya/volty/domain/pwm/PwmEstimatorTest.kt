@@ -97,6 +97,8 @@ class PwmEstimatorTest {
     fun `a measured non-zero duty latches REPORTS in the same snapshot and the estimate never shows`() {
         val r = Rig(memory = provenWithMeasured)
         r.step(speed = 60f, duty = 2f, hasDuty = true)
+        assertEquals(PwmEvidence.NEVER_REPORTED, r.est.evidence, "one non-zero sample decides nothing (Task 7)")
+        r.step(speed = 60f, duty = 2f, hasDuty = true)
         assertEquals(PwmEvidence.REPORTS, r.est.evidence)
         assertEquals(2f, r.motion.dutyPercent)
         assertEquals(DutySource.MEASURED, r.motion.dutySource)

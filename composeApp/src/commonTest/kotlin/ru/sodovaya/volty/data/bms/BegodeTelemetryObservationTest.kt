@@ -125,6 +125,7 @@ class BegodeTelemetryObservationTest {
         assertEquals(TelemetryUnknown.UNAVAILABLE, events.single().read(TelemetryMetric.MOTOR_TEMPERATURE).unknown)
         assertEquals(TelemetryUnknown.UNAVAILABLE, events.single().read(TelemetryMetric.DUTY).unknown)
         protocol.onNotification(live()); protocol.onNotification(motion(temperature = 20, duty = 5))
+        protocol.onNotification(motion(temperature = 20, duty = 5)) // Task 7: the temperature latch needs two consecutive frames
         protocol.onNotification(motion(current = 0, temperature = 0, duty = 0))
         assertEquals(0.0, events.last().read(TelemetryMetric.MOTOR_TEMPERATURE).value)
         assertEquals(0.0, events.last().read(TelemetryMetric.DUTY).value)

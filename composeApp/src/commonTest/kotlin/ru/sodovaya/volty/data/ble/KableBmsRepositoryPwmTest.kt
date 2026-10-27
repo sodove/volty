@@ -366,7 +366,7 @@ class KableBmsRepositoryPwmTest {
         repoTest(store) { repo ->
             val ride = Ride(repo, { advanceUntilIdle() }); ride.connect()
             ride.send(30f); ride.send(30f)
-            ride.send(30f, duty = 12f)   // a measured, non-zero duty: the one-way latch
+            ride.send(30f, duty = 12f); ride.send(30f, duty = 12f)   // two consecutive measured non-zero duties: the one-way latch (Task 7)
             assertEquals(PwmEvidence.REPORTS, assertNotNull(repo.vehicleConnectionForTest()?.pwm).evidence)
             val outcome = repo.applyPwmCalibration("v-pwm", wizard); advanceUntilIdle()
             assertTrue(outcome.isFailure)
@@ -392,7 +392,7 @@ class KableBmsRepositoryPwmTest {
             advanceUntilIdle()
             assertEquals(listOf(PwmEvidence.NEVER_REPORTED), seen)
             val ride = Ride(repo, { advanceUntilIdle() }); ride.connect()
-            ride.send(30f); ride.send(30f); ride.send(30f, duty = 9f)
+            ride.send(30f); ride.send(30f); ride.send(30f, duty = 9f); ride.send(30f, duty = 9f)
             assertEquals(listOf(PwmEvidence.NEVER_REPORTED, PwmEvidence.REPORTS), seen)
             job.cancel()
         }

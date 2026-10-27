@@ -45,8 +45,27 @@ class PwmEvidenceTest {
     }
 
     @Test
-    fun `ET Max duty 2 standing is REPORTS at once`() {
-        assertEquals(PwmEvidence.REPORTS, run(sample(0, 0f, 2f)).evidence)
+    fun `ET Max duty 2 standing is REPORTS from two consecutive samples`() {
+        assertEquals(PwmEvidence.REPORTS, run(sample(0, 0f, 2f), sample(310, 0f, 2f)).evidence)
+    }
+
+    @Test
+    fun `one non-zero sample between zeros does not latch REPORTS (Task 7 retraction of any-non-zero-latches)`() {
+        val p = run(sample(0, 30f, 0f), sample(310, 30f, 37f), sample(620, 30f, 0f), sample(930, 30f, 0f))
+        assertEquals(PwmEvidence.UNKNOWN, p.evidence)
+        // a lone non-zero followed by a zero is a broken run: the next non-zero starts over
+        assertEquals(PwmEvidence.UNKNOWN, run(sample(0, 0f, 5f), sample(310, 0f, 0f), sample(620, 0f, 5f)).evidence)
+    }
+
+    @Test
+    fun `a sample with hasDuty false between two non-zero samples is no sample at all`() {
+        val p = run(sample(0, 0f, 5f), sample(310, 0f, 99f, hasDuty = false), sample(620, 0f, 5f))
+        assertEquals(PwmEvidence.REPORTS, p.evidence)
+    }
+
+    @Test
+    fun `the reflashed T4 duty rising from two consecutive non-zero samples is REPORTS`() {
+        assertEquals(PwmEvidence.REPORTS, run(sample(0, 5f, 3f), sample(310, 9f, 4f)).evidence)
     }
 
     @Test
@@ -56,7 +75,7 @@ class PwmEvidenceTest {
 
     @Test
     fun `REPORTS never reverts`() {
-        val p = run(sample(0, 0f, 2f), *steady(30, 40f, 0f, startMs = 1000L))
+        val p = run(sample(0, 0f, 2f), sample(310, 0f, 2f), *steady(30, 40f, 0f, startMs = 1000L))
         assertEquals(PwmEvidence.REPORTS, p.evidence)
     }
 
@@ -64,14 +83,14 @@ class PwmEvidenceTest {
     fun `a non-zero sample after NEVER_REPORTED latches REPORTS`() {
         val never = run(*steady(6, 30f, 0f))
         assertEquals(PwmEvidence.NEVER_REPORTED, never.evidence)
-        assertEquals(PwmEvidence.REPORTS, never.next(sample(7000, 30f, 3f)).evidence)
+        assertEquals(PwmEvidence.REPORTS, never.next(sample(7000, 30f, 3f)).next(sample(7310, 30f, 3f)).evidence)
     }
 
     @Test
     fun `persisted NEVER_REPORTED survives zeros and is overturned by a non-zero`() {
         val loaded = PwmEvidenceProgress(PwmEvidence.NEVER_REPORTED)
         assertEquals(PwmEvidence.NEVER_REPORTED, run(sample(0, 0f, 0f), sample(1000, 50f, 0f), from = loaded).evidence)
-        assertEquals(PwmEvidence.REPORTS, run(sample(0, 50f, 1f), from = loaded).evidence)
+        assertEquals(PwmEvidence.REPORTS, run(sample(0, 50f, 1f), sample(310, 50f, 1f), from = loaded).evidence)
     }
 
     @Test
@@ -81,7 +100,7 @@ class PwmEvidenceTest {
 
     @Test
     fun `a duty that changes while moving is REPORTS`() {
-        assertEquals(PwmEvidence.REPORTS, run(*steady(3, 30f, 0f), sample(4000, 30f, 1f)).evidence)
+        assertEquals(PwmEvidence.REPORTS, run(*steady(3, 30f, 0f), sample(4000, 30f, 1f), sample(4310, 30f, 1f)).evidence)
     }
 
     @Test
@@ -103,7 +122,7 @@ class PwmEvidenceTest {
     fun `incoherent samples do not disturb an earlier NEVER_REPORTED or REPORTS`() {
         val never = run(*steady(6, 30f, 0f))
         assertEquals(PwmEvidence.NEVER_REPORTED, never.next(sample(7000, 30f, 55f, hasDuty = false)).evidence)
-        val reports = run(sample(0, 0f, 2f))
+        val reports = run(sample(0, 0f, 2f), sample(310, 0f, 2f))
         assertEquals(PwmEvidence.REPORTS, reports.next(sample(1000, 30f, 0f, hasDuty = false)).evidence)
     }
 

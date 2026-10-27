@@ -315,6 +315,8 @@ class BegodeMotionProtocolTest {
         // so a decoder reading a neighbouring word fails on all three.
         val protocol = BegodeProtocol()
         protocol.onNotification(motionFrame(batteryCurrentRaw = 250, motorTempRaw = 41, dutyRaw = 63))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 250, motorTempRaw = 41, dutyRaw = 63))
         assertEquals(-2.50f, assertNotNull(protocol.batteryCurrentA()), 1e-4f)
         assertEquals(41f, assertNotNull(protocol.motorTempC()), 0f)
         assertEquals(63f, assertNotNull(protocol.dutyPercent()), 0f)
@@ -359,11 +361,15 @@ class BegodeMotionProtocolTest {
         val protocol = BegodeProtocol()
         repeat(5) {
             protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 0))
+            // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
+            protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 0))
         }
         assertNotNull(protocol.batteryCurrentA(), "precondition: the frames were decoded")
         assertNull(protocol.dutyPercent(), "an always-zero duty field is not a duty measurement")
 
         // One non-zero reading proves the field is real...
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 3))
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 3))
         assertEquals(3f, assertNotNull(protocol.dutyPercent()), 0f)
 
@@ -402,12 +408,16 @@ class BegodeMotionProtocolTest {
         val protocol = BegodeProtocol()
         repeat(5) {
             protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 0))
+            // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
+            protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 0))
         }
         val unproven = assertNotNull(protocol.latestMotion(0), "precondition: the frames were decoded")
         assertEquals(0f, unproven.dutyPercent, 0f, "0 is all the field itself can say")
         assertFalse(unproven.hasDuty, "…so the sample has to say the rest")
 
         // One non-zero reading closes the latch, and the flag follows.
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 3))
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 3))
         val proven = assertNotNull(protocol.latestMotion(0))
         assertEquals(3f, proven.dutyPercent, 0f)
@@ -467,6 +477,8 @@ class BegodeMotionProtocolTest {
         val protocol = BegodeProtocol()
         protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
         protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
 
         val data = assertNotNull(protocol.latestData(0))
@@ -514,6 +526,8 @@ class BegodeMotionProtocolTest {
         assertNull(odometerOnly.motorTempC(), "no 0x07 frame arrived")
 
         val motionOnly = BegodeProtocol()
+        motionOnly.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
         motionOnly.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
         assertNotNull(motionOnly.batteryCurrentA())
         assertNotNull(motionOnly.motorTempC())
@@ -656,6 +670,8 @@ class BegodeMotionProtocolTest {
         // COMPUTED as escTempC > -50f, so a 0f default would claim a sensor
         // that has not reported and arm ESC_TEMP against a constant zero.
         val protocol = BegodeProtocol()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
         val m = assertNotNull(protocol.latestMotion(0), "a 0x07 frame alone is motion")
         assertFalse(m.hasEscTemp, "no live frame arrived, so the mainboard sensor has not spoken")
@@ -816,6 +832,8 @@ class BegodeMotionProtocolTest {
         // exact moment — so the leak became observable here first.
         val protocol = BegodeProtocol()
         protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
 
         val m = assertNotNull(protocol.latestMotion(0))
@@ -1204,6 +1222,8 @@ class BegodeMotionProtocolTest {
         // real data on the coldest day of the year.
         val protocol = BegodeProtocol()
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
         assertTrue(assertNotNull(protocol.latestMotion(0)).hasMotorTemp)
 
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 0, dutyRaw = 2))
@@ -1337,6 +1357,8 @@ class BegodeMotionProtocolTest {
         // silent at the exact moment a EUC's duty peaks.
         val protocol = BegodeProtocol()
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = -92))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = -92))
 
         assertEquals(
             92f, assertNotNull(protocol.dutyPercent()), 0f,
@@ -1362,6 +1384,8 @@ class BegodeMotionProtocolTest {
         // report).
         val protocol = BegodeProtocol()
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = -3))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = -3))
         assertNotNull(protocol.dutyPercent(), "a negative reading is a reading")
         assertTrue(assertNotNull(protocol.latestMotion(0)).hasDuty)
     }
@@ -1377,12 +1401,15 @@ class BegodeMotionProtocolTest {
         // is the safe error.
         val protocol = BegodeProtocol()
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 8000))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 8000))
         assertEquals(100f, assertNotNull(protocol.dutyPercent()), 0f)
         assertEquals(100f, assertNotNull(protocol.latestMotion(0)).dutyPercent, 0f)
 
         // Symmetrically for a large negative, which the magnitude turns into a
         // large positive before the clamp sees it.
         val other = BegodeProtocol()
+        other.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = -8000))
         other.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = -8000))
         assertEquals(100f, assertNotNull(other.dutyPercent()), 0f)
     }
@@ -1394,9 +1421,12 @@ class BegodeMotionProtocolTest {
         // reading (full modulation) rather than the clamp's own artefact.
         val protocol = BegodeProtocol()
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 63))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 63))
         assertEquals(63f, assertNotNull(protocol.dutyPercent()), 0f)
 
         val atTheLimit = BegodeProtocol()
+        atTheLimit.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 100))
         atTheLimit.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 100))
         assertEquals(100f, assertNotNull(atTheLimit.dutyPercent()), 0f)
     }
@@ -1527,6 +1557,8 @@ class BegodeMotionProtocolTest {
 
         // A real frame afterwards still works — the gate withholds a placeholder,
         // it does not disable the frame type.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        // Task 7: a one-way latch needs two consecutive genuine 0x07 frames; this is the first.
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
         assertEquals(2f, assertNotNull(protocol.dutyPercent()), 0f)
         assertEquals(20f, assertNotNull(protocol.motorTempC()), 0f)

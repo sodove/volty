@@ -38,6 +38,8 @@ data class PwmEvidenceProgress(
     val movingMillis: Long = 0L,
     /** Timestamp of the previous counted moving sample, or null when the last coherent sample was not one. */
     val lastMovingAtMillis: Long? = null,
+    /** The previous counted sample carried a non-zero measured duty; one more in a row latches [PwmEvidence.REPORTS]. */
+    val pendingNonZero: Boolean = false,
 ) {
     /**
      * Folds one controller sample in.
@@ -45,9 +47,14 @@ data class PwmEvidenceProgress(
      * - A sample with `hasDuty = false` is **ignored entirely**, whatever duty number rides beside the flag
      *   (an incoherent `hasDuty = false, dutyPercent = 37f` is no evidence either way and counts no moving time).
      * - A non-finite duty is ignored the same way.
-     * - Any measured duty that is non-zero **latches** [PwmEvidence.REPORTS] for good. (The rule says "non-zero or
-     *   differs from its first value"; a duty that differs from a first value of 0 is non-zero, and a constant
-     *   non-zero duty is a duty too, so non-zero alone is the whole test.)
+     * - A measured duty that is non-zero in **two consecutive** counted samples latches [PwmEvidence.REPORTS] for
+     *   good; a zero sample between them breaks the run. **Retraction (Task 7):** an earlier revision latched on
+     *   any single non-zero sample ("any non-zero sample latches"). That was wrong because the latch is persisted
+     *   forever and switches the estimate off for good, and a wheel's frames carry no checksum, so one corrupt
+     *   frame decided it. Cost: one more sample. False-positive risk: a wheel whose duty is non-zero only on
+     *   alternating samples never latches. Caveat: a live 0x00 rebuild republishes the last 0x07 duty, so on a
+     *   Begode a corrupt 0x07 followed by any live frame can still count twice; the protocol's own latch
+     *   (two consecutive 0x07 frames) is the stronger guard there.
      * - Otherwise (duty exactly 0), time spent moving at >= [MIN_MOVING_KMH] accumulates between consecutive
      *   moving samples no further apart than [MAX_GAP_MILLIS] (a long hole is no evidence of anything); at
      *   >= [PROOF_MILLIS] cumulative, with every duty sample 0, the evidence becomes [PwmEvidence.NEVER_REPORTED].
@@ -55,12 +62,15 @@ data class PwmEvidenceProgress(
     fun next(sample: ControllerData): PwmEvidenceProgress {
         if (evidence == PwmEvidence.REPORTS) return this
         if (!sample.hasDuty || !sample.dutyPercent.isFinite()) return this
-        if (sample.dutyPercent != 0f) return copy(evidence = PwmEvidence.REPORTS, lastMovingAtMillis = null)
+        if (sample.dutyPercent != 0f) {
+            return if (pendingNonZero) copy(evidence = PwmEvidence.REPORTS, lastMovingAtMillis = null, pendingNonZero = false)
+            else copy(pendingNonZero = true, lastMovingAtMillis = null)
+        }
 
         val at = sample.timestamp.toEpochMilliseconds()
         val moving = sample.speedSource != SpeedSource.NONE &&
             sample.speedKmh.isFinite() && sample.speedKmh >= MIN_MOVING_KMH
-        if (!moving) return copy(lastMovingAtMillis = null)
+        if (!moving) return copy(lastMovingAtMillis = null, pendingNonZero = false)
 
         val last = lastMovingAtMillis
         val dt = if (last != null) (at - last).takeIf { it in 0..MAX_GAP_MILLIS } ?: 0L else 0L
@@ -69,7 +79,8 @@ data class PwmEvidenceProgress(
         return copy(
             evidence = if (proven) PwmEvidence.NEVER_REPORTED else evidence,
             movingMillis = total,
-            lastMovingAtMillis = at
+            lastMovingAtMillis = at,
+            pendingNonZero = false
         )
     }
 

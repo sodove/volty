@@ -214,6 +214,15 @@ class BegodeProtocol(
      */
     private var sawMotorTempEvidence = false
 
+    /**
+     * Consecutive genuine 0x07 frames whose motor-temperature word was non-zero (Task 7). [sawMotorTempEvidence]
+     * latches only at [LATCH_CONFIRM_FRAMES]; a zero word breaks the run.
+     */
+    private var motorTempNonZeroRun = 0
+
+    /** The same run for the duty word, feeding [sawTrueDuty]'s non-zero path (its live-motion path is unchanged). */
+    private var dutyNonZeroRun = 0
+
     /** Last decoded hardware duty, percent — see [dutyPercent]. */
     private var dutyPercentValue: Float = 0f
 
@@ -1365,6 +1374,8 @@ class BegodeProtocol(
         // Per-wheel evidence, exactly like the duty latch: a wheel whose motor
         // thermistor is unwired must not inherit the previous wheel's proof.
         sawMotorTempEvidence = false
+        motorTempNonZeroRun = 0
+        dutyNonZeroRun = 0
         dutyPercentValue = 0f
         // The duty latch is per-wheel evidence: a wheel that never proved it
         // reports duty must not inherit the previous wheel's proof.
@@ -1816,7 +1827,14 @@ class BegodeProtocol(
         // reading is what proves a sensor is wired at all. See [motorTempC] for
         // why frame arrival is not evidence and why no range gate can replace
         // this.
-        if (motorTempRaw != 0) sawMotorTempEvidence = true
+        //
+        // **Two consecutive frames, not one (Task 7).** An earlier revision latched on any single non-zero word;
+        // that was wrong because this format has no checksum, so one corrupt 0x07 (temperature 130 between two
+        // zero frames) decided the latch for the whole connection. The run must now reach [LATCH_CONFIRM_FRAMES]
+        // genuine 0x07 frames. Cost: one frame (~310 ms) before a real sensor shows. False-positive risk: a real
+        // sensor that reads exactly 0 C on alternate frames never latches; it shows as the sensor staying hidden.
+        motorTempNonZeroRun = if (motorTempRaw != 0) motorTempNonZeroRun + 1 else 0
+        if (motorTempNonZeroRun >= LATCH_CONFIRM_FRAMES) sawMotorTempEvidence = true
         motorTempCValue = motorTempRaw.toFloat()
         val dutyRaw = frame.i16BE(8)
         // A non-zero value proves the field by itself. For the stationary
@@ -1825,7 +1843,13 @@ class BegodeProtocol(
         // connection, that zero is a measurement rather than an absent field.
         // Keep the isolated all-zero synthetic stream unknown (there is no
         // session context to distinguish an unimplemented field there).
-        if (dutyRaw != 0 || sawLiveMotion) sawTrueDuty = true
+        //
+        // **Retraction (Task 7):** the non-zero path used to latch on one frame ("a non-zero value proves the field
+        // by itself"). That was wrong for the same reason as the temperature latch above: one corrupt frame closed
+        // it for the connection. It now needs [LATCH_CONFIRM_FRAMES] consecutive non-zero duty words. The
+        // [sawLiveMotion] path is unchanged: a zero is a measurement once a genuine live frame exists.
+        dutyNonZeroRun = if (dutyRaw != 0) dutyNonZeroRun + 1 else 0
+        if (dutyNonZeroRun >= LATCH_CONFIRM_FRAMES || sawLiveMotion) sawTrueDuty = true
         // MAGNITUDE, clamped to the 0..100 [dutyPercent]'s contract promises —
         // the same statement VescValues makes with `abs(duty) * 100`, made in
         // the decoder rather than in [rebuildMotion] so the two protocols agree
@@ -1857,9 +1881,34 @@ class BegodeProtocol(
      * capture (semiVoltage 74.1 V at even bmsnum, 74.2 V at odd; both branches
      * report the same 147.2 V pack voltage because they are parallel).
      */
+    /**
+     * **R13 (witness).** Once the series count is certified from the branch ratio ([branchVoltageCertified]), a 0x01
+     * whose pack voltage differs from the live frame's voltage scaled by `count / 16` by more than [R13_TOLERANCE]
+     * is rejected whole: no branch state, SoC or observation comes from it. The live 0x00 frame is never touched
+     * (live display stays raw). A corrupt 0x01 voltage would otherwise become a SoC needle on a T4.
+     *
+     * Measured: 0x01 V / live raw is 0.01500 on all 268 pairs of the three dumps (spread 0.01 %, including the
+     * 0 to 81 km/h sag in dump 3), so 3 % is a x300 margin. Not applied before certification (the scale is
+     * unproven then), when no genuine live voltage exists, or to a zero-padded boot payload (handled elsewhere).
+     *
+     * False-positive risk: a wheel whose two boards sample far apart in time under heavy sag. It would show as
+     * the rejection counter growing on a healthy wheel. Read-only; nothing is sent.
+     */
+    private fun rejectedByPackVoltageWitness(frame: ByteArray): Boolean {
+        if (!branchVoltageCertified || liveVoltageRaw <= 0 || isZeroPaddedPayload(frame)) return false
+        val count = derivedCellCountValue ?: return false
+        val expectedV = liveVoltageRaw * 0.01f * count / 16f
+        val packV = frame.u16BE(6) * 0.1f
+        if (abs(packV - expectedV) <= expectedV * R13_TOLERANCE) return false
+        recordRejection(0x01, PlausibilityRule.R13_PACK_VOLTAGE_WITNESS, frame,
+            "${(expectedV * 10).toInt() / 10.0} V", "${(packV * 10).toInt() / 10.0} V")
+        return true
+    }
+
     private fun parseBmsTelemetry(frame: ByteArray) {
         val bmsnum = frame.u8(19)
         if (bmsnum > 3) return
+        if (rejectedByPackVoltageWitness(frame)) return
         retireSyntheticPack()
         val branch = branches[bmsnum shr 1]
         val section = bmsnum and 1
@@ -2472,6 +2521,11 @@ class BegodeProtocol(
         private const val LIVE_FRAME_CONVENTION_TOLERANCE = 0.05f
 
         /** A quarter of one series cell: 1 % at 24S, still far from the neighbouring whole counts. */
+        /** Consecutive genuine 0x07 frames a one-way latch needs (Task 7). */
+        private const val LATCH_CONFIRM_FRAMES = 2
+
+        /** R13: how far a 0x01 pack voltage may sit from the scaled live voltage (fraction). Measured spread 0.01 %. */
+        private const val R13_TOLERANCE = 0.03f
         private const val BRANCH_RATIO_TOLERANCE = 0.25f
         private const val BRANCH_RATIO_STREAK = 3
         private const val BRANCH_RATIO_MIN_FRAMES = 4
