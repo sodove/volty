@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.mutablePreferencesOf
 import app.cash.turbine.test
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import com.arkivanov.essenty.lifecycle.destroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.BmsData
@@ -141,8 +142,14 @@ class ScanningComponentTest {
     private fun device(address: String) =
         DiscoveredDevice(address = address, name = "dev", rssi = -50, bmsType = null)
 
+    /** Every lifecycle a component was built over, so [tearDown] can cancel the component scopes while Main is still set. */
+    private val lifecycles = mutableListOf<LifecycleRegistry>()
+
+    private fun newLifecycle() = LifecycleRegistry().also { lifecycles += it }
+
     @AfterTest
     fun tearDown() {
+        lifecycles.forEach { it.destroy() }
         Dispatchers.resetMain()
     }
 
@@ -152,7 +159,7 @@ class ScanningComponentTest {
         val saved = controllerOnlyVehicle()
         val navigated = mutableListOf<String>()
         val c = DefaultScanningComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
             bmsRepository = FakeBmsRepo(listOf(device(CTRL_ADDR))),
             vehicleRepository = FakeVehicleRepo(listOf(saved)),
             appPrefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf())),
@@ -182,7 +189,7 @@ class ScanningComponentTest {
         val saved = packOnlyVehicle()
         val navigated = mutableListOf<String>()
         DefaultScanningComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
             bmsRepository = FakeBmsRepo(listOf(device(PACK_ADDR))),
             vehicleRepository = FakeVehicleRepo(listOf(saved)),
             appPrefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf())),
@@ -204,7 +211,7 @@ class ScanningComponentTest {
         // The controller advertises; the pack does not. Keying on the primary
         // pack alone would have left this vehicle unrecognised.
         val c = DefaultScanningComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
             bmsRepository = FakeBmsRepo(listOf(device(CTRL_ADDR))),
             vehicleRepository = FakeVehicleRepo(listOf(dualSourceVehicle())),
             appPrefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf())),
@@ -224,7 +231,7 @@ class ScanningComponentTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val navigated = mutableListOf<String>()
         val c = DefaultScanningComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
             bmsRepository = FakeBmsRepo(listOf(device(PACK_ADDR), device("CC:STRANGER"))),
             vehicleRepository = FakeVehicleRepo(listOf(packOnlyVehicle())),
             appPrefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf())),
@@ -250,7 +257,7 @@ class ScanningComponentTest {
         // completion and report "none".
         val fellThrough = mutableListOf<Unit>()
         val c = DefaultScanningComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
             bmsRepository = FakeBmsRepo(emptyList()),
             vehicleRepository = FakeVehicleRepo(listOf(controllerOnlyVehicle(), packOnlyVehicle())),
             appPrefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf())),

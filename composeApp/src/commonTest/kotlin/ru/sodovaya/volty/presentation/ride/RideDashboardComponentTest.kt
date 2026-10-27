@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import app.cash.turbine.test
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import com.arkivanov.essenty.lifecycle.destroy
 import ru.sodovaya.volty.data.controller.kelly.ErrorCodes
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.model.DemoProfile
@@ -286,7 +287,7 @@ class RideDashboardComponentTest {
             units, appDefault, faultLingerSeconds, criticalLingerSeconds, warningLingerSeconds
         )
         return DefaultRideDashboardComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
             bmsRepository = repo,
             vehicleRepository = vehicleRepo,
             appPrefs = appPrefs,
@@ -1100,8 +1101,14 @@ class RideDashboardComponentTest {
         assertTrue(c.state.value.faults.isEmpty(), "a Kelly fault must not leak into the next vehicle")
     }
 
+    /** Every lifecycle a component was built over, so [tearDown] can cancel the component scopes while Main is still set. */
+    private val lifecycles = mutableListOf<LifecycleRegistry>()
+
+    private fun newLifecycle() = LifecycleRegistry().also { lifecycles += it }
+
     @AfterTest
     fun tearDown() {
+        lifecycles.forEach { it.destroy() }
         Dispatchers.resetMain()
     }
 
@@ -1829,7 +1836,7 @@ class RideDashboardComponentTest {
         appPrefs.unitSystem.first { it == UnitSystem.METRIC }
         appPrefs.defaultDashboardStyle.first { it == DashboardStyle.CLEAN }
         val c = DefaultRideDashboardComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
             bmsRepository = repo,
             vehicleRepository = FakeVehicleRepo(
                 listOf(ridden),

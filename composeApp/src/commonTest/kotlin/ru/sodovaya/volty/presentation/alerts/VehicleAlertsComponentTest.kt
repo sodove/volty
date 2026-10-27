@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.mutablePreferencesOf
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.backhandler.BackDispatcher
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import com.arkivanov.essenty.lifecycle.destroy
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -138,7 +139,11 @@ class VehicleAlertsComponentTest {
     private val lifecycle = LifecycleRegistry()
 
     @AfterTest
-    fun tearDown() = Dispatchers.resetMain()
+    fun tearDown() {
+        // Cancel the component scopes while Main is still set (see VehicleEditComponentTest).
+        lifecycle.destroy()
+        Dispatchers.resetMain()
+    }
 
     private fun vehicle(
         controllerType: ControllerType = ControllerType.VESC,

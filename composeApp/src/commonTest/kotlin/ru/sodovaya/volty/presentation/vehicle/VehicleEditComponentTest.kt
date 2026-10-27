@@ -9,6 +9,7 @@ import com.arkivanov.decompose.router.stack.push
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.backhandler.BackDispatcher
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import com.arkivanov.essenty.lifecycle.destroy
 import com.arkivanov.essenty.lifecycle.pause
 import com.arkivanov.essenty.lifecycle.resume
 import ru.sodovaya.volty.domain.model.DemoProfile
@@ -419,7 +420,7 @@ class VehicleEditComponentTest {
         onCancelled: () -> Unit = {},
         backDispatcher: BackDispatcher? = null,
         onOpenPwmWizard: () -> Unit = {},
-        lifecycle: LifecycleRegistry = LifecycleRegistry()
+        lifecycle: LifecycleRegistry = newLifecycle()
     ): DefaultVehicleEditComponent {
         val ctx = DefaultComponentContext(lifecycle, backHandler = backDispatcher)
         return DefaultVehicleEditComponent(
@@ -496,8 +497,14 @@ class VehicleEditComponentTest {
         return navigation to stack
     }
 
+    /** Every lifecycle a component was built over, so [tearDown] can cancel the component scopes while Main is still set. */
+    private val lifecycles = mutableListOf<LifecycleRegistry>()
+
+    private fun newLifecycle() = LifecycleRegistry().also { lifecycles += it }
+
     @AfterTest
     fun tearDown() {
+        lifecycles.forEach { it.destroy() }
         Dispatchers.resetMain()
     }
 
@@ -2739,7 +2746,8 @@ class VehicleEditComponentTest {
         var opened = 0
         val repo = FakeVehicleRepo(listOf(existingVehicle()))
         val c = DefaultVehicleEditComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
+            pwmIoContext = kotlin.coroutines.EmptyCoroutineContext,
             vehicleId = "v1",
             vehicleRepository = repo,
             bmsRepository = FakeBmsRepo(),
@@ -2762,7 +2770,8 @@ class VehicleEditComponentTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var opened = 0
         val c = DefaultVehicleEditComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
+            pwmIoContext = kotlin.coroutines.EmptyCoroutineContext,
             vehicleId = "v1",
             vehicleRepository = FakeVehicleRepo(listOf(existingVehicle())),
             bmsRepository = FakeBmsRepo(),
@@ -3825,7 +3834,8 @@ class VehicleEditComponentTest {
             .addPack(BmsType.ANT_BMS, "AN:02", "ANT")
         val repo = FakeVehicleRepo(emptyList())
         val c = DefaultVehicleEditComponent(
-            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            componentContext = DefaultComponentContext(newLifecycle()),
+            pwmIoContext = kotlin.coroutines.EmptyCoroutineContext,
             vehicleId = null,
             vehicleRepository = repo,
             bmsRepository = FakeBmsRepo(),
@@ -4082,7 +4092,7 @@ class VehicleEditComponentTest {
     fun `coming back to the editor re-reads the PWM memory, but only once the form has loaded`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val bms = FakeBmsRepo()
-        val lifecycle = LifecycleRegistry()
+        val lifecycle = newLifecycle()
         val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms, lifecycle = lifecycle)
         lifecycle.resume()   // before the load finished: must not refresh into a state initialize() will replace
         assertEquals(0, bms.pwmMemoryReads)
@@ -4098,7 +4108,7 @@ class VehicleEditComponentTest {
     fun `a memory read answered before a REPORTS latch cannot put the evidence back when it lands after`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val bms = FakeBmsRepo().apply { pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED) }
-        val lifecycle = LifecycleRegistry()
+        val lifecycle = newLifecycle()
         val c = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms, lifecycle = lifecycle)
         advanceUntilIdle()
         bms.evidenceLive.value = ru.sodovaya.volty.domain.pwm.PwmEvidence.REPORTS
@@ -4110,7 +4120,7 @@ class VehicleEditComponentTest {
         assertEquals(ru.sodovaya.volty.domain.pwm.PwmEvidence.REPORTS, c.state.value.pwmEvidence, "REPORTS is a one-way latch")
         // The weaker order too: UNKNOWN read later never beats a NEVER_REPORTED already held.
         val bms2 = FakeBmsRepo().apply { pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.NEVER_REPORTED) }
-        val lifecycle2 = LifecycleRegistry()
+        val lifecycle2 = newLifecycle()
         val c2 = component(FakeVehicleRepo(listOf(existingVehicle())), bmsRepo = bms2, lifecycle = lifecycle2)
         advanceUntilIdle()
         bms2.pwmMemoryAnswer = ru.sodovaya.volty.domain.pwm.PwmMemory(null, ru.sodovaya.volty.domain.pwm.PwmEvidence.UNKNOWN)
