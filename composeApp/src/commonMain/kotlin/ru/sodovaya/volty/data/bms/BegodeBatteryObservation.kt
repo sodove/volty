@@ -73,6 +73,10 @@ internal fun observedBegodeCells(frame: ByteArray, expectedCount: Int?, previous
     val values = cells.mapNotNull { it.value }
     val minimum = values.minOrNull()
     val maximum = values.maxOrNull()
+    // Audit note (telemetry plausibility, Task 6): this is the same SHAPE as the Begode 0x00 power artefact (a per-page
+    // PARTIAL_SOURCE for a metric another page of the same source supplies), but it is NOT changed: the summary on a
+    // page that carries only some cells is genuinely partial, and no test demonstrates the value/unknown alternation
+    // emptying a chart here. Revisit only with such a test (a smart-BMS ride whose cell min/max overview collapses).
     fun summary(metric: TelemetryMetric, value: Double?) = if (complete) TelemetryReading(metric, checkNotNull(value))
         else TelemetryReading(metric, null, TelemetryUnknown.PARTIAL_SOURCE)
     return cells + listOf(summary(TelemetryMetric.CELL_MIN, minimum), summary(TelemetryMetric.CELL_MAX, maximum),

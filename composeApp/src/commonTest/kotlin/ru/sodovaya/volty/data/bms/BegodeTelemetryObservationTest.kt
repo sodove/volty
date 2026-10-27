@@ -29,8 +29,10 @@ class BegodeTelemetryObservationTest {
         val protocol = BegodeProtocol(cellCount = 40); val events = capture(protocol)
         protocol.onNotification(live() + motion() + odometer(100_000))
         assertEquals(3, events.size)
+        // Retraction: an earlier revision pinned PARTIAL_SOURCE here; that alternation emptied the chart overview and
+        // blocked energy (plausibility spec §4). The 0x00 frame now omits CONTROLLER_POWER.
         assertEquals(setOf(TelemetryMetric.SPEED, TelemetryMetric.MOTOR_CURRENT, TelemetryMetric.ESC_TEMPERATURE,
-            TelemetryMetric.INPUT_VOLTAGE, TelemetryMetric.CONTROLLER_POWER), events[0].readings.map { it.metric }.toSet())
+            TelemetryMetric.INPUT_VOLTAGE), events[0].readings.map { it.metric }.toSet())
         assertEquals(setOf(TelemetryMetric.CONTROLLER_BATTERY_CURRENT, TelemetryMetric.MOTOR_TEMPERATURE,
             TelemetryMetric.DUTY, TelemetryMetric.CONTROLLER_POWER), events[1].readings.map { it.metric }.toSet())
         assertEquals(setOf(TelemetryMetric.ODOMETER, TelemetryMetric.TRIP), events[2].readings.map { it.metric }.toSet())
@@ -46,9 +48,13 @@ class BegodeTelemetryObservationTest {
         configured.onNotification(live(phase = -999) + motion(current = 500) + live(phase = -1000))
         assertEquals(150.0, events[0].read(TelemetryMetric.INPUT_VOLTAGE).value)
         // Phase current never feeds power; the 0x07 right after a live frame joins that frame's voltage with ITS OWN current.
-        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, events[0].read(TelemetryMetric.CONTROLLER_POWER).unknown)
+        // Retraction: an earlier revision pinned PARTIAL_SOURCE here; that alternation emptied the chart overview and
+        // blocked energy (plausibility spec §4). The live frame omits power.
+        assertTrue(events[0].readings.none { it.metric == TelemetryMetric.CONTROLLER_POWER })
         assertEquals(750.0, assertNotNull(events[1].read(TelemetryMetric.CONTROLLER_POWER).value), 0.01)
-        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, events[2].read(TelemetryMetric.CONTROLLER_POWER).unknown)
+        // Retraction: an earlier revision pinned PARTIAL_SOURCE here; that alternation emptied the chart overview and
+        // blocked energy (plausibility spec §4).
+        assertTrue(events[2].readings.none { it.metric == TelemetryMetric.CONTROLLER_POWER })
         assertEquals(5.0, events[1].read(TelemetryMetric.CONTROLLER_BATTERY_CURRENT).value)
         assertTrue(events[2].readings.none { it.metric == TelemetryMetric.CONTROLLER_BATTERY_CURRENT })
         val unconfigured = BegodeProtocol(); val unknown = capture(unconfigured)
@@ -62,8 +68,22 @@ class BegodeTelemetryObservationTest {
         val power = events.last().read(TelemetryMetric.CONTROLLER_POWER)
         assertNull(power.unknown)
         assertEquals(150.0 * 2.2, assertNotNull(power.value), 0.05)
-        // The live frame itself still cannot pair: its battery current is the previous 0x07's.
-        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, events.first().read(TelemetryMetric.CONTROLLER_POWER).unknown)
+        // The live frame itself still cannot pair (its battery current is the previous 0x07's), so it says nothing.
+        // Retraction: an earlier revision pinned PARTIAL_SOURCE here; that alternation emptied the chart overview and
+        // blocked energy (plausibility spec §4).
+        assertTrue(events.first().readings.none { it.metric == TelemetryMetric.CONTROLLER_POWER })
+    }
+
+    @Test fun theLiveFrameOmitsControllerPowerEvenWhenTheDecoderHoldsAJoinablePair() {
+        // Incoherent on purpose: hasPower = true and powerW = 4200 on a 0x00 frame, with a fresh join. No producer
+        // emits this, which is why it separates the contract (the live frame never speaks for power) from habit.
+        val data = ControllerData().copy(hasPower = true, powerW = 4200f, speedKmh = 12f)
+        val readings = observedBegodeController(0x00, data, powerJoinFresh = true)
+        assertTrue(readings.isNotEmpty())
+        assertTrue(readings.none { it.metric == TelemetryMetric.CONTROLLER_POWER })
+        // The motion frame is the one that records it.
+        assertEquals(4200.0, observedBegodeController(0x07, data, powerJoinFresh = true)
+            .single { it.metric == TelemetryMetric.CONTROLLER_POWER }.value)
     }
 
     @Test fun motionFrameWithoutARecentLiveFrameKeepsPowerUnknown() {

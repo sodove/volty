@@ -4,6 +4,8 @@ import ru.sodovaya.volty.data.db.VoltyDatabase
 import ru.sodovaya.volty.data.db.HistoryBucketV2
 import ru.sodovaya.volty.domain.history.*
 
+private const val REPAIR_MAX_PAGES = 50
+
 internal class HistoryStoreReader(private val database: VoltyDatabase) {
     fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
         require(limit in 1..20000)
@@ -58,13 +60,50 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         val maximum = listOfNotNull(summary.maximum, detail.maximum).maxOrNull()
         val energy = summary.energyWh?.takeIf { it.isFinite() }
         val gap = database.rideHistoryMarkerQueries.hasEvidenceGap(rideId, bounds.first, bounds.last, key.sourceId).executeAsOne()
+        // Every bucket of the range must carry its sum: a mean over part of the stream is not a mean.
+        val mean = summary.valueCount?.toDouble()?.takeIf { it > 0 && summary.valuesKnown?.toLong() == 1L }
+            ?.let { count -> summary.valueSum?.toDouble()?.div(count) }?.takeIf { it.isFinite() }
+        if (detail.unknownCount > 0L && bridgesPartialSourceArtefact(key.metricId)) {
+            repairedControllerPowerEnergy(rideId, key, range, ride.status, gap)?.let {
+                return HistoryStats(minimum, maximum, it.energyWh, it.complete, mean)
+            }
+        }
         return HistoryStats(minimum, maximum, energy, ride.status != HistoryRideStatus.INTERRUPTED && summary.complete == 1L && !gap &&
             detail.unknownCount == 0L &&
-            (summary.energyWh == null || energy != null),
-            // Every bucket of the range must carry its sum: a mean over part of the stream is not a mean.
-            summary.valueCount?.toDouble()?.takeIf { it > 0 && summary.valuesKnown?.toLong() == 1L }
-                ?.let { count -> summary.valueSum?.toDouble()?.div(count) }?.takeIf { it.isFinite() })
+            (summary.energyWh == null || energy != null), mean)
     }
+
+    /**
+     * Energy for a controller-power series recorded BEFORE the Begode 0x00 fix. Stored buckets integrate at write time
+     * and an artefact unknown between every pair of values meant no pair was ever usable, so those buckets hold no
+     * energy and cannot be repaired in place without rewriting them (a migration). The retained detail rows (first,
+     * min, max, last of each 500 ms window plus every explicit unknown) are enough to integrate again here, with the
+     * PARTIAL_SOURCE artefact bridged ([HistoryPartialSourceBridge]); genuine unknowns, markers and long gaps still
+     * break the integral and clear `complete`. This is an approximation by construction: the interior points the
+     * detail gate thinned away are not integrated, so it is exact for no ride, but its error is bounded by the
+     * min/max retention. A ride too large to read back within the page budget is not guessed at (null).
+     * New recordings never reach this path: they carry no artefact unknowns, and the caller only comes here when the stored detail holds an unknown.
+     */
+    private fun repairedControllerPowerEnergy(rideId: String, key: HistorySeriesKey, range: HistoryRange,
+        status: HistoryRideStatus, evidenceGap: Boolean): RepairedEnergy? {
+        val multiplier = HistoryMetricRegistry.descriptor(key.metricId)?.consumptionMultiplier ?: return null
+        val rows = ArrayList<HistorySample>()
+        var after: HistoryCursor? = null
+        var pages = 0
+        while (true) {
+            val page = samples(rideId, key, range, after, 20000)
+            rows += page.items
+            after = page.next ?: break
+            if (++pages >= REPAIR_MAX_PAGES) return null
+        }
+        val markers = runCatching { markers(rideId, range) }.getOrNull()
+            ?.filter { it.sourceId == null || it.sourceId == key.sourceId } ?: return null
+        val stats = historyStats(bridgePartialSourceArtefact(rows), markers, multiplier)
+        val energy = stats.energyWh ?: return null
+        return RepairedEnergy(energy, stats.complete && !evidenceGap && status != HistoryRideStatus.INTERRUPTED)
+    }
+
+    private class RepairedEnergy(val energyWh: Double, val complete: Boolean)
 
     fun rides(before: HistoryCursor?, limit: Int): HistoryPage<HistoryRide> {
         require(limit in 1..20)

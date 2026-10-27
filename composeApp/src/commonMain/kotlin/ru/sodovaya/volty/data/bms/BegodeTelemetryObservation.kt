@@ -12,8 +12,15 @@ import ru.sodovaya.volty.domain.model.TelemetryUnknown
  * the 0x07 frame - the one that refreshed the current - and only when [powerJoinFresh]: the protocol's own receipt
  * state says a genuine live frame supplied the voltage at most [BegodeProtocol]'s `POWER_JOIN_MAX_MOTION_FRAMES`
  * 0x07 frames ago (about 1 s of wheel-frame time, counted in frames because the wire has no timestamps) AND the
- * decoder certified a voltage at all (`hasPower`). Otherwise the honest unknown stays. The 0x00 frame still records
- * unknown: its current is the PREVIOUS 0x07's, so the pair would be a guess in the other direction.
+ * decoder certified a voltage at all (`hasPower`). Otherwise the honest unknown stays. The 0x00 frame OMITS power
+ * (it does not record it): its current is the PREVIOUS 0x07's, so the pair would be a guess in the other direction, and
+ * "no observation" is the contract for a frame that did not measure the metric ([ru.sodovaya.volty.domain.model.TelemetryObservation]).
+ *
+ * Retraction (telemetry plausibility, Task 6): an earlier revision said "the 0x00 frame still records unknown". That
+ * was wrong for a stored series: every 0x00 wrote an explicit unknown between the 0x07 values, the series alternated
+ * value/unknown at ~20 Hz, the chart overview (which keeps unknowns as mandatory boundaries) collapsed to four
+ * isolated points on a 15-minute ride, and energy was never integrated across an unknown. The 0x07 stale-join unknown
+ * below stays: it is rare and honest (no recent live frame supplied the voltage).
  *
  * Retraction: an earlier revision said "a receipt-aware join belongs to the source runtime" and recorded unknown on
  * both frames, so every Begode ride stored volts and amps with no power. The join was never built; this is it.
@@ -32,7 +39,6 @@ internal fun observedBegodeController(frameType: Int, data: ControllerData, powe
             value(TelemetryMetric.ESC_TEMPERATURE, data.escTempC, data.hasEscTemp),
             // Existing decoder calibration uses configured/proven topology; never record the raw 67.2V reference as rail voltage.
             value(TelemetryMetric.INPUT_VOLTAGE, data.inputVoltageV, data.hasInputVoltage),
-            unpairedPower(),
         )
         0x04 -> listOf(value(TelemetryMetric.ODOMETER, data.odometerKm, data.hasDistance),
             value(TelemetryMetric.TRIP, data.tripKm, data.hasDistance))

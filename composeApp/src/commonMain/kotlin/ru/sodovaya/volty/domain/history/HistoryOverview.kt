@@ -1,9 +1,13 @@
 package ru.sodovaya.volty.domain.history
 
-/** Min/max envelope with gaps split first. This view never supplies exact ride statistics. */
-fun historyOverview(samples: List<HistorySample>, markers: List<HistoryMarker>, maxPoints: Int = 600): List<HistorySample> {
+/**
+ * Min/max envelope with gaps split first. This view never supplies exact ride statistics. Recorded controller-power
+ * artefact unknowns are bridged first ([HistoryPartialSourceBridge]); every other unknown still splits.
+ */
+fun historyOverview(rawSamples: List<HistorySample>, markers: List<HistoryMarker>, maxPoints: Int = 600): List<HistorySample> {
     require(maxPoints in 3..20000)
-    requireSingleHistoryKey(samples)
+    requireSingleHistoryKey(rawSamples)
+    val samples = bridgePartialSourceArtefact(rawSamples)
     if (samples.isEmpty()) return emptyList()
     val continuity = HistoryContinuityIndex(markers)
     val rows = buildList {
