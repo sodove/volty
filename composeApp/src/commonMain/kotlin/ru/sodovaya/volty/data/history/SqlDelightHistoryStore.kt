@@ -141,6 +141,10 @@ class SqlDelightHistoryStore(
     override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistoryGpsFix> = withContext(dispatcher) {
         reader.gps(rideId, range, after, limit)
     }
+    override suspend fun lastSampleElapsedOfOtherSources(rideId: String, exceptSourceId: String, toElapsed: Long): Long? =
+        withContext(dispatcher) {
+            sampleQueries.lastElapsedOfOtherSources(rideId, exceptSourceId, toElapsed).executeAsOne().lastElapsed
+        }
     override suspend fun markers(rideId: String, range: HistoryRange): List<HistoryMarker> = withContext(dispatcher) {
         reader.markers(rideId, range)
     }

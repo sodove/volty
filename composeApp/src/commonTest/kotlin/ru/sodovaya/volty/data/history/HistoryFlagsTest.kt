@@ -292,4 +292,46 @@ class HistoryFlagsTest {
         assertFalse(exact(store).stats("ride", speed, HistoryRange(10_015, 10_035)).complete)
         assertTrue(exact(store).stats("ride", speed, range(30)).complete)
     }
+
+    // --- Re-review: the tail counts only when the ride demonstrably went on --------------------------------------
+
+    private suspend fun recordWithGps(store: SqlDelightHistoryStore, samples: List<HistorySample>, gps: List<HistoryGpsFix>,
+        markers: List<HistoryMarker>, endAt: Long) {
+        val ride = HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING)
+        store.begin(ride, listOf(ctl))
+        store.append(HistoryRecordingProjection(ride, listOf(ctl)).prepare(HistoryBatch("ride", samples, gps, markers, "g"), true).batch)
+        store.finish("ride", tick(endAt), HistoryRideStatus.COMPLETED)
+    }
+
+    /** One fix a second from [fromSeconds] to [toSeconds]: standing (sub-accuracy jitter) or moving at 6 m/s northwards. */
+    private fun track(fromSeconds: Long, toSeconds: Long, moving: Boolean) = (fromSeconds..toSeconds).map { s ->
+        val north = if (moving) 6.0 * s / 111_194.9 else (s % 2) * 1.0 / 111_194.9
+        HistoryGpsFix(tick(s * 1000), 55.0 + north, 37.0, 5.0, null)
+    }
+
+    @Test fun aWheelSwitchedOffAndStoppedThreeMinutesLaterWithAStandingGpsIsStillExact() = runTest {
+        val (_, store) = fixture()
+        // The wheel is switched off at 120 s (link lost at 124 s); the rider stands there and presses Stop at 304 s.
+        recordWithGps(store, seconds(speed, 0, 120), track(0, 304, moving = false), listOf(gap(124_000)), 304_000)
+        assertTrue(exact(store).stats("ride", speed, range(304_000)).complete)
+    }
+
+    @Test fun aSingleSourceWheelThatDiesWhileGpsShowsTheRiderMovingOnIsPartial() = runTest {
+        val (_, store) = fixture()
+        recordWithGps(store, seconds(speed, 0, 120), track(0, 720, moving = true), listOf(gap(122_000)), 722_000)
+        assertFalse(exact(store).stats("ride", speed, range(722_000)).complete, "10 minutes of riding the wheel never recorded")
+    }
+
+    @Test fun gpsMovingEvidenceNeedsRealDisplacementAndTime() {
+        val standing = track(0, 60, moving = false)
+        assertNull(historyGpsMovingUntil(standing, 0))
+        // A poor fix (15 m) wandering 9 m per 10 s is 3.2 km/h of speed but inside its own accuracy: not riding.
+        val wandering = (0L..60L).map { s -> HistoryGpsFix(tick(s * 1000), 55.0 + ((s / 10) % 2) * 9.0 / 111_194.9, 37.0, 15.0, null) }
+        assertNull(historyGpsMovingUntil(wandering, 0))
+        // 6 s of riding is not a window; 12 s is.
+        assertNull(historyGpsMovingUntil(track(0, 6, moving = true), 0))
+        assertEquals(tick(10_000).epochMillis, historyGpsMovingUntil(track(0, 12, moving = true), 0))
+        // Only movement after the cut counts.
+        assertNull(historyGpsMovingUntil(track(0, 12, moving = true), tick(8_000).epochMillis))
+    }
 }

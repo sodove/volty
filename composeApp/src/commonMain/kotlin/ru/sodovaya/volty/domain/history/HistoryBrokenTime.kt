@@ -54,8 +54,12 @@ internal class HistoryBrokenAccumulator(markers: List<HistoryMarker>, private va
      * gap marker sits at or after this series' last sample and the ride ran on for more than the interval limit, the
      * series stopped being recorded while the ride continued: that tail is broken time (review C1, a BMS link that died
      * at minute 20 of 60). A ride that ends where its series end (the wheel switched off, tail within the limit) has
-     * no such tail. Returns null when there were no samples.
+     * no such tail. The caller passes the EFFECTIVE end: the ride's end only when the ride demonstrably went on without this
+ * series (another source sampled later, or GPS shows movement), else the series' own last tick. Returns null when there were no samples.
      */
+    /** Elapsed tick of the last sample offered, or null. */
+    val lastElapsed: Long? get() = last?.tick?.elapsedMillis
+
     fun partial(rideEndElapsed: Long): Boolean? {
         val f = first ?: return null
         val l = checkNotNull(last)
@@ -106,3 +110,42 @@ fun historyBrokenIsPartial(brokenMillis: Long, spanMillis: Long): Boolean =
 
 const val HISTORY_PARTIAL_FRACTION = 0.02
 const val HISTORY_PARTIAL_FLOOR_MILLIS = 10_000L
+
+/**
+ * The epoch time up to which GPS shows the rider still MOVING after [afterEpochMillis], or null. Used to decide whether
+ * the ride demonstrably went on after a series stopped (review re-check: a wheel switched off and a ride ended minutes
+ * later by Stop must not count that standing time as a gap). A moving window is two fixes 10 to 30 s apart,
+ * both at most 50 m accurate, whose displacement exceeds the sum of their accuracies at an implied speed of at least
+ * 3 km/h; at least [HISTORY_GPS_MOVING_MIN_SECONDS] of it must accumulate.
+ * Standing jitter stays inside the accuracy and reads as not moving.
+ */
+internal fun historyGpsMovingUntil(fixes: List<HistoryGpsFix>, afterEpochMillis: Long): Long? {
+    val usable = fixes.filter { it.tick.epochMillis > afterEpochMillis && it.accuracyMeters <= 50.0 }
+    var seconds = 0.0
+    var until: Long? = null
+    var i = 0
+    while (i < usable.size) {
+        // Non-overlapping windows of at least 10 s: at 1 Hz one step is smaller than the accuracy even at riding speed.
+        val a = usable[i]
+        var j = i + 1
+        while (j < usable.size && usable[j].tick.epochMillis - a.tick.epochMillis < 10_000) j++
+        if (j >= usable.size) break
+        val b = usable[j]
+        val dt = (b.tick.epochMillis - a.tick.epochMillis) / 1000.0
+        if (dt <= 30.0) {
+            val metres = metresBetween(a.lat, a.lon, b.lat, b.lon)
+            if (metres > a.accuracyMeters + b.accuracyMeters && metres / dt * 3.6 >= 3.0) { seconds += dt; until = b.tick.epochMillis }
+        }
+        i = j
+    }
+    return until.takeIf { seconds >= HISTORY_GPS_MOVING_MIN_SECONDS }
+}
+
+internal const val HISTORY_GPS_MOVING_MIN_SECONDS = 10.0
+
+private fun metresBetween(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+    val dLat = (lat2 - lat1) * kotlin.math.PI / 180; val dLon = (lon2 - lon1) * kotlin.math.PI / 180
+    val h = kotlin.math.sin(dLat / 2).let { it * it } +
+        kotlin.math.cos(lat1 * kotlin.math.PI / 180) * kotlin.math.cos(lat2 * kotlin.math.PI / 180) * kotlin.math.sin(dLon / 2).let { it * it }
+    return 2 * 6_371_000.0 * kotlin.math.asin(kotlin.math.sqrt(h))
+}

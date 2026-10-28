@@ -2,6 +2,11 @@ package ru.sodovaya.volty.domain.history
 
 /** Durable canonical data, before UI conversion and overview projection. */
 interface HistoryStore {
+    /**
+     * The newest sample tick of any source other than [exceptSourceId], at or before [toElapsed]; null when there is none
+     * or the store cannot say (then no "the ride went on" evidence exists).
+     */
+    suspend fun lastSampleElapsedOfOtherSources(rideId: String, exceptSourceId: String, toElapsed: Long): Long? = null
     suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int = 20000): HistoryRecordedKeys
     suspend fun begin(ride: HistoryRide, sources: List<HistorySource>)
     suspend fun ride(rideId: String): HistoryRide?

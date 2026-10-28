@@ -34,6 +34,12 @@ FROM HistorySampleV2
 WHERE rideId = :rideId AND sourceId = :sourceId AND metricId = :metricId AND cellIndex = :cellIndex
 AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed;
 
+-- The newest sample of any OTHER source at or before :toElapsed (looked up among the last 200 rows by sequence, so it is
+-- cheap): evidence that the ride went on after one source stopped.
+lastElapsedOfOtherSources:
+SELECT MAX(elapsedMillis) AS lastElapsed FROM (SELECT elapsedMillis FROM HistorySampleV2
+WHERE rideId = :rideId AND sourceId != :sourceId AND elapsedMillis <= :toElapsed ORDER BY sequence DESC LIMIT 200);
+
 deleteSamples:
 DELETE FROM HistorySampleV2 WHERE rideId = :rideId;
 

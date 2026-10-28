@@ -142,8 +142,37 @@ class DefaultHistoryReadRepository(
             after = page.next ?: break
             if (++pages >= maxWalkPages) return false to false
         }
-        val partial = broken.partial(rideEnd) ?: return false to false
+        val last = broken.lastElapsed ?: return false to false
+        val partial = broken.partial(effectiveEnd(ride, key, range, last, rideEnd)) ?: return false to false
         return !partial to (broken.gapMillis > 0)
+    }
+
+    /**
+     * Where the series' ride effectively ended. The tail after its last sample counts as broken only when the ride
+     * demonstrably went on without it: another source sampled later than the interval limit, or GPS shows the rider moving
+     * (review re-check: a wheel switched off and the ride ended minutes later by Stop must not read as a gap). Otherwise
+     * the series' own last tick is the end, so a standing tail adds nothing. At most [maxWalkPages] pages of GPS are read.
+     */
+    private suspend fun effectiveEnd(ride: HistoryRide, key: HistorySeriesKey, range: HistoryRange, last: Long, rideEnd: Long): Long {
+        if (rideEnd - last <= HISTORY_MAX_INTERVAL_MILLIS) return last
+        val other = read { store.lastSampleElapsedOfOtherSources(ride.id, key.sourceId, rideEnd) }
+        if (other != null && other - last > HISTORY_MAX_INTERVAL_MILLIS) return minOf(rideEnd, other)
+        val origin = ride.started
+        val from = origin.epochMillis + (last - origin.elapsedMillis)
+        val to = origin.epochMillis + (rideEnd - origin.elapsedMillis)
+        val fixes = ArrayList<HistoryGpsFix>()
+        var after: HistoryCursor? = null
+        var pages = 0
+        while (true) {
+            val page = read { store.gps(ride.id, HistoryRange(from, to), after, PAGE_SIZE) }
+            fixes += page.items
+            after = page.next ?: break
+            // Too much track to read: assume the ride went on (partial), never that it stood still.
+            if (++pages >= maxWalkPages) return rideEnd
+        }
+        val movingUntil = historyGpsMovingUntil(fixes, from) ?: return last
+        val movingElapsed = origin.elapsedMillis + (movingUntil - origin.epochMillis)
+        return if (movingElapsed - last > HISTORY_MAX_INTERVAL_MILLIS) minOf(rideEnd, movingElapsed) else last
     }
 
     private val repairMutex = Mutex()
