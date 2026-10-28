@@ -16,6 +16,7 @@ class RideMapFollowPolicyTest {
 
         assertEquals(RideMapFollowMode.FREE, state.mode)
         assertEquals(1_000L, state.lastGestureAtMillis)
+        assertTrue(state.gestureActive)
     }
 
     @Test
@@ -80,13 +81,45 @@ class RideMapFollowPolicyTest {
             origin = RideMapCameraMoveOrigin.GESTURE,
             nowMillis = 1_000L,
         )
-        val second = onRideMapCameraMoveStarted(
-            state = first,
+        val second = onRideMapCameraIdle(onRideMapCameraMoveStarted(
+            state = onRideMapCameraIdle(first, 1_800L),
             origin = RideMapCameraMoveOrigin.GESTURE,
             nowMillis = 2_500L,
-        )
+        ), 2_500L)
 
         assertFalse(shouldAutoReturnToFollow(second, speedKmh = 20f, nowMillis = 7_499L))
         assertTrue(shouldAutoReturnToFollow(second, speedKmh = 20f, nowMillis = 7_500L))
+    }
+
+    @Test
+    fun an_active_gesture_never_returns_however_long_it_lasts() {
+        val dragging = onRideMapCameraMoveStarted(RideMapFollowState(), RideMapCameraMoveOrigin.GESTURE, 1_000L)
+
+        assertFalse(shouldAutoReturnToFollow(dragging, speedKmh = 30f, nowMillis = 1_000_000L))
+    }
+
+    @Test
+    fun the_delay_is_measured_from_the_gesture_end() {
+        val dragging = onRideMapCameraMoveStarted(RideMapFollowState(), RideMapCameraMoveOrigin.GESTURE, 1_000L)
+        val ended = onRideMapCameraIdle(dragging, nowMillis = 9_000L)
+
+        assertFalse(ended.gestureActive)
+        assertFalse(shouldAutoReturnToFollow(ended, speedKmh = 30f, nowMillis = 13_999L))
+        assertTrue(shouldAutoReturnToFollow(ended, speedKmh = 30f, nowMillis = 14_000L))
+    }
+
+    @Test
+    fun an_idle_without_a_gesture_changes_nothing() {
+        val free = RideMapFollowState(RideMapFollowMode.FREE, lastGestureAtMillis = 1_000L)
+
+        assertEquals(free, onRideMapCameraIdle(free, 50_000L))
+        assertEquals(RideMapFollowState(), onRideMapCameraIdle(RideMapFollowState(), 50_000L))
+    }
+
+    @Test
+    fun recenter_clears_an_active_gesture() {
+        val dragging = onRideMapCameraMoveStarted(RideMapFollowState(), RideMapCameraMoveOrigin.GESTURE, 1_000L)
+
+        assertEquals(RideMapFollowState(), recenterRideMap(dragging))
     }
 }

@@ -11,6 +11,8 @@ expect fun PlatformRideMapLayer(
     darkTheme: Boolean,
     onCameraGesture: (Long) -> Unit,
     modifier: Modifier = Modifier,
+    /** The camera went idle after a gesture (drag ended, fling settled), with the same clock as [onCameraGesture]. */
+    onCameraGestureEnd: (Long) -> Unit = {},
     onHistoryMediaClick: (String) -> Unit = {},
     showAttribution: Boolean = true,
     /** False pauses rendering; the retained map keeps its style, tiles and camera. */

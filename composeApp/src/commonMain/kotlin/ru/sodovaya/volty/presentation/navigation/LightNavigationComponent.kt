@@ -62,6 +62,9 @@ interface LightNavigationComponent {
     fun onMapVisibilityChanged(visible: Boolean)
     fun onLocationPermissionResult(granted: Boolean)
     fun onCameraGesture(nowElapsedMillis: Long)
+
+    /** The camera went idle after a gesture: the auto-return delay starts here, not at the gesture's start. */
+    fun onCameraGestureEnd(nowElapsedMillis: Long)
     fun onRecenterRequested()
     fun close()
 }
@@ -337,6 +340,11 @@ class DefaultLightNavigationComponent(
         if (shouldAutoReturnToFollow(_state.value.followState, speedKmh, now)) {
             reduce(NavigationAction.RecenterRequested)
         }
+    }
+
+    override fun onCameraGestureEnd(nowElapsedMillis: Long) {
+        if (closed) return
+        reduce(NavigationAction.CameraGestureEnded(nowElapsedMillis))
     }
 
     override fun onRecenterRequested() {

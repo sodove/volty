@@ -320,6 +320,9 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     onCameraGesture = { now ->
                         if (active is RootComponent.Child.Ride) component.navigation.onCameraGesture(now)
                     },
+                    onCameraGestureEnd = { now ->
+                        if (active is RootComponent.Child.Ride) component.navigation.onCameraGestureEnd(now)
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .alpha(mapAlpha),

@@ -134,6 +134,7 @@ actual fun PlatformRideMapLayer(
     darkTheme: Boolean,
     onCameraGesture: (Long) -> Unit,
     modifier: Modifier,
+    onCameraGestureEnd: (Long) -> Unit,
     onHistoryMediaClick: (String) -> Unit,
     showAttribution: Boolean,
     active: Boolean,
@@ -143,6 +144,7 @@ actual fun PlatformRideMapLayer(
         darkTheme = darkTheme,
         scene = scene,
         onCameraGesture = onCameraGesture,
+        onCameraGestureEnd = onCameraGestureEnd,
         onHistoryMediaClick = onHistoryMediaClick,
         showAttribution = showAttribution,
         active = active,
@@ -185,6 +187,7 @@ private fun AndroidMapLibreView(
     scene: NavigationMapScene,
     onCameraGesture: (Long) -> Unit,
     modifier: Modifier,
+    onCameraGestureEnd: (Long) -> Unit = {},
     onHistoryMediaClick: (String) -> Unit = {},
     showAttribution: Boolean = true,
     active: Boolean = true,
@@ -196,6 +199,7 @@ private fun AndroidMapLibreView(
     var lastCameraRequest by remember(cacheKey) { mutableStateOf<MapCameraRequest?>(null) }
     val latestScene = rememberUpdatedState(scene)
     val latestGestureCallback = rememberUpdatedState(onCameraGesture)
+    val latestGestureEndCallback = rememberUpdatedState(onCameraGestureEnd)
     val latestMediaCallback = rememberUpdatedState(onHistoryMediaClick)
     val motionEstimator = remember(cacheKey) { RideMapMotionEstimator() }
     val cameraSmoother = remember(cacheKey) { RideMapCameraSmoother() }
@@ -276,13 +280,27 @@ private fun AndroidMapLibreView(
 
     DisposableEffect(map) {
         val readyMap = map ?: return@DisposableEffect onDispose { }
+        // A gesture starts at REASON_API_GESTURE and ends when the camera next goes idle (finger up, any fling settled).
+        // Whether MapLibre fires idle exactly then, also after a fling, is device behaviour no unit test can pin.
+        var gestureActive = false
         val listener = MapLibreMap.OnCameraMoveStartedListener { reason ->
             if (reason == MapLibreMap.OnCameraMoveStartedListener.REASON_API_GESTURE) {
+                gestureActive = true
                 latestGestureCallback.value(SystemClock.elapsedRealtime())
             }
         }
+        val idleListener = MapLibreMap.OnCameraIdleListener {
+            if (gestureActive) {
+                gestureActive = false
+                latestGestureEndCallback.value(SystemClock.elapsedRealtime())
+            }
+        }
         readyMap.addOnCameraMoveStartedListener(listener)
-        onDispose { readyMap.removeOnCameraMoveStartedListener(listener) }
+        readyMap.addOnCameraIdleListener(idleListener)
+        onDispose {
+            readyMap.removeOnCameraMoveStartedListener(listener)
+            readyMap.removeOnCameraIdleListener(idleListener)
+        }
     }
 
     DisposableEffect(map) {

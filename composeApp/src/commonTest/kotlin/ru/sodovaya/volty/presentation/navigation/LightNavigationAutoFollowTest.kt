@@ -54,6 +54,7 @@ class LightNavigationAutoFollowTest {
         advanceUntilIdle()
 
         component.onCameraGesture(nowElapsedMillis = 101_000L)
+        component.onCameraGestureEnd(nowElapsedMillis = 101_000L)
         assertEquals(RideMapFollowMode.FREE, component.state.value.followState.mode)
 
         location.emit(fixAt(elapsed = 105_999L, speedKmh = 25.0))
@@ -63,6 +64,28 @@ class LightNavigationAutoFollowTest {
         location.emit(fixAt(elapsed = 106_000L, speedKmh = 25.0))
         advanceUntilIdle()
         assertEquals(RideMapFollowMode.FOLLOWING, component.state.value.followState.mode, "5 s while moving: follows again")
+    }
+
+    @Test
+    fun `a gesture still in progress never returns and the delay runs from its end`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val location = FakeLocation(fixAt(elapsed = 100_000L, speedKmh = 25.0))
+        val component = component(location, dispatcher)
+        advanceUntilIdle()
+
+        component.onCameraGesture(nowElapsedMillis = 101_000L)
+        location.emit(fixAt(elapsed = 130_000L, speedKmh = 25.0))
+        advanceUntilIdle()
+        assertEquals(RideMapFollowMode.FREE, component.state.value.followState.mode, "29 s into a drag: the finger is still down")
+
+        component.onCameraGestureEnd(nowElapsedMillis = 131_000L)
+        location.emit(fixAt(elapsed = 135_999L, speedKmh = 25.0))
+        advanceUntilIdle()
+        assertEquals(RideMapFollowMode.FREE, component.state.value.followState.mode, "4.999 s after the END")
+        location.emit(fixAt(elapsed = 136_000L, speedKmh = 25.0))
+        advanceUntilIdle()
+        assertEquals(RideMapFollowMode.FOLLOWING, component.state.value.followState.mode, "5 s after the end")
     }
 
     @Test

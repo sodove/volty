@@ -118,6 +118,7 @@ sealed interface NavigationAction {
     data class LocationStatusChanged(val status: LocationUiStatus) : NavigationAction
     data class ArrivalSocChanged(val estimate: ArrivalSocEstimate) : NavigationAction
     data class CameraGesture(val nowElapsedMillis: Long) : NavigationAction
+    data class CameraGestureEnded(val nowElapsedMillis: Long) : NavigationAction
     data object RecenterRequested : NavigationAction
 }
 
@@ -358,6 +359,9 @@ object NavigationReducer {
 
         is NavigationAction.LocationStatusChanged -> state.copy(locationStatus = action.status)
         is NavigationAction.ArrivalSocChanged -> state.copy(arrivalSoc = action.estimate)
+        is NavigationAction.CameraGestureEnded -> state.copy(
+            followState = ru.sodovaya.volty.presentation.map.onRideMapCameraIdle(state.followState, action.nowElapsedMillis),
+        )
         is NavigationAction.CameraGesture -> state.copy(
             followState = ru.sodovaya.volty.presentation.map.onRideMapCameraMoveStarted(
                 state = state.followState,
