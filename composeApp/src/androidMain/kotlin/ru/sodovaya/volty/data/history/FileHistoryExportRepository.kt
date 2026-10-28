@@ -72,9 +72,10 @@ class FileHistoryExportRepository(
         var completed = false
         try {
             var bytes = 0L
+            var counts = HistoryExportCounts()
             val digest = MessageDigest.getInstance("SHA-256")
             FileChannel.open(temporary, WRITE, NOFOLLOW_LINKS).use { channel ->
-                encoder.write(request.format, input.metadata, input.records) { fragment ->
+                counts = encoder.write(request.format, input.metadata, input.records) { fragment ->
                     currentCoroutineContext().ensureActive()
                     // Encoders supply bounded fragments; enforce bytes, not UTF-16 characters.
                     if (fragment.length.toLong() > maxFileBytes - bytes) throw HistoryExportException(HistoryExportFailure.LIMIT)
@@ -97,7 +98,7 @@ class FileHistoryExportRepository(
             onPublished(target)
             currentCoroutineContext().ensureActive()
             val result = HistoryExportResult.Success(name, bytes,
-                digest.digest().joinToString("") { "%02x".format(it) }, request.format.mime)
+                digest.digest().joinToString("") { "%02x".format(it) }, request.format.mime, counts.droppedLate)
             completed = true
             return result
         } finally {

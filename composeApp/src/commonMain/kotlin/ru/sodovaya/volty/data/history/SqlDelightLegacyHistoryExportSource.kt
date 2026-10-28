@@ -28,7 +28,8 @@ internal class SqlDelightLegacyHistoryExportSource(provider: VoltyDatabaseProvid
             if (request.range.startEpochMillis < bounds.startEpochMillis || request.range.endEpochMillis > bounds.endEpochMillis)
                 fail(HistoryExportFailure.INVALID_DATA)
             if (request.format == HistoryExportFormat.GPX) fail(HistoryExportFailure.NO_ROUTE)
-            Snapshot(row, HistoryExportMetadata(ride, request.range, sources(row.id)),
+            Snapshot(row, HistoryExportMetadata(ride, request.range, sources(row.id),
+                vehicleName = database.historyExportReadQueries.exportVehicleName(row.vehicleId).executeAsOneOrNull()),
                 count(row.id, request.range))
         }
         return HistoryExportInput(snapshot.metadata, flow {

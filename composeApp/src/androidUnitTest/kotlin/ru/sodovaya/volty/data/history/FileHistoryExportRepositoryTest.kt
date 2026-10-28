@@ -11,6 +11,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -24,8 +25,10 @@ class FileHistoryExportRepositoryTest {
     private val ride = HistoryRide("ride", "vehicle", tick, tick.copy(epochMillis = 2000, elapsedMillis = 1010), HistoryRideStatus.COMPLETED)
     private val request = HistoryExportRequest(ride.favoriteSource(), HistoryRange(1000, 2000), HistoryExportFormat.LOGUI)
     private val metadata = HistoryExportMetadata(ride, request.range, emptyList(), vehicleName = "Мой EXN/2")
+    // One fix: the smallest range that is not empty (an empty one fails with NO_DATA).
+    private val records = flowOf<HistoryExportRecord>(HistoryExportRecord.Location(HistoryGpsFix(tick, 56.0, 60.0, 3.0, null)))
     private val source = object : HistoryExportSource {
-        override suspend fun open(request: HistoryExportRequest) = HistoryExportInput(metadata, emptyFlow())
+        override suspend fun open(request: HistoryExportRequest) = HistoryExportInput(metadata, records)
     }
     private suspend fun fixture(block: suspend (File) -> Unit) {
         val root = Files.createTempDirectory("volty-export-test-").toFile()
@@ -35,14 +38,16 @@ class FileHistoryExportRepositoryTest {
     @Test fun publishesOnlyCompleteUtf8FileWithActualChecksumAndScopedName() = runTest {
         fixture { root ->
             val result = assertIs<HistoryExportResult.Success>(FileHistoryExportRepository(root, source,
-                zone = { TimeZone.UTC }).export(request))
+                StreamingHistoryExportEncoder(zone = { TimeZone.UTC }), zone = { TimeZone.UTC }).export(request))
             // The rider's vehicle name, cleaned for a file system, then the range start in local time.
             assertEquals("volty_Мой-EXN-2_1970-01-01_00-00-01.csv", result.relativePath)
             val file = File(root, result.relativePath)
             val bytes = file.readBytes()
             assertEquals(bytes.size.toLong(), result.bytes)
             assertEquals(MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }, result.sha256)
-            assertEquals("t_day:Time:s:3:0:1\n", bytes.toString(Charsets.UTF_8))
+            assertEquals("t_day:Time:s:3:0:1;t_day_pos:Time GNSS:s:3:0:1;gnss_lat:Latitude:deg:7:0:0;gnss_lon:Longitude:deg:7:0:0;" +
+                "gnss_h_acc:H. Accuracy GNSS:m:2:0:0\n1;1;56;60;3\n", bytes.toString(Charsets.UTF_8))
+            assertEquals(0L, result.droppedLate)
             assertEquals("text/csv", result.mime)
             assertEquals(listOf(result.relativePath), root.list()!!.toList())
         }
@@ -120,7 +125,7 @@ class FileHistoryExportRepositoryTest {
                         publicationObserved = root.list()!!.any { it.endsWith(".csv") }
                         caller.cancel()
                     }
-                    return HistoryExportInput(metadata, emptyFlow())
+                    return HistoryExportInput(metadata, records)
                 }
             }
             val repo = FileHistoryExportRepository(root, capturedSource, dispatcher = StandardTestDispatcher(testScheduler))
@@ -131,5 +136,22 @@ class FileHistoryExportRepositoryTest {
                 assertTrue(root.list()!!.isEmpty(), "A canceled export must not leave a finished file")
             } finally { caller.cancel() }
         }
+    }
+}
+
+class FileHistoryExportRepositoryEmptyRangeTest {
+    @Test fun aRangeWithNothingKnownFailsInsteadOfPublishingABareHeader() = runTest {
+        val tick = HistoryTick(1000, 10, 1)
+        val ride = HistoryRide("ride", "vehicle", tick, tick.copy(epochMillis = 2000, elapsedMillis = 1010), HistoryRideStatus.COMPLETED)
+        val request = HistoryExportRequest(ride.favoriteSource(), HistoryRange(1000, 2000), HistoryExportFormat.LOGUI)
+        val source = object : HistoryExportSource {
+            override suspend fun open(request: HistoryExportRequest) =
+                HistoryExportInput(HistoryExportMetadata(ride, request.range, emptyList()), emptyFlow())
+        }
+        val root = Files.createTempDirectory("volty-export-test-").toFile()
+        try {
+            assertEquals(HistoryExportResult.Failed(HistoryExportFailure.NO_DATA), FileHistoryExportRepository(root, source).export(request))
+            assertTrue(root.list()!!.none { it.endsWith(".csv") })
+        } finally { root.deleteRecursively() }
     }
 }

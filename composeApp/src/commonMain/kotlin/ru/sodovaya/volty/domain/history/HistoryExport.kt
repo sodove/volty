@@ -12,6 +12,11 @@ import kotlinx.coroutines.flow.Flow
  * with units, source labels, unknown reasons and 60 s summaries), was about as large (~11 MB for
  * the same ride). Their shared per-record encoder (`StructuredHistoryExportEncoder`) and the
  * summary records only they carried (`Summary`, `RetainedSummary`) went with them.
+ * What no export carries any more, by decision rather than loss: unknown reasons (an unknown is an
+ * empty cell), markers (BLE/GPS gaps, clock changes — a gap is missing time), raw values of legacy
+ * metrics Volty cannot map (`LegacyUnmapped`, counted only), and the 60 s summaries with their
+ * `energyWh` (so no `cnt_wh`: VESC Tool's Wh and efficiency read 0). V2 detail is never pruned, so
+ * the summaries were aggregates of samples the file still has.
  */
 enum class HistoryExportFormat(val extension: String, val mime: String) {
     LOGUI("csv", "text/csv"), GPX("gpx", "application/gpx+xml")
@@ -20,11 +25,14 @@ enum class HistoryExportFormat(val extension: String, val mime: String) {
 data class HistoryExportRequest(val source: HistoryFavoriteSource, val range: HistoryRange,
     val format: HistoryExportFormat)
 
-enum class HistoryExportFailure { NOT_FOUND, SOURCE_CHANGED, ACTIVE_RECORDING, NO_ROUTE, INVALID_DATA, UNSUPPORTED_FORMAT, LIMIT, STORAGE }
+/** [NO_DATA]: the range holds neither a known sample nor a fix, so a file would be a bare header. */
+enum class HistoryExportFailure { NOT_FOUND, SOURCE_CHANGED, ACTIVE_RECORDING, NO_ROUTE, NO_DATA, INVALID_DATA, UNSUPPORTED_FORMAT, LIMIT, STORAGE }
 class HistoryExportException(val reason: HistoryExportFailure) : IllegalStateException(reason.name)
 
 sealed interface HistoryExportResult {
-    data class Success(val relativePath: String, val bytes: Long, val sha256: String, val mime: String) : HistoryExportResult
+    /** [droppedLate]: samples left out because they arrived too far out of time order to place. */
+    data class Success(val relativePath: String, val bytes: Long, val sha256: String, val mime: String,
+        val droppedLate: Long = 0) : HistoryExportResult
     data class Failed(val reason: HistoryExportFailure) : HistoryExportResult
 }
 
@@ -61,7 +69,7 @@ sealed interface HistoryExportRecord {
 }
 
 data class HistoryExportCounts(val samples: Long = 0, val locations: Long = 0,
-    val events: Long = 0, val unmapped: Long = 0)
+    val events: Long = 0, val unmapped: Long = 0, val droppedLate: Long = 0)
 
 /** Writes fragments to an app-owned temporary sink. Only its file owner may
  * publish a finished, checksummed artifact after this method succeeds. */

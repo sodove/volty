@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
+import ru.sodovaya.volty.data.ble.historySourceCanId
 import ru.sodovaya.volty.domain.history.*
 import kotlin.math.abs
 import kotlin.math.floor
@@ -14,6 +15,10 @@ import kotlin.math.floor
 /**
  * A ride as a VESC logui CSV: the file the rider's own head unit writes, so it opens in VESC Tool's
  * Log Analysis (with the map) and in telemetry-studio's `vesc` parser without either being changed.
+ * It is parse-compatible, deliberately not byte-identical to log.c: trailing zeros are stripped,
+ * GNSS has 7 decimals (log.c prints `%.8f`), the GNSS columns are in a different order, and an exact
+ * binary tie rounds half away from zero (`0.125` → `0.13`, glibc `%.2f` gives `0.12`). Both readers
+ * look columns up by key and parse with `toDouble`/`Number`, so none of this matters to them.
  *
  * ## The wire format, from the writers and the reader (paths under `vesc_tool_free_windows`)
  * - Header: one line of `key:name:unit:precision:isRelative:isTimestamp` descriptors joined by `;`,
@@ -59,10 +64,9 @@ import kotlin.math.floor
  * ([historyAxisEpochMillis]); every sample and fix lands in the slot holding its own tick, and a
  * cell is written only in that slot — no forward fill, no interpolation. A metric sampled twice in
  * one slot keeps the later sample. Unknown samples write nothing, and a slot that would hold only
- * empty cells is not written at all. Samples are read in storage order, which is time order in
- * practice (the real T4 ride: 0 of 46 782 out of order); one arriving more than
- * [REORDER_WINDOW_MILLIS] behind the newest is written at once in a row of its own, out of time
- * order, rather than dropped.
+ * empty cells is not written at all. Samples are read in storage order (append order); pass 1
+ * measures how far any sample lags the newest one, and pass 2 holds back that many slots, up to
+ * [MAX_REORDER_WINDOW_MILLIS]. Rows are always written in time order.
  *
  * `t_day` counts from the local time of day at the range start plus elapsed axis time, so a DST
  * change mid-ride does not jump it by an hour; a ride longer than 24 h aliases, which no logui
@@ -74,7 +78,9 @@ import kotlin.math.floor
  *
  * The input flow is collected twice — once to learn which series earned a column (the header
  * comes first), once to stream the rows — so it must be cold. Fixes are held in memory between
- * the passes (about one per second); samples never are, beyond a [REORDER_WINDOW_MILLIS] window.
+ * the passes (about one per second); samples never are, beyond the reorder window. A range with
+ * neither a known sample nor a fix fails with [HistoryExportFailure.NO_DATA] instead of publishing a
+ * header-only file.
  */
 internal class LoguiHistoryExportEncoder(
     private val metadata: HistoryExportMetadata,
@@ -93,17 +99,22 @@ internal class LoguiHistoryExportEncoder(
         if (metadata.ride.status == HistoryRideStatus.RECORDING) fail(HistoryExportFailure.ACTIVE_RECORDING)
         if (metadata.sources.map { it.id }.distinct().size != metadata.sources.size) fail(HistoryExportFailure.INVALID_DATA)
 
-        // Pass 1: which series earned a column, and the fixes (ordered by their own tick).
+        // Pass 1: which series earned a column, the fixes (ordered by their own tick), and how far
+        // behind the newest sample any sample arrives in storage order.
         val earned = LinkedHashSet<HistorySeriesKey>()
         val fixes = ArrayList<Pair<Long, HistoryGpsFix>>()
         var events = 0L; var unmapped = 0L
+        var newest = Long.MIN_VALUE; var lateness = 0L
         records.collect { record ->
             currentCoroutineContext().ensureActive()
             when (record) {
                 is HistoryExportRecord.Numeric -> {
-                    axis(record.sample.tick)
+                    val at = axis(record.sample.tick)
                     descriptor(record.sample.key)
-                    if (record.sample.value?.isFinite() == true) earned += record.sample.key
+                    if (record.sample.value?.isFinite() == true) {
+                        earned += record.sample.key
+                        if (at < newest) lateness = maxOf(lateness, newest - at) else newest = at
+                    }
                 }
                 is HistoryExportRecord.Location -> {
                     if (fixes.size >= MAX_FIXES) fail(HistoryExportFailure.LIMIT)
@@ -113,17 +124,20 @@ internal class LoguiHistoryExportEncoder(
                 is HistoryExportRecord.LegacyUnmapped -> unmapped++
             }
         }
+        if (earned.isEmpty() && fixes.isEmpty()) fail(HistoryExportFailure.NO_DATA)
         fixes.sortBy { it.first }
         val prefixes = loguiSourcePrefixes(metadata.sources, earned.mapTo(HashSet()) { it.sourceId })
         val order = loguiSourceOrder(metadata.sources, prefixes)
         val keys = earned.sortedWith(compareBy<HistorySeriesKey>({ order.getValue(it.sourceId) },
             { metricOrder.getValue(it.metricId) }, { it.cellIndex ?: -1 }))
-        val fields = keys.map { key -> loguiField(key.metricId, key.cellIndex) }
-        val columns = keys.indices.map { index ->
-            val prefix = prefixes.getValue(keys[index].sourceId)
-            LoguiColumn(prefix + fields[index].key, prefix + fields[index].name, fields[index].unit, fields[index].precision)
+        // One series can feed more than one column (the trip: ride distance and the raw session trip).
+        val specs = keys.flatMap { key -> loguiFields(key.metricId, key.cellIndex).map { key to it } }
+        val fields = specs.map { it.second }
+        val columns = specs.map { (key, field) ->
+            val prefix = prefixes.getValue(key.sourceId)
+            LoguiColumn(prefix + field.key, prefix + field.name, field.unit, field.precision)
         }
-        val columnOf = keys.withIndex().associate { (index, key) -> key to index }
+        val columnsOf = specs.withIndex().groupBy({ it.value.first }, { it.index })
         val hasFix = fixes.isNotEmpty()
         val hasHeading = fixes.any { it.second.heading?.isFinite() == true }
         val header = columns + LoguiColumn("t_day", "Time", "s", 3, isTimestamp = true) + (if (!hasFix) emptyList() else listOf(
@@ -141,16 +155,31 @@ internal class LoguiHistoryExportEncoder(
         val sink = BufferedSink(output)
         sink.append(header.joinToString(";") { it.descriptor() }).append("\n")
 
-        // Pass 2: rows in slot order, merged within a short reorder window.
+        // Pass 2: rows in slot order. The window holds back as many slots as the latest sample
+        // measured in pass 1 needs, up to the cap; a sample later than that is dropped and counted,
+        // never written out of time order.
+        val windowMillis = minOf(lateness, MAX_REORDER_WINDOW_MILLIS)
+        val window = windowMillis / gridMillis + 2
         val pending = ArrayList<Row>()
         var lastWritten = Long.MIN_VALUE
+        var newestSlot = Long.MIN_VALUE
         var nextFix = 0
-        var rows = 0L; var cells = 0L; var replaced = 0L; var late = 0L; var fixesWritten = 0L
+        var rows = 0L; var cells = 0L; var replaced = 0L; var dropped = 0L; var fixesWritten = 0L
+        // Ride distance per trip column: positive steps of the session trip, a drop (a reconnect
+        // resetting the controller's trip) contributing nothing.
+        val tripPrevious = DoubleArray(columns.size) { Double.NaN }
+        val tripDistance = DoubleArray(columns.size)
         suspend fun emitRow(row: Row) {
             val line = StringBuilder()
             for (index in columns.indices) {
                 if (index > 0) line.append(';')
-                val value = row.values[index]
+                var value = row.values[index]
+                if (!value.isNaN() && fields[index].distanceSinceStart) {
+                    val previous = tripPrevious[index]
+                    if (!previous.isNaN() && value > previous) tripDistance[index] += value - previous
+                    tripPrevious[index] = value
+                    value = tripDistance[index]
+                }
                 if (!value.isNaN()) line.append(loguiNumber(value, columns[index].precision))
             }
             if (columns.isNotEmpty()) line.append(';')
@@ -191,32 +220,29 @@ internal class LoguiHistoryExportEncoder(
                 if (row.fix != null || row.values.any { !it.isNaN() }) { emitRow(row); lastWritten = row.slot }
             }
         }
-        val window = (REORDER_WINDOW_MILLIS + gridMillis - 1) / gridMillis
         records.collect { record ->
             currentCoroutineContext().ensureActive()
             if (record !is HistoryExportRecord.Numeric) return@collect
             val sample = record.sample
             val value = sample.value?.takeIf { it.isFinite() } ?: return@collect
-            val column = columnOf[sample.key] ?: fail(HistoryExportFailure.SOURCE_CHANGED)
+            val targets = columnsOf[sample.key] ?: fail(HistoryExportFailure.SOURCE_CHANGED)
             val slot = axis(sample.tick).floorDiv(gridMillis)
-            val scaled = value * fields[column].scale
-            if (slot <= lastWritten) {
-                // Older than the reorder window: its own row, out of order, rather than lost.
-                late++; cells++
-                emitRow(Row(slot, DoubleArray(columns.size) { Double.NaN }.also { it[column] = scaled }))
-                return@collect
-            }
-            admitFixesThrough(slot)
+            if (slot <= lastWritten) { dropped++; return@collect }
+            newestSlot = maxOf(newestSlot, slot)
+            admitFixesThrough(newestSlot)
             val row = rowFor(slot)
-            if (!row.values[column].isNaN()) replaced++ else cells++
-            row.values[column] = scaled
-            flushThrough(slot - window)
+            for (column in targets) {
+                if (!row.values[column].isNaN()) replaced++ else cells++
+                row.values[column] = value * fields[column].scale
+            }
+            flushThrough(newestSlot - window)
         }
         admitFixesThrough(Long.MAX_VALUE)
         flushThrough(Long.MAX_VALUE)
         sink.flush()
-        stats = LoguiExportStats(rows, cells, replaced, late, columns.size, fixesWritten)
-        return HistoryExportCounts(samples = cells, locations = fixesWritten, events = events, unmapped = unmapped)
+        stats = LoguiExportStats(rows, cells, replaced, dropped, columns.size, fixesWritten, lateness)
+        return HistoryExportCounts(samples = cells, locations = fixesWritten, events = events, unmapped = unmapped,
+            droppedLate = dropped)
     }
 
     private class Row(val slot: Long, val values: DoubleArray) {
@@ -257,7 +283,8 @@ internal class LoguiHistoryExportEncoder(
     private companion object {
         const val MILLIS_PER_DAY = 86_400_000L
         const val FRAGMENT_CHARS = 32 * 1024
-        const val MAX_FIXES = 1_000_000
+        /** ~55 h of fixes at 1 Hz; each held fix costs well under 1 KiB of heap. */
+        const val MAX_FIXES = 200_000
         /** logui's own field order (`logger.lisp:39-66`) first, then the registry's. */
         val metricOrder = (listOf("input_voltage_v", "motor_current_a", "battery_current_a", "duty_percent",
             "duty_estimated_percent", "erpm", "esc_temperature_c", "motor_temperature_c", "controller_power_w", "speed_kmh",
@@ -274,11 +301,11 @@ internal class LoguiHistoryExportEncoder(
  *
  * | grid | bytes | rows | samples merged away |
  * |---:|---:|---:|---:|
- * | 1 ms | 467 079 | 11 815 | 0 |
- * | 20 ms | 377 595 | 8 732 | 0 |
- * | **50 ms** | **312 727** | **6 194** | **0** |
- * | 100 ms | 272 229 | 4 658 | 0 |
- * | 200 ms | 246 789 | 3 625 | 20 |
+ * | 1 ms | 488 908 | 11 815 | 0 |
+ * | 20 ms | 396 341 | 8 732 | 0 |
+ * | **50 ms** | **328 935** | **6 194** | **0** |
+ * | 100 ms | 286 901 | 4 658 | 0 |
+ * | 200 ms | 260 422 | 3 625 | 22 |
  *
  * The wheel's frame types arrive tens of milliseconds apart, so a fine grid writes one sparse row
  * per frame; merging them into 50 ms slots saves a third without dropping anything. 100 ms saves
@@ -290,11 +317,20 @@ internal class LoguiHistoryExportEncoder(
  */
 internal const val LOGUI_ROW_GRID_MILLIS = 50L
 
-/** A sample this far behind the newest one still merges into its own slot. */
-internal const val REORDER_WINDOW_MILLIS = 2_000L
+/**
+ * The most a sample may lag the newest one in storage order and still be placed in its own slot.
+ * The window actually used is the lateness measured in pass 1, so an in-order ride holds back two
+ * slots. Storage order is append order, and `HistoryDetailGate` can hold a series' 500 ms window
+ * until its link-loss marker fires — seconds after other sources' newer samples were appended — so
+ * multi-source rides are expected to lag. Two minutes of 50 ms slots is 2 400 pending rows, a few
+ * MiB at a hundred columns. A sample later than this is dropped and counted
+ * ([HistoryExportCounts.droppedLate], shown in the export sheet), never written out of time order:
+ * VESC Tool would draw the plot backwards, and a row before the first one would read as the next day.
+ */
+internal const val MAX_REORDER_WINDOW_MILLIS = 120_000L
 
 internal data class LoguiExportStats(val rows: Long = 0, val cells: Long = 0, val replaced: Long = 0,
-    val late: Long = 0, val columns: Int = 0, val fixes: Long = 0)
+    val dropped: Long = 0, val columns: Int = 0, val fixes: Long = 0, val latenessMillis: Long = 0)
 
 internal data class LoguiColumn(val key: String, val name: String, val unit: String, val precision: Int,
     val isTimestamp: Boolean = false) {
@@ -303,8 +339,30 @@ internal data class LoguiColumn(val key: String, val name: String, val unit: Str
     fun descriptor() = "$key:$name:$unit:$precision:0:${if (isTimestamp) 1 else 0}"
 }
 
-/** How one Volty metric is written: the stored canonical value times [scale], at [precision] decimals. */
-internal data class LoguiField(val key: String, val name: String, val unit: String, val precision: Int, val scale: Double = 1.0)
+/**
+ * How one Volty metric is written: the stored canonical value times [scale], at [precision] decimals.
+ * [distanceSinceStart] turns a session trip into distance ridden since the range's first trip sample.
+ */
+internal data class LoguiField(val key: String, val name: String, val unit: String, val precision: Int,
+    val scale: Double = 1.0, val distanceSinceStart: Boolean = false)
+
+/**
+ * Every column a series feeds. `trip_distance_km` is the controller's per-connection trip
+ * (`VescProtocol.kt:241`, `BegodeProtocol.kt:586`): it starts wherever the session was when the range
+ * begins and falls to 0 on a reconnect. VESC Tool's Distance is `trip_vesc` of the last row minus
+ * that of the first row, and the first row reads 0 unless it holds a trip sample
+ * (`pageloganalysis.cpp:1327`, `updateStats`). So `trip_vesc` is the distance since the first trip
+ * sample in the range, summing positive steps only, and the raw session trip goes to the
+ * non-special `trip_session`.
+ *
+ * Retraction: the first revision wrote the raw session trip as `trip_vesc`. A range starting at a
+ * session trip of 10 km, or a first row holding only a BMS sample, made VESC Tool report the whole
+ * session (or more) as the distance of the range.
+ */
+internal fun loguiFields(metricId: String, cellIndex: Int?): List<LoguiField> =
+    if (metricId == "trip_distance_km") listOf(loguiField(metricId, cellIndex),
+        LoguiField("trip_session", "Trip Session", "m", 1, scale = 1000.0))
+    else listOf(loguiField(metricId, cellIndex))
 
 /**
  * The logui field for a registry metric. Keys VESC Tool or telemetry-studio already know are used
@@ -315,15 +373,20 @@ internal data class LoguiField(val key: String, val name: String, val unit: Stri
  * - `RPM` is logui's `get-rpm`, electrical RPM, the same quantity as Volty's `erpm`.
  * - `Batt` is a percentage; here it is the battery source's state of charge.
  * The estimated duty (`duty_estimated_percent`) is a different quantity and never shares `Duty`.
- * Battery current and power keep Volty's stored sign (charge positive), named for the BMS, rather
- * than borrowing logui's `bms_i_in_ic`, whose sign convention was not verified.
+ * Every value is in the sign the rider sees (the registry's `displayMultiplier`), so the pack's
+ * `bms_current` and `bms_power` are discharge-positive like `Current In` in the same file. They keep
+ * Volty's own keys rather than logui's `bms_i_in_ic`, whose sign convention was not verified.
+ *
+ * Retraction: the first revision wrote battery current and power in the stored sign (charge
+ * positive), so under load `Current In` read +20 A and `bms_current` −20 A in one plot.
  */
 internal fun loguiField(metricId: String, cellIndex: Int?): LoguiField {
     val descriptor = HistoryMetricRegistry.descriptor(metricId)
     val unit = descriptor?.unit?.let(::loguiUnit).orEmpty()
     val precision = descriptor?.unit?.let(::loguiPrecision) ?: 2
+    val sign = descriptor?.displayMultiplier ?: 1.0
     fun same(key: String, name: String = key) = LoguiField(key, name, unit, precision)
-    return when (metricId) {
+    val field = when (metricId) {
         "input_voltage_v" -> same("Input Voltage")
         "motor_current_a" -> same("Current")
         "battery_current_a" -> same("Current In")
@@ -333,7 +396,7 @@ internal fun loguiField(metricId: String, cellIndex: Int?): LoguiField {
         "esc_temperature_c" -> same("Temp Fet")
         "motor_temperature_c" -> same("Temp Motor")
         "speed_kmh" -> same("kmh_vesc", "Speed")
-        "trip_distance_km" -> LoguiField("trip_vesc", "Trip", "m", 1, scale = 1000.0)
+        "trip_distance_km" -> LoguiField("trip_vesc", "Trip", "m", 1, scale = 1000.0, distanceSinceStart = true)
         "odometer_km" -> same("odometer", "Odometer")
         "controller_power_w" -> same("power", "Power")
         "soc_percent" -> same("Batt", "Battery")
@@ -348,6 +411,7 @@ internal fun loguiField(metricId: String, cellIndex: Int?): LoguiField {
         "cell_v" -> "BMS_C${(cellIndex ?: 0) + 1}".let { LoguiField(it, it, unit, 3) }
         else -> (if (cellIndex == null) metricId else "${metricId}_${cellIndex + 1}").let { same(it) }
     }
+    return field.copy(scale = field.scale * sign)
 }
 
 internal fun loguiUnit(unit: HistoryUnit): String = when (unit) {
@@ -364,31 +428,52 @@ internal fun loguiPrecision(unit: HistoryUnit): Int = when (unit) {
 }
 
 /**
- * Column prefix per source. The first motion source (a vehicle aggregate if there is one, else a
- * controller) and the first battery source (aggregate, else a pack) that earned a column keep bare
- * keys; every other source gets a kind letter and its 1-based ordinal among sources of that kind,
- * like logui's `V117 Current`. A second controller is `V<n>`, which telemetry-studio's
- * `detectSecondController` (`/^(V\d+)\s+/`) folds into its totals; other kinds use letters it does
- * not match. Labels never appear: they are rider text, can repeat, and may contain `:` or `;`.
+ * Column prefix per source. Like logui, the master controller writes bare keys (`Current`, `Duty`)
+ * and only the extra controllers are prefixed (`logger.lisp:39-81`), so a single-controller vehicle
+ * has no prefixed column at all. Bare keys go to the first source that earned a column among, in
+ * order: a vehicle motion aggregate; a controller without a CAN id — the one a gateway answers for
+ * itself ("hosted", `LinkPlan.kt:202`, identity `local`) or a directly connected VESC; any
+ * controller (a single CAN-forwarded controller is still the master). Likewise for the battery: a
+ * vehicle battery aggregate, else a pack. Every other source gets a prefix like logui's
+ * `V117 Current`, whose number is the CAN id (`logger.lisp:71-81`):
+ * - a controller behind a gateway: `V<canId>` (and a reported-CAN source `CAN<canId>`), read from
+ *   the source identity ([historySourceCanId], `NativeHistorySourcePlan.kt:117`), so the columns
+ *   line up with the head unit's own log of the same ride; telemetry-studio's
+ *   `detectSecondController` (`/^(V\d+)\s+/`) folds a `V<id>` controller into its totals;
+ * - any other source: a kind letter and its 1-based ordinal among sources of that kind — `C` for a
+ *   controller without a CAN id, `R` for reported CAN without one, so an ordinal can never be read
+ *   as a CAN id — `M`, `B`, `P`, `A`, `D` for the others.
+ * Labels never appear: they are rider text, can repeat, and may contain `:` or `;`.
+ *
+ * Retraction: the first revision numbered extra controllers `V<ordinal>`, which looked like CAN ids
+ * and did not match the head unit's `V117`.
  */
 internal fun loguiSourcePrefixes(sources: List<HistorySource>, withData: Set<String>): Map<String, String> {
     fun first(vararg tiers: HistorySourceKind) = tiers.firstNotNullOfOrNull { kind ->
         sources.firstOrNull { it.kind == kind && it.id in withData } }
-    val bare = setOfNotNull(first(HistorySourceKind.VEHICLE_MOTION, HistorySourceKind.CONTROLLER)?.id,
-        first(HistorySourceKind.VEHICLE_BATTERY, HistorySourceKind.BATTERY)?.id)
+    val master = first(HistorySourceKind.VEHICLE_MOTION)
+        ?: sources.firstOrNull { it.kind == HistorySourceKind.CONTROLLER && it.id in withData && historySourceCanId(it.id) == null }
+        ?: first(HistorySourceKind.CONTROLLER)
+    val bare = setOfNotNull(master?.id, first(HistorySourceKind.VEHICLE_BATTERY, HistorySourceKind.BATTERY)?.id)
     val ordinal = HashMap<HistorySourceKind, Int>()
     return sources.associate { source ->
         val number = (ordinal[source.kind] ?: 0) + 1
         ordinal[source.kind] = number
-        source.id to if (source.id in bare) "" else "${loguiKindLetter(source.kind)}$number "
+        val canId = historySourceCanId(source.id)
+        source.id to when {
+            source.id in bare -> ""
+            source.kind == HistorySourceKind.CONTROLLER && canId != null -> "V$canId "
+            source.kind == HistorySourceKind.REPORTED_CAN && canId != null -> "CAN$canId "
+            else -> "${loguiKindLetter(source.kind)}$number "
+        }
     }
 }
 
 private fun loguiKindLetter(kind: HistorySourceKind) = when (kind) {
-    HistorySourceKind.CONTROLLER -> "V"; HistorySourceKind.VEHICLE_MOTION -> "M"
+    HistorySourceKind.CONTROLLER -> "C"; HistorySourceKind.VEHICLE_MOTION -> "M"
     HistorySourceKind.BATTERY -> "B"; HistorySourceKind.VEHICLE_BATTERY -> "P"
     HistorySourceKind.BATTERY_ASSEMBLY -> "A"; HistorySourceKind.DERIVED_BATTERY -> "D"
-    HistorySourceKind.REPORTED_CAN -> "CAN"
+    HistorySourceKind.REPORTED_CAN -> "R"
 }
 
 /** Bare-key sources first (motion, then battery), then the rest in metadata order. */

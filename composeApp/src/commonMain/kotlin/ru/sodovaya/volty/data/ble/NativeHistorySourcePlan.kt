@@ -156,3 +156,23 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle, 
 
 /** Length prefixes prevent address/configuration text from merging identity fields. */
 private fun encodeIdentity(fields: List<String>): String = fields.joinToString("") { "${it.length}:$it" }
+
+/**
+ * The CAN id inside a gateway controller's source identity (`native-gateway-history-v1:`, fields
+ * address, protocol, CAN id or `local`, role, calibration — see the CONTROLLER branch above), or
+ * null for any other identity. Used only to name export columns like logui's `V117`.
+ */
+internal fun historySourceCanId(sourceId: String): Int? {
+    val prefix = "native-gateway-history-v1:"
+    if (!sourceId.startsWith(prefix)) return null
+    val fields = mutableListOf<String>()
+    var at = prefix.length
+    while (at < sourceId.length && fields.size < 3) {
+        val colon = sourceId.indexOf(':', at).takeIf { it > at } ?: return null
+        val length = sourceId.substring(at, colon).toIntOrNull()?.takeIf { it >= 0 } ?: return null
+        if (colon + 1 + length > sourceId.length) return null
+        fields += sourceId.substring(colon + 1, colon + 1 + length)
+        at = colon + 1 + length
+    }
+    return fields.getOrNull(2)?.toIntOrNull()?.takeIf { it in 0..254 }
+}

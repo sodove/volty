@@ -3,10 +3,12 @@
     <string name="history_export_window">Selected interval: %1$s — %2$s</string>
     <string name="history_export_privacy">The file may contain your recorded location and telemetry. Share it only with people you trust. Export does not change the original ride.</string>
     <string name="history_export_logui">CSV for VESC Tool · telemetry and route</string>
-    <string name="history_export_logui_hold">In the VESC Tool file a value is written only when it was measured. VESC Tool fills the gaps with the last known value, so a gap there looks like a steady reading.</string>
+    <string name="history_export_logui_hold">In the VESC Tool file a value is written only where it was measured. VESC Tool shows 0 for a value until its first measurement, and across a gap it keeps the last known value, so a gap looks like a steady reading.</string>
     <string name="history_export_gpx">GPX · recorded route</string>
     <string name="history_export_working">Preparing file… You can cancel.</string>
     <string name="history_export_no_route">No recorded route in this interval. Choose CSV for VESC Tool to export telemetry.</string>
+    <string name="history_export_no_data">This interval has no recorded telemetry or route.</string>
+    <string name="history_export_dropped_late">Samples left out because they arrived too far out of time order: %1$s.</string>
     <string name="history_export_active">Stop recording this ride before exporting it.</string>
     <string name="history_export_changed">The recording was removed or changed. Reopen the ride and try again.</string>
     <string name="history_export_invalid">Some saved data cannot be exported. The original ride has not changed.</string>

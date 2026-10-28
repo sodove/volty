@@ -2,9 +2,7 @@ exportV2Shape:
 SELECT
  (SELECT COUNT(*) FROM HistorySampleV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS sampleCount,
  (SELECT COUNT(*) FROM HistoryGpsV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS gpsCount,
- (SELECT COUNT(*) FROM HistoryMarkerV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS markerCount,
- (SELECT COUNT(*) FROM HistoryBucketV2 WHERE rideId = :rideId
-  AND COALESCE(firstElapsedMillis, startElapsedMillis) >= :fromElapsed AND endElapsedMillis <= :toElapsed) AS bucketCount;
+ (SELECT COUNT(*) FROM HistoryMarkerV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS markerCount;
 
 -- The rider's vehicle name, used only to name an exported file.
 exportVehicleName:

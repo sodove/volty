@@ -38,6 +38,7 @@ fun HistoryExportSheet(state: HistoryExportState, onChoose: (HistoryExportFormat
             }
             state.error?.let { error -> Text(stringResource(when (error) {
                 HistoryExportFailure.NO_ROUTE -> Res.string.history_export_no_route
+                HistoryExportFailure.NO_DATA -> Res.string.history_export_no_data
                 HistoryExportFailure.ACTIVE_RECORDING -> Res.string.history_export_active
                 HistoryExportFailure.NOT_FOUND, HistoryExportFailure.SOURCE_CHANGED -> Res.string.history_export_changed
                 HistoryExportFailure.INVALID_DATA, HistoryExportFailure.UNSUPPORTED_FORMAT -> Res.string.history_export_invalid
@@ -46,6 +47,8 @@ fun HistoryExportSheet(state: HistoryExportState, onChoose: (HistoryExportFormat
             }), color = MaterialTheme.colorScheme.error) }
             state.ready?.let { ready ->
                 Text(stringResource(Res.string.history_export_ready, ((ready.bytes + 1023) / 1024).toString()))
+                if (ready.droppedLate > 0) Text(stringResource(Res.string.history_export_dropped_late, ready.droppedLate.toString()),
+                    style = MaterialTheme.typography.bodySmall)
                 HistoryExportActions(ready)
             }
             TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
