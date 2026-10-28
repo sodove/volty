@@ -40,11 +40,13 @@ class BegodeBatteryObservationTest {
     @Test fun bootTelemetryIsAbsentAndRealZeroCurrentIsEarned() {
         val protocol = BegodeProtocol(); val events = capture(protocol)
         protocol.onNotification(telemetry(0, 0, boot = true))
-        assertEquals(TelemetryUnknown.UNAVAILABLE, events.single().read(TelemetryMetric.CURRENT).unknown)
+        // Retraction: this asserted CURRENT = UNAVAILABLE on the boot frame. A placeholder frame makes no claim about the
+        // current, so it is omitted (no observation), exactly as the controller-power fix (Task 6) omits an unpaired 0x00.
+        assertTrue(events.single().readings.none { it.metric == TelemetryMetric.CURRENT || it.metric == TelemetryMetric.POWER })
         protocol.onNotification(telemetry(0, 0))
         assertEquals(0.0, assertNotNull(events.last().read(TelemetryMetric.CURRENT).value), 0.0)
         protocol.onNotification(telemetry(0, 0, boot = true))
-        assertEquals(TelemetryUnknown.UNAVAILABLE, events.last().read(TelemetryMetric.CURRENT).unknown)
+        assertTrue(events.last().readings.none { it.metric == TelemetryMetric.CURRENT })
     }
 
     @Test fun outOfOrderPagesKeepPhysicalIndicesAndBranchIdentityBeforeBasicData() {
@@ -110,11 +112,12 @@ class BegodeBatteryObservationTest {
         val battery = events.filter { it.origin == TelemetryOrigin.BATTERY }
         assertEquals(76, battery.size)
         assertEquals(setOf(0, 1), battery.map { it.localIndex }.toSet())
-        val telemetry = battery.filter { event -> event.readings.any { it.metric == TelemetryMetric.CURRENT } }
+        val telemetry = battery.filter { event -> event.readings.any { it.metric == TelemetryMetric.VOLTAGE } }
         val pages = battery.filter { event -> event.readings.any { it.metric == TelemetryMetric.CELL_MIN } }
         assertEquals(38, telemetry.size); assertEquals(38, pages.size)
-        assertEquals(TelemetryUnknown.UNAVAILABLE, telemetry.first().read(TelemetryMetric.CURRENT).unknown)
-        assertTrue(telemetry.any { it.read(TelemetryMetric.CURRENT).value != null })
+        // Retraction: the boot placeholder used to record CURRENT as UNAVAILABLE and POWER as PARTIAL_SOURCE; it records neither.
+        assertTrue(telemetry.first().readings.none { it.metric == TelemetryMetric.CURRENT || it.metric == TelemetryMetric.POWER })
+        assertTrue(telemetry.any { event -> event.readings.any { it.metric == TelemetryMetric.CURRENT && it.value != null } })
         assertTrue(telemetry.all { it.read(TelemetryMetric.VOLTAGE).unknown == TelemetryUnknown.PARTIAL_SOURCE })
         val cells = pages.flatMap { event -> event.readings.filter { it.metric.indexed } }
         assertTrue(cells.isNotEmpty())

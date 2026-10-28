@@ -37,13 +37,25 @@ internal fun observedBegodeBranch(frame: ByteArray, bootPlaceholder: Boolean,
     // Not gated on the boot shape: a wheel without a smart BMS (the rider's T4) sends that all-zero
     // payload forever, with the pack voltage real beside it. The certification is what proves it.
     val certified = voltageCertified && voltage > 0
-    return listOf(
-    TelemetryReading.measured(TelemetryMetric.CURRENT, current, !bootPlaceholder),
+    // A boot-shaped (all-zero) payload carries no current and no power. Omit both rather than record an explicit unknown:
+    // "no observation" is the contract for a frame that did not measure the metric ([TelemetryObservation]).
+    //
+    // Retraction (history flags): an earlier revision recorded CURRENT as UNAVAILABLE and POWER as PARTIAL_SOURCE on every
+    // such frame. A wheel without a smart BMS (the rider's T4) sends this placeholder forever, so its pack `power_w` and
+    // `current_a` were stored as 100 % unknown series: every bucket incomplete, an empty chart ("No data") that the
+    // default chart selected, and the rider's 14-minute ride held 2753 of them. That was wrong for the same reason as
+    // the controller-power fix (Task 6): an unknown is a claim about a sample, and the placeholder frame makes none.
+    // A non-boot frame whose voltage is not yet certified still records POWER as PARTIAL_SOURCE (a real BMS, transient).
+    return listOfNotNull(
+    TelemetryReading.measured(TelemetryMetric.CURRENT, current).takeUnless { bootPlaceholder },
     if (certified) TelemetryReading.measured(TelemetryMetric.VOLTAGE, voltage)
     // The dashboard can substitute cached cell sums for nominal frame voltage. Neither certifies a fresh calibrated branch voltage here.
     else TelemetryReading(TelemetryMetric.VOLTAGE, null, TelemetryUnknown.PARTIAL_SOURCE),
-    if (certified && !bootPlaceholder) TelemetryReading.measured(TelemetryMetric.POWER, voltage * current)
-    else TelemetryReading(TelemetryMetric.POWER, null, TelemetryUnknown.PARTIAL_SOURCE),
+    when {
+        bootPlaceholder -> null
+        certified -> TelemetryReading.measured(TelemetryMetric.POWER, voltage * current)
+        else -> TelemetryReading(TelemetryMetric.POWER, null, TelemetryUnknown.PARTIAL_SOURCE)
+    },
     TelemetryReading(TelemetryMetric.SOC, null, TelemetryUnknown.UNAVAILABLE),
     // Each frame refreshes only one assembly's two sensors, not the whole branch maximum.
     TelemetryReading(TelemetryMetric.BATTERY_TEMPERATURE, null,
