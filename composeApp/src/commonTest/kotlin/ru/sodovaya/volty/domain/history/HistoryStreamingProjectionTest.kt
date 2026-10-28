@@ -55,7 +55,8 @@ class HistoryStreamingProjectionTest {
         val accumulator = HistoryBucketAccumulator(origin, key)
         accumulator.offer(sample(0, -100.0)); accumulator.offer(sample(1000, -100.0))
         val gap = HistoryMarker(sample(1500, 0.0).tick, HistoryMarkerKind.OVERFLOW)
-        assertFalse(assertNotNull(accumulator.mark(gap)).complete)
+        // Retraction: was assertFalse; the marker only blocks the next interval (the final `result.complete` below).
+        assertTrue(assertNotNull(accumulator.mark(gap)).complete)
         accumulator.offer(sample(2000, -100.0))
         val result = assertNotNull(accumulator.snapshot())
         assertEquals(100.0 / 3600, result.energyWh)

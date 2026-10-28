@@ -56,6 +56,8 @@ SUM(CASE WHEN firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElap
 MIN(CASE WHEN firstEpochMillis IS NOT NULL AND lastEpochMillis IS NOT NULL
 AND firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN complete ELSE 0 END) AS complete,
 COUNT(*) AS bucketCount,
+MIN(CASE WHEN firstEpochMillis IS NOT NULL AND lastEpochMillis IS NOT NULL
+AND firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN 1 ELSE 0 END) AS covered,
 SUM(CASE WHEN firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN valueSum END) AS valueSum,
 SUM(CASE WHEN firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN valueCount END) AS valueCount,
 MIN(CASE WHEN firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed AND valueCount IS NULL THEN 0 ELSE 1 END) AS valuesKnown

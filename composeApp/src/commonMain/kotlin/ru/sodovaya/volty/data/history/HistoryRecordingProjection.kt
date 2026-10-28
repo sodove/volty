@@ -58,7 +58,12 @@ internal class HistoryRecordingProjection(
             }
         }
         batch.samples.sortedBy { it.tick.elapsedMillis }.forEach { sample ->
-            while (markerIndex < markers.size && markers[markerIndex].tick.elapsedMillis <= sample.tick.elapsedMillis) {
+            // A marker at exactly a sample's tick is applied AFTER that sample (retraction: it used to come first, `<=`).
+            // The ride-ending link-loss marker is stamped at the loss tick, which can equal the last sample's tick; applied
+            // first it made that last sample cross a barrier and flagged a bucket whose every sample was recorded. The
+            // cost: a marker that truly preceded a same-tick sample no longer breaks that one interval (a real gap is
+            // longer than the 2 s interval limit and breaks anyway).
+            while (markerIndex < markers.size && markers[markerIndex].tick.elapsedMillis < sample.tick.elapsedMillis) {
                 mark(markers[markerIndex++])
             }
             val current = series[sample.key] ?: run {

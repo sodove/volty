@@ -45,7 +45,10 @@ class HistorySourceBoundaryTest {
         val before = bucket.snapshot()
         assertNull(bucket.mark(gap("a")))
         assertEquals(before, bucket.snapshot())
-        assertFalse(assertNotNull(bucket.mark(gap("b"))).complete)
+        // Retraction: this asserted `assertFalse(...complete)`. A marker with no sample after it flags nothing (the ride-ending
+        // link loss); the barrier it sets makes the NEXT sample's bucket incomplete instead.
+        assertTrue(assertNotNull(bucket.mark(gap("b"))).complete)
+        assertFalse(bucket.offer(rows("b").last()).last().complete)
     }
 
     @Test fun projection_only_flushes_detail_and_marks_quality_for_the_affected_source() {
@@ -55,7 +58,9 @@ class HistorySourceBoundaryTest {
         val affected = projection.prepare(HistoryBatch(ride.id, emptyList(), emptyList(), listOf(gap("a"))), false)
         assertEquals(listOf(first.first()), affected.batch.samples)
         assertEquals(setOf("a"), affected.batch.buckets.map { it.key.sourceId }.toSet())
-        assertFalse(affected.batch.buckets.single().complete)
+        // Retraction: was assertFalse. No sample of "a" follows the marker, so its bucket stays complete; the marker is
+        // still scoped to "a" (the single bucket) and still flushes only a's detail.
+        assertTrue(affected.batch.buckets.single().complete)
         val remaining = affected.next.prepare(HistoryBatch(ride.id, emptyList(), emptyList(), emptyList()), true)
         assertEquals(listOf(first.last()), remaining.batch.samples)
     }

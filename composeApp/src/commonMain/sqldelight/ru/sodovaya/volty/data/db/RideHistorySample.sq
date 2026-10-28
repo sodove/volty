@@ -29,7 +29,7 @@ AND (:afterElapsed IS NULL OR elapsedMillis > :afterElapsed OR (elapsedMillis = 
 ORDER BY elapsedMillis, sequence LIMIT :pageSize;
 
 rangeDetailStats:
-SELECT MIN(reading) AS minimum, MAX(reading) AS maximum, COUNT(unknownReason) AS unknownCount
+SELECT MIN(reading) AS minimum, MAX(reading) AS maximum, COUNT(unknownReason) AS unknownCount, MAX(elapsedMillis) AS lastElapsed
 FROM HistorySampleV2
 WHERE rideId = :rideId AND sourceId = :sourceId AND metricId = :metricId AND cellIndex = :cellIndex
 AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed;

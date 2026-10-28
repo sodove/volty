@@ -32,7 +32,7 @@ class HistoryLongRecordingAcceptanceTest {
             for (receipt in 0..72000) {
                 val samples = listOf(
                     HistorySample(tick(receipt), power, if (receipt == 43217) -4200.0 else -1000.0),
-                    if (receipt in 60000..60199) HistorySample(tick(receipt), cell, null, HistoryUnknownReason.PARTIAL_SOURCE)
+                    if (receipt in 60000..62999) HistorySample(tick(receipt), cell, null, HistoryUnknownReason.PARTIAL_SOURCE)
                     else HistorySample(tick(receipt), cell, 0.0),
                 )
                 assertEquals(HistoryOffer.ACCEPTED, writer.offer(7, HistoryBatch("ride", samples, emptyList(), emptyList())))
@@ -62,6 +62,7 @@ class HistoryLongRecordingAcceptanceTest {
             assertTrue(summary.isNotEmpty() && summary.all { it.complete }, "Reach genuinely complete full-stream evidence")
             val cellStats = reader.stats("ride", cell, range)
             assertEquals(0.0, cellStats.minimum); assertEquals(0.0, cellStats.maximum)
+            // Retraction: the unknown run was 200 samples (20 s of 7200 s), now below the 2 % threshold (144 s) and exact; it is 3000 (300 s).
             assertFalse(cellStats.complete, "A partial cell must not inherit the healthy power series quality")
             assertTrue(stats.complete, "A complete earned summary must not become incomplete at the detail page limit")
             assertEquals(HistoryRideStatus.COMPLETED, store.ride("ride")?.status)

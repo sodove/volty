@@ -45,17 +45,21 @@ class SqlDelightHistoryStoreTest {
         val ride = HistoryRide("ride", "bike", origin, null, HistoryRideStatus.RECORDING)
         val sources = listOf("pack", "peer").map { HistorySource(it, HistorySourceKind.BATTERY, it) }
         store.begin(ride, sources)
-        val raw = listOf("pack", "peer").flatMap { id -> listOf(0L, 200L).map {
-            HistorySample(tick(it), HistorySeriesKey(id, "power_w"), 100.0)
+        // Retraction: the fixture was two samples 200 ms apart with one marker between them. Under the unknown-or-gap time
+        // threshold (max of 2 % and 10 s) that is exact; a series is partial only when enough of its time is broken. So:
+        // 60 one-second samples per source, and twelve pack-scoped gap markers (12 s > 10 s), each inside its own interval.
+        val raw = listOf("pack", "peer").flatMap { id -> (0L until 60L).map {
+            HistorySample(tick(it * 1000), HistorySeriesKey(id, "power_w"), 100.0)
         } }
-        val gap = HistoryMarker(tick(100), HistoryMarkerKind.BLE_GAP, "pack")
+        val gaps = (0L until 12L).map { HistoryMarker(tick(it * 2000 + 1500), HistoryMarkerKind.BLE_GAP, "pack") }
         val projected = HistoryRecordingProjection(ride, sources).prepare(
-            HistoryBatch("ride", raw, emptyList(), listOf(gap), "scoped-projection"), true).batch
+            HistoryBatch("ride", raw, emptyList(), gaps, "scoped-projection"), true).batch
         assertTrue(projected.buckets.single { it.key.sourceId == "peer" }.complete)
         assertFalse(projected.buckets.single { it.key.sourceId == "pack" }.complete)
-        store.append(projected); store.finish("ride", tick(200), HistoryRideStatus.COMPLETED)
-        assertTrue(store.stats("ride", HistorySeriesKey("peer", "power_w"), range).complete)
-        assertFalse(store.stats("ride", HistorySeriesKey("pack", "power_w"), range).complete)
+        store.append(projected); store.finish("ride", tick(59_000), HistoryRideStatus.COMPLETED)
+        val whole = HistoryRange(10000, 70000)
+        assertTrue(store.stats("ride", HistorySeriesKey("peer", "power_w"), whole).complete)
+        assertFalse(store.stats("ride", HistorySeriesKey("pack", "power_w"), whole).complete)
     }
 
     @Test fun seriesReadsOnlyExposeItsOwnScopedAndGlobalBoundaries() = runTest {
@@ -133,10 +137,14 @@ class SqlDelightHistoryStoreTest {
         val point = HistorySample(origin, key, -1.0)
         val prefix = List(20000) { point }
         val bucket = HistoryBucket(key, 0, origin, origin, point, point, null, 20000, true)
-        val absent = HistorySample(origin, key, null, HistoryUnknownReason.PARTIAL_SOURCE)
-        store.append(HistoryBatch("ride", prefix + absent, emptyList(), emptyList(), "tail-unknown", listOf(bucket)))
-        assertNotNull(store.samples("ride", key, range, null).next)
-        val stats = store.stats("ride", key, range)
+        // Retraction: the unknown used to sit at the same tick as the prefix. Under the unknown-or-gap time threshold an
+        // unknown with no time attached counts for nothing, so it now has 30 s on each side (60 s broken of a 60 s span),
+        // still beyond the first 20000-row page.
+        val absent = HistorySample(HistoryTick(origin.epochMillis + 30_000, origin.elapsedMillis + 30_000, 1), key, null, HistoryUnknownReason.PARTIAL_SOURCE)
+        val after = HistorySample(HistoryTick(origin.epochMillis + 60_000, origin.elapsedMillis + 60_000, 1), key, -1.0)
+        store.append(HistoryBatch("ride", prefix + absent + after, emptyList(), emptyList(), "tail-unknown", listOf(bucket)))
+        assertNotNull(store.samples("ride", key, HistoryRange(10000, 70000), null).next)
+        val stats = store.stats("ride", key, HistoryRange(10000, 70000))
         assertEquals(-1.0, stats.minimum); assertEquals(-1.0, stats.maximum)
         assertFalse(stats.complete, "Removing the page-truncated check alone would hide this unknown tail")
     }

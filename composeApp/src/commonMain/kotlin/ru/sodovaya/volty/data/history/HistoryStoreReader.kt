@@ -57,14 +57,46 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         val minimum = listOfNotNull(summary.minimum, detail.minimum).minOrNull()
         val maximum = listOfNotNull(summary.maximum, detail.maximum).maxOrNull()
         val energy = summary.energyWh?.takeIf { it.isFinite() }
-        val gap = database.rideHistoryMarkerQueries.hasEvidenceGap(rideId, bounds.first, bounds.last, key.sourceId).executeAsOne()
-        return HistoryStats(minimum, maximum, energy, ride.status != HistoryRideStatus.INTERRUPTED && summary.complete == 1L && !gap &&
-            detail.unknownCount == 0L &&
-            (summary.energyWh == null || energy != null),
-            // Every bucket of the range must carry its sum: a mean over part of the stream is not a mean.
-            summary.valueCount?.toDouble()?.takeIf { it > 0 && summary.valuesKnown?.toLong() == 1L }
-                ?.let { count -> summary.valueSum?.toDouble()?.div(count) }?.takeIf { it.isFinite() })
+        val sound = ride.status != HistoryRideStatus.INTERRUPTED && (summary.energyWh == null || energy != null)
+        val average = summary.valueCount?.toDouble()?.takeIf { it > 0 && summary.valuesKnown?.toLong() == 1L }
+            ?.let { count -> summary.valueSum?.toDouble()?.div(count) }?.takeIf { it.isFinite() }
+        // A range that clips a bucket (`covered` = 0) is never complete: that bucket's energy and mean are not derivable.
+        return HistoryStats(minimum, maximum, energy, sound && summary.covered == 1L && partialFree(rideId, key, range,
+            summary.complete == 1L && detail.unknownCount == 0L &&
+                !database.rideHistoryMarkerQueries.hasEvidenceGap(rideId, bounds.first, bounds.last,
+                    detail.lastElapsed ?: Long.MAX_VALUE, key.sourceId).executeAsOne()), average)
     }
+
+    /**
+     * Is the series' unknown-or-gap time within [historyPartialThresholdMillis]? [clean] is the cheap proof (every
+     * stored bucket complete, no unknown, no evidence gap FOLLOWED by a sample): then nothing is read. Otherwise the
+     * retained detail is walked (bounded at [PARTIAL_READ_PAGES] pages; beyond that the answer is "partial", never a
+     * guess) and the broken time measured against the threshold.
+     *
+     * Rides already stored need no migration: their last bucket may carry `complete = 0` only because the ride-ending
+     * BLE_GAP marker followed it (an earlier writer set the flag), and a ride-ending marker has no later sample so
+     * the detail walk finds no broken time and reads exact. A bucket flag is trusted only when the detail holds no
+     * sample at all (a summary-only fixture), because then there is nothing to measure it against.
+     */
+    private fun partialFree(rideId: String, key: HistorySeriesKey, range: HistoryRange, clean: Boolean): Boolean {
+        if (clean) return true
+        val samples = ArrayList<HistorySample>()
+        var after: HistoryCursor? = null
+        var pages = 0
+        while (true) {
+            val page = samples(rideId, key, range, after, 20000)
+            samples += page.items
+            after = page.next ?: break
+            if (++pages >= PARTIAL_READ_PAGES) return false
+        }
+        if (samples.isEmpty()) return false
+        val markers = try { markers(rideId, range) } catch (e: IllegalStateException) { return false }
+            .filter { it.sourceId == null || it.sourceId == key.sourceId }
+        val span = samples.last().tick.elapsedMillis - samples.first().tick.elapsedMillis
+        return !historyBrokenIsPartial(historyBrokenMillis(samples, markers), span)
+    }
+
+    private companion object { const val PARTIAL_READ_PAGES = 10 }
 
     fun rides(before: HistoryCursor?, limit: Int): HistoryPage<HistoryRide> {
         require(limit in 1..20)

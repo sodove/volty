@@ -75,7 +75,12 @@ class HistoryBucketAccumulator(
             else -> false
         }
         if (!breaks) return null
-        state = old.copy(complete = false, barrier = true)
+        // Retraction: an earlier revision also set complete = false here. That was wrong because the
+        // normal ride end (wheel switched off) writes a BLE_GAP at the very last tick, with no sample
+        // after it, and degraded a bucket whose every sample was recorded. The marker only blocks
+        // integration across the NEXT interval: the next offer() sees barrier and marks its own
+        // bucket incomplete, so a mid-ride gap is still flagged and a trailing one flags nothing.
+        state = old.copy(barrier = true)
         return snapshot()
     }
 
