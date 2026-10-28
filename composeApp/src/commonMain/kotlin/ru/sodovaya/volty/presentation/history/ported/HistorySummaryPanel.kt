@@ -4,6 +4,16 @@
 package ru.sodovaya.volty.presentation.history
 
 import androidx.compose.animation.animateContentSize
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -46,15 +56,41 @@ fun HistorySummaryPanel(totals: HistoryTotalsState, expanded: Boolean, onExpande
                 totals.loading -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(12.dp))
                 totals.totals.isEmpty() -> Text(stringResource(Res.string.history_summary_unavailable), Modifier.padding(12.dp),
                     style = MaterialTheme.typography.bodySmall)
-                // Collapsed shows the first row of headline numbers; expanded shows all of them.
-                else -> ru.sodovaya.volty.presentation.vehicle.TotalsTiles(
-                    if (expanded) totals.totals else totals.totals.take(COLLAPSED_TOTALS), Modifier.padding(12.dp))
+                // Collapsed: one sideways-scrolling row of headline numbers, the clipped tile fading out; expanded: all.
+                expanded -> ru.sodovaya.volty.presentation.vehicle.TotalsTiles(
+                    historyExpandedTotals(totals.totals), Modifier.padding(12.dp))
+                else -> TotalsStrip(historyCollapsedTotals(totals.totals), Modifier.padding(vertical = 12.dp))
             }
         }
     }
 }
 
-private const val COLLAPSED_TOTALS = 4
+@Composable
+private fun TotalsStrip(totals: List<HistoryTotal>, modifier: Modifier = Modifier) {
+    val scroll = rememberScrollState()
+    Row(
+        modifier.fillMaxWidth()
+            // An alpha mask rather than a painted gradient, so the fade matches whatever tonal surface is underneath.
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                if (scroll.canScrollForward) {
+                    val fade = FADE_WIDTH.toPx()
+                    drawRect(Brush.horizontalGradient(listOf(Color.Black, Color.Transparent),
+                        startX = size.width - fade, endX = size.width),
+                        topLeft = Offset(size.width - fade, 0f), size = Size(fade, size.height),
+                        blendMode = BlendMode.DstIn)
+                }
+            }
+            .horizontalScroll(scroll)
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        totals.forEach { ru.sodovaya.volty.presentation.vehicle.TotalTile(it) }
+    }
+}
+
+private val FADE_WIDTH = 36.dp
 
 @Composable
 internal fun SummaryCell(title: String, value: HistorySummaryValue, unit: HistoryUnit?) {

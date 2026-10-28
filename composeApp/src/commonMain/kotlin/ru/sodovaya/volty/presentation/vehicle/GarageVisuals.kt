@@ -152,12 +152,15 @@ internal fun CellBars(cells: List<Double>, modifier: Modifier = Modifier) {
 @Composable
 internal fun TotalsTiles(totals: List<HistoryTotal>, modifier: Modifier = Modifier) {
     FlowRow(modifier, horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        totals.forEach { total ->
-            Column(Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-                .padding(horizontal = 10.dp, vertical = 7.dp)) {
-                Text(stringResource(total.kind.title()), fontSize = 10.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(historyTotalPrefix(total) + total.text(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            }
-        }
+        totals.forEach { TotalTile(it) }
+    }
+}
+
+@Composable
+internal fun TotalTile(total: HistoryTotal) {
+    Column(Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
+        .padding(horizontal = 10.dp, vertical = 7.dp)) {
+        Text(stringResource(total.kind.title()), fontSize = 10.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+        Text(historyTotalPrefix(total) + total.text(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
     }
 }
