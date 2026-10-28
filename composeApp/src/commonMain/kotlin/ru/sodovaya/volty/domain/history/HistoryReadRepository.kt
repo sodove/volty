@@ -30,6 +30,10 @@ interface HistoryReadRepository {
     suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor? = null): HistoryRoutePage
     suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats
 
+    /** Does [key] hold at least one known value in [range]? Cheaper than [stats], which may walk the detail for its `complete`. */
+    suspend fun hasKnownValue(rideId: String, key: HistorySeriesKey, range: HistoryRange): Boolean =
+        stats(rideId, key, range).maximum != null
+
     /**
      * One page of the stored detail samples of [key], oldest first, with the same range, order and cursor checks as
      * [series] but no thinning: what a whole-ride computation (distance, charge used) must walk. Keep the cursor even

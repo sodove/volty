@@ -16,27 +16,65 @@ package ru.sodovaya.volty.domain.history
  *
  * Unknown samples at the very end, with no later sample, have no interval to measure and add nothing.
  */
-internal fun historyBrokenMillis(samples: List<HistorySample>, markers: List<HistoryMarker>, maxIntervalMillis: Long = 2000): Long {
-    val gapAxis = markers.filter { it.kind in HISTORY_GAP_MARKERS }.map { it.tick.elapsedMillis }.sorted()
-    var broken = 0L
-    for (i in 1 until samples.size) {
-        val a = samples[i - 1]; val b = samples[i]
+internal class HistoryBrokenAccumulator(markers: List<HistoryMarker>, private val maxIntervalMillis: Long = HISTORY_MAX_INTERVAL_MILLIS) {
+    private val gapAxis = markers.filter { it.kind in HISTORY_GAP_MARKERS }.map { it.tick.elapsedMillis }.sorted()
+    private val trailingAxis = markers.filter { it.kind in HISTORY_TRAILING_MARKERS }.map { it.tick.elapsedMillis }
+    private var first: HistorySample? = null
+    private var last: HistorySample? = null
+
+    /** Unknown-or-gap time so far. */
+    var brokenMillis = 0L; private set
+
+    /** The part of it that is a real gap (interval, marker, clock jump), not an unknown run. */
+    var gapMillis = 0L; private set
+
+    fun offer(b: HistorySample) {
+        val a = last
+        last = b
+        if (first == null) first = b
+        if (a == null) return
         val delta = b.tick.elapsedMillis - a.tick.elapsedMillis
-        if (delta <= 0) continue
-        val marker = run {
-            var low = 0; var high = gapAxis.size
-            while (low < high) {
-                val mid = (low + high) ushr 1
-                if (gapAxis[mid] <= a.tick.elapsedMillis) low = mid + 1 else high = mid
-            }
-            gapAxis.getOrNull(low)?.let { it < b.tick.elapsedMillis } == true
+        if (delta <= 0) return
+        var low = 0; var high = gapAxis.size
+        while (low < high) {
+            val mid = (low + high) ushr 1
+            if (gapAxis[mid] <= a.tick.elapsedMillis) low = mid + 1 else high = mid
         }
-        if (a.unknown != null || b.unknown != null || clockBoundary(a.tick, b.tick) || delta > maxIntervalMillis || marker) {
-            broken += delta
-        }
+        val marker = gapAxis.getOrNull(low)?.let { it < b.tick.elapsedMillis } == true
+        val genuine = marker || clockBoundary(a.tick, b.tick) || delta > maxIntervalMillis
+        if (genuine) { brokenMillis += delta; gapMillis += delta }
+        else if (a.unknown != null || b.unknown != null) brokenMillis += delta
     }
-    return broken
+
+    /** True once the broken time is beyond the threshold of the longest span the range could hold: the verdict is final. */
+    fun surelyPartial(spanBoundMillis: Long) = brokenMillis > historyPartialThresholdMillis(spanBoundMillis)
+
+    /**
+     * Final verdict. [rideEndElapsed] is the end of the RIDE (or of the range, if earlier), not of this series. When a
+     * gap marker sits at or after this series' last sample and the ride ran on for more than the interval limit, the
+     * series stopped being recorded while the ride continued: that tail is broken time (review C1, a BMS link that died
+     * at minute 20 of 60). A ride that ends where its series end (the wheel switched off, tail within the limit) has
+     * no such tail. Returns null when there were no samples.
+     */
+    fun partial(rideEndElapsed: Long): Boolean? {
+        val f = first ?: return null
+        val l = checkNotNull(last)
+        var broken = brokenMillis
+        var spanEnd = l.tick.elapsedMillis
+        val tail = rideEndElapsed - l.tick.elapsedMillis
+        if (tail > maxIntervalMillis && trailingAxis.any { it >= l.tick.elapsedMillis }) {
+            broken += tail; gapMillis += tail; spanEnd += tail
+        }
+        return historyBrokenIsPartial(broken, spanEnd - f.tick.elapsedMillis)
+    }
 }
+
+/** The recorder's interval limit: samples further apart than this are a gap. */
+const val HISTORY_MAX_INTERVAL_MILLIS = 2000L
+
+/** Markers that can start a tail: the series was cut while the ride may have gone on. */
+internal val HISTORY_TRAILING_MARKERS = setOf(HistoryMarkerKind.BLE_GAP, HistoryMarkerKind.CLOCK_CHANGE,
+    HistoryMarkerKind.OVERFLOW, HistoryMarkerKind.INTERRUPTED)
 
 /** Markers that interrupt a series (same set the writer's barrier and the SQL evidence-gap query use). */
 internal val HISTORY_GAP_MARKERS = setOf(HistoryMarkerKind.BLE_GAP, HistoryMarkerKind.CLOCK_CHANGE,
@@ -48,8 +86,12 @@ internal val HISTORY_GAP_MARKERS = setOf(HistoryMarkerKind.BLE_GAP, HistoryMarke
  *
  * False-negative cost, stated: a hole up to the threshold is NOT flagged, so a minimum, maximum or mean can miss a
  * value inside it. At 2 % that is ~17 s of a 14-minute ride, ~3.6 min of a 3-hour one; on a short ride the 10 s floor
- * applies. A genuine gap still renders as a break on the chart, and energy loses exactly the integrated time of the
- * hole (at most the threshold fraction of the energy), so the figure is a floor, not a fabrication.
+ * applies. A genuine gap still renders as a break on the chart.
+ *
+ * Retraction: an earlier revision said energy loses "at most the threshold fraction of the energy". That was wrong: the
+ * tolerance is a fraction of TIME, and a hole can hold far more of the Wh than that (a climb). The energy figure is a
+ * floor either way; a genuine gap now makes the Energy tile approximate regardless of this tolerance
+ * ([HistoryStats.hasGap]) and only short unknown runs are tolerated there.
  */
 fun historyPartialThresholdMillis(spanMillis: Long): Long =
     maxOf((spanMillis * HISTORY_PARTIAL_FRACTION).toLong(), HISTORY_PARTIAL_FLOOR_MILLIS)

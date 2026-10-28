@@ -174,8 +174,11 @@ class ControllerPowerContinuityTest {
         val stored = store.stats("ride", power, range)
         assertNotNull(stored.energyWh)
         val counting = CountingStore(store)
-        assertEquals(stored, DefaultHistoryReadRepository(counting).stats("ride", power, range))
-        assertEquals(0, counting.samplePages, "no recompute when the stored energy exists")
+        // The store leaves the unknown-or-gap verdict to the repository's walk (one page, tiny ride): that verdict is the
+        // only difference, and it is the only paging: no energy recompute when the stored energy exists.
+        assertTrue(stored.pendingWalk)
+        assertEquals(stored.copy(complete = true, pendingWalk = false), DefaultHistoryReadRepository(counting).stats("ride", power, range))
+        assertEquals(1, counting.samplePages, "one walk page, no repair page when the stored energy exists")
     }
 
     @Test fun twoReadsOfTheSameArtefactRidePageTheDetailOnce() = runTest {
@@ -188,9 +191,11 @@ class ControllerPowerContinuityTest {
         assertEquals(pages, counting.samplePages, "the second read is served from the cache")
     }
 
+    /** Fails the SECOND markers read: the first is the completeness walk's (Fix round I1), the second the repair's. */
     private class FlakyMarkersStore(val inner: HistoryStore, var failure: Exception?) : HistoryStore by inner {
+        private var reads = 0
         override suspend fun markers(rideId: String, range: HistoryRange) =
-            failure?.let { failure = null; throw it } ?: inner.markers(rideId, range)
+            if (++reads >= 2) failure?.let { failure = null; throw it } ?: inner.markers(rideId, range) else inner.markers(rideId, range)
     }
 
     @Test fun aFailedRepairIsNotCachedSoTheNextReadRepairs() = runTest {

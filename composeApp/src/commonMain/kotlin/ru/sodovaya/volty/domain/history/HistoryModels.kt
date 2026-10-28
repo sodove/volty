@@ -141,6 +141,17 @@ data class HistoryStats(
     val complete: Boolean,
     /** Mean of the recorded samples in the range (sample-weighted, not time-weighted); null when none. */
     val average: Double? = null,
+    /**
+     * The store's cheap proof failed but the series might still be exact within the unknown-or-gap tolerance; the
+     * read repository walks the detail and settles it (it clears this flag). Never shown to the rider.
+     */
+    val pendingWalk: Boolean = false,
+    /**
+     * A genuine gap (an interval over the limit, a marker break, a clock jump) lies inside a series that is still
+     * [complete] by tolerance. Short unknown runs do not set it. Energy reads approximate when set: the integral
+     * skipped real time, which can hold far more than the same fraction of the energy.
+     */
+    val hasGap: Boolean = false,
 ) {
     init {
         require(minimum == null || minimum.isFinite())

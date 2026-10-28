@@ -16,8 +16,10 @@ class DefaultHistoryReadRepository(
     private val maxReadPages: Int = 8,
     /** Where the multi-page energy repair computes (final review I1); the stores do their own IO. */
     private val computeDispatcher: CoroutineDispatcher = Dispatchers.Default,
+    /** Pages of detail the unknown-or-gap walk may read per series; beyond it the series is partial, never guessed. */
+    private val maxWalkPages: Int = 10,
 ) : HistoryReadRepository {
-    init { require(maxReadPages in 1..64) }
+    init { require(maxReadPages in 1..64); require(maxWalkPages in 1..64) }
 
     override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
         require(limit in 1..PAGE_SIZE)
@@ -80,12 +82,68 @@ class DefaultHistoryReadRepository(
     override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats {
         val ride = ride(rideId)
         if (ride == null || !available(rideId, key)) return HistoryStats(null, null, null, false)
-        val stored = read { store.stats(rideId, key, range) }
+        var stored = read { store.stats(rideId, key, range) }
+        if (stored.pendingWalk) {
+            val (complete, gap) = settledCompleteness(ride, key, range)
+            stored = stored.copy(complete = complete, hasGap = gap, pendingWalk = false)
+        }
         if (stored.energyWh != null || ride.status == HistoryRideStatus.RECORDING ||
             !bridgesPartialSourceArtefact(key.metricId)) return stored
         val energy = repairedEnergy(rideId, key, range) ?: return stored
         // Approximate by construction (thinned detail), so never `complete`: the tile renders it as partial.
         return stored.copy(energyWh = energy, complete = false)
+    }
+
+    /** Cheapest honest "has a known value": the store's stats (a maximum query), never the unknown-or-gap walk. */
+    override suspend fun hasKnownValue(rideId: String, key: HistorySeriesKey, range: HistoryRange): Boolean {
+        if (ride(rideId) == null || !available(rideId, key)) return false
+        return read { store.stats(rideId, key, range) }.maximum != null
+    }
+
+    private val walkCache = HashMap<Triple<String, HistorySeriesKey, HistoryRange>, Pair<Boolean, Boolean>>()
+
+    /**
+     * Settles a series the store's cheap proof could not call exact (review I1): pages its detail with ordinary short
+     * reads (never inside the store's read transaction, which the live recorder's append must not wait on), measures its
+     * unknown-or-gap time ([HistoryBrokenAccumulator]) against [historyBrokenIsPartial], and stops as soon as the verdict
+     * is certain. Returns (complete, hasGap). Cached per (ride, key, range) for a finished ride only; the rules are the
+     * energy repair's: a definitive answer is cached, a cancelled caller propagates, a failed read is neither cached nor
+     * guessed at (partial). Reading more than [maxWalkPages] pages is partial, not a guess.
+     */
+    private suspend fun settledCompleteness(ride: HistoryRide, key: HistorySeriesKey, range: HistoryRange): Pair<Boolean, Boolean> {
+        val cacheKey = Triple(ride.id, key, range)
+        val cacheable = ride.status != HistoryRideStatus.RECORDING
+        if (cacheable) repairMutex.withLock { walkCache[cacheKey]?.let { return it } }
+        val answer = try { walk(ride, key, range) } catch (e: CancellationException) { throw e }
+        catch (e: Exception) { println("[VOLTY] history completeness walk failed: $e"); return false to false }
+        if (cacheable) repairMutex.withLock {
+            if (walkCache.size >= REPAIR_CACHE_SIZE) walkCache.clear()
+            walkCache[cacheKey] = answer
+        }
+        return answer
+    }
+
+    private suspend fun walk(ride: HistoryRide, key: HistorySeriesKey, range: HistoryRange): Pair<Boolean, Boolean> {
+        val origin = ride.started
+        fun elapsedAt(axis: Long) = origin.elapsedMillis + (axis - origin.epochMillis)
+        val startElapsed = elapsedAt(maxOf(range.startEpochMillis, origin.epochMillis))
+        val endElapsed = elapsedAt(range.endEpochMillis)
+        // The ride's end, not the series': see HistoryBrokenAccumulator.partial.
+        val rideEnd = minOf(ride.ended?.elapsedMillis ?: Long.MAX_VALUE, endElapsed)
+        val markers = read { store.markers(ride.id, range) }.toList()
+            .filter { it.sourceId == null || it.sourceId == key.sourceId }
+        val broken = HistoryBrokenAccumulator(markers)
+        var after: HistoryCursor? = null
+        var pages = 0
+        while (true) {
+            val page = read { store.samples(ride.id, key, range, after, PAGE_SIZE) }
+            for (sample in page.items) broken.offer(sample)
+            if (broken.surelyPartial(endElapsed - startElapsed)) return false to true
+            after = page.next ?: break
+            if (++pages >= maxWalkPages) return false to false
+        }
+        val partial = broken.partial(rideEnd) ?: return false to false
+        return !partial to (broken.gapMillis > 0)
     }
 
     private val repairMutex = Mutex()

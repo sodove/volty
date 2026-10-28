@@ -300,7 +300,7 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                 // The pack's power may hold no value (a Begode T4's placeholder BMS): ask the stats the tiles use.
                 val sources = next.sources
                 scope.launch {
-                    val known = try { repository.stats(ride.id, packKey, whole).maximum != null }
+                    val known = try { repository.hasKnownValue(ride.id, packKey, whole) }
                     catch (e: CancellationException) { throw e } catch (e: Exception) { false }
                     if (lifetime.isActive && selection === captured && detail.state.value.selectedKeys.isEmpty() &&
                         pendingRestoration == null)

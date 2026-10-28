@@ -25,11 +25,13 @@ DELETE FROM HistoryMarkerV2 WHERE rideId = :rideId;
 markersForReceipt:
 SELECT * FROM HistoryMarkerV2 WHERE rideId = :rideId AND sequence >= :firstSequence AND sequence < :nextSequence ORDER BY sequence;
 
--- A gap counts only when a sample of the series follows it (elapsedMillis < :lastSampleElapsed): the ride-ending
--- BLE_GAP sits at/after the last sample and says nothing about recorded data. Pass Long.MAX_VALUE to count all.
+-- A gap counts when a sample of the series follows it (elapsedMillis < :lastSampleElapsed) OR it lies before
+-- :excuseBefore (= the ride's end minus the interval limit). Only the ride-ending BLE_GAP, at the ride's own end, is
+-- excused; a source-scoped marker at a source's last sample while the ride goes on still counts. Pass Long.MAX_VALUE
+-- for :lastSampleElapsed to count all.
 hasEvidenceGap:
 SELECT EXISTS(SELECT 1 FROM HistoryMarkerV2 WHERE rideId = :rideId
 AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed
-AND elapsedMillis < :lastSampleElapsed
+AND (elapsedMillis < :lastSampleElapsed OR elapsedMillis < :excuseBefore)
 AND (sourceId IS NULL OR sourceId = :sourceId)
 AND kind IN ('BLE_GAP', 'CLOCK_CHANGE', 'OVERFLOW', 'INTERRUPTED')) AS hasGap;

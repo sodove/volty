@@ -58,11 +58,12 @@ internal class HistoryRecordingProjection(
             }
         }
         batch.samples.sortedBy { it.tick.elapsedMillis }.forEach { sample ->
-            // A marker at exactly a sample's tick is applied AFTER that sample (retraction: it used to come first, `<=`).
-            // The ride-ending link-loss marker is stamped at the loss tick, which can equal the last sample's tick; applied
-            // first it made that last sample cross a barrier and flagged a bucket whose every sample was recorded. The
-            // cost: a marker that truly preceded a same-tick sample no longer breaks that one interval (a real gap is
-            // longer than the 2 s interval limit and breaks anyway).
+            // Within one batch, a marker at exactly a sample's tick is applied AFTER that sample (retraction: it used to come
+            // first, `<=`). The ride-ending link-loss marker is stamped at the loss tick, which can equal the last sample's
+            // tick; applied first it made that last sample cross a barrier and flagged a bucket whose every sample was
+            // recorded. This is batch-dependent, not a global rule: a marker in batch N whose same-tick sample arrives in
+            // batch N+1 is already applied before it (review M2). Harmless for energy: no interval over the limit is ever
+            // integrated, and a real gap is longer than the limit and breaks on that alone.
             while (markerIndex < markers.size && markers[markerIndex].tick.elapsedMillis < sample.tick.elapsedMillis) {
                 mark(markers[markerIndex++])
             }

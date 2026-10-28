@@ -17,15 +17,15 @@ fun historyMetricSummary(key: HistorySeriesKey, stats: HistoryStats?): HistoryMe
     val descriptor = HistoryMetricRegistry.descriptor(key.metricId)
         ?.takeIf { it.indexedByCell == (key.cellIndex != null) }
         ?: return HistoryMetricSummary(missing, missing, missing, null, missing)
-    fun field(value: Double?): HistorySummaryValue {
+    fun field(value: Double?, gapMakesPartial: Boolean = false): HistorySummaryValue {
         if (value == null || !value.isFinite()) return missing
         return HistorySummaryValue(if (value == 0.0) 0.0 else value,
-            if (stats?.complete == true) SummaryQuality.EXACT else SummaryQuality.PARTIAL)
+            if (stats?.complete == true && !(gapMakesPartial && stats.hasGap)) SummaryQuality.EXACT else SummaryQuality.PARTIAL)
     }
     val multiplier = descriptor.displayMultiplier
     val low = if (multiplier < 0) stats?.maximum else stats?.minimum
     val high = if (multiplier < 0) stats?.minimum else stats?.maximum
     return HistoryMetricSummary(field(low?.times(multiplier)), field(high?.times(multiplier)),
-        field(stats?.energyWh?.takeIf { descriptor.consumptionMultiplier != null }), descriptor.unit,
+        field(stats?.energyWh?.takeIf { descriptor.consumptionMultiplier != null }, gapMakesPartial = true), descriptor.unit,
         field(stats?.average?.times(multiplier)))
 }
