@@ -34,8 +34,6 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                 vehicleName = queries.exportVehicleName(ride.vehicleId).executeAsOneOrNull()), from, through,
                 queries.exportV2Shape(ride.id, from, through).executeAsOne())
         }
-        // Summaries are aggregates of the samples; only the long CSV carries them.
-        val withSummaries = request.format == HistoryExportFormat.CSV
         return HistoryExportInput(snapshot.metadata, flow {
             // Every page is its own short SQLite snapshot. No database
             // transaction is held while encoding or waiting for the file sink.
@@ -82,40 +80,13 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                 }
                 if (page.size < pageSize) break
             }
-            var bucketRows = 0L
-            if (withSummaries) {
-                var source: String? = null; var metric = ""; var index = -1L; var start = -1L
-                while (true) {
-                    val page = read { unchanged(snapshot); queries.exportBuckets(id, snapshot.from, snapshot.through,
-                        source, metric, index, start, pageSize.toLong(), mapper = ::HistoryBucketV2).executeAsList() }
-                    if (page.isEmpty()) break
-                    bucketRows += page.size
-                    if (bucketRows > snapshot.shape.bucketCount) fail(HistoryExportFailure.SOURCE_CHANGED)
-                    for (row in page) {
-                        cell(row.cellIndex)
-                        // Retraction: the old SQL discarded migrated summaries
-                        // without captured times. Their aggregates remain earned;
-                        // keep missing times explicit instead of synthesizing ticks.
-                        if (row.firstEpochMillis != null && row.firstElapsedMillis != null && row.lastEpochMillis != null &&
-                            (row.minimum == null || (row.minEpochMillis != null && row.minElapsedMillis != null)) &&
-                            (row.maximum == null || (row.maxEpochMillis != null && row.maxElapsedMillis != null))) {
-                            emit(HistoryExportRecord.Summary(row.toHistoryBucket(snapshot.metadata.ride.started)))
-                        } else emit(HistoryExportRecord.RetainedSummary(
-                            HistorySeriesKey(row.sourceId, row.metricId, cell(row.cellIndex)),
-                            row.startElapsedMillis, row.endElapsedMillis, row.minimum, row.maximum, row.energyWh,
-                            row.sampleCount, row.complete == 1L, row.firstEpochMillis, row.firstElapsedMillis,
-                            row.lastEpochMillis, row.minEpochMillis, row.minElapsedMillis, row.maxEpochMillis, row.maxElapsedMillis))
-                        source = row.sourceId; metric = row.metricId; index = row.cellIndex; start = row.startElapsedMillis
-                    }
-                    if (page.size < pageSize) break
-                }
-            }
+            // Retraction: summaries (HistoryBucketV2) were paged here for the long CSV and JSON
+            // exports. Both were removed on 2026-10-29; no export reads summaries now.
             read {
                 unchanged(snapshot)
                 if (queries.exportV2Shape(id, snapshot.from, snapshot.through).executeAsOne() != snapshot.shape ||
                     sources(id) != snapshot.metadata.sources || gpsRows != snapshot.shape.gpsCount || markerRows != snapshot.shape.markerCount ||
-                    (request.format != HistoryExportFormat.GPX && sampleRows != snapshot.shape.sampleCount) ||
-                    (withSummaries && bucketRows != snapshot.shape.bucketCount)) fail(HistoryExportFailure.SOURCE_CHANGED)
+                    (request.format != HistoryExportFormat.GPX && sampleRows != snapshot.shape.sampleCount)) fail(HistoryExportFailure.SOURCE_CHANGED)
             }
         }.catch { failure ->
             when (failure) {

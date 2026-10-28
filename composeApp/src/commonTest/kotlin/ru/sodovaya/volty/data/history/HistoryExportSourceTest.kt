@@ -9,7 +9,6 @@ import ru.sodovaya.volty.domain.history.*
 import java.io.StringReader
 import javax.xml.parsers.DocumentBuilderFactory
 import org.xml.sax.InputSource
-import kotlinx.serialization.json.*
 import kotlin.test.*
 
 class HistoryExportSourceTest {
@@ -38,7 +37,7 @@ class HistoryExportSourceTest {
         val samples = (1..4).map { HistorySample(origin, key, it.toDouble()) } +
             HistorySample(origin, key, null, HistoryUnknownReason.PARTIAL_SOURCE)
         store.append(HistoryBatch("ride", samples, emptyList(), emptyList()))
-        val request = store.request(HistoryExportFormat.CSV)
+        val request = store.request(HistoryExportFormat.LOGUI)
         val input = SqlDelightHistoryExportSource(provider, pageSize = 2).open(request)
         assertEquals(request.source, input.metadata.ride.favoriteSource())
         val output = input.records.toList().filterIsInstance<HistoryExportRecord.Numeric>().map { it.sample }
@@ -67,7 +66,7 @@ class HistoryExportSourceTest {
     @Test fun sourceIdentityCannotFallbackToAnotherRecordingAndDeletionDuringReadCannotCompleteStream() = runTest {
         val (provider, store) = fixture(); store.beginRide()
         store.append(HistoryBatch("ride", (1..5).map { HistorySample(tick(it * 100L), key, it.toDouble()) }, emptyList(), emptyList()))
-        val request = store.request(HistoryExportFormat.CSV)
+        val request = store.request(HistoryExportFormat.LOGUI)
         val reader = SqlDelightHistoryExportSource(provider, pageSize = 2)
         val mismatch = assertFailsWith<HistoryExportException> { reader.open(request.copy(source = request.source.copy(vehicleId = "other"))) }
         assertEquals(HistoryExportFailure.SOURCE_CHANGED, mismatch.reason)
@@ -81,7 +80,7 @@ class HistoryExportSourceTest {
         assertEquals(HistoryExportFailure.SOURCE_CHANGED, failure.reason)
     }
 
-    private suspend fun legacyRequest(provider: VoltyDatabaseProvider, format: HistoryExportFormat = HistoryExportFormat.CSV,
+    private suspend fun legacyRequest(provider: VoltyDatabaseProvider, format: HistoryExportFormat = HistoryExportFormat.LOGUI,
         range: HistoryRange = HistoryRange(1000, 3000)) = HistoryExportRequest(
         assertNotNull(LegacyHistoryReader(provider).ride("old")).favoriteSource(), range, format)
 
@@ -93,17 +92,19 @@ class HistoryExportSourceTest {
         db.ridePointRowQueries.insert("old", "POWER", second, -1, 60.0, 1)
         db.ridePointRowQueries.insert("old", "CURRENT", "1970-01-01T00:00:02Z", -1, 4200.0, 0)
         val input = SqlDelightHistoryExportSource(provider, pageSize = 1).open(legacyRequest(provider))
-        val text = StringBuilder()
-        StreamingHistoryExportEncoder().write(HistoryExportFormat.CSV, input.metadata, input.records) { text.append(it) }
-        val rows = structuredRecords(input.metadata, input.records)
+        // Retraction: this read the long CSV's per-record objects; that export is gone, so the
+        // source's own records are checked, then the logui file that is written from them.
+        val rows = input.records.toList().map { assertIs<HistoryExportRecord.Numeric>(it) }
         assertEquals(3, rows.size)
-        val power = rows.filter { it.getValue("metric").jsonPrimitive.content == "power_w" }
-        assertEquals(setOf(first, second), power.map { it.getValue("capturedTimestamp").jsonPrimitive.content }.toSet())
-        assertEquals(setOf(-50.0, -60.0), power.map { it.getValue("value").jsonPrimitive.double }.toSet())
-        assertTrue(rows.all { it.getValue("elapsedMillis") == JsonNull && it.getValue("clockGeneration") == JsonNull })
-        val unknown = rows.single { it.getValue("metric").jsonPrimitive.content == "current_a" }
-        assertEquals(JsonNull, unknown.getValue("value")); assertEquals("LEGACY", unknown.getValue("unknownReason").jsonPrimitive.content)
+        val power = rows.filter { it.sample.key.metricId == "power_w" }
+        assertEquals(setOf(first, second), power.map { it.capturedTimestamp }.toSet())
+        assertEquals(setOf(-50.0, -60.0), power.map { it.sample.value }.toSet())
+        val unknown = rows.single { it.sample.key.metricId == "current_a" }
+        assertNull(unknown.sample.value); assertEquals(HistoryUnknownReason.LEGACY, unknown.sample.unknown)
+        val text = StringBuilder()
+        StreamingHistoryExportEncoder().write(HistoryExportFormat.LOGUI, input.metadata, input.records) { text.append(it) }
         assertFalse("4200" in text)
+        assertFalse("bms_current" in text, "a series with only unknown samples earns no column")
     }
 
     @Test fun legacyUnmappedMetricsAreRetainedAndTwinV2IdCannotReplaceLegacySourceOrSupplyGps() = runTest {
@@ -156,7 +157,7 @@ class HistoryExportSourceTest {
         }
         val end = tick(total * 500L)
         store.finish("ride", end, HistoryRideStatus.COMPLETED)
-        val request = HistoryExportRequest(assertNotNull(store.ride("ride")).favoriteSource(), HistoryRange(1000, end.epochMillis), HistoryExportFormat.CSV)
+        val request = HistoryExportRequest(assertNotNull(store.ride("ride")).favoriteSource(), HistoryRange(1000, end.epochMillis), HistoryExportFormat.LOGUI)
         val input = SqlDelightHistoryExportSource(provider, pageSize = 127).open(request)
         var count = 0; var unknowns = 0; var last: HistorySample? = null
         input.records.collect { record ->
@@ -168,54 +169,15 @@ class HistoryExportSourceTest {
         assertEquals(tick((total - 1) * 500L), last?.tick)
     }
 
-    @Test fun retainedSummariesWithoutCapturedTimesAreExportedWithoutInventingSampleTimes() = runTest {
+    @Test fun summariesAreNotReadForAnyExportFormat() = runTest {
+        // Retraction: two tests here proved the long CSV/JSON paged summaries (retained ones without
+        // captured times, and buckets crossing the window). Both exports were removed on 2026-10-29.
         val (provider, store) = fixture(); store.beginRide()
-        val db = provider.database
-        // Deliberately incoherent with current writers: migrated retained facts
-        // have earned aggregates but none of the later captured-time columns.
-        db.rideHistoryBucketQueries.putBucket("ride", "pack", "power_w", -1,
+        provider.database.rideHistoryBucketQueries.putBucket("ride", "pack", "power_w", -1,
             10, 2010, -100.0, 20.0, 4.5, 100, 1, null, null, null, null, null, null, null, null, null)
-        val request = store.request(HistoryExportFormat.CSV)
-        val reader = SqlDelightHistoryExportSource(provider, pageSize = 1)
-        for (structured in listOf(true, false)) {
-            val input = reader.open(request); val text = StringBuilder()
-            val counts = StreamingHistoryExportEncoder().write(HistoryExportFormat.CSV, input.metadata, input.records) { text.append(it) }
-            assertEquals(1, counts.summaries, "retained facts must not silently disappear")
-            if (structured) {
-                val row = structuredRecords(input.metadata, input.records).single()
-                assertEquals("summary", row.getValue("type").jsonPrimitive.content)
-                assertEquals("RETAINED_SUMMARY_TIME_UNAVAILABLE", row.getValue("dataQuality").jsonPrimitive.content)
-                assertEquals(JsonNull, row.getValue("epochMillis"))
-                assertEquals(JsonNull, row.getValue("clockGeneration"))
-                assertEquals(JsonNull, row.getValue("first").jsonObject.getValue("epochMillis"))
-                assertEquals(JsonNull, row.getValue("minimum").jsonObject.getValue("epochMillis"))
-                assertEquals(-100.0, row.getValue("minimum").jsonObject.getValue("value").jsonPrimitive.double)
-                assertEquals(4.5, row.getValue("energyWh").jsonPrimitive.double)
-                assertEquals(100, row.getValue("sampleCount").jsonPrimitive.int)
-                assertEquals(10, row.getValue("coverageStartElapsedMillis").jsonPrimitive.int)
-                assertEquals(2010, row.getValue("coverageEndElapsedMillis").jsonPrimitive.int)
-            } else assertTrue("RETAINED_SUMMARY_TIME_UNAVAILABLE" in text)
+        val request = store.request(HistoryExportFormat.LOGUI)
+        for (format in HistoryExportFormat.entries) {
+            assertTrue(SqlDelightHistoryExportSource(provider, pageSize = 1).open(request.copy(format = format)).records.toList().isEmpty(), format.name)
         }
-        val cropped = reader.open(request.copy(range = HistoryRange(1500, 4000)))
-        assertTrue(cropped.records.toList().isEmpty(), "a retained bucket crossing the selected window cannot be cropped by guessing")
-    }
-
-    @Test fun summaryCompositePagingKeepsIncompleteEarnedFactsAndExcludesBucketsCrossingSelectedWindow() = runTest {
-        val (provider, store) = fixture(); store.beginRide(); val db = provider.database
-        for (source in listOf("pack2", "pack3")) db.rideHistorySourceQueries.insertSource("ride", source, "BATTERY", "Same label")
-        fun bucket(source: String, first: Long, last: Long) {
-            db.rideHistoryBucketQueries.putBucket("ride", source, "power_w", -1, 10, 10 + last,
-                -100.0, 20.0, 4.5, 100, 0, 1000 + first, 10 + first, 1000 + last,
-                1000 + first, 10 + first, 1000 + last, 10 + last, null, null)
-        }
-        bucket("pack", 1000, 2000); bucket("pack2", 1000, 2500); bucket("pack3", 0, 2000)
-        val request = store.request(HistoryExportFormat.CSV).copy(range = HistoryRange(2000, 4000))
-        val input = SqlDelightHistoryExportSource(provider, pageSize = 1).open(request)
-        val rows = input.records.toList().map { assertIs<HistoryExportRecord.Summary>(it).bucket }
-        assertEquals(listOf("pack", "pack2"), rows.map { it.key.sourceId })
-        assertTrue(rows.all { !it.complete && it.sampleCount == 100L && it.energyWh == 4.5 })
-        assertEquals(listOf(2000L, 2000L), rows.map { it.first.epochMillis })
-        assertEquals(listOf(3000L, 3500L), rows.map { it.last.epochMillis })
-        assertEquals(2, structuredRecords(input.metadata, input.records).size)
     }
 }

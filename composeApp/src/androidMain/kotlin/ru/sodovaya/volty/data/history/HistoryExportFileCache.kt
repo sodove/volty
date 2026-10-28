@@ -56,8 +56,8 @@ class HistoryExportFileCache(private val directory: File,
         if (!Files.isDirectory(root, NOFOLLOW_LINKS)) throw IOException("Export cache is not a directory")
     }
     companion object {
-        /** [historyExportFileName]: `volty_<vehicle>_<yyyy-MM-dd_HH-mm-ss>[_records].<ext>`. */
-        private val NAMED = Regex("volty_[\\p{L}\\p{N}_-]{1,40}_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}(_records)?\\.(gpx|csv)")
+        /** [historyExportFileName]: `volty_<vehicle>_<yyyy-MM-dd_HH-mm-ss>.<ext>`. */
+        private val NAMED = Regex("volty_[\\p{L}\\p{N}_-]{1,40}_\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2}\\.(gpx|csv)")
         /** Names written before 0.7.59, including the retired `.json`; still swept from the cache. */
         private val LEGACY = Regex("volty-ride-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.(gpx|csv|json)")
         private val READY = Regex("(?:${NAMED.pattern})|(?:${LEGACY.pattern})")

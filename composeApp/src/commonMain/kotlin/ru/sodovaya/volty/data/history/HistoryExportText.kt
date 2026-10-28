@@ -26,8 +26,7 @@ private val exportPrivatePath = Regex(
 
 /**
  * `volty_<vehicle>_<yyyy-MM-dd_HH-mm-ss>.<ext>`, the time being the selected range's start in the
- * phone's zone (the head unit names its logs by local time too, `log.c:151-163`). Volty's long
- * table gets a `_records` suffix so it never shares a name with the logui file of the same range.
+ * phone's zone (the head unit names its logs by local time too, `log.c:151-163`).
  * The vehicle part keeps letters (any script), digits, `-` and `_`; device addresses and private
  * paths are redacted first, as in every other exported label.
  */
@@ -39,8 +38,7 @@ fun historyExportFileName(format: HistoryExportFormat, vehicle: String?, startEp
     fun two(value: Int) = value.toString().padStart(2, '0')
     val stamp = "${time.year.toString().padStart(4, '0')}-${two(time.monthNumber)}-${two(time.dayOfMonth)}_" +
         "${two(time.hour)}-${two(time.minute)}-${two(time.second)}"
-    val suffix = if (format == HistoryExportFormat.CSV) "_records" else ""
-    return "volty_${name}_$stamp$suffix.${format.extension}"
+    return "volty_${name}_$stamp.${format.extension}"
 }
 
 /** The vehicle part of [historyExportFileName]: the rider's name for it, else the first source's label. */

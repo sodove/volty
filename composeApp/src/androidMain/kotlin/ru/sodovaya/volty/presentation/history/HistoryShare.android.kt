@@ -99,7 +99,6 @@ actual fun HistoryExportActions(artifact: HistoryExportResult.Success) {
 
 /** Verify the exact completed artifact again before granting access or copying. */
 internal suspend fun checkedExportFile(directory: File, artifact: HistoryExportResult.Success): File {
-    // Two formats share `.csv` and `text/csv`, so this asks for some format, not exactly one.
     if (HistoryExportFormat.entries.none { artifact.relativePath.endsWith(".${it.extension}") && artifact.mime == it.mime })
         throw IOException("Unsupported export")
     if (!HistoryExportFileCache.isReadyName(artifact.relativePath) ||

@@ -3,16 +3,18 @@ package ru.sodovaya.volty.domain.history
 import kotlinx.coroutines.flow.Flow
 
 /**
- * [LOGUI] is the VESC logui CSV (VESC Tool Log Analysis, telemetry-studio), one row per sample slot.
- * [CSV] is Volty's long table: one row per stored record, with units, sources and unknown reasons.
+ * [LOGUI] is the VESC logui CSV (VESC Tool Log Analysis, telemetry-studio), one row per sample slot;
+ * [GPX] is the recorded route.
  *
- * Retraction: a `JSON` entry (schema v1, one object per record) was removed on 2026-10-29 at the
- * rider's request. It cost ~400 B per value (an 18 MB file for a 14-minute ride), nothing in the
- * app read it back, and [LOGUI] replaces it as the compact export. Its record encoder survives
- * only as the row source of [CSV].
+ * Retraction: two more entries were removed on 2026-10-29 at the rider's request. `JSON` (schema
+ * v1, one object per record) cost ~400 B per value — an 18 MB file for a 14-minute ride — and
+ * nothing in the app read it back. `CSV`, Volty's long table (one quoted row per stored record,
+ * with units, source labels, unknown reasons and 60 s summaries), was about as large (~11 MB for
+ * the same ride). Their shared per-record encoder (`StructuredHistoryExportEncoder`) and the
+ * summary records only they carried (`Summary`, `RetainedSummary`) went with them.
  */
 enum class HistoryExportFormat(val extension: String, val mime: String) {
-    LOGUI("csv", "text/csv"), GPX("gpx", "application/gpx+xml"), CSV("csv", "text/csv")
+    LOGUI("csv", "text/csv"), GPX("gpx", "application/gpx+xml")
 }
 
 data class HistoryExportRequest(val source: HistoryFavoriteSource, val range: HistoryRange,
@@ -46,7 +48,8 @@ data class HistoryExportMetadata(val ride: HistoryRide, val range: HistoryRange,
 
 /** Input must be paged by its producer; GPS/events are ordered by elapsed time,
  * with boundary events preceding locations at the same tick. Original wall time
- * stays on every fact. These are retained detail/summaries, not an acquisition log.
+ * stays on every fact. These are retained detail, not an acquisition log.
+ * Summary records were removed with the long CSV/JSON exports, their only readers.
  */
 sealed interface HistoryExportRecord {
     data class Numeric(val sample: HistorySample, val capturedTimestamp: String? = null,
@@ -55,21 +58,10 @@ sealed interface HistoryExportRecord {
         val cellIndex: Int?, val rawValue: Double?, val known: Boolean) : HistoryExportRecord
     data class Location(val fix: HistoryGpsFix) : HistoryExportRecord
     data class Event(val marker: HistoryMarker) : HistoryExportRecord
-    data class Summary(val bucket: HistoryBucket) : HistoryExportRecord
-    /** Migrated retained aggregates may lack captured boundary/peak times.
-     * Preserve earned values and stored coverage without manufacturing samples.
-     */
-    data class RetainedSummary(val key: HistorySeriesKey,
-        val startElapsedMillis: Long, val endElapsedMillis: Long,
-        val minimum: Double?, val maximum: Double?, val energyWh: Double?,
-        val sampleCount: Long, val complete: Boolean,
-        val firstEpochMillis: Long?, val firstElapsedMillis: Long?, val lastEpochMillis: Long?,
-        val minEpochMillis: Long?, val minElapsedMillis: Long?,
-        val maxEpochMillis: Long?, val maxElapsedMillis: Long?) : HistoryExportRecord
 }
 
 data class HistoryExportCounts(val samples: Long = 0, val locations: Long = 0,
-    val events: Long = 0, val summaries: Long = 0, val unmapped: Long = 0)
+    val events: Long = 0, val unmapped: Long = 0)
 
 /** Writes fragments to an app-owned temporary sink. Only its file owner may
  * publish a finished, checksummed artifact after this method succeeds. */

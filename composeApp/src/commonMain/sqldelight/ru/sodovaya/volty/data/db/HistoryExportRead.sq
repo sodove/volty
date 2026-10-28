@@ -35,15 +35,6 @@ OR (elapsedMillis = :afterElapsed AND routeOrder > :afterOrder)
 OR (elapsedMillis = :afterElapsed AND routeOrder = :afterOrder AND sequence > :afterSequence)
 ORDER BY elapsedMillis, routeOrder, sequence LIMIT :pageSize;
 
-exportBuckets:
-SELECT * FROM HistoryBucketV2 WHERE rideId = :rideId
-AND COALESCE(firstElapsedMillis, startElapsedMillis) >= :fromElapsed AND endElapsedMillis <= :toElapsed
-AND (:afterSource IS NULL OR sourceId > :afterSource
- OR (sourceId = :afterSource AND metricId > :afterMetric)
- OR (sourceId = :afterSource AND metricId = :afterMetric AND cellIndex > :afterCell)
- OR (sourceId = :afterSource AND metricId = :afterMetric AND cellIndex = :afterCell AND startElapsedMillis > :afterStart))
-ORDER BY sourceId, metricId, cellIndex, startElapsedMillis LIMIT :pageSize;
-
 exportLegacyKnownKeys:
 SELECT DISTINCT metricKey FROM RidePointRow WHERE rideId = :rideId AND metricKey IN :recognizedKeys
 ORDER BY metricKey LIMIT 17;

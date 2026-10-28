@@ -126,11 +126,11 @@ class HistoryComponentTest {
             assertEquals(listOf(HistoryExportRequest(ride("a").favoriteSource(), window, HistoryExportFormat.LOGUI)), requests)
             c.openRide("b")
             assertTrue(c.state.value.detail.loading)
-            c.openExport(); c.export(HistoryExportFormat.CSV); runCurrent()
+            c.openExport(); c.export(HistoryExportFormat.GPX); runCurrent()
             assertEquals(1, requests.size, "old detail/export state cannot supply the replacement ride")
             assertEquals("b", c.state.value.detail.ride?.id)
-            c.openExport(); c.export(HistoryExportFormat.CSV); runCurrent()
-            assertEquals(HistoryExportRequest(ride("b").favoriteSource(), full, HistoryExportFormat.CSV), requests.last())
+            c.openExport(); c.export(HistoryExportFormat.GPX); runCurrent()
+            assertEquals(HistoryExportRequest(ride("b").favoriteSource(), full, HistoryExportFormat.GPX), requests.last())
             c.close(); c.openExport(); c.export(HistoryExportFormat.GPX); runCurrent(); assertEquals(2, requests.size)
         } finally { c.close() }
     }

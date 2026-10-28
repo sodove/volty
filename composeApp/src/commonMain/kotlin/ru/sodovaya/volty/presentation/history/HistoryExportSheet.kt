@@ -29,7 +29,6 @@ fun HistoryExportSheet(state: HistoryExportState, onChoose: (HistoryExportFormat
                 Text(stringResource(when (format) {
                     HistoryExportFormat.LOGUI -> Res.string.history_export_logui
                     HistoryExportFormat.GPX -> Res.string.history_export_gpx
-                    HistoryExportFormat.CSV -> Res.string.history_export_csv
                 }))
             }
             Text(stringResource(Res.string.history_export_logui_hold), style = MaterialTheme.typography.bodySmall)

@@ -221,13 +221,21 @@ class LoguiHistoryExportTest {
         assertEquals(2, collections); assertTrue(lastEmitted < 11_999, "the second pass stopped at the cancelled write")
     }
 
+    @Test fun onlyTheVescToolCsvAndGpxRemainAndLabelsNeverReachTheLoguiFile() = runTest {
+        assertEquals(listOf("LOGUI", "GPX"), HistoryExportFormat.entries.map { it.name })
+        val address = "AA:BB:CC:DD:EE:FF"
+        val labelled = HistorySource("ctl", HistorySourceKind.CONTROLLER, "BMS $address /data/user/0/private.bin")
+        val text = export(metadata(labelled).copy(title = "Ride C:\\Users\\private"), sample(0, labelled, "erpm", 10.0))
+        assertFalse(address in text); assertFalse("private" in text); assertFalse("BMS" in text)
+    }
+
     @Test fun fileNamesCarryTheVehicleAndLocalStartAndNeverAnAddressOrPath() {
         val moscow = TimeZone.of("Europe/Moscow")
         val start = Instant.parse("2026-10-29T21:05:07Z").toEpochMilliseconds()
         assertEquals("volty_GotWay_59672_2026-10-30_00-05-07.csv",
             historyExportFileName(HistoryExportFormat.LOGUI, "GotWay_59672", start, moscow))
-        assertEquals("volty_Мой-самокат_2026-10-30_00-05-07_records.csv",
-            historyExportFileName(HistoryExportFormat.CSV, "Мой самокат!!", start, moscow))
+        assertEquals("volty_Мой-самокат_2026-10-30_00-05-07.gpx",
+            historyExportFileName(HistoryExportFormat.GPX, "Мой самокат!!", start, moscow))
         assertEquals("volty_BMS-device_2026-10-29_21-05-07.gpx",
             historyExportFileName(HistoryExportFormat.GPX, "BMS AA:BB:CC:DD:EE:FF", start, TimeZone.UTC))
         assertEquals("volty_path_2026-10-29_21-05-07.csv", historyExportFileName(HistoryExportFormat.LOGUI, "/data/user/0/x", start, TimeZone.UTC))

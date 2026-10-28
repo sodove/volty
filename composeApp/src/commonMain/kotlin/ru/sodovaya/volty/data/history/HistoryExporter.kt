@@ -17,7 +17,6 @@ class StreamingHistoryExportEncoder(private val maxGpsGapMillis: Long = 5_000,
         currentCoroutineContext().ensureActive()
         if (metadata.ride.status == HistoryRideStatus.RECORDING) fail(HistoryExportFailure.ACTIVE_RECORDING)
         if (format == HistoryExportFormat.LOGUI) return LoguiHistoryExportEncoder(metadata, zone(), loguiGridMillis).write(records, write)
-        if (format != HistoryExportFormat.GPX) return StructuredHistoryExportEncoder(metadata).write(format, records, write)
         if (metadata.ride.status == HistoryRideStatus.LEGACY) fail(HistoryExportFailure.NO_ROUTE)
         return gpx(metadata, records, write)
     }
@@ -76,7 +75,7 @@ class StreamingHistoryExportEncoder(private val maxGpsGapMillis: Long = 5_000,
                         originalLongitude + "</extensions></trkpt>\n")
                     previous = fix; boundary = false; points++
                 }
-                is HistoryExportRecord.Numeric, is HistoryExportRecord.Summary, is HistoryExportRecord.RetainedSummary, is HistoryExportRecord.LegacyUnmapped -> Unit
+                is HistoryExportRecord.Numeric, is HistoryExportRecord.LegacyUnmapped -> Unit
             }
         }
         if (points == 0L) fail(HistoryExportFailure.NO_ROUTE)

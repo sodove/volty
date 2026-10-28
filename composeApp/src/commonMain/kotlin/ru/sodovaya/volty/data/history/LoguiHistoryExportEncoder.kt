@@ -70,7 +70,7 @@ import kotlin.math.floor
  *
  * Markers (BLE gaps, GPS gaps, clock changes) are omitted: logui has no marker row, and any extra
  * line or section would be dropped or misread by both parsers. A gap shows as missing time in
- * `t_day`. Summaries are omitted: they are aggregates of the very samples this file carries.
+ * `t_day`. Summaries are not read at all: they are aggregates of the very samples this file carries.
  *
  * The input flow is collected twice — once to learn which series earned a column (the header
  * comes first), once to stream the rows — so it must be cold. Fixes are held in memory between
@@ -111,7 +111,6 @@ internal class LoguiHistoryExportEncoder(
                 }
                 is HistoryExportRecord.Event -> { axis(record.marker.tick); events++ }
                 is HistoryExportRecord.LegacyUnmapped -> unmapped++
-                is HistoryExportRecord.Summary, is HistoryExportRecord.RetainedSummary -> Unit
             }
         }
         fixes.sortBy { it.first }
