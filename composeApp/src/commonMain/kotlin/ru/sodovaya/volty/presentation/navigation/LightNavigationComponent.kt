@@ -27,6 +27,7 @@ import ru.sodovaya.volty.domain.location.RideLocationFix
 import ru.sodovaya.volty.domain.location.RideLocationRepository
 import ru.sodovaya.volty.domain.location.RideLocationState
 import ru.sodovaya.volty.domain.location.RideLocationStatus
+import ru.sodovaya.volty.presentation.map.shouldAutoReturnToFollow
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.ArrivalEnergyEstimator
 import ru.sodovaya.volty.domain.navigation.NavigationFailure
@@ -116,6 +117,7 @@ class DefaultLightNavigationComponent(
                 if (!closed && !lifecycleStopped) {
                     processNavigationLocation(locationState)
                     processPendingRouteOrigin()
+                    autoReturnToFollow(locationState)
                 }
             }
         }
@@ -319,6 +321,22 @@ class DefaultLightNavigationComponent(
     override fun onCameraGesture(nowElapsedMillis: Long) {
         if (closed) return
         reduce(NavigationAction.CameraGesture(nowElapsedMillis))
+    }
+
+    /**
+     * After a pan the map follows the rider again once they have been moving for the auto-return delay
+     * ([shouldAutoReturnToFollow]). Decided on each fix, because a moving rider produces fixes and a standing one needs
+     * no return. The gesture is stamped with the platform's elapsed realtime, so the fix's own elapsed realtime is the
+     * comparable "now"; a fix without one (or without a speed) decides nothing. An earlier revision had the policy and
+     * its tests but never called it, so a panned map stayed put until Recenter or the navigator (rider, 2026-10-28).
+     */
+    private fun autoReturnToFollow(locationState: RideLocationState) {
+        val fix = (locationState.status as? RideLocationStatus.Available)?.fix ?: return
+        val now = fix.elapsedRealtimeMillis ?: return
+        val speedKmh = fix.speedMetersPerSecond?.let { (it * 3.6).toFloat() }
+        if (shouldAutoReturnToFollow(_state.value.followState, speedKmh, now)) {
+            reduce(NavigationAction.RecenterRequested)
+        }
     }
 
     override fun onRecenterRequested() {
