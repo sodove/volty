@@ -38,7 +38,7 @@ class HistoryExportSourceTest {
         val samples = (1..4).map { HistorySample(origin, key, it.toDouble()) } +
             HistorySample(origin, key, null, HistoryUnknownReason.PARTIAL_SOURCE)
         store.append(HistoryBatch("ride", samples, emptyList(), emptyList()))
-        val request = store.request(HistoryExportFormat.JSON)
+        val request = store.request(HistoryExportFormat.CSV)
         val input = SqlDelightHistoryExportSource(provider, pageSize = 2).open(request)
         assertEquals(request.source, input.metadata.ride.favoriteSource())
         val output = input.records.toList().filterIsInstance<HistoryExportRecord.Numeric>().map { it.sample }
@@ -67,7 +67,7 @@ class HistoryExportSourceTest {
     @Test fun sourceIdentityCannotFallbackToAnotherRecordingAndDeletionDuringReadCannotCompleteStream() = runTest {
         val (provider, store) = fixture(); store.beginRide()
         store.append(HistoryBatch("ride", (1..5).map { HistorySample(tick(it * 100L), key, it.toDouble()) }, emptyList(), emptyList()))
-        val request = store.request(HistoryExportFormat.JSON)
+        val request = store.request(HistoryExportFormat.CSV)
         val reader = SqlDelightHistoryExportSource(provider, pageSize = 2)
         val mismatch = assertFailsWith<HistoryExportException> { reader.open(request.copy(source = request.source.copy(vehicleId = "other"))) }
         assertEquals(HistoryExportFailure.SOURCE_CHANGED, mismatch.reason)
@@ -81,7 +81,7 @@ class HistoryExportSourceTest {
         assertEquals(HistoryExportFailure.SOURCE_CHANGED, failure.reason)
     }
 
-    private suspend fun legacyRequest(provider: VoltyDatabaseProvider, format: HistoryExportFormat = HistoryExportFormat.JSON,
+    private suspend fun legacyRequest(provider: VoltyDatabaseProvider, format: HistoryExportFormat = HistoryExportFormat.CSV,
         range: HistoryRange = HistoryRange(1000, 3000)) = HistoryExportRequest(
         assertNotNull(LegacyHistoryReader(provider).ride("old")).favoriteSource(), range, format)
 
@@ -94,8 +94,8 @@ class HistoryExportSourceTest {
         db.ridePointRowQueries.insert("old", "CURRENT", "1970-01-01T00:00:02Z", -1, 4200.0, 0)
         val input = SqlDelightHistoryExportSource(provider, pageSize = 1).open(legacyRequest(provider))
         val text = StringBuilder()
-        StreamingHistoryExportEncoder().write(HistoryExportFormat.JSON, input.metadata, input.records) { text.append(it) }
-        val rows = Json.parseToJsonElement(text.toString()).jsonObject.getValue("records").jsonArray.map { it.jsonObject }
+        StreamingHistoryExportEncoder().write(HistoryExportFormat.CSV, input.metadata, input.records) { text.append(it) }
+        val rows = structuredRecords(input.metadata, input.records)
         assertEquals(3, rows.size)
         val power = rows.filter { it.getValue("metric").jsonPrimitive.content == "power_w" }
         assertEquals(setOf(first, second), power.map { it.getValue("capturedTimestamp").jsonPrimitive.content }.toSet())
@@ -156,7 +156,7 @@ class HistoryExportSourceTest {
         }
         val end = tick(total * 500L)
         store.finish("ride", end, HistoryRideStatus.COMPLETED)
-        val request = HistoryExportRequest(assertNotNull(store.ride("ride")).favoriteSource(), HistoryRange(1000, end.epochMillis), HistoryExportFormat.JSON)
+        val request = HistoryExportRequest(assertNotNull(store.ride("ride")).favoriteSource(), HistoryRange(1000, end.epochMillis), HistoryExportFormat.CSV)
         val input = SqlDelightHistoryExportSource(provider, pageSize = 127).open(request)
         var count = 0; var unknowns = 0; var last: HistorySample? = null
         input.records.collect { record ->
@@ -175,14 +175,14 @@ class HistoryExportSourceTest {
         // have earned aggregates but none of the later captured-time columns.
         db.rideHistoryBucketQueries.putBucket("ride", "pack", "power_w", -1,
             10, 2010, -100.0, 20.0, 4.5, 100, 1, null, null, null, null, null, null, null, null, null)
-        val request = store.request(HistoryExportFormat.JSON)
+        val request = store.request(HistoryExportFormat.CSV)
         val reader = SqlDelightHistoryExportSource(provider, pageSize = 1)
-        for (format in listOf(HistoryExportFormat.JSON, HistoryExportFormat.CSV)) {
-            val input = reader.open(request.copy(format = format)); val text = StringBuilder()
-            val counts = StreamingHistoryExportEncoder().write(format, input.metadata, input.records) { text.append(it) }
+        for (structured in listOf(true, false)) {
+            val input = reader.open(request); val text = StringBuilder()
+            val counts = StreamingHistoryExportEncoder().write(HistoryExportFormat.CSV, input.metadata, input.records) { text.append(it) }
             assertEquals(1, counts.summaries, "retained facts must not silently disappear")
-            if (format == HistoryExportFormat.JSON) {
-                val row = Json.parseToJsonElement(text.toString()).jsonObject.getValue("records").jsonArray.single().jsonObject
+            if (structured) {
+                val row = structuredRecords(input.metadata, input.records).single()
                 assertEquals("summary", row.getValue("type").jsonPrimitive.content)
                 assertEquals("RETAINED_SUMMARY_TIME_UNAVAILABLE", row.getValue("dataQuality").jsonPrimitive.content)
                 assertEquals(JsonNull, row.getValue("epochMillis"))
@@ -209,15 +209,13 @@ class HistoryExportSourceTest {
                 1000 + first, 10 + first, 1000 + last, 10 + last, null, null)
         }
         bucket("pack", 1000, 2000); bucket("pack2", 1000, 2500); bucket("pack3", 0, 2000)
-        val request = store.request(HistoryExportFormat.JSON).copy(range = HistoryRange(2000, 4000))
+        val request = store.request(HistoryExportFormat.CSV).copy(range = HistoryRange(2000, 4000))
         val input = SqlDelightHistoryExportSource(provider, pageSize = 1).open(request)
         val rows = input.records.toList().map { assertIs<HistoryExportRecord.Summary>(it).bucket }
         assertEquals(listOf("pack", "pack2"), rows.map { it.key.sourceId })
         assertTrue(rows.all { !it.complete && it.sampleCount == 100L && it.energyWh == 4.5 })
         assertEquals(listOf(2000L, 2000L), rows.map { it.first.epochMillis })
         assertEquals(listOf(3000L, 3500L), rows.map { it.last.epochMillis })
-        val text = StringBuilder()
-        StreamingHistoryExportEncoder().write(request.format, input.metadata, input.records) { text.append(it) }
-        assertEquals(2, Json.parseToJsonElement(text.toString()).jsonObject.getValue("records").jsonArray.size)
+        assertEquals(2, structuredRecords(input.metadata, input.records).size)
     }
 }

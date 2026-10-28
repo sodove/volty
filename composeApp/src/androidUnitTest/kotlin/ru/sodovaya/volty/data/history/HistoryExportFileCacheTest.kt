@@ -32,4 +32,16 @@ class HistoryExportFileCacheTest {
         assertFalse(expired.exists()); assertTrue(recent.exists()); assertEquals("keep", keep.readText())
         cache.clearOwned(); assertFalse(recent.exists()); assertEquals("keep", keep.readText())
     }
+    @Test fun namedExportsAreOwnedAndOnlyCurrentNamesMayBeShared() = fixture { root ->
+        val named = File(root, "volty_Мой-EXN_2026-10-29_23-59-58.csv").apply { writeText("t_day:Time:s:3:0:1\n") }
+        val records = File(root, "volty_GotWay_59672_2026-10-29_23-59-58_records.csv").apply { writeText("x") }
+        val foreign = File(root, "volty_notes.csv").apply { writeText("keep") }
+        HistoryExportFileCache(root).clearOwned()
+        assertFalse(named.exists()); assertFalse(records.exists()); assertEquals("keep", foreign.readText())
+        assertTrue(HistoryExportFileCache.isReadyName("volty_Мой-EXN_2026-10-29_23-59-58.csv"))
+        assertTrue(HistoryExportFileCache.isReadyName("volty_ride_2026-10-29_23-59-58.gpx"))
+        assertFalse(HistoryExportFileCache.isReadyName("volty-ride-00000000-0000-0000-0000-000000000001.json"))
+        assertFalse(HistoryExportFileCache.isReadyName("volty_../x_2026-10-29_23-59-58.csv"))
+        assertFalse(HistoryExportFileCache.isReadyName("volty_a_2026-10-29_23-59-58.json"))
+    }
 }

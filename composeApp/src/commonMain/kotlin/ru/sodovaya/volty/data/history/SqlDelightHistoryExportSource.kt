@@ -30,9 +30,12 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                 fail(HistoryExportFailure.INVALID_DATA)
             val from = ride.started.elapsedMillis + (request.range.startEpochMillis - ride.started.epochMillis)
             val through = ride.started.elapsedMillis + (request.range.endEpochMillis - ride.started.epochMillis)
-            Snapshot(request, HistoryExportMetadata(ride, request.range, sources(ride.id)), from, through,
+            Snapshot(request, HistoryExportMetadata(ride, request.range, sources(ride.id),
+                vehicleName = queries.exportVehicleName(ride.vehicleId).executeAsOneOrNull()), from, through,
                 queries.exportV2Shape(ride.id, from, through).executeAsOne())
         }
+        // Summaries are aggregates of the samples; only the long CSV carries them.
+        val withSummaries = request.format == HistoryExportFormat.CSV
         return HistoryExportInput(snapshot.metadata, flow {
             // Every page is its own short SQLite snapshot. No database
             // transaction is held while encoding or waiting for the file sink.
@@ -80,7 +83,7 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                 if (page.size < pageSize) break
             }
             var bucketRows = 0L
-            if (request.format != HistoryExportFormat.GPX) {
+            if (withSummaries) {
                 var source: String? = null; var metric = ""; var index = -1L; var start = -1L
                 while (true) {
                     val page = read { unchanged(snapshot); queries.exportBuckets(id, snapshot.from, snapshot.through,
@@ -111,8 +114,8 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                 unchanged(snapshot)
                 if (queries.exportV2Shape(id, snapshot.from, snapshot.through).executeAsOne() != snapshot.shape ||
                     sources(id) != snapshot.metadata.sources || gpsRows != snapshot.shape.gpsCount || markerRows != snapshot.shape.markerCount ||
-                    (request.format != HistoryExportFormat.GPX &&
-                        (sampleRows != snapshot.shape.sampleCount || bucketRows != snapshot.shape.bucketCount))) fail(HistoryExportFailure.SOURCE_CHANGED)
+                    (request.format != HistoryExportFormat.GPX && sampleRows != snapshot.shape.sampleCount) ||
+                    (withSummaries && bucketRows != snapshot.shape.bucketCount)) fail(HistoryExportFailure.SOURCE_CHANGED)
             }
         }.catch { failure ->
             when (failure) {

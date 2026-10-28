@@ -10,10 +10,10 @@ import java.nio.file.LinkOption.NOFOLLOW_LINKS
 import java.nio.file.StandardCopyOption.ATOMIC_MOVE
 import java.nio.file.StandardOpenOption.WRITE
 import java.security.MessageDigest
-import java.util.UUID
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.datetime.TimeZone
 import ru.sodovaya.volty.domain.history.*
 
 /** Owns only disposable export artifacts, never the original recording. */
@@ -25,6 +25,7 @@ class FileHistoryExportRepository(
     private val maxFileBytes: Long = 64L * 1024 * 1024,
     private val gate: Mutex = Mutex(),
     private val reconcile: () -> Boolean = { true },
+    private val zone: () -> TimeZone = { TimeZone.currentSystemDefault() },
 ) : HistoryExportRepository {
     init { require(maxFileBytes > 0) }
 
@@ -61,7 +62,10 @@ class FileHistoryExportRepository(
         val root = directory.toPath()
         Files.createDirectories(root)
         if (!Files.isDirectory(root, NOFOLLOW_LINKS)) throw IOException("Export directory unavailable")
-        val name = "volty-ride-${UUID.randomUUID()}.${request.format.extension}"
+        // A later export of the same range replaces the earlier file of that name (ATOMIC_MOVE).
+        val name = historyExportFileName(request.format, historyExportVehicleName(input.metadata),
+            request.range.startEpochMillis, zone())
+        if (!HistoryExportFileCache.isReadyName(name)) throw HistoryExportException(HistoryExportFailure.INVALID_DATA)
         val target = root.resolve(name)
         val temporary = Files.createTempFile(root, "volty-export-tmp-v1-", ".tmp")
         var published = false

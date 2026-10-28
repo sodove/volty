@@ -4,15 +4,19 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.datetime.TimeZone
 import ru.sodovaya.volty.domain.history.*
 import kotlin.time.Instant
 
-class StreamingHistoryExportEncoder(private val maxGpsGapMillis: Long = 5_000) : HistoryExportEncoder {
+class StreamingHistoryExportEncoder(private val maxGpsGapMillis: Long = 5_000,
+    private val zone: () -> TimeZone = { TimeZone.currentSystemDefault() },
+    private val loguiGridMillis: Long = LOGUI_ROW_GRID_MILLIS) : HistoryExportEncoder {
     init { require(maxGpsGapMillis > 0) }
     override suspend fun write(format: HistoryExportFormat, metadata: HistoryExportMetadata,
         records: Flow<HistoryExportRecord>, write: suspend (String) -> Unit): HistoryExportCounts {
         currentCoroutineContext().ensureActive()
         if (metadata.ride.status == HistoryRideStatus.RECORDING) fail(HistoryExportFailure.ACTIVE_RECORDING)
+        if (format == HistoryExportFormat.LOGUI) return LoguiHistoryExportEncoder(metadata, zone(), loguiGridMillis).write(records, write)
         if (format != HistoryExportFormat.GPX) return StructuredHistoryExportEncoder(metadata).write(format, records, write)
         if (metadata.ride.status == HistoryRideStatus.LEGACY) fail(HistoryExportFailure.NO_ROUTE)
         return gpx(metadata, records, write)

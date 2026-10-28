@@ -26,9 +26,9 @@ class HistoryExportComponentTest {
         })
         try {
             c.open(source, range); runCurrent(); assertTrue(requests.isEmpty())
-            c.start(HistoryExportFormat.JSON); c.start(HistoryExportFormat.CSV); runCurrent()
+            c.start(HistoryExportFormat.LOGUI); c.start(HistoryExportFormat.CSV); runCurrent()
             assertTrue(entered.isCompleted); assertTrue(c.state.value.busy)
-            assertEquals(listOf(HistoryExportRequest(source, range, HistoryExportFormat.JSON)), requests)
+            assertEquals(listOf(HistoryExportRequest(source, range, HistoryExportFormat.LOGUI)), requests)
             release.complete(Unit); runCurrent(); assertEquals(success, c.state.value.ready); assertFalse(c.state.value.busy)
         } finally { release.complete(Unit); c.close() }
     }
@@ -40,7 +40,7 @@ class HistoryExportComponentTest {
             }
         })
         try {
-            c.open(source, range); c.start(HistoryExportFormat.JSON); runCurrent(); assertTrue(entered.isCompleted)
+            c.open(source, range); c.start(HistoryExportFormat.LOGUI); runCurrent(); assertTrue(entered.isCompleted)
             c.dismiss(); assertNull(c.state.value.source); assertFalse(c.state.value.busy)
             val newer = source.copy(rideId = "other"); c.open(newer, range)
             release.complete(Unit); runCurrent()
@@ -58,7 +58,7 @@ class HistoryExportComponentTest {
         try {
             c.open(source, range); c.start(HistoryExportFormat.GPX); runCurrent()
             assertEquals(HistoryExportFailure.NO_ROUTE, c.state.value.error); assertFalse(c.state.value.busy)
-            c.start(HistoryExportFormat.JSON); runCurrent(); assertEquals(success, c.state.value.ready); assertEquals(2, calls)
+            c.start(HistoryExportFormat.LOGUI); runCurrent(); assertEquals(success, c.state.value.ready); assertEquals(2, calls)
             c.open(source, range); c.start(HistoryExportFormat.CSV); c.close(); runCurrent(); assertEquals(2, calls)
         } finally { c.close() }
     }

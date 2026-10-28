@@ -15,16 +15,15 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonObject
+import kotlinx.datetime.TimeZone
 import ru.sodovaya.volty.domain.history.*
 import kotlin.test.*
 
 class FileHistoryExportRepositoryTest {
     private val tick = HistoryTick(1000, 10, 1)
     private val ride = HistoryRide("ride", "vehicle", tick, tick.copy(epochMillis = 2000, elapsedMillis = 1010), HistoryRideStatus.COMPLETED)
-    private val request = HistoryExportRequest(ride.favoriteSource(), HistoryRange(1000, 2000), HistoryExportFormat.JSON)
-    private val metadata = HistoryExportMetadata(ride, request.range, emptyList())
+    private val request = HistoryExportRequest(ride.favoriteSource(), HistoryRange(1000, 2000), HistoryExportFormat.LOGUI)
+    private val metadata = HistoryExportMetadata(ride, request.range, emptyList(), vehicleName = "Мой EXN/2")
     private val source = object : HistoryExportSource {
         override suspend fun open(request: HistoryExportRequest) = HistoryExportInput(metadata, emptyFlow())
     }
@@ -35,14 +34,16 @@ class FileHistoryExportRepositoryTest {
 
     @Test fun publishesOnlyCompleteUtf8FileWithActualChecksumAndScopedName() = runTest {
         fixture { root ->
-            val result = assertIs<HistoryExportResult.Success>(FileHistoryExportRepository(root, source).export(request))
-            assertTrue(Regex("volty-ride-[a-f0-9-]{36}\\.json").matches(result.relativePath))
+            val result = assertIs<HistoryExportResult.Success>(FileHistoryExportRepository(root, source,
+                zone = { TimeZone.UTC }).export(request))
+            // The rider's vehicle name, cleaned for a file system, then the range start in local time.
+            assertEquals("volty_Мой-EXN-2_1970-01-01_00-00-01.csv", result.relativePath)
             val file = File(root, result.relativePath)
             val bytes = file.readBytes()
             assertEquals(bytes.size.toLong(), result.bytes)
             assertEquals(MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }, result.sha256)
-            assertTrue(Json.parseToJsonElement(bytes.toString(Charsets.UTF_8)).jsonObject.containsKey("schemaVersion"))
-            assertEquals("application/json", result.mime)
+            assertEquals("t_day:Time:s:3:0:1\n", bytes.toString(Charsets.UTF_8))
+            assertEquals("text/csv", result.mime)
             assertEquals(listOf(result.relativePath), root.list()!!.toList())
         }
     }
@@ -55,7 +56,7 @@ class FileHistoryExportRepositoryTest {
                     records: kotlinx.coroutines.flow.Flow<HistoryExportRecord>, write: suspend (String) -> Unit): HistoryExportCounts {
                     write("начало"); issued = true
                     assertTrue(root.list()!!.any { it.endsWith(".tmp") })
-                    assertFalse(root.list()!!.any { it.endsWith(".json") })
+                    assertFalse(root.list()!!.any { it.endsWith(".csv") })
                     throw CancellationException("user dismissed")
                 }
             }
@@ -116,7 +117,7 @@ class FileHistoryExportRepositoryTest {
                     if (opens == 2) currentCoroutineContext()[Job]!!.invokeOnCompletion {
                         // The IO transaction completed, but its result has not
                         // yet resumed the caller on the UI dispatcher.
-                        publicationObserved = root.list()!!.any { it.endsWith(".json") }
+                        publicationObserved = root.list()!!.any { it.endsWith(".csv") }
                         caller.cancel()
                     }
                     return HistoryExportInput(metadata, emptyFlow())

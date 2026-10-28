@@ -6,6 +6,10 @@ SELECT
  (SELECT COUNT(*) FROM HistoryBucketV2 WHERE rideId = :rideId
   AND COALESCE(firstElapsedMillis, startElapsedMillis) >= :fromElapsed AND endElapsedMillis <= :toElapsed) AS bucketCount;
 
+-- The rider's vehicle name, used only to name an exported file.
+exportVehicleName:
+SELECT name FROM VehicleRow WHERE id = :vehicleId;
+
 exportSources:
 SELECT * FROM HistorySourceV2 WHERE rideId = :rideId ORDER BY id LIMIT 2049;
 

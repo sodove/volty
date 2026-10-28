@@ -2,8 +2,17 @@ package ru.sodovaya.volty.domain.history
 
 import kotlinx.coroutines.flow.Flow
 
+/**
+ * [LOGUI] is the VESC logui CSV (VESC Tool Log Analysis, telemetry-studio), one row per sample slot.
+ * [CSV] is Volty's long table: one row per stored record, with units, sources and unknown reasons.
+ *
+ * Retraction: a `JSON` entry (schema v1, one object per record) was removed on 2026-10-29 at the
+ * rider's request. It cost ~400 B per value (an 18 MB file for a 14-minute ride), nothing in the
+ * app read it back, and [LOGUI] replaces it as the compact export. Its record encoder survives
+ * only as the row source of [CSV].
+ */
 enum class HistoryExportFormat(val extension: String, val mime: String) {
-    GPX("gpx", "application/gpx+xml"), CSV("csv", "text/csv"), JSON("json", "application/json")
+    LOGUI("csv", "text/csv"), GPX("gpx", "application/gpx+xml"), CSV("csv", "text/csv")
 }
 
 data class HistoryExportRequest(val source: HistoryFavoriteSource, val range: HistoryRange,
@@ -31,7 +40,9 @@ interface HistoryExportSource {
 
 /** Internal identities qualify reads. Encoded files use local aliases, never device addresses. */
 data class HistoryExportMetadata(val ride: HistoryRide, val range: HistoryRange,
-    val sources: List<HistorySource>, val title: String = "Volty ride")
+    val sources: List<HistorySource>, val title: String = "Volty ride",
+    /** The rider's name for the vehicle, for the file name only; null when the vehicle is gone. */
+    val vehicleName: String? = null)
 
 /** Input must be paged by its producer; GPS/events are ordered by elapsed time,
  * with boundary events preceding locations at the same tick. Original wall time

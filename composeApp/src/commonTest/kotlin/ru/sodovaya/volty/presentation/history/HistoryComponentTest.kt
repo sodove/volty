@@ -117,13 +117,13 @@ class HistoryComponentTest {
         val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),
             backgroundScope, Repo(), { origin }, {}, exportRepository = exports)
         try {
-            c.openExport(); c.export(HistoryExportFormat.JSON); runCurrent(); assertTrue(requests.isEmpty())
+            c.openExport(); c.export(HistoryExportFormat.LOGUI); runCurrent(); assertTrue(requests.isEmpty())
             c.openRide("a"); runCurrent()
             val window = HistoryRange(2000, 4000)
             c.selectRange(window); runCurrent()
             assertEquals(window, c.state.value.detail.range)
-            c.openExport(); c.export(HistoryExportFormat.JSON); runCurrent()
-            assertEquals(listOf(HistoryExportRequest(ride("a").favoriteSource(), window, HistoryExportFormat.JSON)), requests)
+            c.openExport(); c.export(HistoryExportFormat.LOGUI); runCurrent()
+            assertEquals(listOf(HistoryExportRequest(ride("a").favoriteSource(), window, HistoryExportFormat.LOGUI)), requests)
             c.openRide("b")
             assertTrue(c.state.value.detail.loading)
             c.openExport(); c.export(HistoryExportFormat.CSV); runCurrent()
@@ -147,12 +147,12 @@ class HistoryComponentTest {
         val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)),
             backgroundScope, Repo(), { origin }, {}, exportRepository = exports)
         try {
-            c.openRide("a"); runCurrent(); c.openExport(); c.export(HistoryExportFormat.JSON); runCurrent()
+            c.openRide("a"); runCurrent(); c.openExport(); c.export(HistoryExportFormat.LOGUI); runCurrent()
             assertTrue(entered.isCompleted); assertTrue(c.state.value.export.busy)
             c.openRide("b"); runCurrent(); release.complete(Unit); runCurrent()
             assertEquals("b", c.state.value.detail.ride?.id)
             assertNull(c.state.value.export.ready); assertNull(c.state.value.export.source)
-            assertEquals(listOf(HistoryExportRequest(ride("a").favoriteSource(), full, HistoryExportFormat.JSON)), requests)
+            assertEquals(listOf(HistoryExportRequest(ride("a").favoriteSource(), full, HistoryExportFormat.LOGUI)), requests)
         } finally { release.complete(Unit); c.close(); runCurrent() }
     }
 

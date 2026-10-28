@@ -27,11 +27,12 @@ fun HistoryExportSheet(state: HistoryExportState, onChoose: (HistoryExportFormat
             for (format in HistoryExportFormat.entries) OutlinedButton(onClick = { onChoose(format) },
                 enabled = !state.busy, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(when (format) {
+                    HistoryExportFormat.LOGUI -> Res.string.history_export_logui
                     HistoryExportFormat.GPX -> Res.string.history_export_gpx
                     HistoryExportFormat.CSV -> Res.string.history_export_csv
-                    HistoryExportFormat.JSON -> Res.string.history_export_json
                 }))
             }
+            Text(stringResource(Res.string.history_export_logui_hold), style = MaterialTheme.typography.bodySmall)
             if (state.busy) {
                 LinearProgressIndicator(Modifier.fillMaxWidth())
                 Text(stringResource(Res.string.history_export_working))

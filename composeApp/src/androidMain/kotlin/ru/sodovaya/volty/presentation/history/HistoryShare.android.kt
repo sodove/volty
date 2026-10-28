@@ -16,6 +16,7 @@ import java.io.IOException
 import java.security.MessageDigest
 import kotlinx.coroutines.*
 import org.jetbrains.compose.resources.stringResource
+import ru.sodovaya.volty.data.history.HistoryExportFileCache
 import ru.sodovaya.volty.domain.history.HistoryExportFormat
 import ru.sodovaya.volty.domain.history.HistoryExportResult
 import volty.composeapp.generated.resources.*
@@ -98,10 +99,10 @@ actual fun HistoryExportActions(artifact: HistoryExportResult.Success) {
 
 /** Verify the exact completed artifact again before granting access or copying. */
 internal suspend fun checkedExportFile(directory: File, artifact: HistoryExportResult.Success): File {
-    val format = HistoryExportFormat.entries.singleOrNull {
-        artifact.relativePath.endsWith(".${it.extension}") && artifact.mime == it.mime
-    } ?: throw IOException("Unsupported export")
-    if (!Regex("volty-ride-[a-f0-9-]{36}\\.${format.extension}").matches(artifact.relativePath) ||
+    // Two formats share `.csv` and `text/csv`, so this asks for some format, not exactly one.
+    if (HistoryExportFormat.entries.none { artifact.relativePath.endsWith(".${it.extension}") && artifact.mime == it.mime })
+        throw IOException("Unsupported export")
+    if (!HistoryExportFileCache.isReadyName(artifact.relativePath) ||
         artifact.bytes !in 1..64L * 1024 * 1024) throw IOException("Invalid export")
     val root = directory.canonicalFile
     val file = File(root, artifact.relativePath).canonicalFile

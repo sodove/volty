@@ -8,7 +8,16 @@ import kotlinx.serialization.json.*
 import ru.sodovaya.volty.domain.history.*
 import kotlin.time.Instant
 
-/** One record at a time. Original storage identities stay inside this owner. */
+/**
+ * One record at a time, as one row of Volty's long CSV. Original storage identities stay inside
+ * this owner.
+ *
+ * Retraction: this class also wrote `HistoryExportFormat.JSON` (schema v1: a header with the
+ * sources, then a `records` array and `counts`). That format was removed on 2026-10-29 at the
+ * rider's request — it cost ~400 B per value, nothing in the app read it back, and the logui CSV
+ * ([LoguiHistoryExportEncoder]) replaced it as the compact export. The per-record JSON object
+ * built by [encode] remains because the CSV columns, and `summary_json`, are read from it.
+ */
 @OptIn(kotlin.time.ExperimentalTime::class)
 internal class StructuredHistoryExportEncoder(private val metadata: HistoryExportMetadata) {
     private data class Source(val alias: String, val kind: HistorySourceKind, val label: String)
@@ -27,16 +36,18 @@ internal class StructuredHistoryExportEncoder(private val metadata: HistoryExpor
 
     suspend fun write(format: HistoryExportFormat, records: Flow<HistoryExportRecord>,
         output: suspend (String) -> Unit): HistoryExportCounts {
-        val json = format == HistoryExportFormat.JSON
-        if (!json && format != HistoryExportFormat.CSV) fail(HistoryExportFailure.UNSUPPORTED_FORMAT)
-        if (json) output(header().toString().dropLast(1) + ",\"records\":[")
-        else output(csvColumns.joinToString(",") { it.first } + "\r\n")
-        var counts = HistoryExportCounts(); var first = true
+        if (format != HistoryExportFormat.CSV) fail(HistoryExportFailure.UNSUPPORTED_FORMAT)
+        output(csvColumns.joinToString(",") { it.first } + "\r\n")
+        return encodeRecords(records) { output(csvRow(it)) }
+    }
+
+    /** Each record as the object its CSV row is read from, in input order. */
+    internal suspend fun encodeRecords(records: Flow<HistoryExportRecord>,
+        onRecord: suspend (JsonObject) -> Unit): HistoryExportCounts {
+        var counts = HistoryExportCounts()
         records.collect { record ->
             currentCoroutineContext().ensureActive()
-            val encoded = encode(record)
-            if (json) { output((if (first) "" else ",") + encoded.toString()); first = false }
-            else output(csvRow(encoded))
+            onRecord(encode(record))
             counts = when (record) {
                 is HistoryExportRecord.Numeric -> counts.copy(samples = counts.samples + 1)
                 is HistoryExportRecord.Location -> counts.copy(locations = counts.locations + 1)
@@ -45,26 +56,7 @@ internal class StructuredHistoryExportEncoder(private val metadata: HistoryExpor
                 is HistoryExportRecord.LegacyUnmapped -> counts.copy(unmapped = counts.unmapped + 1)
             }
         }
-        if (json) output("],\"counts\":" + buildJsonObject {
-            put("samples", counts.samples); put("locations", counts.locations)
-            put("events", counts.events); put("summaries", counts.summaries)
-            put("unmapped", counts.unmapped)
-        } + "}\n")
         return counts
-    }
-
-    private fun header() = buildJsonObject {
-        put("schemaVersion", 1); put("dataQuality", quality)
-        put("storageKind", if (legacy) "LEGACY" else "V2"); put("title", historyExportLabel(metadata.title))
-        put("origin", if (legacy) JsonNull else tick(metadata.ride.started))
-        putJsonObject("range") {
-            put("axis", rangeAxis)
-            put("startEpochMillis", metadata.range.startEpochMillis); put("endEpochMillis", metadata.range.endEpochMillis)
-        }
-        put("summaryIntervalPolicy", "FULL_STORED_BUCKETS_INSIDE_WINDOW")
-        putJsonArray("sources") { sources.values.forEach { source -> add(buildJsonObject {
-            put("source", source.alias); put("kind", source.kind.name); put("label", source.label)
-        }) } }
     }
 
     private fun encode(record: HistoryExportRecord): JsonObject = when (record) {

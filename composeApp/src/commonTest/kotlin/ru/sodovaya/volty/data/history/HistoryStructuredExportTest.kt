@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.history
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.runTest
@@ -20,20 +21,17 @@ class HistoryStructuredExportTest {
     private val known get() = HistoryExportRecord.Numeric(HistorySample(start, key, -50.0))
     private val unknown get() = HistoryExportRecord.Numeric(HistorySample(end, key, null, HistoryUnknownReason.PARTIAL_SOURCE))
 
-    @Test fun jsonHasVersionQualityUnitsSignsAndExplicitUnknownWithoutPrivateStorageIdentities() = runTest {
-        val output = StringBuilder()
-        val counts = StreamingHistoryExportEncoder().write(HistoryExportFormat.JSON, metadata(), flowOf(known, unknown)) { output.append(it) }
-        val document = Json.parseToJsonElement(output.toString()).jsonObject
-        assertEquals(1, document.getValue("schemaVersion").jsonPrimitive.int)
-        assertEquals("RETAINED_DETAIL_AND_SUMMARIES", document.getValue("dataQuality").jsonPrimitive.content)
-        assertEquals("ORIGIN_PLUS_ELAPSED", document.getValue("range").jsonObject.getValue("axis").jsonPrimitive.content)
-        val source = document.getValue("sources").jsonArray.single().jsonObject
-        assertEquals("source-1", source.getValue("source").jsonPrimitive.content)
-        assertEquals("BATTERY", source.getValue("kind").jsonPrimitive.content)
-        assertEquals(label, source.getValue("label").jsonPrimitive.content)
-        val rows = document.getValue("records").jsonArray.map { it.jsonObject }
-        assertEquals(2, rows.size); assertEquals(2L, counts.samples)
+    // Retraction: this test read the JSON v1 document (schemaVersion, header sources). That format
+    // was removed on 2026-10-29; the per-record objects it checked are the long CSV's row source.
+    @Test fun structuredRecordsHaveQualityUnitsSignsAndExplicitUnknownWithoutPrivateStorageIdentities() = runTest {
+        val rows = structuredRecords(metadata(), flowOf(known, unknown))
+        val output = rows.joinToString("\n")
+        assertEquals(2, rows.size)
+        assertEquals("RETAINED_DETAIL_AND_SUMMARIES", rows[0].getValue("dataQuality").jsonPrimitive.content)
+        assertEquals("ORIGIN_PLUS_ELAPSED", rows[0].getValue("rangeAxis").jsonPrimitive.content)
         assertEquals("source-1", rows[0].getValue("source").jsonPrimitive.content)
+        assertEquals("BATTERY", rows[0].getValue("sourceKind").jsonPrimitive.content)
+        assertEquals(label, rows[0].getValue("sourceLabel").jsonPrimitive.content)
         assertEquals("WATT", rows[0].getValue("unit").jsonPrimitive.content)
         assertEquals(-50.0, rows[0].getValue("value").jsonPrimitive.double)
         assertEquals(-1.0, rows[0].getValue("displayMultiplier").jsonPrimitive.double)
@@ -43,6 +41,16 @@ class HistoryStructuredExportTest {
         assertEquals(JsonNull, rows[1].getValue("value"))
         assertEquals("PARTIAL_SOURCE", rows[1].getValue("unknownReason").jsonPrimitive.content)
         assertFalse(address in output); assertFalse("private-record-id" in output); assertFalse("C:/Users/private" in output)
+    }
+
+    @Test fun theRetiredJsonFormatIsGoneAndTheStructuredWriterRefusesAnythingButItsCsv() = runTest {
+        assertEquals(listOf("LOGUI", "GPX", "CSV"), HistoryExportFormat.entries.map { it.name })
+        for (format in listOf(HistoryExportFormat.GPX, HistoryExportFormat.LOGUI)) {
+            val error = assertFailsWith<HistoryExportException> {
+                StructuredHistoryExportEncoder(metadata()).write(format, flowOf(known)) {}
+            }
+            assertEquals(HistoryExportFailure.UNSUPPORTED_FORMAT, error.reason, format.name)
+        }
     }
 
     @Test fun csvEscapesMultilineUnicodeLabelsAndFormulaPrefixesButKeepsNumericSigns() = runTest {
@@ -60,21 +68,22 @@ class HistoryStructuredExportTest {
     }
 
     @Test fun formattedSourceLabelsDoNotLeakAnEmbeddedDeviceAddress() = runTest {
-        for (format in listOf(HistoryExportFormat.JSON, HistoryExportFormat.CSV)) {
+        for (format in listOf(HistoryExportFormat.CSV, HistoryExportFormat.LOGUI)) {
             val output = StringBuilder()
             StreamingHistoryExportEncoder().write(format, metadata("BMS $address"), flowOf(known)) { output.append(it) }
             assertFalse(address in output, format.name)
-            assertTrue("BMS [device]" in output, format.name)
+            // The logui file carries no labels at all, only constant keys.
+            assertEquals(format == HistoryExportFormat.CSV, "BMS [device]" in output, format.name)
         }
     }
 
     @Test fun structuredSinkCancellationStopsBeforeTheNextInputRecord() = runTest {
-        for (format in listOf(HistoryExportFormat.CSV, HistoryExportFormat.JSON)) {
+        for (format in listOf(HistoryExportFormat.CSV)) {
             var secondRead = false; var writtenSample = false
             val records = flow { emit(known); secondRead = true; emit(unknown) }
             assertFailsWith<CancellationException> {
                 StreamingHistoryExportEncoder().write(format, metadata(), records) {
-                    if ("-50.0" in it) { writtenSample = true; throw CancellationException("explicit export cancel") }
+                    if ("-50" in it) { writtenSample = true; throw CancellationException("explicit export cancel") }
                 }
             }
             assertTrue(writtenSample); assertFalse(secondRead)
@@ -83,7 +92,7 @@ class HistoryStructuredExportTest {
 
     @Test fun unresolvedSourceCannotBeRelabeledAsAnotherBatteryOrExportedAsZero() = runTest {
         val missing = HistoryExportRecord.Numeric(HistorySample(start, key.copy(sourceId = "missing"), null, HistoryUnknownReason.UNAVAILABLE))
-        for (format in listOf(HistoryExportFormat.CSV, HistoryExportFormat.JSON)) {
+        for (format in listOf(HistoryExportFormat.CSV, HistoryExportFormat.LOGUI)) {
             val error = assertFailsWith<HistoryExportException> {
                 StreamingHistoryExportEncoder().write(format, metadata(), flowOf(missing)) {}
             }
@@ -95,11 +104,7 @@ class HistoryStructuredExportTest {
         val minimum = HistorySample(start, key, -100.0)
         val maximum = HistorySample(end, key, 20.0)
         val bucket = HistoryBucket(key, 0, start, end, minimum, maximum, 4.5, 100, false)
-        val output = StringBuilder()
-        val selected = metadata()
-        StreamingHistoryExportEncoder().write(HistoryExportFormat.JSON, selected,
-            flowOf(HistoryExportRecord.Summary(bucket))) { output.append(it) }
-        val record = Json.parseToJsonElement(output.toString()).jsonObject.getValue("records").jsonArray.single().jsonObject
+        val record = structuredRecords(metadata(), flowOf(HistoryExportRecord.Summary(bucket))).single()
         assertEquals("ORIGINAL_BUCKET", record.getValue("coverage").jsonPrimitive.content)
         assertFalse(record.getValue("overlapsRangeBoundary").jsonPrimitive.boolean)
         assertFalse(record.getValue("complete").jsonPrimitive.boolean)
@@ -113,7 +118,7 @@ class HistoryStructuredExportTest {
     @Test fun summaryCrossingSelectedWindowCannotLeakOutsideFactsOrBeProportionallyRescaled() = runTest {
         val bucket = HistoryBucket(key, 0, start, end, HistorySample(start, key, -100.0),
             HistorySample(end, key, 20.0), 4.5, 100, false)
-        for (format in listOf(HistoryExportFormat.JSON, HistoryExportFormat.CSV)) {
+        for (format in listOf(HistoryExportFormat.CSV)) {
             val error = assertFailsWith<HistoryExportException> {
                 StreamingHistoryExportEncoder().write(format, metadata().copy(range = HistoryRange(1250, 1750)),
                     flowOf(HistoryExportRecord.Summary(bucket))) {}
@@ -123,23 +128,22 @@ class HistoryStructuredExportTest {
     }
 
     @Test fun privateAbsolutePathsEmbeddedInDisplayLabelsAreRedactedForBothStructuredFormats() = runTest {
-        for (format in listOf(HistoryExportFormat.JSON, HistoryExportFormat.CSV)) {
+        for (format in listOf(HistoryExportFormat.CSV, HistoryExportFormat.LOGUI)) {
             val output = StringBuilder()
             val selected = metadata("Pack /data/user/0/ru.sodovaya.volty/files/private.bin")
                 .copy(title = "Ride C:\\Users\\private\\source.json")
             StreamingHistoryExportEncoder().write(format, selected, flowOf(known)) { output.append(it) }
             assertFalse("/data/user/0/" in output, format.name)
             assertFalse("Users" in output, format.name)
-            assertTrue("Pack [path]" in output, format.name)
+            assertEquals(format == HistoryExportFormat.CSV, "Pack [path]" in output, format.name)
         }
     }
     @Test fun unmappedLegacyFactsRetainRawEvidenceWithoutInventingSourceUnitOrCanonicalValue() = runTest {
         val selected = metadata().copy(ride = metadata().ride.copy(status = HistoryRideStatus.LEGACY), sources = emptyList())
         val raw = HistoryExportRecord.LegacyUnmapped(HistoryTick(1000, 0, 0), "1970-01-01T00:00:01.000100Z",
             "=FUTURE_VALUE", null, 321.0, true)
-        val output = StringBuilder()
-        val counts = StreamingHistoryExportEncoder().write(HistoryExportFormat.JSON, selected, flowOf(raw)) { output.append(it) }
-        val record = Json.parseToJsonElement(output.toString()).jsonObject.getValue("records").jsonArray.single().jsonObject
+        val counts = StreamingHistoryExportEncoder().write(HistoryExportFormat.CSV, selected, flowOf(raw)) {}
+        val record = structuredRecords(selected, flowOf(raw)).single()
         assertEquals("legacy_unmapped", record.getValue("type").jsonPrimitive.content)
         assertEquals(JsonNull, record.getValue("source")); assertEquals(JsonNull, record.getValue("unit"))
         assertEquals(JsonNull, record.getValue("value")); assertEquals(JsonNull, record.getValue("elapsedMillis"))
@@ -173,4 +177,11 @@ class HistoryStructuredExportTest {
         if (field.isNotEmpty() || row.isNotEmpty()) { row += field.toString(); rows += row.toList() }
         return rows
     }
+}
+
+/** The per-record objects the long CSV is written from (the retired JSON format's records). */
+internal suspend fun structuredRecords(metadata: HistoryExportMetadata, records: Flow<HistoryExportRecord>): List<JsonObject> {
+    val rows = mutableListOf<JsonObject>()
+    StructuredHistoryExportEncoder(metadata).encodeRecords(records) { rows += it }
+    return rows
 }

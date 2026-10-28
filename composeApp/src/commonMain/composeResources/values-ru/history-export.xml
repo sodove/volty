@@ -2,11 +2,12 @@
     <string name="history_export_title">Экспорт поездки</string>
     <string name="history_export_window">Выбранный участок: %1$s — %2$s</string>
     <string name="history_export_privacy">Файл может содержать записанные координаты и телеметрию. Отправляйте его только тем, кому доверяете. Экспорт не изменяет исходную поездку.</string>
+    <string name="history_export_logui">CSV для VESC Tool · телеметрия и маршрут</string>
+    <string name="history_export_logui_hold">В файле для VESC Tool значение записано только там, где оно было измерено. VESC Tool заполняет пропуски последним известным значением, поэтому разрыв в данных выглядит там как ровное показание.</string>
     <string name="history_export_gpx">GPX · записанный маршрут</string>
-    <string name="history_export_csv">CSV · таблица телеметрии</string>
-    <string name="history_export_json">JSON · телеметрия и маршрут</string>
+    <string name="history_export_csv">CSV · все записи с единицами и пропусками</string>
     <string name="history_export_working">Готовим файл… Можно отменить.</string>
-    <string name="history_export_no_route">На этом участке нет записанного маршрута. Телеметрию можно сохранить в CSV или JSON.</string>
+    <string name="history_export_no_route">На этом участке нет записанного маршрута. Телеметрию можно сохранить в CSV.</string>
     <string name="history_export_active">Перед экспортом остановите запись этой поездки.</string>
     <string name="history_export_changed">Запись удалена или изменилась. Откройте поездку заново и повторите попытку.</string>
     <string name="history_export_invalid">Часть сохранённых данных не удалось экспортировать. Исходная поездка не изменилась.</string>
