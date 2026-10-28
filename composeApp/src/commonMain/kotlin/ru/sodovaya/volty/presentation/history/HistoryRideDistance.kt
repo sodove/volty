@@ -26,7 +26,12 @@ data class HistoryRideDistance(val km: Double, val approximate: Boolean)
  *  - Cross-check (kind-1 witness: the ride's own speed series): a distance above `peakKmh x duration x 1.05` is
  *    impossible. The counter is then not used: the GPS length alone when there is any GPS, otherwise null (no distance
  *    tile, therefore no average and no Wh/km). Never a clamped number.
- *  - [HistoryRideDistance.approximate]: any fill used, any step rejected or re-baselined, or the cross-check fired.
+ *  - [HistoryRideDistance.approximate]: wheel fill above [HISTORY_FILL_APPROXIMATE_FRACTION] of the total, any step
+ *    rejected or re-baselined, or the cross-check fired (the page budget running out is marked by the caller).
+ *    Retraction: an earlier revision marked ANY fill outside GPS cover as approximate. That was wrong because GPS
+ *    warm-up (first fixes at 74 m accuracy) puts a few metres of fill on essentially every ride: 16 m of fill on a
+ *    3.9 km ride (0.4 %) read "approximate", and Average and Wh/km inherited the mark. False-negative cost: a ride whose
+ *    wheel scale differs from GPS by 15 % and whose fill is just under 10 % mixes the two unmarked, a <=1.5 % error.
  *
  * Known limit, inherited from the gate: two consecutive identical torn reads (a needle repeated once) agree with each
  * other, so the gate accepts them and the step adds its ~65 km. Only the cross-check above catches that; when GPS is
@@ -74,7 +79,7 @@ internal fun historyRideWalk(
     var approximate = false
     fun fill(from: Long, to: Long, metres: Double) {
         if (metres <= 0.0) return
-        if (!covered.contains((from + to) / 2)) { fillMetres += metres; approximate = true }
+        if (!covered.contains((from + to) / 2)) fillMetres += metres
     }
 
     var run = CounterRun()
@@ -118,7 +123,10 @@ internal fun historyRideWalk(
     if (limit != null && durationMillis > 0 && total > limit) {
         return HistoryRideWalk(if (gpsKm > 0.0) HistoryRideDistance(gpsKm, approximate = true) else null, acceptedMetres, true)
     }
-    return HistoryRideWalk(total.takeIf { it > 0.0 }?.let { HistoryRideDistance(it, approximate) }, acceptedMetres, false)
+    // Fill is a gate-accepted measurement, not a guess; it is approximate only when it is a large share of the whole
+    // (the wheel and GPS scales differ, measured 15 %, so a small share moves the total by a fraction of a percent).
+    val fillApproximate = fillMetres / 1000.0 > total * HISTORY_FILL_APPROXIMATE_FRACTION
+    return HistoryRideWalk(total.takeIf { it > 0.0 }?.let { HistoryRideDistance(it, approximate || fillApproximate) }, acceptedMetres, false)
 }
 
 /**
@@ -167,6 +175,8 @@ internal fun historyPeakSpeedKmh(sources: List<HistorySource>, stats: Map<Histor
 /** Slack over the top speed: the stored peak is a 500 ms window maximum and the clock of a window is coarse. */
 private const val CROSS_CHECK_TOLERANCE = 1.05
 private const val RUN_CONFIRMATIONS = 3
+/** Wheel fill above this share of the total distance makes the distance approximate. */
+internal const val HISTORY_FILL_APPROXIMATE_FRACTION = 0.10
 internal const val GPS_COVER_GAP_MILLIS = 30_000L
 internal const val GPS_COVER_MAX_ACCURACY_M = 50.0
 

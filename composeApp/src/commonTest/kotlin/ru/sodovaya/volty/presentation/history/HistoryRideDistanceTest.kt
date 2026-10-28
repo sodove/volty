@@ -47,6 +47,30 @@ class HistoryRideDistanceTest {
         assertTrue(d.approximate)
     }
 
+    /** The 17:33 ride's shape: 3.9 km in 650 s at 6 m/s, the counter sampled every 500 ms. */
+    private fun shortRide(): List<HistorySample> = (0..1300).map { i -> at(i * 500L, 2816.4 + 6.0 * (i * 500L) / 1_000_000.0) }
+
+    @Test fun aSmallWarmUpFillOnAGpsRideStaysExact() {
+        // GPS starts 3 s late: 18 m of wheel fill on 3.9 km (0.46 %). An earlier revision marked ANY fill approximate, so
+        // GPS warm-up made essentially every ride read "approximate" (16 m on 3.9 km on the rider's 0.7.57 ride).
+        val d = checkNotNull(historyRideDistance(shortRide(), track(fromSeconds = 3, toSeconds = 650), origin, 55.1, 650_000))
+        assertEquals(3.9, d.km, 0.02)
+        assertFalse(d.approximate, "18 m of fill is far below the 10 % share")
+    }
+
+    @Test fun aLargeFillShareIsApproximate() {
+        // GPS starts 83 s late: 500 m of fill on 3.9 km (12.8 %).
+        val d = checkNotNull(historyRideDistance(shortRide(), track(fromSeconds = 83, toSeconds = 650), origin, 55.1, 650_000))
+        assertEquals(3.9, d.km, 0.02)
+        assertTrue(d.approximate)
+    }
+
+    @Test fun aRejectedCounterStepIsApproximateEvenWithAllGpsCoverage() {
+        val needle = shortRide().map { if (it.tick.elapsedMillis == 272_000L) it.copy(value = 2883.568) else it }
+        val d = checkNotNull(historyRideDistance(needle, track(toSeconds = 650), origin, 55.1, 650_000))
+        assertTrue(d.approximate, "no fill at all, yet a step was rejected: still marked")
+    }
+
     @Test fun theWheelFillsTheHeadBeforeTheFirstFix() {
         val d = checkNotNull(historyRideDistance(ride(), track(fromSeconds = 120), origin, 55.1, rideMillis))
         // 120 s x 6 m/s = 0.720 km of fill, plus 4.98 km of GPS.
