@@ -196,4 +196,17 @@ class HistoryRideTotalsTest {
             historyDefaultMetrics(listOf(controller)), "no battery: the controller's power")
         assertTrue(historyDefaultMetrics(emptyList()).isEmpty())
     }
+
+    @Test fun aPackPowerSeriesWithNoKnownValueIsNotTheDefaultChart() {
+        // The 17:33 ride: a Begode T4's placeholder BMS made pack power_w all unknown while the Peak power tile used the
+        // controller's series. The default chart took the pack's and printed "No data".
+        val expected = listOf(HistorySeriesKey("esc", "speed_kmh"), HistorySeriesKey("esc", "controller_power_w"))
+        assertEquals(expected, historyDefaultMetrics(listOf(controller, pack)) { false })
+        assertEquals(listOf(HistorySeriesKey("esc", "speed_kmh"), HistorySeriesKey("pack", "power_w")),
+            historyDefaultMetrics(listOf(controller, pack)) { it == HistorySeriesKey("pack", "power_w") })
+        // Nothing to fall back to: the pack's series stays (an empty chart is the honest answer, not another series).
+        assertEquals(listOf(HistorySeriesKey("pack", "power_w")), historyDefaultMetrics(listOf(pack)) { false })
+        assertEquals(HistorySeriesKey("pack", "power_w"), historyDefaultPackPowerKey(listOf(controller, pack)))
+        assertNull(historyDefaultPackPowerKey(listOf(controller)))
+    }
 }

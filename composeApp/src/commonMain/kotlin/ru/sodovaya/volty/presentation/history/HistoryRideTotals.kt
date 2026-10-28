@@ -73,15 +73,26 @@ internal fun tier(sources: List<HistorySource>, tiers: List<Set<HistorySourceKin
 
 /**
  * What a ride shows when the rider has chosen nothing: speed from the motion source, power from the
- * battery (the controller's when there is no battery power). One tier each, so an aggregate and its
+ * battery when it holds a value (the controller's otherwise). One tier each, so an aggregate and its
  * contributors never both appear.
+ *
+ * Retraction: an earlier revision took the battery's `power_w` whenever a battery source existed. That was wrong
+ * for a Begode T4, whose BMS frame is a placeholder: the pack power series is all unknown, the default chart read
+ * "No data" while the Peak power tile (which asks whether the pack has a value) showed the controller's 4694 W.
+ * [packPowerHasValue] is the same question the tile asks (the pack series holds a known value). When there is no
+ * controller to fall back to, the pack series stays: an empty chart is then the honest answer, not another series.
  */
-fun historyDefaultMetrics(sources: List<HistorySource>): List<HistorySeriesKey> {
+fun historyDefaultMetrics(sources: List<HistorySource>, packPowerHasValue: (HistorySeriesKey) -> Boolean = { true }): List<HistorySeriesKey> {
     val speed = tier(sources, motionTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "speed_kmh") }
-    val power = tier(sources, batteryTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "power_w") }
-        ?: tier(sources, motionTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "controller_power_w") }
+    val controller = tier(sources, motionTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "controller_power_w") }
+    val pack = historyDefaultPackPowerKey(sources)
+    val power = if (pack != null && (controller == null || packPowerHasValue(pack))) pack else controller
     return listOfNotNull(speed, power)
 }
+
+/** The pack power series [historyDefaultMetrics] would prefer; the caller asks whether it has a value. */
+fun historyDefaultPackPowerKey(sources: List<HistorySource>): HistorySeriesKey? =
+    tier(sources, batteryTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "power_w") }
 
 /** Stats to read for the tiles of a ride with these sources. */
 fun historyTotalsKeys(sources: List<HistorySource>): List<HistorySeriesKey> {

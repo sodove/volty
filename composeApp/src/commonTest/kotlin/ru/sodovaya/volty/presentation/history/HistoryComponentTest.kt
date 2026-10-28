@@ -238,6 +238,22 @@ class HistoryComponentTest {
             assertTrue(c.state.value.detail.selectedKeys.isEmpty(), "the rider cleared it: no defaults forced back")
         } finally { c.close() }
     }
+    @Test fun aPackWithNoKnownPowerDefaultsTheChartToTheControllersPower() = runTest {
+        val repo = object : Repo() {
+            override suspend fun sources(rideId: String) = listOf(HistorySource("esc", HistorySourceKind.CONTROLLER, "Controller"),
+                HistorySource("pack", HistorySourceKind.BATTERY, "Pack"))
+            override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) =
+                if (key == HistorySeriesKey("pack", "power_w")) HistoryStats(null, null, null, false) else super.stats(rideId, key, range)
+        }
+        val lifecycle = LifecycleRegistry(Lifecycle.State.RESUMED)
+        val c = DefaultHistoryComponent(DefaultComponentContext(lifecycle), backgroundScope,
+            repo, { HistoryTick(6000, 5010, 1) }, {}, defaultMetrics = true)
+        try {
+            c.openRide("a"); runCurrent()
+            assertEquals(listOf(HistorySeriesKey("esc", "speed_kmh"), HistorySeriesKey("esc", "controller_power_w")),
+                c.state.value.detail.selectedKeys)
+        } finally { c.close(); lifecycle.destroy() }
+    }
     @Test fun aRequestedRideOpensInsteadOfTheNewest() = runTest {
         val c = DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
             Repo(), { HistoryTick(6000, 5010, 1) }, {}, openLatestOnLoad = true, initialRideId = "b")

@@ -65,7 +65,7 @@ interface HistoryComponent {
  * and lifecycle; catalog errors and reads do not replace selected detail/route.
  */
 class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: CoroutineScope,
-    repository: HistoryReadRepository, readTick: () -> HistoryTick, private val onBack: () -> Unit,
+    private val repository: HistoryReadRepository, readTick: () -> HistoryTick, private val onBack: () -> Unit,
     presetStore: HistoryMetricPresetStore? = null, imageLoader: HistoryPreviewImageLoader? = null,
     previewDispatcher: CoroutineDispatcher = Dispatchers.Default,
     favoriteStore: HistoryFavoriteRepository? = null,
@@ -289,9 +289,23 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         if (defaultMetrics && pendingRestoration == null && ride != null && !next.loading && next.error == null &&
             next.selectedKeys.isEmpty() && defaultsAppliedTo !== captured) {
             defaultsAppliedTo = captured
-            historyDefaultMetrics(next.sources).takeIf { it.isNotEmpty() }?.let { keys ->
-                detail.replaceMetrics(keys)
-                if (!lifetime.isActive || selection !== captured) return
+            val packKey = historyDefaultPackPowerKey(next.sources)
+            val whole = next.availableRange ?: range
+            if (packKey == null || whole == null) {
+                historyDefaultMetrics(next.sources).takeIf { it.isNotEmpty() }?.let { keys ->
+                    detail.replaceMetrics(keys)
+                    if (!lifetime.isActive || selection !== captured) return
+                }
+            } else {
+                // The pack's power may hold no value (a Begode T4's placeholder BMS): ask the stats the tiles use.
+                val sources = next.sources
+                scope.launch {
+                    val known = try { repository.stats(ride.id, packKey, whole).maximum != null }
+                    catch (e: CancellationException) { throw e } catch (e: Exception) { false }
+                    if (lifetime.isActive && selection === captured && detail.state.value.selectedKeys.isEmpty() &&
+                        pendingRestoration == null)
+                        historyDefaultMetrics(sources) { known }.takeIf { it.isNotEmpty() }?.let(detail::replaceMetrics)
+                }
             }
         }
         val whole = next.availableRange
