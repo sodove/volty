@@ -1,0 +1,15 @@
+-- Compact history, step 1 of 2 (plan 2026-10-29-compact-history-storage, Task 4). Additive only: the V2 tables stay
+-- untouched and no row is copied here; Task 8's 28.sqm converts the old rides. See RideHistoryCompact.sq.
+CREATE TABLE HistoryRideKeyV3 (rideNo INTEGER NOT NULL PRIMARY KEY, rideId TEXT NOT NULL UNIQUE);
+CREATE TABLE HistorySeriesV3 (seriesId INTEGER NOT NULL PRIMARY KEY, rideNo INTEGER NOT NULL,
+  sourceId TEXT NOT NULL, metricId TEXT NOT NULL, cellIndex INTEGER NOT NULL DEFAULT -1 CHECK(cellIndex >= -1),
+  UNIQUE(rideNo, sourceId, metricId, cellIndex));
+CREATE TABLE HistorySampleV3 (seriesId INTEGER NOT NULL, elapsedMillis INTEGER NOT NULL, sequence INTEGER NOT NULL,
+  epochSkew INTEGER NOT NULL DEFAULT 0, clockDelta INTEGER NOT NULL DEFAULT 0, reading REAL, unknownCode INTEGER,
+  runEndElapsed INTEGER, runEndSequence INTEGER, runCount INTEGER,
+  PRIMARY KEY(seriesId, elapsedMillis, sequence),
+  CHECK((reading IS NULL AND unknownCode IS NOT NULL AND unknownCode BETWEEN 1 AND 5) OR (reading IS NOT NULL AND unknownCode IS NULL)),
+  CHECK((runCount IS NULL AND runEndElapsed IS NULL AND runEndSequence IS NULL) OR
+    (unknownCode IS NOT NULL AND runCount IS NOT NULL AND runEndElapsed IS NOT NULL AND runEndSequence IS NOT NULL AND
+      runCount >= 2 AND runEndElapsed >= elapsedMillis AND runEndSequence > sequence))
+) WITHOUT ROWID;

@@ -1,0 +1,92 @@
+-- Compact history tables (plan 2026-10-29-compact-history-storage). Created by 27.sqm; the V2 tables stay until 28.sqm.
+--
+-- HistoryRideKeyV3   rideNo is a small integer standing for the 36-character rideId, so a series row carries 1-3 bytes
+--                    instead of a UUID.
+-- HistorySeriesV3    one row per (ride, source, metric, cell); seriesId replaces the four-column key in every sample.
+-- HistorySampleV3    one row per known sample or per unknown RUN, WITHOUT ROWID so the primary key IS the table:
+--                    (seriesId, elapsedMillis, sequence) is the read order of every reader and there is no second index.
+--
+-- Per-sample epoch and clock generation, decided here (Task 4):
+--   epochSkew  = (sample.epochMillis - sample.elapsedMillis) - (ride.started.epochMillis - ride.started.elapsedMillis)
+--   clockDelta = sample.clockGeneration - ride.started.clockGeneration
+-- so epochMillis = elapsedMillis + rideOriginSkew + epochSkew, EXACTLY, for every row (the fingerprint compares epoch
+-- and generation of each known sample, and historyAxisEpochMillis/clockBoundary read both). Both are 0 for nearly every
+-- row, which SQLite stores in 0 bytes of payload (serial type 8/9 integers 0 and 1), and a few milliseconds of wobble
+-- cost one byte. The ride origin comes from HistoryRideV2.started*. An earlier idea, one skew per run only, would have
+-- lost the epoch of known samples; known rows therefore keep their own.
+--
+-- unknownCode: 1..5, the ordinal+1 of the unknown reason (mapping lives in the Task 5 codec, not in SQL).
+-- A run row (runCount IS NOT NULL) is an unknown that stands for runCount samples evenly spaced from
+-- (elapsedMillis, sequence) to (runEndElapsed, runEndSequence), runCount >= 2. Task 3: a stored run must satisfy
+-- runEndElapsed - elapsedMillis <= 2000 * (runCount - 1).
+-- Every CHECK spells out IS NOT NULL: a CHECK that evaluates to NULL PASSES in SQLite, so the first draft (without it)
+-- accepted a row with neither a reading nor a code, and a run with a NULL end. Both are rejected now (tested).
+-- No foreign keys: application foreign_keys are OFF (SqlDelightHistoryStore), deletion is explicit.
+
+CREATE TABLE HistoryRideKeyV3 (
+  rideNo INTEGER NOT NULL PRIMARY KEY,
+  rideId TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE HistorySeriesV3 (
+  seriesId INTEGER NOT NULL PRIMARY KEY,
+  rideNo INTEGER NOT NULL,
+  sourceId TEXT NOT NULL,
+  metricId TEXT NOT NULL,
+  cellIndex INTEGER NOT NULL DEFAULT -1 CHECK(cellIndex >= -1),
+  UNIQUE(rideNo, sourceId, metricId, cellIndex)
+);
+
+CREATE TABLE HistorySampleV3 (
+  seriesId INTEGER NOT NULL,
+  elapsedMillis INTEGER NOT NULL,
+  sequence INTEGER NOT NULL,
+  epochSkew INTEGER NOT NULL DEFAULT 0,
+  clockDelta INTEGER NOT NULL DEFAULT 0,
+  reading REAL,
+  unknownCode INTEGER,
+  runEndElapsed INTEGER,
+  runEndSequence INTEGER,
+  runCount INTEGER,
+  PRIMARY KEY(seriesId, elapsedMillis, sequence),
+  CHECK((reading IS NULL AND unknownCode IS NOT NULL AND unknownCode BETWEEN 1 AND 5) OR (reading IS NOT NULL AND unknownCode IS NULL)),
+  CHECK((runCount IS NULL AND runEndElapsed IS NULL AND runEndSequence IS NULL) OR
+    (unknownCode IS NOT NULL AND runCount IS NOT NULL AND runEndElapsed IS NOT NULL AND runEndSequence IS NOT NULL AND
+      runCount >= 2 AND runEndElapsed >= elapsedMillis AND runEndSequence > sequence))
+) WITHOUT ROWID;
+
+insertRideKeyV3:
+INSERT INTO HistoryRideKeyV3(rideNo, rideId) VALUES (:rideNo, :rideId);
+
+rideNoV3:
+SELECT rideNo FROM HistoryRideKeyV3 WHERE rideId = :rideId;
+
+maxRideNoV3:
+SELECT COALESCE(MAX(rideNo), 0) FROM HistoryRideKeyV3;
+
+insertSeriesV3:
+INSERT INTO HistorySeriesV3(seriesId, rideNo, sourceId, metricId, cellIndex)
+VALUES (:seriesId, :rideNo, :sourceId, :metricId, :cellIndex);
+
+seriesForV3:
+SELECT seriesId FROM HistorySeriesV3
+WHERE rideNo = :rideNo AND sourceId = :sourceId AND metricId = :metricId AND cellIndex = :cellIndex;
+
+seriesOfRideV3:
+SELECT * FROM HistorySeriesV3 WHERE rideNo = :rideNo ORDER BY seriesId;
+
+insertSampleV3:
+INSERT INTO HistorySampleV3(seriesId, elapsedMillis, sequence, epochSkew, clockDelta, reading, unknownCode,
+runEndElapsed, runEndSequence, runCount)
+VALUES (:seriesId, :elapsedMillis, :sequence, :epochSkew, :clockDelta, :reading, :unknownCode,
+:runEndElapsed, :runEndSequence, :runCount);
+
+deleteSamplesOfSeriesV3:
+DELETE FROM HistorySampleV3 WHERE seriesId = :seriesId;
+
+deleteSeriesOfRideV3:
+DELETE FROM HistorySeriesV3 WHERE rideNo = :rideNo;
+
+deleteRideKeyV3:
+DELETE FROM HistoryRideKeyV3 WHERE rideNo = :rideNo;
+
