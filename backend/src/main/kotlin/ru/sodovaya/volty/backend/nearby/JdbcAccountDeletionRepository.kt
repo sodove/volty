@@ -38,8 +38,19 @@ class JdbcAccountDeletionRepository(private val source: DataSource) {
             for (peer in affected.distinct().sorted().filter { it != actor })
                 for (community in owned) sessions.cancelCurrentCommunityClaim(c, peer, community, at)
 
-            update(c, "UPDATE users SET deleted_at=?,tokens_revoked_at=? WHERE id=?::uuid AND deleted_at IS NULL", at, at / 1000, actor).also { check(it == 1) }
-            update(c, "UPDATE refresh_tokens SET revoked_at=? WHERE user_id=?::uuid AND revoked_at IS NULL", at / 1000, actor)
+            // Earlier revisions only hid the profile. Account deletion must also erase
+            // credentials and personal data; keep the UUID tombstone for fenced cleanup.
+            update(c, """
+                UPDATE users SET deleted_at=?,tokens_revoked_at=?,
+                    email='deleted+' || id::text || '@account.invalid',password_hash='!',
+                    display_name='[deleted]',email_verified=FALSE
+                WHERE id=?::uuid AND deleted_at IS NULL
+            """.trimIndent(), at, at / 1000, actor).also { check(it == 1) }
+            update(c, "DELETE FROM refresh_tokens WHERE user_id=?::uuid", actor)
+            update(c, "DELETE FROM one_time_tokens WHERE user_id=?::uuid", actor)
+            update(c, "DELETE FROM friendships WHERE requester_id=?::uuid OR addressee_id=?::uuid", actor, actor)
+            update(c, "DELETE FROM nearby_push_devices WHERE actor_id=?::uuid", actor)
+            update(c, "DELETE FROM nearby_channel_sharing_consent WHERE actor_id=?::uuid", actor)
             update(c, "DELETE FROM live_updates WHERE user_id=?::uuid", actor)
             update(c, "DELETE FROM sharing_sessions WHERE user_id=?::uuid", actor)
             // Historical owner membership is required by V7's deferred owner/member FK.
@@ -48,11 +59,16 @@ class JdbcAccountDeletionRepository(private val source: DataSource) {
                 WHERE m.community_id=g.id AND m.user_id=?::uuid AND g.owner_id<>?::uuid
             """.trimIndent(), actor, actor)
             for (community in owned) {
-                update(c, "UPDATE nearby_voice_channels SET state='DELETED' WHERE community_id=?::uuid", community)
-                check(update(c, "UPDATE nearby_communities SET state='DELETED' WHERE id=?::uuid", community) == 1)
+                update(c, "UPDATE nearby_voice_channels SET state='DELETED',name='[deleted]' WHERE community_id=?::uuid", community)
+                check(update(c, "UPDATE nearby_communities SET state='DELETED',name='[deleted]',description='' WHERE id=?::uuid", community) == 1)
                 update(c, "DELETE FROM groups WHERE id=?::uuid", community)
                 appendCommunityChange(c, community, actor, "DELETED")
             }
+            update(c, "UPDATE nearby_communities SET name='[deleted]',description='' WHERE owner_id=?::uuid", actor)
+            update(c, """
+                UPDATE nearby_voice_channels SET name='[deleted]'
+                WHERE community_id IN (SELECT id FROM nearby_communities WHERE owner_id=?::uuid)
+            """.trimIndent(), actor)
             // Also close legacy-only groups created before the final cutover backfill.
             update(c, "DELETE FROM groups WHERE owner_id=?::uuid", actor)
             update(c, "DELETE FROM group_members WHERE user_id=?::uuid", actor)

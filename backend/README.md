@@ -113,6 +113,25 @@ The manual equivalent is:
 docker compose up -d --remove-orphans --build
 ```
 
+## Public account deletion
+
+`https://volty.sodove.ru/remove_account` is the public account-deletion link
+for Google Play. It works without the Android app: verify email/password,
+then explicitly confirm irreversible deletion. Forgotten passwords use the
+existing email recovery flow. Opening the page never changes an account.
+
+The page calls the existing login and authenticated `DELETE /v1/account`
+endpoints. Passwords and access tokens are not stored in browser storage.
+Deletion erases email, password hash, profile name, friendships, authentication
+tokens, push registrations, and shared coordinates/telemetry in one transaction.
+Owned communities are closed and their titles/descriptions/channel names are
+scrubbed, including previously deleted communities. Internal UUID tombstones and
+session cleanup journals remain to prevent revoked access from returning.
+Existing server backups are not rewritten. Local rides and vehicles on the
+rider's device remain on that device.
+
+Production release evidence: `docs/superpowers/sdd/2026-10-29-account-removal.md`.
+
 Useful checks after boot:
 
 ```powershell

@@ -336,6 +336,14 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     }
 
     routing {
+        get("/remove_account") {
+            val nonce = java.util.Base64.getEncoder().encodeToString(java.security.SecureRandom().generateSeed(24))
+            val page = checkNotNull(PasswordResetDelivery::class.java.getResourceAsStream("/remove-account.html"))
+                .bufferedReader(Charsets.UTF_8).use { it.readText() }.replace("__CSP_NONCE__", nonce)
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            call.response.header("Content-Security-Policy", "default-src 'none'; script-src 'nonce-$nonce'; style-src 'nonce-$nonce'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            call.respondText(page, ContentType.Text.Html)
+        }
         get("/reset-password") {
             val nonce = java.util.Base64.getEncoder().encodeToString(java.security.SecureRandom().generateSeed(24))
             val page = checkNotNull(PasswordResetDelivery::class.java.getResourceAsStream("/password-reset.html"))
