@@ -427,3 +427,12 @@ val fetchRnnoiseModel = tasks.register<FetchRnnoiseModelTask>("fetchRnnoiseModel
 tasks.configureEach {
     if (name.startsWith("configureCMake") || name.startsWith("buildCMake")) dependsOn(fetchRnnoiseModel)
 }
+
+// Reader fingerprint (HistoryReaderFingerprintTest.realDatabaseFingerprint): the gate properties must reach the test JVM,
+// which -D on the Gradle command line does not do by itself. Absent, the test is skipped; they are never set in the suite.
+tasks.withType<Test>().configureEach {
+    if (System.getProperty("volty.fingerprintDb") != null) maxHeapSize = "3g"   // a 600 MB database: whole series are held for the collapse
+    listOf("volty.fingerprintDb", "volty.fingerprintOut", "volty.fingerprintVerbose").forEach { name ->
+        System.getProperty(name)?.let { systemProperty(name, it) }
+    }
+}
