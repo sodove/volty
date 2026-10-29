@@ -7,10 +7,19 @@ import ru.sodovaya.volty.data.db.HistoryRideV2
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
 import ru.sodovaya.volty.domain.history.*
 
-/** Borrows the application database; mutations commit atomically away from the UI thread. */
+/**
+ * Borrows the application database; mutations commit atomically away from the UI thread.
+ *
+ * [recordCompact] (compact-history-storage plan, Task 5): when true, [begin] gives every new ride a `HistoryRideKeyV3`
+ * and its samples are written to the compact tables only. It is OFF by default until Task 6 lands, because until then
+ * every reader (samples, stats, recordedKeys, export, the other-sources probe) still reads `HistorySampleV2`, and a
+ * compact ride would show as empty. The writer and deletion dispatch on the ride KEY, not on this flag, so a ride begun
+ * compact stays compact whatever the flag says later, and a V2 ride stays V2. Task 6 flips the default.
+ */
 class SqlDelightHistoryStore(
     provider: VoltyDatabaseProvider,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
+    private val recordCompact: Boolean = false,
 ) : HistoryStore {
     private val database = provider.database
     private val rides = database.rideHistoryV2Queries
@@ -21,6 +30,7 @@ class SqlDelightHistoryStore(
     private val reader = HistoryStoreReader(database)
     private val receipts = HistoryBatchReceipts(database)
     private val bucketStorage = HistoryBucketStorage(database)
+    private val compact = HistoryCompactSampleWriter(database)
 
     override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys = withContext(dispatcher) {
         database.transactionWithResult { reader.recordedKeys(rideId, sourceId, limit) }
@@ -33,6 +43,7 @@ class SqlDelightHistoryStore(
             rides.insertRide(ride.id, ride.vehicleId, ride.started.epochMillis,
                 ride.started.elapsedMillis, ride.started.clockGeneration, ride.status.name)
             sources.forEach { sourceQueries.insertSource(ride.id, it.id, it.kind.name, it.label) }
+            if (recordCompact) compact.begin(ride.id)
         }
     }
 
@@ -42,7 +53,8 @@ class SqlDelightHistoryStore(
 
     override suspend fun append(batch: HistoryBatch) = withContext(dispatcher) {
         database.transaction {
-            if (receipts.verifyCommitted(batch)) return@transaction
+            val rideNo = compact.rideNo(batch.rideId)
+            if (receipts.verifyCommitted(batch, compact = rideNo != null)) return@transaction
             val row = checkNotNull(rides.getRide(batch.rideId).executeAsOneOrNull()) { "Ride not found" }
             check(row.status == HistoryRideStatus.RECORDING.name) { "Ride is closed" }
             val origin = row.toHistoryRide().started
@@ -56,9 +68,11 @@ class SqlDelightHistoryStore(
                 if (tick.elapsedMillis >= last.elapsedMillis) last = tick
                 return sequence++
             }
+            val session = rideNo?.let { compact.session(batch.rideId, it, origin, batch.markers) }
             batch.samples.forEach { sample ->
                 require(sample.key.sourceId in sources) { "Unregistered source" }
                 val t = sample.tick
+                if (session != null) { session.write(sample, admit(t)); return@forEach }
                 sampleQueries.insertSample(batch.rideId, admit(t), sample.key.sourceId,
                     sample.key.metricId, sample.key.cellIndex?.toLong() ?: -1L, t.epochMillis,
                     t.elapsedMillis, t.clockGeneration, sample.value, sample.unknown?.name)
@@ -168,6 +182,7 @@ class SqlDelightHistoryStore(
             }
             // Application foreign_keys are OFF. Explicit child deletion must work on that path too.
             sampleQueries.deleteSamples(rideId)
+            compact.delete(rideId)
             gpsQueries.deleteGps(rideId)
             markerQueries.deleteMarkers(rideId)
             database.rideHistoryBucketQueries.deleteBuckets(rideId)

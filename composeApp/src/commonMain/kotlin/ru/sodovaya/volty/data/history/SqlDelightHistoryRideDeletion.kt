@@ -50,6 +50,8 @@ class SqlDelightHistoryRideDeletion(provider: VoltyDatabaseProvider,
                 // Explicit children, including receipt/bucket state, are required
                 // even on SQLite connections with foreign_keys disabled.
                 database.rideHistorySampleQueries.deleteSamples(source.rideId)
+                // A compact ride's samples, series and key go in this same transaction (ids are reused MAX+1).
+                HistoryCompactSampleWriter(database).delete(source.rideId)
                 database.rideHistoryGpsQueries.deleteGps(source.rideId)
                 database.rideHistoryMarkerQueries.deleteMarkers(source.rideId)
                 database.rideHistoryBucketQueries.deleteBuckets(source.rideId)

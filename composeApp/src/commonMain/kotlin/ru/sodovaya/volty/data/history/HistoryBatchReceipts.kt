@@ -5,7 +5,12 @@ import ru.sodovaya.volty.domain.history.*
 
 /** Called inside append's transaction. Old receipts reference rows; new ones certify the full payload. */
 internal class HistoryBatchReceipts(private val database: VoltyDatabase) {
-    fun verifyCommitted(batch: HistoryBatch): Boolean {
+    /**
+     * [compact]: the ride has a compact key. Its rows cannot certify a payload (a run keeps only its first and last
+     * member), so only a fingerprint can; and `record` always writes one, so a fingerprint-less receipt on a compact
+     * ride cannot have been written by this app and is refused rather than compared against rows.
+     */
+    fun verifyCommitted(batch: HistoryBatch, compact: Boolean = false): Boolean {
         val token = batch.receiptId ?: return false
         val receipt = database.rideHistoryReceiptQueries.getReceipt(batch.rideId, token).executeAsOneOrNull()
             ?: return false
@@ -13,6 +18,7 @@ internal class HistoryBatchReceipts(private val database: VoltyDatabase) {
             require(it == historyBatchFingerprint(batch)) { "Receipt reused with a different payload" }
             return true
         }
+        check(!compact) { "A compact ride cannot hold a legacy receipt" }
         require(batch.buckets.isEmpty()) { "Legacy receipt cannot certify a bucket payload" }
         val samples = database.rideHistorySampleQueries.samplesForReceipt(batch.rideId,
             receipt.firstSequence, receipt.nextSequence).executeAsList().map {

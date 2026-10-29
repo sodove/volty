@@ -104,3 +104,24 @@ DELETE FROM HistorySeriesV3 WHERE rideNo = :rideNo;
 deleteRideKeyV3:
 DELETE FROM HistoryRideKeyV3 WHERE rideNo = :rideNo;
 
+
+-- Task 5 (writer). The newest row of a series in reader order: one seek on the primary key, read backwards.
+newestSampleOfSeriesV3:
+SELECT * FROM HistorySampleV3 WHERE seriesId = :seriesId ORDER BY elapsedMillis DESC, sequence DESC LIMIT 1;
+
+-- Extends a lone unknown or a run in place; the row is addressed by its full primary key.
+extendRunV3:
+UPDATE HistorySampleV3 SET runCount = :runCount, runEndElapsed = :runEndElapsed, runEndSequence = :runEndSequence
+WHERE seriesId = :seriesId AND elapsedMillis = :elapsedMillis AND sequence = :sequence;
+
+deleteSamplesOfRideV3:
+DELETE FROM HistorySampleV3 WHERE seriesId IN (SELECT seriesId FROM HistorySeriesV3 WHERE rideNo = :rideNo);
+
+samplesOfSeriesV3:
+SELECT * FROM HistorySampleV3 WHERE seriesId = :seriesId ORDER BY elapsedMillis, sequence;
+
+-- The committed markers that could split a run of :sourceId between its end and the next sample. The gap kinds are
+-- filtered in Kotlin by historyRunContinues (HISTORY_GAP_MARKERS), so the set is defined once.
+markersAfterV3:
+SELECT * FROM HistoryMarkerV2 WHERE rideId = :rideId AND elapsedMillis > :afterElapsed AND elapsedMillis <= :toElapsed
+AND (sourceId IS NULL OR sourceId = :sourceId) ORDER BY elapsedMillis, sequence;
