@@ -160,6 +160,8 @@ class SqlDelightHistoryStore(
     }
     override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistorySample> = withContext(dispatcher) {
         // A compact page reads a carried run and the rows after it: one snapshot, so a concurrent append cannot land between.
+        // On Android this begins IMMEDIATE (write lock) and serialises with the recorder's append for one page (ms-scale,
+        // no suspension inside, as `stats` and `recordedKeys` already do); review M4 accepted it.
         database.transactionWithResult { reader.samples(rideId, key, range, after, limit) }
     }
     override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistoryGpsFix> = withContext(dispatcher) {

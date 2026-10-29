@@ -53,17 +53,33 @@ import java.util.concurrent.Executors
  * Measured in Task 6 (retraction of "row selection" as its only cause): with Ruling 2's exact-count expansion the
  * selection no longer moves (`n` is equal), yet the line still differs on a series with an UNEVENLY spaced run, because
  * `sha` hashes every overview point, and the interior unknown points of a run carry interpolated ticks (Global
- * Constraint 2.3: interior ticks are not kept). `known` and `breaks` (each stretch's first and last) stay equal, which
- * is exactly this tolerance's condition, so the same name covers it; no number the chart draws depends on an interior
- * unknown's tick (a cursor there answers null either way, HistoryUnknownRun.kt). On evenly spaced runs it is exact.
+ * Constraint 2.3: interior ticks are not kept). No number the chart draws depends on an interior unknown's tick (a
+ * cursor there answers null either way, HistoryUnknownRun.kt). On evenly spaced runs it is exact.
+ *
+ * Retraction (Task 6 review I1): the tolerance used to accept ANY `n`/`known`/`breaks` once the baseline was `thinned`
+ * (590+ points). Nearly every real ride's overview is thinned, so in the Task 9 gate it compared `markers`/`truncated`
+ * only and would have passed a reader that dropped or moved known points. It now requires `n`, `known`, `breaks`,
+ * `markers` and `truncated` equal whatever the thinning: only `sha` may differ.
  *
  * ## A window that cuts a run
  * [Tolerance.RANGE_CUT_EDGE] (Ruling 4). A window opening or closing inside a run reads the run's expansion clipped,
  * so its first or last unknown member is interpolated and lies less than one inter-sample step from the real one; one
- * member may even cross the window edge. It applies to `w<k>.unknownEdges` and `w<k>.overview` lines ONLY, and only when
- * that window's `w<k>.samples` line (known rows and chain count) is identical; for the overview also `markers`,
- * `truncated` and, unless the baseline was `thinned`, `known` must be equal and `n` within 2 (one member per edge).
- * Whole-ride lines never get it.
+ * member may even cross the window edge. It applies ONLY to a window the candidate marks as cutting a chain of that
+ * series (a `# cut ride|key|w<k>` comment: a window bound strictly inside a whole-ride chain), ONLY to its
+ * `w<k>.unknownEdges`, `w<k>.overview` and `w<k>.stats` lines, and only when that window's `w<k>.samples` line (known rows
+ * and chain count) is identical. The overview must keep `markers`, `truncated` and `known` equal and `n` within 2 (one
+ * member per edge), thinned or not; the stats may differ only in `complete`/`pendingWalk`/`hasGap` (the verdicts that
+ * the in-window unknown count and last tick feed), never in min, max, energy or average. Whole-ride lines never get it.
+ *
+ * ## A back-dated marker that split an uneven run (Ruling 5)
+ * [Tolerance.BACKDATED_SPLIT]. A gap marker committed after unknowns at or past its tick were already stored (the live
+ * writer then cuts the stored run at interpolated members, `splitStoredRunAt`) can move that series' unknown edges by
+ * less than one step in WHOLE-ride lines. The tool marks such series with `# backdatedSplit ride|key` (a gap marker of
+ * the series' source, or global, with a sample of that source stored before it at or after its tick, and an unknown of
+ * the series within the interval limit of it). The tolerance accepts only the unknown-edge lines of a marked series
+ * (`samplesFull`, `chainMembers`, `overview` with `n`/`known`/`markers`/`truncated` equal, `w<k>.unknownEdges`,
+ * `w<k>.overview` with the same conditions), and only when every totals/stats/walk/energy/peaks line of that ride is
+ * identical (`totals`, `total.*`, `cardMaxDuty`, `stats`, `w<k>.stats`, `walk`, `energyRepair` for every key).
  *
  * ## What is probed (review I2, I5)
  * Per series: all samples at one page size; the same samples re-paged at sizes 7 and 100 (an internal consistency
@@ -86,7 +102,7 @@ object HistoryReaderFingerprint {
     const val OVERVIEW_THIN_THRESHOLD = 590
 
     /** Named differences [compare] may be told to accept. There is no blanket ignore. */
-    enum class Tolerance { OVERVIEW_ROW_SELECTION, CHAIN_MEMBERS, RANGE_CUT_EDGE }
+    enum class Tolerance { OVERVIEW_ROW_SELECTION, CHAIN_MEMBERS, RANGE_CUT_EDGE, BACKDATED_SPLIT }
 
     sealed interface Segment {
         data class One(val sample: HistorySample) : Segment
@@ -301,6 +317,8 @@ object HistoryReaderFingerprint {
                     bulk.finish()
                 }
                 var rideKnown = 0L; var rideChains = 0L
+                // Gap markers committed after samples at or past their tick (Ruling 5); comments only, see the class KDoc.
+                val backdated = guardedList { backdatedGapMarkers(driver, id) }
 
                 // Fixed windows of the ride's own time (never run boundaries); null for a ride with no end.
                 val windows = if (end == null) emptyList() else {
@@ -322,10 +340,20 @@ object HistoryReaderFingerprint {
                         seriesCount++
                         val keyText = "${key.sourceId}/${key.metricId}/${key.cellIndex ?: ""}"
                         var lastRowElapsed: Long? = null
+                        var unknownSpans = emptyList<LongRange>()
                         guarded(emit, id, keyText, "samplesFull") {
                             val rows = pageAll(store, id, key, range, HISTORY_DETAIL_PAGE_SIZE)
                             lastRowElapsed = rows.lastOrNull()?.tick?.elapsedMillis
                             val segments = collapseUnknownChains(rows, markers)
+                            unknownSpans = segments.mapNotNull {
+                                when (it) {
+                                    is Segment.Chain -> it.first.tick.elapsedMillis..it.last.tick.elapsedMillis
+                                    is Segment.One -> if (it.sample.value == null) it.sample.tick.elapsedMillis..it.sample.tick.elapsedMillis else null
+                                }
+                            }
+                            if (backdated.any { (at, source) -> (source == null || source == key.sourceId) &&
+                                    unknownSpans.any { span -> span.last >= at - HISTORY_MAX_INTERVAL_MILLIS && span.first <= at + HISTORY_MAX_INTERVAL_MILLIS } })
+                                writer.append("# backdatedSplit $id|$keyText\n")
                             val bulk = emit.Bulk(id, keyText, "samplesFull")
                             segments.forEach { bulk.add(segmentLine(it)) }
                             bulk.finish()
@@ -382,6 +410,11 @@ object HistoryReaderFingerprint {
                             emit.line(id, keyText, "overview", overviewText(emit, id, keyText, "overview", repository.series(id, key, range, 600)))
                         }
                         windows.forEachIndexed { index, window ->
+                            // A window bound strictly inside a whole-ride chain: the only place RANGE_CUT_EDGE applies.
+                            val from = ride.started.elapsedMillis + (window.startEpochMillis - ride.started.epochMillis)
+                            val to = ride.started.elapsedMillis + (window.endEpochMillis - ride.started.epochMillis)
+                            if (unknownSpans.any { (it.first < from && from <= it.last) || (it.first <= to && to < it.last) })
+                                writer.append("# cut $id|$keyText|w$index\n")
                             guarded(emit, id, keyText, "w$index.samples") {
                                 val rows = pageAll(store, id, key, window, HISTORY_DETAIL_PAGE_SIZE)
                                 val segments = collapseUnknownChains(rows, markers)
@@ -476,6 +509,33 @@ object HistoryReaderFingerprint {
         } finally { driver.close() }
     }
 
+    private inline fun <T> guardedList(block: () -> List<T>): List<T> = try { block() } catch (e: Exception) { emptyList() }
+
+    /**
+     * (elapsed, sourceId) of every gap marker of [rideId] committed in a LATER batch than a sample of a series it applies
+     * to that lies at or after its tick. Reads either layout, whichever tables exist.
+     */
+    private fun backdatedGapMarkers(driver: JdbcSqliteDriver, rideId: String): List<Pair<Long, String?>> {
+        val compact = driver.executeQuery(null, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'HistorySampleV3'",
+            { c -> c.next(); QueryResult.Value(c.getLong(0) == 1L) }, 0).value
+        val kinds = HISTORY_GAP_MARKERS.joinToString(",") { "'${it.name}'" }
+        // Stored BEFORE the marker's batch: a sample of the same batch is written knowing the marker, so it never needs a
+        // cut. Without a receipt the marker's own sequence is the bound (conservative: it can only mark more series).
+        val batchStart = "COALESCE((SELECT b.firstSequence FROM HistoryBatchReceiptV2 b WHERE b.rideId = m.rideId " +
+            "AND b.firstSequence <= m.sequence AND b.nextSequence > m.sequence), m.sequence)"
+        val v3 = if (!compact) "" else " OR EXISTS (SELECT 1 FROM HistorySampleV3 s JOIN HistorySeriesV3 r ON r.seriesId = s.seriesId " +
+            "JOIN HistoryRideKeyV3 k ON k.rideNo = r.rideNo WHERE k.rideId = m.rideId AND (m.sourceId IS NULL OR r.sourceId = m.sourceId) " +
+            "AND s.elapsedMillis >= m.elapsedMillis AND s.sequence < $batchStart)"
+        val sql = "SELECT m.elapsedMillis, m.sourceId FROM HistoryMarkerV2 m WHERE m.rideId = ? AND m.kind IN ($kinds) AND (" +
+            "EXISTS (SELECT 1 FROM HistorySampleV2 s WHERE s.rideId = m.rideId AND s.sequence < $batchStart " +
+            "AND (m.sourceId IS NULL OR s.sourceId = m.sourceId) AND s.elapsedMillis >= m.elapsedMillis)$v3) ORDER BY m.elapsedMillis, m.sequence"
+        return driver.executeQuery(null, sql, { c ->
+            val result = ArrayList<Pair<Long, String?>>()
+            while (c.next().value) result += checkNotNull(c.getLong(0)) to c.getString(1)
+            QueryResult.Value(result)
+        }, 1) { bindString(0, rideId) }.value
+    }
+
     /** One failing reader is a line of its own, not the end of the run. */
     private inline fun guarded(emit: Emitter, ride: String, key: String, reader: String, block: () -> Unit) {
         try { block() } catch (e: kotlinx.coroutines.CancellationException) { throw e }
@@ -483,6 +543,10 @@ object HistoryReaderFingerprint {
     }
 
     // --- comparing two fingerprints -------------------------------------------------------------------------------
+
+    /** The `# <tag> <value>` scope comments of a fingerprint (`cut`, `backdatedSplit`). */
+    private fun scopes(file: File, tag: String): Set<String> =
+        file.readLines().filter { it.startsWith("# $tag ") }.map { it.removePrefix("# $tag ") }.toSet()
 
     private fun parse(file: File): Map<String, String> {
         val result = LinkedHashMap<String, String>()
@@ -505,13 +569,16 @@ object HistoryReaderFingerprint {
      */
     fun compare(baseline: File, candidate: File, tolerate: Set<Tolerance> = emptySet()): List<Difference> {
         val a = parse(baseline); val b = parse(candidate)
+        val cuts = scopes(baseline, "cut") + scopes(candidate, "cut")
+        val backdated = scopes(baseline, "backdatedSplit") + scopes(candidate, "backdatedSplit")
         val differences = ArrayList<Difference>()
         for (location in (a.keys + b.keys).toSortedSet()) {
             val x = a[location]; val y = b[location]
             if (x == y) continue
             val reader = location.substringAfterLast('|')
             if (Tolerance.CHAIN_MEMBERS in tolerate && reader == "chainMembers") continue
-            if (Tolerance.RANGE_CUT_EDGE in tolerate && x != null && y != null && rangeCutEdgeTolerated(location, x, y, a, b)) continue
+            if (Tolerance.RANGE_CUT_EDGE in tolerate && x != null && y != null && rangeCutEdgeTolerated(location, x, y, a, b, cuts)) continue
+            if (Tolerance.BACKDATED_SPLIT in tolerate && x != null && y != null && backdatedSplitTolerated(location, x, y, a, b, backdated)) continue
             if (Tolerance.OVERVIEW_ROW_SELECTION in tolerate && (reader == "overview" || Regex("w\\d+\\.overview").matches(reader)) &&
                 x != null && y != null && overviewDifferenceTolerated(fields(x), fields(y))) continue
             differences += Difference(location, x, y, describe(x, y))
@@ -519,25 +586,57 @@ object HistoryReaderFingerprint {
         return differences
     }
 
-    private fun rangeCutEdgeTolerated(location: String, x: String, y: String, a: Map<String, String>, b: Map<String, String>): Boolean {
+    private fun rangeCutEdgeTolerated(location: String, x: String, y: String, a: Map<String, String>, b: Map<String, String>,
+        cuts: Set<String>): Boolean {
         val reader = location.substringAfterLast('|')
-        val window = Regex("""(w\d+)\.(unknownEdges|overview)""").matchEntire(reader) ?: return false
-        val samples = location.substringBeforeLast('|') + "|" + window.groupValues[1] + ".samples"
+        val window = Regex("""(w\d+)\.(unknownEdges|overview|stats)""").matchEntire(reader) ?: return false
+        val prefix = location.substringBeforeLast('|')
+        if ("$prefix|${window.groupValues[1]}" !in cuts) return false
+        val samples = prefix + "|" + window.groupValues[1] + ".samples"
         if (a[samples] == null || a[samples] != b[samples]) return false
-        if (window.groupValues[2] == "unknownEdges") return true
-        val p = fields(x); val q = fields(y)
-        if (p["markers"] != q["markers"] || p["truncated"] != q["truncated"] || p["markers"] == null) return false
-        if (p["thinned"] == "true") return true
-        val n = p["n"]?.toLongOrNull() ?: return false
-        val m = q["n"]?.toLongOrNull() ?: return false
-        return p["known"] == q["known"] && p["known"] != null && kotlin.math.abs(n - m) <= 2
+        return when (window.groupValues[2]) {
+            "unknownEdges" -> true
+            "overview" -> overviewWithin(fields(x), fields(y), slack = 2, breaksEqual = false)
+            else -> {
+                val p = fields(x); val q = fields(y)
+                val verdicts = setOf("complete", "pendingWalk", "hasGap")
+                p.keys == q.keys && p.keys.isNotEmpty() && p.keys.filterNot { it in verdicts }.all { p[it] == q[it] }
+            }
+        }
     }
 
-    private fun overviewDifferenceTolerated(x: Map<String, String>, y: Map<String, String>): Boolean {
-        if (x["markers"] != y["markers"] || x["truncated"] != y["truncated"] || x["markers"] == null) return false
-        if (x["thinned"] == "true") return true
-        return x["known"] == y["known"] && x["breaks"] == y["breaks"] && x["known"] != null
+    private fun backdatedSplitTolerated(location: String, x: String, y: String, a: Map<String, String>, b: Map<String, String>,
+        backdated: Set<String>): Boolean {
+        val reader = location.substringAfterLast('|')
+        val prefix = location.substringBeforeLast('|')
+        if (prefix !in backdated) return false
+        val ride = prefix.substringBefore('|')
+        val numbers = Regex("""totals|total\..+|cardMaxDuty|stats|w\d+\.stats|walk|energyRepair""")
+        for (key in a.keys + b.keys) {
+            if (!key.startsWith("$ride|")) continue
+            if (numbers.matches(key.substringAfterLast('|')) && a[key] != b[key]) return false
+        }
+        return when {
+            reader == "samplesFull" || reader == "chainMembers" || Regex("""w\d+\.unknownEdges""").matches(reader) -> true
+            reader == "overview" -> overviewWithin(fields(x), fields(y), slack = 0, breaksEqual = false)
+            Regex("""w\d+\.overview""").matches(reader) -> overviewWithin(fields(x), fields(y), slack = 2, breaksEqual = false)
+            else -> false
+        }
     }
+
+    /** `markers`, `truncated` and `known` equal, `n` within [slack], `breaks` equal when [breaksEqual]; thinning waives nothing. */
+    private fun overviewWithin(x: Map<String, String>, y: Map<String, String>, slack: Long, breaksEqual: Boolean): Boolean {
+        if (x["markers"] == null || x["known"] == null) return false
+        if (x["markers"] != y["markers"] || x["truncated"] != y["truncated"] || x["known"] != y["known"]) return false
+        if (breaksEqual && x["breaks"] != y["breaks"]) return false
+        val n = x["n"]?.toLongOrNull() ?: return false
+        val m = y["n"]?.toLongOrNull() ?: return false
+        return kotlin.math.abs(n - m) <= slack
+    }
+
+    /** I1: only `sha` may differ; `n`, `known`, `breaks`, `markers` and `truncated` stay equal, thinned or not. */
+    private fun overviewDifferenceTolerated(x: Map<String, String>, y: Map<String, String>): Boolean =
+        x["breaks"] != null && overviewWithin(x, y, slack = 0, breaksEqual = true)
 
     private fun describe(x: String?, y: String?): String {
         if (x == null) return "missing in baseline"

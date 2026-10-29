@@ -189,7 +189,10 @@ class HistoryRunMembers(val row: HistoryStoredSample, maxIntervalMillis: Long = 
         }
     }
 
-    /** True when every member gets its own sequence, i.e. a cursor on a member is unambiguous. */
+    /**
+     * True when every member gets its own sequence, i.e. a cursor on a member is unambiguous. When false the sequences
+     * are still non-decreasing; the compact pager breaks the ties (HistoryCompactReader.samples).
+     */
     val hasDistinctSequences: Boolean get() = end == null || end.sequence - row.sequence >= parts
 
     fun tick(index: Int): HistoryTick {
@@ -208,7 +211,8 @@ class HistoryRunMembers(val row: HistoryStoredSample, maxIntervalMillis: Long = 
     fun sequence(index: Int): Long {
         require(index in 0 until size)
         val run = end ?: return row.sequence
-        return row.sequence + ((run.sequence - row.sequence) * index + parts / 2).floorDiv(parts)
+        // A negative spread cannot be stored (CHECK runEndSequence > sequence); clamped so sequences never decrease.
+        return row.sequence + ((run.sequence - row.sequence).coerceAtLeast(0) * index + parts / 2).floorDiv(parts)
     }
 
     fun sample(index: Int): HistorySample =

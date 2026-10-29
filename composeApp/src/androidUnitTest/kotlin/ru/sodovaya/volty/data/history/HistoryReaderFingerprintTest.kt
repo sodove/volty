@@ -164,17 +164,23 @@ class HistoryReaderFingerprintTest {
             val b = File(root, "b.txt").apply { writeText(candidate + "\n") }
             return HistoryReaderFingerprint.compare(a, b, tolerate)
         }
+        fun lines(vararg text: String) = text.joinToString("\n")
         val overviewOnly = setOf(Tolerance.OVERVIEW_ROW_SELECTION)
-        // Row selection moved but the drawn known points and break stretches are equal: named, accepted.
-        assertEquals(1, diff(overview(10, "K", "B"), overview(12, "K", "B"), emptySet()).size)
-        assertEquals(0, diff(overview(10, "K", "B"), overview(12, "K", "B"), overviewOnly).size)
-        // A known point or a break stretch that changed within the budget is NOT accepted.
-        assertEquals(1, diff(overview(10, "K", "B"), overview(12, "K2", "B"), overviewOnly).size)
-        assertEquals(1, diff(overview(10, "K", "B"), overview(12, "K", "B2"), overviewOnly).size)
-        // Above the budget the expanded series may pick other real points: accepted only when the baseline was thinned.
-        assertEquals(0, diff(overview(600, "K", "B", thinned = true), overview(590, "K2", "B2"), overviewOnly).size)
-        // Markers or truncation moving is never the row selection.
-        assertEquals(1, diff(overview(600, "K", "B", thinned = true), overview(590, "K", "B", markers = 2), overviewOnly).size)
+        // Only the hash moved (interpolated interior unknown ticks): named, accepted.
+        assertEquals(1, diff(overview(10, "K", "B"), overview(10, "K", "B").replace("sha=h10", "sha=x"), emptySet()).size)
+        assertEquals(0, diff(overview(10, "K", "B"), overview(10, "K", "B").replace("sha=h10", "sha=x"), overviewOnly).size)
+        // n, a known point or a break stretch that changed is NOT accepted.
+        assertEquals(1, diff(overview(10, "K", "B"), overview(12, "K", "B"), overviewOnly).size)
+        assertEquals(1, diff(overview(10, "K", "B"), overview(10, "K2", "B"), overviewOnly).size)
+        assertEquals(1, diff(overview(10, "K", "B"), overview(10, "K", "B2"), overviewOnly).size)
+        // Retraction (review I1): thinning waives NOTHING. A thinned baseline used to accept any n/known/breaks.
+        assertEquals(1, diff(overview(600, "K", "B", thinned = true), overview(590, "K", "B"), overviewOnly).size)
+        assertEquals(1, diff(overview(600, "K", "B", thinned = true), overview(600, "K2", "B", thinned = true), overviewOnly).size)
+        assertEquals(1, diff(overview(600, "K", "B", thinned = true), overview(600, "K", "B2", thinned = true), overviewOnly).size)
+        assertEquals(0, diff(overview(600, "K", "B", thinned = true),
+            overview(600, "K", "B", thinned = true).replace("sha=h600", "sha=x"), overviewOnly).size)
+        // Markers or truncation moving is never accepted.
+        assertEquals(1, diff(overview(600, "K", "B", thinned = true), overview(600, "K", "B", markers = 2, thinned = true), overviewOnly).size)
         // Any other reader differs even with every tolerance on.
         val all = Tolerance.entries.toSet()
         assertEquals(1, diff("r|k|samplesFull|n=1 sha=a", "r|k|samplesFull|n=1 sha=b", all).size)
@@ -182,20 +188,61 @@ class HistoryReaderFingerprintTest {
         // chainMembers is its own named tolerance and nothing else is waved through with it.
         assertEquals(1, diff("r|k|chainMembers|n=2 sha=a", "r|k|chainMembers|n=2 sha=b", overviewOnly).size)
         assertEquals(0, diff("r|k|chainMembers|n=2 sha=a", "r|k|chainMembers|n=2 sha=b", setOf(Tolerance.CHAIN_MEMBERS)).size)
-        // RANGE_CUT_EDGE: a window's cut-edge lines, only while that window's known rows and chain count are equal.
+
+        // RANGE_CUT_EDGE: only a window the candidate marks as cutting a chain (review M2), only while that window's
+        // known rows and chain count are equal.
         val cut = setOf(Tolerance.RANGE_CUT_EDGE)
         val samples = "r|k|w1.samples|n=3 sha=K chains=2"
-        fun lines(vararg text: String) = text.joinToString("\n")
-        assertEquals(0, diff(lines(samples, "r|k|w1.unknownEdges|E"), lines(samples, "r|k|w1.unknownEdges|E2"), cut).size)
+        val marked = "# cut r|k|w1"
+        assertEquals(0, diff(lines(samples, "r|k|w1.unknownEdges|E"), lines(marked, samples, "r|k|w1.unknownEdges|E2"), cut).size)
+        assertEquals(1, diff(lines(samples, "r|k|w1.unknownEdges|E"), lines(samples, "r|k|w1.unknownEdges|E2"), cut).size,
+            "a window that cuts nothing gets no tolerance")
+        assertEquals(1, diff(lines(samples, "r|k|w1.unknownEdges|E"), lines("# cut r|k|w2", samples, "r|k|w1.unknownEdges|E2"), cut).size)
         assertEquals(2, diff(lines(samples, "r|k|w1.unknownEdges|E"),
-            lines("r|k|w1.samples|n=3 sha=K chains=3", "r|k|w1.unknownEdges|E2"), cut).size)
-        val windowOverview = { n: Int, known: String -> "r|k|w1.overview|n=$n sha=h$n known=$known breaks=B$n markers=0 truncated=false thinned=false" }
-        assertEquals(0, diff(lines(samples, windowOverview(10, "K")), lines(samples, windowOverview(12, "K")), cut).size)
-        assertEquals(1, diff(lines(samples, windowOverview(10, "K")), lines(samples, windowOverview(13, "K")), cut).size)
-        assertEquals(1, diff(lines(samples, windowOverview(10, "K")), lines(samples, windowOverview(10, "K2")), cut).size)
+            lines(marked, "r|k|w1.samples|n=3 sha=K chains=3", "r|k|w1.unknownEdges|E2"), cut).size)
+        val windowOverview = { n: Int, known: String, thinned: Boolean ->
+            "r|k|w1.overview|n=$n sha=h$n known=$known breaks=B$n markers=0 truncated=false thinned=$thinned" }
+        fun cutOverview(x: String, y: String) = diff(lines(samples, x), lines(marked, samples, y), cut).size
+        assertEquals(0, cutOverview(windowOverview(10, "K", false), windowOverview(12, "K", false)))
+        assertEquals(1, cutOverview(windowOverview(10, "K", false), windowOverview(13, "K", false)))
+        assertEquals(1, cutOverview(windowOverview(10, "K", false), windowOverview(10, "K2", false)))
+        // Thinned: the same bounds (review I1).
+        assertEquals(0, cutOverview(windowOverview(600, "K", true), windowOverview(599, "K", true)))
+        assertEquals(1, cutOverview(windowOverview(600, "K", true), windowOverview(590, "K", true)))
+        assertEquals(1, cutOverview(windowOverview(600, "K", true), windowOverview(600, "K2", true)))
+        // w<k>.stats (review M3): only the verdicts the in-window unknown count and last tick feed may move.
+        val stats = { min: String, complete: Boolean, pending: Boolean ->
+            "r|k|w1.stats|min=$min max=9 energy=null complete=$complete avg=5 pendingWalk=$pending hasGap=false" }
+        assertEquals(0, diff(lines(samples, stats("1", true, false)), lines(marked, samples, stats("1", false, true)), cut).size)
+        assertEquals(1, diff(lines(samples, stats("1", true, false)), lines(marked, samples, stats("2", true, false)), cut).size)
+        assertEquals(1, diff(lines(samples, stats("1", true, false)), lines(samples, stats("1", false, true)), cut).size)
         // Never a whole-ride line, never another window reader.
-        assertEquals(1, diff(lines(samples, "r|k|unknownEdges|E"), lines(samples, "r|k|unknownEdges|E2"), cut).size)
-        assertEquals(1, diff(lines(samples, "r|k|w1.stats|min=1"), lines(samples, "r|k|w1.stats|min=2"), cut).size)
+        assertEquals(1, diff(lines(samples, "r|k|unknownEdges|E"), lines(marked, samples, "r|k|unknownEdges|E2"), cut).size)
+        assertEquals(1, diff(lines(samples, "r|k|w1.route|n=1 sha=a"), lines(marked, samples, "r|k|w1.route|n=1 sha=b"), cut).size)
+
+        // BACKDATED_SPLIT (Ruling 5): the unknown-edge lines of a marked series, only while every number of the ride holds.
+        val back = setOf(Tolerance.BACKDATED_SPLIT)
+        val flag = "# backdatedSplit r|k"
+        val rideNumbers = lines("r|-|totals|n=1", "r|-|total.DISTANCE|value=7", "r|k|stats|min=1", "r|k|walk|complete=true",
+            "r|k2|energyRepair|energy=3", "r|-|cardMaxDuty|null")
+        assertEquals(0, diff(lines(rideNumbers, "r|k|samplesFull|n=2 sha=a"), lines(flag, rideNumbers, "r|k|samplesFull|n=2 sha=b"), back).size)
+        assertEquals(0, diff(lines(rideNumbers, "r|k|w3.unknownEdges|a"), lines(flag, rideNumbers, "r|k|w3.unknownEdges|b"), back).size)
+        assertEquals(0, diff(lines(rideNumbers, overview(10, "K", "B")),
+            lines(flag, rideNumbers, overview(10, "K", "B2").replace("sha=h10", "sha=x")), back).size)
+        assertEquals(1, diff(lines(rideNumbers, overview(10, "K", "B")), lines(flag, rideNumbers, overview(10, "K2", "B2")), back).size)
+        assertEquals(1, diff(lines(rideNumbers, "r|k|samplesFull|n=2 sha=a"), lines(rideNumbers, "r|k|samplesFull|n=2 sha=b"), back).size,
+            "an unmarked series gets no tolerance")
+        assertEquals(1, diff(lines(rideNumbers, "r|k3|samplesFull|n=2 sha=a"), lines(flag, rideNumbers, "r|k3|samplesFull|n=2 sha=b"), back).size,
+            "another series of the ride gets no tolerance")
+        // Any number of the ride that moved voids it, and the number itself is reported.
+        for (moved in listOf("r|-|total.DISTANCE|value=8", "r|k|stats|min=2", "r|k|walk|complete=false", "r|k2|energyRepair|energy=4",
+            "r|-|cardMaxDuty|value=1", "r|k2|w0.stats|min=1")) {
+            val prefix = moved.substringBeforeLast('|')
+            val baseline = rideNumbers.lines().filterNot { it.startsWith("$prefix|") }
+            val original = rideNumbers.lines().firstOrNull { it.startsWith("$prefix|") }
+            assertEquals(2, diff(lines(*(baseline + listOfNotNull(original) + "r|k|samplesFull|n=2 sha=a").toTypedArray()),
+                lines(flag, *(baseline + moved + "r|k|samplesFull|n=2 sha=b").toTypedArray()), back).size, moved)
+        }
         // The schema version and the physical summary are comments.
         assertEquals(0, diff("# userVersion=27\n# summary physicalSampleRows=9\nr|k|counts|known=1 chains=0",
             "# userVersion=29\n# summary physicalSampleRows=3\nr|k|counts|known=1 chains=0", emptySet()).size)
@@ -208,7 +255,7 @@ class HistoryReaderFingerprintTest {
     /**
      * The real run: `-Dvolty.fingerprintDb=<absolute path of the file to copy> -Dvolty.fingerprintOut=<absolute file>`, optionally
      * `-Dvolty.fingerprintWork=<dir for the working copy>`, `-Dvolty.fingerprintCompare=<baseline to diff against>`
-     * (with `-Dvolty.fingerprintTolerate=OVERVIEW_ROW_SELECTION,CHAIN_MEMBERS`) and `-Dvolty.fingerprintVerbose=true`;
+     * (with `-Dvolty.fingerprintTolerate=OVERVIEW_ROW_SELECTION,RANGE_CUT_EDGE,BACKDATED_SPLIT`, the set Task 6 measured) and `-Dvolty.fingerprintVerbose=true`;
      * skipped without the first two. Run it with `--tests "*HistoryReaderFingerprintTest.realDatabaseFingerprint" --rerun`.
      */
     @Test fun realDatabaseFingerprint() {
@@ -312,9 +359,10 @@ class HistoryReaderFingerprintTest {
      * needed (Ruling 2: a run reads back as its count). Every other whole-ride line is equal with no tolerance, except the
      * `overview` of a series with an UNEVENLY spaced run, whose interior unknown points carry interpolated ticks: there
      * `n`, `known`, `breaks`, `markers` and `truncated` are asserted equal and only `sha` differs (OVERVIEW_ROW_SELECTION,
-     * see its KDoc). Window lines that differ are only `w<k>.unknownEdges` / `w<k>.overview` of a window cutting a run,
-     * accepted by RANGE_CUT_EDGE (Ruling 4). The `tool` fixture (300 ms runs) needs no tolerance at all; the T4 replay
-     * (uneven runs) needs the two and is asserted to, so the tolerances are not vacuous.
+     * see its KDoc). Window lines that differ belong to a window the tool marks as cutting a run (RANGE_CUT_EDGE,
+     * Ruling 4). Ride M's back-dated marker splits an UNEVEN run (Ruling 5): only that series' unknown-edge lines differ,
+     * under BACKDATED_SPLIT, while every number of the ride is identical. The `tool` fixture (300 ms runs) needs no
+     * tolerance at all; the replay needs all three and is asserted to, each one, so none is vacuous.
      *
      * The one excluded reader is `logui`: the export still reads `HistorySampleV2` until Task 7 (export, GPX and shape on
      * compact rides), so a compact ride's CSV has no sample rows yet. It is asserted to differ, so the exclusion cannot
@@ -346,19 +394,26 @@ class HistoryReaderFingerprintTest {
             val logui = raw.filter { it.location.endsWith("|logui") }
             assertTrue(logui.isNotEmpty(), "$name: logui reads V2 until Task 7, so it must differ (else drop this exclusion)")
             val differences = raw - logui.toSet()
-            val tolerated = HistoryReaderFingerprint.compare(v2, v3, setOf(Tolerance.OVERVIEW_ROW_SELECTION, Tolerance.RANGE_CUT_EDGE))
-            assertEquals(emptyList(), tolerated.filterNot { it.location.endsWith("|logui") }, "$name: only the named tolerances")
-            fun fields(value: String?) = value.orEmpty().split(' ').associate { it.substringBefore('=') to it.substringAfter('=') }
+            val named = setOf(Tolerance.OVERVIEW_ROW_SELECTION, Tolerance.RANGE_CUT_EDGE, Tolerance.BACKDATED_SPLIT)
+            fun remaining(tolerate: Set<Tolerance>) =
+                HistoryReaderFingerprint.compare(v2, v3, tolerate).filterNot { it.location.endsWith("|logui") }.map { it.location }
+            assertEquals(emptyList(), remaining(named), "$name: only the named tolerances")
+            val backdated = v3.readLines().filter { it.startsWith("# backdatedSplit ") }.map { it.removePrefix("# backdatedSplit ") }
             for (d in differences) {
                 val reader = d.location.substringAfterLast('|')
-                if (reader == "overview") {
-                    val (p, q) = fields(d.baseline) to fields(d.candidate)
-                    for (field in listOf("n", "known", "breaks", "markers", "truncated")) assertEquals(p[field], q[field], "${d.location} $field")
-                } else assertTrue(Regex("""w\d+\.(unknownEdges|overview)""").matches(reader), "$name: whole-ride ${d.location} differs")
+                val window = Regex("""w\d+\.(unknownEdges|overview|stats)""").matches(reader)
+                assertTrue(window || reader == "overview" || d.location.substringBeforeLast('|') in backdated,
+                    "$name: whole-ride ${d.location} differs outside a back-dated split")
             }
             if (name == "tool") assertEquals(emptyList(), differences, "evenly spaced runs: no tolerance at all")
-            else assertTrue(differences.any { it.location.endsWith("|overview") } &&
-                differences.any { it.location.endsWith(".unknownEdges") }, "$name: the uneven runs reach both tolerances")
+            else {
+                // Each tolerance is needed: dropping any one leaves differences.
+                for (t in named) assertTrue(remaining(named - t).isNotEmpty(), "$name: $t is reached")
+                assertTrue("rideM|peer/current_a/" in backdated && backdated.none { it.startsWith("rideT|") },
+                    "$name: the split series is marked, a marker that travels with its own batch is not: $backdated")
+                assertTrue("rideM|peer/current_a/|samplesFull" in differences.map { it.location },
+                    "$name: the uneven back-dated split really moves a whole-ride chain edge")
+            }
             // A compact ride's CSV may even fail with NO_DATA (no V2 rows) until Task 7: the same exclusion, nothing else.
             assertEquals(v2Result.unexpectedErrors, v3Result.unexpectedErrors.filterNot { "|logui|" in it })
             assertEquals(v2Result.exercise, v3Result.exercise)
@@ -376,7 +431,7 @@ class HistoryReaderFingerprintTest {
      * Ride T: the Begode T4 replay (frames, observations, projection, store) with a BLE_GAP of its first source.
      * Ride M: two batteries; `peer` is dead (one run) and goes silent at 30 s while `pack` goes on to 90 s and the ride
      * ends at 95 s (the ride-end tail rule); a BLE_GAP of `peer` committed in a LATER batch is back-dated into the stored
-     * run (the writer cuts it; with a 300 ms step the cut is exact, see `splitStoredRunAt`); `pack` has a source-scoped
+     * run, which is uneven there (the writer cuts it at interpolated members, `splitStoredRunAt`); `pack` has a source-scoped
      * gap and the ride a global OVERFLOW.
      * Ride I: left RECORDING and closed by `recoverInterrupted`, whose INTERRUPTED marker lands on a run's last tick.
      */
@@ -438,13 +493,14 @@ class HistoryReaderFingerprintTest {
                     }
                 }
                 project(rideM, sourcesM, listOf(
-                    HistoryBatch("rideM", slice(0, 19_800), emptyList(), emptyList(), "m0"),
-                    // Back-dated: 12.15 s lies inside peer's run, already stored up to 19.5 s. The slices keep the 300 ms
-                    // grid: a first draft started the second slice at 20 s, the run became uneven (one 200 ms step) and
-                    // the writer's interpolated cut moved the whole-ride chain edges by 40 ms (Task 5's stated bound).
-                    HistoryBatch("rideM", slice(19_800, 49_800), emptyList(),
+                    HistoryBatch("rideM", slice(0, 20_000), emptyList(), emptyList(), "m0"),
+                    // Back-dated: 12.15 s lies inside peer's run, already stored up to 19.8 s. The second slice starts at
+                    // 20 s, off the 300 ms grid, so the run is UNEVEN (one 200 ms step) and the writer's interpolated cut
+                    // moves the whole-ride chain edges by 40 ms (Task 5's stated bound). Ruling 5 names it BACKDATED_SPLIT;
+                    // an earlier revision of this fixture stepped around it by keeping the grid, which hid it (review M6).
+                    HistoryBatch("rideM", slice(20_000, 50_000), emptyList(),
                         listOf(HistoryMarker(m(12_150), HistoryMarkerKind.BLE_GAP, "peer")), "m1"),
-                    HistoryBatch("rideM", slice(49_800, 90_000), emptyList(),
+                    HistoryBatch("rideM", slice(50_000, 90_000), emptyList(),
                         listOf(HistoryMarker(m(60_150), HistoryMarkerKind.BLE_GAP, "pack"),
                             HistoryMarker(m(70_150), HistoryMarkerKind.OVERFLOW)), "m2")))
                 store.finish("rideM", m(95_000), HistoryRideStatus.COMPLETED)

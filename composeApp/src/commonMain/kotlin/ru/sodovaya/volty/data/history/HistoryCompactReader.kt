@@ -43,51 +43,71 @@ internal class HistoryCompactReader(database: VoltyDatabase) {
      * at the next member: it finds the row at or before the cursor (one backwards seek, `latestAtOrBeforeKeyV3`), and if
      * that row is a run reaching past the cursor, emits its remaining members first, then pages the rows after it. No
      * row of the same series lies inside a run (the writer refuses one), so nothing is skipped or repeated, and the
-     * concatenation of pages equals one whole read at every page size. A run with non-distinct sequences (corrupt; the
-     * writer cannot produce one) fails loudly instead of yielding a cursor that does not advance.
+     * concatenation of pages equals one whole read at every page size.
+     *
+     * ## A run whose stored sequences span fewer than `count - 1` (review I2; LOUD, for Task 9)
+     * The live writer gives every member its own increasing sequence, so it cannot store one. A CONVERSION can: a V2
+     * chain whose rows were committed out of elapsed order keeps first/end sequences closer than its member count. Such
+     * a run must never make a page throw (an earlier revision `check`ed and failed every read of the series, so the
+     * rider would have seen the ride as unreadable). Its member sequences are interpolated the same way and are then
+     * non-decreasing, with ties; `(elapsed, sequence)` ties are broken deterministically by ENDING THE PAGE BEFORE a tie
+     * group, so the cursor always separates the page from the next member. Only when one group of identical
+     * `(elapsed, sequence)` members is larger than the whole page does the page end inside it, and then the rest of that
+     * group is SKIPPED (the next page resumes strictly after the pair): duplicates of one unknown tick, the least
+     * information there is to lose. Task 9's conversion must split such chains (sequence rule, ledger note), so this is a
+     * safety net, not a path real data should take.
      *
      * Re-reading a RECORDING ride between pages while its open run grows moves the interpolated interior members; the
      * pager then resumes at the first member after the cursor of the longer run, never repeating or going back. V2's
      * pages of a live ride also change between reads.
+     *
+     * A cursor below `from` (never produced: cursors come from the previous page of the same range) is read as no cursor,
+     * so a run starting between the cursor and `from` is not skipped (review M1).
      */
     fun samples(rideNo: Long, origin: HistoryTick, key: HistorySeriesKey, bounds: LongRange, cursor: Pair<Long, Long>?,
         limit: Int, cursorOf: (HistoryTick, Long) -> HistoryCursor): HistoryPage<HistorySample> {
         val id = seriesId(rideNo, key) ?: return HistoryPage(emptyList(), null, false)
+        val after = cursor?.takeIf { it.first >= bounds.first }
         val items = ArrayList<HistorySample>()
-        var last: Pair<HistoryTick, Long>? = null
+        val pairs = ArrayList<Pair<Long, Long>>()
         var reachedEnd = false
         // Emits members of one row from [start]; false once a member lies past the range (nothing later can be in it).
         fun emit(m: HistoryRunMembers, start: Int): Boolean {
-            check(m.hasDistinctSequences) { "A stored unknown run has fewer sequences than members" }
             for (index in start until m.size) {
                 if (items.size > limit) return true
                 val tick = m.tick(index)
                 if (tick.elapsedMillis > bounds.last) { reachedEnd = true; return false }
                 items += m.sample(index)
-                if (items.size <= limit) last = tick to m.sequence(index)
+                pairs += tick.elapsedMillis to m.sequence(index)
             }
             return true
         }
-        val carry = if (cursor == null) queries.latestBeforeV3(id, bounds.first).executeAsOneOrNull()
-            else queries.latestAtOrBeforeKeyV3(id, cursor.first, cursor.second).executeAsOneOrNull()
+        val carry = if (after == null) queries.latestBeforeV3(id, bounds.first).executeAsOneOrNull()
+            else queries.latestAtOrBeforeKeyV3(id, after.first, after.second).executeAsOneOrNull()
         if (carry?.runCount != null) {
             val m = members(carry, key, origin)
             val start = m.firstIndex { index ->
                 val elapsed = m.elapsed(index)
-                elapsed >= bounds.first && (cursor == null || elapsed > cursor.first ||
-                    (elapsed == cursor.first && m.sequence(index) > cursor.second))
+                elapsed >= bounds.first && (after == null || elapsed > after.first ||
+                    (elapsed == after.first && m.sequence(index) > after.second))
             }
             emit(m, start)
         }
         if (!reachedEnd && items.size <= limit) {
-            val low = maxOf(bounds.first, cursor?.first ?: Long.MIN_VALUE)
-            val rows = queries.pageSamplesV3(id, low, bounds.last, cursor?.first, cursor?.second ?: 0,
+            val low = maxOf(bounds.first, after?.first ?: Long.MIN_VALUE)
+            val rows = queries.pageSamplesV3(id, low, bounds.last, after?.first, after?.second ?: 0,
                 (limit + 1 - items.size).toLong()).executeAsList()
             for (row in rows) if (!emit(members(row, key, origin), 0) || items.size > limit) break
         }
-        val more = items.size > limit
-        val page = if (more) items.subList(0, limit).toList() else items
-        return HistoryPage(page, if (more) checkNotNull(last).let { (tick, sequence) -> cursorOf(tick, sequence) } else null, more)
+        if (items.size <= limit) return HistoryPage(items, null, false)
+        // End the page where the cursor strictly separates it from the next member (see "fewer than count - 1").
+        var end = limit - 1
+        while (end >= 0 && pairs[end] == pairs[end + 1]) end--
+        if (end < 0) end = limit - 1
+        val (elapsed, sequence) = pairs[end]
+        val tick = items[end].tick
+        check(tick.elapsedMillis == elapsed)
+        return HistoryPage(items.subList(0, end + 1).toList(), cursorOf(tick, sequence), true)
     }
 
     data class Detail(val minimum: Double?, val maximum: Double?, val unknownCount: Long, val lastElapsed: Long?)

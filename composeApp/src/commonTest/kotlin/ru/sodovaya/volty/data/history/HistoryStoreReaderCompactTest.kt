@@ -262,4 +262,80 @@ class HistoryStoreReaderCompactTest {
         }
         assertTrue(walked > 0, "the completeness walk ran")
     }
+
+    // ---- Task 6 fix round ------------------------------------------------------------------------------------------
+
+    /**
+     * Review I2, incoherent by design (the live writer cannot store it; a conversion of out-of-order V2 rows could):
+     * run A spans 10 members over 2.7 s with stored sequences 10..12 (spread 2 < 9), run B is 6 members at ONE tick with
+     * sequences 20..21, so its members form two tie groups of 3 identical `(elapsed, sequence)` pairs. A known row follows.
+     * The pager must never throw, every page must advance, and the known row after them must be read. Where a tie group
+     * fits a page the pages equal one whole read; where it does not (page size 1, 2), the rest of the group is skipped.
+     */
+    @Test fun aRunWithTooFewSequencesNeverBreaksThePager() = runTest {
+        val f = fixture(compact = true)
+        f.store.begin(HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING), sources)
+        val q = f.db.rideHistoryCompactQueries
+        val rideNo = checkNotNull(q.rideNoV3("ride").executeAsOneOrNull())
+        q.insertSeriesV3(1, rideNo, dead.sourceId, dead.metricId, -1)
+        val code = HistoryCompactCodec.code(HistoryUnknownReason.UNAVAILABLE)
+        q.insertSampleV3(1, 1_000, 10, 0, 0, null, code, 3_700, 12, 0, 10)
+        q.insertSampleV3(1, 5_000, 20, 0, 0, null, code, 5_000, 21, 0, 6)
+        q.insertSampleV3(1, 5_300, 30, 0, 0, 1.5, null, null, null, null, null)
+        val all = f.store.samples("ride", dead, whole, null, 20000).items
+        assertEquals(17, all.size)
+        assertEquals(1.5, all.last().value)
+        for (size in listOf(1, 2, 3, 4, 7, 100)) {
+            val read = pages(f.store, dead, whole, size).flatMap { it.items }
+            if (size >= 3) assertEquals(lines(all), lines(read), "page size $size: every tie group fits a page")
+            else {
+                // A subsequence that keeps every distinct tick and the known row; only tie duplicates are dropped.
+                assertEquals(lines(all).distinct(), lines(read).distinct(), "page size $size")
+                assertTrue(read.size in 13 until 17, "page size $size read ${read.size}")
+            }
+        }
+        // Through the repository too: its page checks (bound, order, cursor progress) accept every page.
+        val repository = DefaultHistoryReadRepository(f.store)
+        var after: HistoryCursor? = null
+        var total = 0
+        do {
+            val page = checkNotNull(repository.samples("ride", dead, whole, after, 2))
+            total += page.items.size
+            after = page.next
+        } while (after != null)
+        assertTrue(total in 13 until 17)
+    }
+
+    /** Review M5: members at one tick (zero steps) and a known row at the run's end tick, written by `append`. */
+    @Test fun zeroStepMembersAndARowAtTheRunEndPageAsV2() = runTest {
+        val tied = List(3) { HistorySample(tick(0), dead, null, HistoryUnknownReason.UNAVAILABLE) } +
+            HistorySample(tick(0), dead, 7.0) + HistorySample(tick(300), dead, null, HistoryUnknownReason.UNAVAILABLE)
+        val v2 = fixture(compact = false); val v3 = fixture(compact = true)
+        for (f in listOf(v2, v3)) {
+            f.store.begin(HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING), sources)
+            f.store.append(HistoryBatch("ride", tied, emptyList(), emptyList(), "r0"))
+        }
+        val q = v3.db.rideHistoryCompactQueries
+        val series = q.seriesForV3(checkNotNull(q.rideNoV3("ride").executeAsOneOrNull()), dead.sourceId, dead.metricId, -1).executeAsOne()
+        assertEquals(listOf(3L, null, null), q.samplesOfSeriesV3(series).executeAsList().map { it.runCount }, "a run, the known row, a lone unknown")
+        val expected = lines(v2.store.samples("ride", dead, whole, null, 20000).items)
+        assertEquals(5, expected.size)
+        for (size in listOf(1, 2, 3, 7)) assertEquals(expected, lines(pages(v3.store, dead, whole, size).flatMap { it.items }), "size $size")
+    }
+
+    /**
+     * Review M1: a cursor below the range start (never produced by a pager; possible from a caller mixing ranges) must
+     * not skip a run that starts between the cursor and `from`. V2 answers every member from `from`.
+     */
+    @Test fun aCursorBelowTheRangeSkipsNothing() = runTest {
+        val (v2, v3) = record(stream(even = true, endMs = 60_000))
+        val range = HistoryRange(axis(31_000), axis(40_000))
+        // The dead series' second run starts at 30.3 s (after the BLE_GAP at 30.15 s); the cursor sits on 30 s.
+        val cursor = HistoryCursor(axis(30_000), "0")
+        for (key in keys) {
+            assertEquals(lines(v2.store.samples("ride", key, range, cursor, 20000).items),
+                lines(v3.store.samples("ride", key, range, cursor, 20000).items), "$key")
+        }
+        assertTrue(v3.store.samples("ride", dead, range, cursor, 20000).items.isNotEmpty())
+    }
 }
