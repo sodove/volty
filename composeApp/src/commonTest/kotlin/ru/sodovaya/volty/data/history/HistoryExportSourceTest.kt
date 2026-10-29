@@ -20,7 +20,7 @@ class HistoryExportSourceTest {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { drivers += it }
         VoltyDatabase.Schema.create(driver)
         val provider = VoltyDatabaseProvider(driver)
-        // Pinned to V2: the export reads HistorySampleV2 until Task 7 of the compact-history-storage plan.
+        // Pinned to V2: these tests pin the V2 stream; compact rides are in SqlDelightHistoryExportSourceCompactTest.
         return provider to SqlDelightHistoryStore(provider, recordCompact = false)
     }
     private suspend fun SqlDelightHistoryStore.beginRide() {

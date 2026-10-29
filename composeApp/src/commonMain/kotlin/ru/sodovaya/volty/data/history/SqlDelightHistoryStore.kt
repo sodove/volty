@@ -16,8 +16,8 @@ import ru.sodovaya.volty.domain.history.*
  * begun compact stays compact whatever the flag says later, and a V2 ride stays V2.
  *
  * ON by default since Task 6. An earlier revision kept it off "until Task 6 lands" because the readers read V2 only.
- * Still open, stated: the export (`SqlDelightHistoryExportSource`, logui CSV) reads `HistorySampleV2` until Task 7, so
- * a compact ride exports no sample rows (NO_DATA) in a build between Tasks 6 and 7; no build ships before Task 8.
+ * Retraction: this KDoc said the export read `HistorySampleV2` only until Task 7, so a compact ride exported NO_DATA.
+ * Task 7 made `SqlDelightHistoryExportSource` merge a compact ride's series in stored-sequence order; that is closed.
  */
 class SqlDelightHistoryStore(
     provider: VoltyDatabaseProvider,

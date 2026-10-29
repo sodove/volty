@@ -12,10 +12,17 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
     private val isLegacyActive: (String) -> Boolean? = { null }) : HistoryExportSource {
     private val database = provider.database
     private val queries = database.historyExportReadQueries
+    private val compact = database.rideHistoryCompactQueries
     private val legacy = SqlDelightLegacyHistoryExportSource(provider, dispatcher, pageSize, isLegacyActive)
     init { require(pageSize in 1..1024) }
+    private data class Shape(val sampleCount: Long, val gpsCount: Long, val markerCount: Long)
+    /** [rideNo] is non-null for a compact (V3) ride, which streams from `HistorySampleV3` instead of `HistorySampleV2`. */
     private data class Snapshot(val request: HistoryExportRequest, val metadata: HistoryExportMetadata,
-        val from: Long, val through: Long, val shape: ExportV2Shape)
+        val from: Long, val through: Long, val shape: Shape, val rideNo: Long?)
+
+    private fun shape(id: String, rideNo: Long?, from: Long, through: Long): Shape =
+        if (rideNo == null) queries.exportV2Shape(id, from, through).executeAsOne().let { Shape(it.sampleCount, it.gpsCount, it.markerCount) }
+        else queries.exportV3Shape(rideNo, from, through, id).executeAsOne().let { Shape(it.sampleCount, it.gpsCount, it.markerCount) }
 
     override suspend fun open(request: HistoryExportRequest): HistoryExportInput {
         if (request.source.kind == HistoryStorageKind.LEGACY) return openLegacy(request)
@@ -30,16 +37,23 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                 fail(HistoryExportFailure.INVALID_DATA)
             val from = ride.started.elapsedMillis + (request.range.startEpochMillis - ride.started.epochMillis)
             val through = ride.started.elapsedMillis + (request.range.endEpochMillis - ride.started.epochMillis)
+            val rideNo = compact.rideNoV3(ride.id).executeAsOneOrNull()
             Snapshot(request, HistoryExportMetadata(ride, request.range, sources(ride.id),
                 vehicleName = queries.exportVehicleName(ride.vehicleId).executeAsOneOrNull()), from, through,
-                queries.exportV2Shape(ride.id, from, through).executeAsOne())
+                shape(ride.id, rideNo, from, through), rideNo)
         }
         return HistoryExportInput(snapshot.metadata, flow {
             // Every page is its own short SQLite snapshot. No database
             // transaction is held while encoding or waiting for the file sink.
             val id = snapshot.metadata.ride.id
             var sampleRows = 0L
-            if (request.format != HistoryExportFormat.GPX) {
+            if (request.format != HistoryExportFormat.GPX && snapshot.rideNo != null) {
+                emitCompactSamples(snapshot, snapshot.rideNo) { record ->
+                    sampleRows++
+                    if (sampleRows > snapshot.shape.sampleCount) fail(HistoryExportFailure.SOURCE_CHANGED)
+                    emit(record)
+                }
+            } else if (request.format != HistoryExportFormat.GPX) {
                 var cursor = -1L
                 while (true) {
                     val page = read { unchanged(snapshot); queries.exportSamples(id, snapshot.from, snapshot.through, cursor, pageSize.toLong()).executeAsList() }
@@ -84,7 +98,7 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
             // exports. Both were removed on 2026-10-29; no export reads summaries now.
             read {
                 unchanged(snapshot)
-                if (queries.exportV2Shape(id, snapshot.from, snapshot.through).executeAsOne() != snapshot.shape ||
+                if (shape(id, snapshot.rideNo, snapshot.from, snapshot.through) != snapshot.shape ||
                     sources(id) != snapshot.metadata.sources || gpsRows != snapshot.shape.gpsCount || markerRows != snapshot.shape.markerCount ||
                     (request.format != HistoryExportFormat.GPX && sampleRows != snapshot.shape.sampleCount)) fail(HistoryExportFailure.SOURCE_CHANGED)
             }
@@ -96,6 +110,64 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                 else -> fail(HistoryExportFailure.STORAGE)
             }
         })
+    }
+
+    /** One series of a compact ride, paged on its primary key; [head] is the next record to merge. */
+    private class SeriesStream(val seriesId: Long, val key: HistorySeriesKey) {
+        val buffer = ArrayDeque<Pair<Long, HistoryExportRecord.Numeric>>()
+        var afterElapsed: Long? = null
+        var afterSequence = 0L
+        var exhausted = false
+    }
+
+    /**
+     * The sample records of a compact ride in STORAGE ORDER, which for V3 means ascending stored sequence across series.
+     *
+     * V2 paged `ORDER BY sequence` over the ride. V3 has no sequence index, so this is a k-way merge of the ride's series,
+     * each paged on its primary key `(elapsedMillis, sequence)` at [pageSize] rows (one short transaction per page, as
+     * for V2), merged on the stored sequence of the row's first member and then on the series id. Within a series PK order
+     * equals sequence order iff its elapsed never decreases in sequence order, which the recorder guarantees for projected
+     * recordings; a ride that breaks that is merged in PK order per series (time order within it), so the logui
+     * `droppedLate` can only fall, never rise. Cross-series order uses ONLY stored sequences of first members and run
+     * ends, never an interpolated interior one (those may coincide with another series').
+     *
+     * A run is emitted as its first and its end member (two unknown records, the exact stored ticks): every encoder
+     * ignores unknowns beyond validating the key, so the interior members are not materialised. The count of records
+     * emitted is what `exportV3Shape` counts. A run is in range when it starts in range, as a V2 row is.
+     */
+    private suspend fun emitCompactSamples(snapshot: Snapshot, rideNo: Long, emit: suspend (HistoryExportRecord.Numeric) -> Unit) {
+        val id = snapshot.metadata.ride.id
+        val origin = snapshot.metadata.ride.started
+        val streams = read { unchanged(snapshot)
+            compact.seriesOfRideV3(rideNo).executeAsList().map {
+                SeriesStream(it.seriesId, HistorySeriesKey(it.sourceId, it.metricId, cell(it.cellIndex)))
+            } }
+        suspend fun fill(stream: SeriesStream) {
+            while (stream.buffer.isEmpty() && !stream.exhausted) {
+                val rows = read { unchanged(snapshot)
+                    compact.pageSamplesV3(stream.seriesId, maxOf(snapshot.from, stream.afterElapsed ?: Long.MIN_VALUE), snapshot.through, stream.afterElapsed,
+                        stream.afterSequence, pageSize.toLong()).executeAsList() }
+                for (row in rows) {
+                    val members = HistoryRunMembers(HistoryCompactCodec.decode(row, stream.key, origin))
+                    stream.buffer.addLast(row.sequence to HistoryExportRecord.Numeric(members.sample(0)))
+                    if (members.size >= 2) stream.buffer.addLast(checkNotNull(row.runEndSequence) to
+                        HistoryExportRecord.Numeric(members.sample(members.size - 1)))
+                }
+                rows.lastOrNull()?.let { stream.afterElapsed = it.elapsedMillis; stream.afterSequence = it.sequence }
+                if (rows.size < pageSize) stream.exhausted = true
+            }
+        }
+        streams.forEach { fill(it) }
+        val live = streams.filterTo(ArrayList()) { it.buffer.isNotEmpty() }
+        while (live.isNotEmpty()) {
+            var best = live[0]
+            for (candidate in live) {
+                val a = candidate.buffer.first().first; val b = best.buffer.first().first
+                if (a < b || (a == b && candidate.seriesId < best.seriesId)) best = candidate
+            }
+            emit(best.buffer.removeFirst().second)
+            if (best.buffer.isEmpty()) { fill(best); if (best.buffer.isEmpty()) live.remove(best) }
+        }
     }
 
     private suspend fun openLegacy(request: HistoryExportRequest): HistoryExportInput = legacy.open(request)

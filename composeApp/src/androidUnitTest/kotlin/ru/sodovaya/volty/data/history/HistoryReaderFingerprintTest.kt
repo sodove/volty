@@ -285,7 +285,7 @@ class HistoryReaderFingerprintTest {
 
     /**
      * [compact] picks the layout new rides record in. The tool's own tests pin V2 (false): their logui assertions read
-     * the export, which reads V2 until Task 7 of the compact-history-storage plan.
+     * the export; the compact layout is compared to V2 in compactLayoutFingerprintEqualsV2.
      */
     private fun buildFixture(file: File, mutation: Mutation, compact: Boolean = false) {
         val driver = JdbcSqliteDriver("jdbc:sqlite:${file.absolutePath}")
@@ -364,9 +364,10 @@ class HistoryReaderFingerprintTest {
      * under BACKDATED_SPLIT, while every number of the ride is identical. The `tool` fixture (300 ms runs) needs no
      * tolerance at all; the replay needs all three and is asserted to, each one, so none is vacuous.
      *
-     * The one excluded reader is `logui`: the export still reads `HistorySampleV2` until Task 7 (export, GPX and shape on
-     * compact rides), so a compact ride's CSV has no sample rows yet. It is asserted to differ, so the exclusion cannot
-     * hide a fixed reader. `gpx` reads no samples and is compared.
+     * `logui` and `gpx` are compared like every other reader, with no exclusion and no tolerance (none of the named
+     * tolerances applies to a CSV: it carries known samples only). An earlier revision excluded `logui` because the export
+     * read `HistorySampleV2` only, so a compact ride exported NO_DATA; Task 7 made the export read compact rides, and the
+     * exclusion went with it.
      */
     @Test fun compactLayoutFingerprintEqualsV2() = withTempDirectory { root ->
         fun fingerprint(name: String, build: (File) -> Unit): Pair<File, HistoryReaderFingerprint.Result> {
@@ -391,12 +392,10 @@ class HistoryReaderFingerprintTest {
             assertTrue(compactRows.first > 0 && compactRows.second > 0 && compactRows.third == 0L,
                 "$name: the candidate is compact (rows, runs, V2 rows) = $compactRows")
             val raw = HistoryReaderFingerprint.compare(v2, v3)
-            val logui = raw.filter { it.location.endsWith("|logui") }
-            assertTrue(logui.isNotEmpty(), "$name: logui reads V2 until Task 7, so it must differ (else drop this exclusion)")
-            val differences = raw - logui.toSet()
+            val differences = raw
             val named = setOf(Tolerance.OVERVIEW_ROW_SELECTION, Tolerance.RANGE_CUT_EDGE, Tolerance.BACKDATED_SPLIT)
             fun remaining(tolerate: Set<Tolerance>) =
-                HistoryReaderFingerprint.compare(v2, v3, tolerate).filterNot { it.location.endsWith("|logui") }.map { it.location }
+                HistoryReaderFingerprint.compare(v2, v3, tolerate).map { it.location }
             assertEquals(emptyList(), remaining(named), "$name: only the named tolerances")
             val backdated = v3.readLines().filter { it.startsWith("# backdatedSplit ") }.map { it.removePrefix("# backdatedSplit ") }
             for (d in differences) {
@@ -414,12 +413,11 @@ class HistoryReaderFingerprintTest {
                 assertTrue("rideM|peer/current_a/|samplesFull" in differences.map { it.location },
                     "$name: the uneven back-dated split really moves a whole-ride chain edge")
             }
-            // A compact ride's CSV may even fail with NO_DATA (no V2 rows) until Task 7: the same exclusion, nothing else.
-            assertEquals(v2Result.unexpectedErrors, v3Result.unexpectedErrors.filterNot { "|logui|" in it })
+            assertEquals(v2Result.unexpectedErrors, v3Result.unexpectedErrors)
             assertEquals(v2Result.exercise, v3Result.exercise)
             val lines = v3.readLines()
             assertTrue(lines.filter { "|paging|" in it }.all { it.endsWith("|paging|ok") })
-            assertTrue(lines.none { "|ERROR " in it && "|gpx|" !in it && "|logui|" !in it }, "$name: no reader failed on the compact layout")
+            assertTrue(lines.none { "|ERROR " in it && "|gpx|" !in it }, "$name: no reader failed on the compact layout")
             if (name == "replay") {
                 val e = v3Result.exercise
                 assertTrue(e.pendingWalk > 0 && e.tailRule > 0, "$name: the walk and the ride-end tail rule ran: $e")
