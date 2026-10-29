@@ -14,15 +14,23 @@ class HistoryRideDeletionSqlTest {
     private val end = HistoryTick(2000, 1010, 1)
     private val id = "aaaaaaaa-1111-4222-8333-bbbbbbbbbbbb"
     private val otherId = "aaaaaaaa-1111-4222-8333-cccccccccccc"
-    private val tables = listOf("HistorySampleV2", "HistoryGpsV2", "HistoryMarkerV2", "HistoryBucketV2", "HistoryBatchReceiptV2", "HistorySourceV2")
+    // "samples" counts a ride's samples in either layout; new rides record compact (Task 6), so the key row is payload too.
+    private val tables = listOf("samples", "HistoryRideKeyV3", "HistoryGpsV2", "HistoryMarkerV2", "HistoryBucketV2", "HistoryBatchReceiptV2", "HistorySourceV2")
     private class Fixture(val driver: JdbcSqliteDriver, val provider: VoltyDatabaseProvider) {
         val db = provider.database; val store = SqlDelightHistoryStore(provider)
         val favorites = SqlDelightHistoryFavorites(provider) { 3000 }
         val media = HistoryMediaJournal(provider)
         val deletion = SqlDelightHistoryRideDeletion(provider)
-        fun count(table: String, rideId: String) = driver.executeQuery(null, "SELECT COUNT(*) FROM $table WHERE rideId = ?", { cursor ->
-            check(cursor.next().value); QueryResult.Value(checkNotNull(cursor.getLong(0)))
-        }, 1) { bindString(0, rideId) }.value
+        fun count(table: String, rideId: String): Long {
+            if (table != "samples") return driver.executeQuery(null, "SELECT COUNT(*) FROM $table WHERE rideId = ?", { cursor ->
+                check(cursor.next().value); QueryResult.Value(checkNotNull(cursor.getLong(0)))
+            }, 1) { bindString(0, rideId) }.value
+            return driver.executeQuery(null, "SELECT (SELECT COUNT(*) FROM HistorySampleV2 WHERE rideId = ?) + " +
+                "(SELECT COUNT(*) FROM HistorySampleV3 WHERE seriesId IN (SELECT s.seriesId FROM HistorySeriesV3 s " +
+                "JOIN HistoryRideKeyV3 k ON k.rideNo = s.rideNo WHERE k.rideId = ?))", { cursor ->
+                check(cursor.next().value); QueryResult.Value(checkNotNull(cursor.getLong(0)))
+            }, 2) { bindString(0, rideId); bindString(1, rideId) }.value
+        }
     }
     private fun fixture(): Fixture {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { drivers += it }

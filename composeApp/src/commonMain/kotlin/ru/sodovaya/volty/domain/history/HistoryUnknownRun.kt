@@ -159,20 +159,71 @@ fun collapseUnknownRuns(samples: List<HistorySample>, markers: List<HistoryMarke
  */
 fun expandForReaders(stored: List<HistoryStoredSample>, maxIntervalMillis: Long = HISTORY_MAX_INTERVAL_MILLIS): List<HistorySample> = buildList {
     for (row in stored) {
-        add(row.sample)
-        val end = row.run ?: continue
-        if (end.count < 2) continue
-        val first = row.sample.tick
-        val span = end.tick.elapsedMillis - first.elapsedMillis
-        val epochSpan = end.tick.epochMillis - first.epochMillis
-        require(span >= 0 && end.tick.clockGeneration == first.clockGeneration &&
-            span <= maxIntervalMillis * (end.count - 1)) { "A stored unknown run is not a chain of steps within the interval limit" }
-        val parts = (end.count - 1).toLong()
-        for (index in 1 until end.count - 1) {
-            val elapsed = first.elapsedMillis + (span * index + parts / 2).floorDiv(parts)
-            val epoch = first.epochMillis + (epochSpan * index + parts / 2).floorDiv(parts)
-            add(HistorySample(HistoryTick(epoch, elapsed, first.clockGeneration), row.sample.key, null, row.sample.unknown))
-        }
-        add(HistorySample(end.tick, row.sample.key, null, row.sample.unknown))
+        val members = HistoryRunMembers(row, maxIntervalMillis)
+        for (index in 0 until members.size) add(members.sample(index))
     }
+}
+
+/**
+ * The members of one stored row exactly as [expandForReaders] gives them, addressable by index, so a reader can start
+ * in the middle of a run without expanding it from its first member (the `samples` pager, Task 6). [size] is 1 for a
+ * known row and a lone unknown, else the run's count.
+ *
+ * [sequence] of an interior member is interpolated between the first and the end sequence the way its tick is
+ * (`first + round(spread * index / (count - 1))`, as `splitStoredRunAt` cuts), so a page cursor can stand on any member:
+ * `(elapsed, sequence)` strictly increases along a run whenever its sequences are distinct integers
+ * (`end - first >= count - 1`, [hasDistinctSequences]). These sequences are not stored ones and may coincide with
+ * another series' rows: nothing may order ACROSS series by them.
+ */
+class HistoryRunMembers(val row: HistoryStoredSample, maxIntervalMillis: Long = HISTORY_MAX_INTERVAL_MILLIS) {
+    private val end = row.run?.takeIf { it.count >= 2 }
+    val size: Int = end?.count ?: 1
+    private val parts = (size - 1).toLong()
+
+    init {
+        if (end != null) {
+            val first = row.sample.tick
+            val span = end.tick.elapsedMillis - first.elapsedMillis
+            require(span >= 0 && end.tick.clockGeneration == first.clockGeneration &&
+                span <= maxIntervalMillis * (end.count - 1)) { "A stored unknown run is not a chain of steps within the interval limit" }
+        }
+    }
+
+    /** True when every member gets its own sequence, i.e. a cursor on a member is unambiguous. */
+    val hasDistinctSequences: Boolean get() = end == null || end.sequence - row.sequence >= parts
+
+    fun tick(index: Int): HistoryTick {
+        require(index in 0 until size)
+        val run = end ?: return row.sample.tick
+        if (index == 0) return row.sample.tick
+        if (index == size - 1) return run.tick
+        val first = row.sample.tick
+        val elapsed = first.elapsedMillis + ((run.tick.elapsedMillis - first.elapsedMillis) * index + parts / 2).floorDiv(parts)
+        val epoch = first.epochMillis + ((run.tick.epochMillis - first.epochMillis) * index + parts / 2).floorDiv(parts)
+        return HistoryTick(epoch, elapsed, first.clockGeneration)
+    }
+
+    fun elapsed(index: Int): Long = tick(index).elapsedMillis
+
+    fun sequence(index: Int): Long {
+        require(index in 0 until size)
+        val run = end ?: return row.sequence
+        return row.sequence + ((run.sequence - row.sequence) * index + parts / 2).floorDiv(parts)
+    }
+
+    fun sample(index: Int): HistorySample =
+        if (index == 0) row.sample else HistorySample(tick(index), row.sample.key, null, row.sample.unknown)
+
+    /** The first index at or after [from] for which [predicate] holds, [predicate] being monotone (false, then true); else [size]. */
+    fun firstIndex(from: Int = 0, predicate: (Int) -> Boolean): Int {
+        var low = from; var high = size
+        while (low < high) {
+            val mid = (low + high) ushr 1
+            if (predicate(mid)) high = mid else low = mid + 1
+        }
+        return low
+    }
+
+    /** The last index whose elapsed is at most [elapsed], or -1. */
+    fun lastIndexAtOrBefore(elapsed: Long): Int = firstIndex { elapsed(it) > elapsed } - 1
 }

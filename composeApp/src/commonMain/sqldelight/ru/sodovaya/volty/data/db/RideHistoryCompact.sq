@@ -140,3 +140,30 @@ SELECT * FROM HistorySampleV3 WHERE seriesId = :seriesId ORDER BY elapsedMillis,
 markersAfterV3:
 SELECT * FROM HistoryMarkerV2 WHERE rideId = :rideId AND elapsedMillis > :afterElapsed AND elapsedMillis <= :toElapsed
 AND (sourceId IS NULL OR sourceId = :sourceId) ORDER BY elapsedMillis, sequence;
+
+-- Task 6 (readers). Every query below walks the primary key of ONE series; none orders by sequence across series.
+
+-- The last row at or before an (elapsed, sequence) cursor: the only run a page that starts at that cursor can resume
+-- inside. The elapsed bound is a plain range on the key; the sequence test only filters rows at that elapsed.
+latestAtOrBeforeKeyV3:
+SELECT * FROM HistorySampleV3 WHERE seriesId = :seriesId AND elapsedMillis <= :elapsedMillis
+AND (elapsedMillis < :elapsedMillis OR sequence <= :sequence)
+ORDER BY elapsedMillis DESC, sequence DESC LIMIT 1;
+
+-- Rows that START in [lowElapsed, toElapsed] and after the cursor, in reader order. :lowElapsed is max(from, cursor
+-- elapsed), so a page does not rescan the rows before its cursor.
+pageSamplesV3:
+SELECT * FROM HistorySampleV3 WHERE seriesId = :seriesId AND elapsedMillis >= :lowElapsed AND elapsedMillis <= :toElapsed
+AND (:afterElapsed IS NULL OR elapsedMillis > :afterElapsed OR (elapsedMillis = :afterElapsed AND sequence > :afterSequence))
+ORDER BY elapsedMillis, sequence LIMIT :pageSize;
+
+-- Rows that START in [from, to]. unknownCount counts run MEMBERS; lastElapsed is a run's end. The two runs a range can
+-- cut (the one starting before :from, and one ending after :to) are corrected in Kotlin by expansion (HistoryCompactReader).
+rangeDetailStatsV3:
+SELECT MIN(reading) AS minimum, MAX(reading) AS maximum,
+COALESCE(SUM(CASE WHEN unknownCode IS NULL THEN 0 ELSE COALESCE(runCount, 1) END), 0) AS unknownCount,
+MAX(COALESCE(runEndElapsed, elapsedMillis)) AS lastElapsed
+FROM HistorySampleV3 WHERE seriesId = :seriesId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed;
+
+seriesOfOtherSourcesV3:
+SELECT * FROM HistorySeriesV3 WHERE rideNo = :rideNo AND sourceId != :sourceId ORDER BY seriesId;

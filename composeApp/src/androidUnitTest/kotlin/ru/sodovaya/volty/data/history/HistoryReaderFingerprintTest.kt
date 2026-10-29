@@ -1,8 +1,12 @@
 package ru.sodovaya.volty.data.history
 
+import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
+import ru.sodovaya.volty.data.bms.BegodeProtocol
+import ru.sodovaya.volty.data.bms.BegodeT4Fixture
+import ru.sodovaya.volty.domain.model.TelemetryObservation
 import ru.sodovaya.volty.data.db.VoltyDatabase
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
 import ru.sodovaya.volty.domain.history.*
@@ -178,6 +182,20 @@ class HistoryReaderFingerprintTest {
         // chainMembers is its own named tolerance and nothing else is waved through with it.
         assertEquals(1, diff("r|k|chainMembers|n=2 sha=a", "r|k|chainMembers|n=2 sha=b", overviewOnly).size)
         assertEquals(0, diff("r|k|chainMembers|n=2 sha=a", "r|k|chainMembers|n=2 sha=b", setOf(Tolerance.CHAIN_MEMBERS)).size)
+        // RANGE_CUT_EDGE: a window's cut-edge lines, only while that window's known rows and chain count are equal.
+        val cut = setOf(Tolerance.RANGE_CUT_EDGE)
+        val samples = "r|k|w1.samples|n=3 sha=K chains=2"
+        fun lines(vararg text: String) = text.joinToString("\n")
+        assertEquals(0, diff(lines(samples, "r|k|w1.unknownEdges|E"), lines(samples, "r|k|w1.unknownEdges|E2"), cut).size)
+        assertEquals(2, diff(lines(samples, "r|k|w1.unknownEdges|E"),
+            lines("r|k|w1.samples|n=3 sha=K chains=3", "r|k|w1.unknownEdges|E2"), cut).size)
+        val windowOverview = { n: Int, known: String -> "r|k|w1.overview|n=$n sha=h$n known=$known breaks=B$n markers=0 truncated=false thinned=false" }
+        assertEquals(0, diff(lines(samples, windowOverview(10, "K")), lines(samples, windowOverview(12, "K")), cut).size)
+        assertEquals(1, diff(lines(samples, windowOverview(10, "K")), lines(samples, windowOverview(13, "K")), cut).size)
+        assertEquals(1, diff(lines(samples, windowOverview(10, "K")), lines(samples, windowOverview(10, "K2")), cut).size)
+        // Never a whole-ride line, never another window reader.
+        assertEquals(1, diff(lines(samples, "r|k|unknownEdges|E"), lines(samples, "r|k|unknownEdges|E2"), cut).size)
+        assertEquals(1, diff(lines(samples, "r|k|w1.stats|min=1"), lines(samples, "r|k|w1.stats|min=2"), cut).size)
         // The schema version and the physical summary are comments.
         assertEquals(0, diff("# userVersion=27\n# summary physicalSampleRows=9\nr|k|counts|known=1 chains=0",
             "# userVersion=29\n# summary physicalSampleRows=3\nr|k|counts|known=1 chains=0", emptySet()).size)
@@ -218,11 +236,15 @@ class HistoryReaderFingerprintTest {
         }
     }
 
-    private fun buildFixture(file: File, mutation: Mutation) {
+    /**
+     * [compact] picks the layout new rides record in. The tool's own tests pin V2 (false): their logui assertions read
+     * the export, which reads V2 until Task 7 of the compact-history-storage plan.
+     */
+    private fun buildFixture(file: File, mutation: Mutation, compact: Boolean = false) {
         val driver = JdbcSqliteDriver("jdbc:sqlite:${file.absolutePath}")
         try {
             VoltyDatabase.Schema.create(driver)
-            val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver))
+            val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver), recordCompact = compact)
             runBlocking {
                 // Ride A: a dead series of 40 UNAVAILABLE rows beside a healthy one, and a short GPS track.
                 val startA = HistoryTick(1_000_000, 5_000, 1)
@@ -280,6 +302,167 @@ class HistoryReaderFingerprintTest {
             // Buckets are untouched by the planned conversion, so this mutation stays valid against the converted layout.
             if (mutation == Mutation.BUCKET) driver.execute(null,
                 "UPDATE HistoryBucketV2 SET maximum = maximum + 1 WHERE rideId = 'rideC' AND sourceId = 'pack'", 0)
+        } finally { driver.close() }
+    }
+
+    // ---- Task 6: the fingerprint is the equivalence oracle between the two layouts -------------------------------
+
+    /**
+     * The same recordings written in V2 and in the compact layout give the same fingerprint. CHAIN_MEMBERS is never
+     * needed (Ruling 2: a run reads back as its count). Every other whole-ride line is equal with no tolerance, except the
+     * `overview` of a series with an UNEVENLY spaced run, whose interior unknown points carry interpolated ticks: there
+     * `n`, `known`, `breaks`, `markers` and `truncated` are asserted equal and only `sha` differs (OVERVIEW_ROW_SELECTION,
+     * see its KDoc). Window lines that differ are only `w<k>.unknownEdges` / `w<k>.overview` of a window cutting a run,
+     * accepted by RANGE_CUT_EDGE (Ruling 4). The `tool` fixture (300 ms runs) needs no tolerance at all; the T4 replay
+     * (uneven runs) needs the two and is asserted to, so the tolerances are not vacuous.
+     *
+     * The one excluded reader is `logui`: the export still reads `HistorySampleV2` until Task 7 (export, GPX and shape on
+     * compact rides), so a compact ride's CSV has no sample rows yet. It is asserted to differ, so the exclusion cannot
+     * hide a fixed reader. `gpx` reads no samples and is compared.
+     */
+    @Test fun compactLayoutFingerprintEqualsV2() = withTempDirectory { root ->
+        fun fingerprint(name: String, build: (File) -> Unit): Pair<File, HistoryReaderFingerprint.Result> {
+            val database = File(root, "$name.db")
+            build(database)
+            val out = File(root, "$name.txt")
+            return out to HistoryReaderFingerprint.run(database, out, workDir = root)
+        }
+        val fixtures = listOf<Pair<String, (File, Boolean) -> Unit>>(
+            "tool" to { f, c -> buildFixture(f, Mutation.NONE, c) },
+            "replay" to { f, c -> buildReplayFixture(f, c) })
+        for ((name, build) in fixtures) {
+            val (v2, v2Result) = fingerprint("$name-v2") { build(it, false) }
+            val (v3, v3Result) = fingerprint("$name-v3") { build(it, true) }
+            val compactRows = JdbcSqliteDriver("jdbc:sqlite:${File(root, "$name-v3.db").absolutePath}").use { driver ->
+                driver.executeQuery(null, "SELECT COUNT(*), TOTAL(runCount IS NOT NULL), " +
+                    "(SELECT COUNT(*) FROM HistorySampleV2) FROM HistorySampleV3", { c ->
+                    check(c.next().value)
+                    QueryResult.Value(Triple(c.getLong(0)!!, c.getDouble(1)!!.toLong(), c.getLong(2)!!))
+                }, 0).value
+            }
+            assertTrue(compactRows.first > 0 && compactRows.second > 0 && compactRows.third == 0L,
+                "$name: the candidate is compact (rows, runs, V2 rows) = $compactRows")
+            val raw = HistoryReaderFingerprint.compare(v2, v3)
+            val logui = raw.filter { it.location.endsWith("|logui") }
+            assertTrue(logui.isNotEmpty(), "$name: logui reads V2 until Task 7, so it must differ (else drop this exclusion)")
+            val differences = raw - logui.toSet()
+            val tolerated = HistoryReaderFingerprint.compare(v2, v3, setOf(Tolerance.OVERVIEW_ROW_SELECTION, Tolerance.RANGE_CUT_EDGE))
+            assertEquals(emptyList(), tolerated.filterNot { it.location.endsWith("|logui") }, "$name: only the named tolerances")
+            fun fields(value: String?) = value.orEmpty().split(' ').associate { it.substringBefore('=') to it.substringAfter('=') }
+            for (d in differences) {
+                val reader = d.location.substringAfterLast('|')
+                if (reader == "overview") {
+                    val (p, q) = fields(d.baseline) to fields(d.candidate)
+                    for (field in listOf("n", "known", "breaks", "markers", "truncated")) assertEquals(p[field], q[field], "${d.location} $field")
+                } else assertTrue(Regex("""w\d+\.(unknownEdges|overview)""").matches(reader), "$name: whole-ride ${d.location} differs")
+            }
+            if (name == "tool") assertEquals(emptyList(), differences, "evenly spaced runs: no tolerance at all")
+            else assertTrue(differences.any { it.location.endsWith("|overview") } &&
+                differences.any { it.location.endsWith(".unknownEdges") }, "$name: the uneven runs reach both tolerances")
+            // A compact ride's CSV may even fail with NO_DATA (no V2 rows) until Task 7: the same exclusion, nothing else.
+            assertEquals(v2Result.unexpectedErrors, v3Result.unexpectedErrors.filterNot { "|logui|" in it })
+            assertEquals(v2Result.exercise, v3Result.exercise)
+            val lines = v3.readLines()
+            assertTrue(lines.filter { "|paging|" in it }.all { it.endsWith("|paging|ok") })
+            assertTrue(lines.none { "|ERROR " in it && "|gpx|" !in it && "|logui|" !in it }, "$name: no reader failed on the compact layout")
+            if (name == "replay") {
+                val e = v3Result.exercise
+                assertTrue(e.pendingWalk > 0 && e.tailRule > 0, "$name: the walk and the ride-end tail rule ran: $e")
+            }
+        }
+    }
+
+    /**
+     * Ride T: the Begode T4 replay (frames, observations, projection, store) with a BLE_GAP of its first source.
+     * Ride M: two batteries; `peer` is dead (one run) and goes silent at 30 s while `pack` goes on to 90 s and the ride
+     * ends at 95 s (the ride-end tail rule); a BLE_GAP of `peer` committed in a LATER batch is back-dated into the stored
+     * run (the writer cuts it; with a 300 ms step the cut is exact, see `splitStoredRunAt`); `pack` has a source-scoped
+     * gap and the ride a global OVERFLOW.
+     * Ride I: left RECORDING and closed by `recoverInterrupted`, whose INTERRUPTED marker lands on a run's last tick.
+     */
+    private fun buildReplayFixture(file: File, compact: Boolean) {
+        val driver = JdbcSqliteDriver("jdbc:sqlite:${file.absolutePath}")
+        try {
+            VoltyDatabase.Schema.create(driver)
+            val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver), recordCompact = compact)
+            runBlocking {
+                suspend fun project(ride: HistoryRide, sources: List<HistorySource>, batches: List<HistoryBatch>) {
+                    var projection = HistoryRecordingProjection(ride, sources)
+                    batches.forEachIndexed { i, batch ->
+                        val prepared = projection.prepare(batch, i == batches.lastIndex)
+                        projection = prepared.next
+                        store.append(prepared.batch)
+                    }
+                }
+                // Ride T.
+                val startT = HistoryTick(5_000_000, 1_000, 1)
+                fun t(ms: Long) = HistoryTick(startT.epochMillis + ms, startT.elapsedMillis + ms, 1)
+                val protocol = BegodeProtocol(cellCount = 24)
+                val observations = mutableListOf<TelemetryObservation>()
+                protocol.telemetryObserver = { observations += it }
+                repeat(60) { BegodeT4Fixture.notifications.forEach { protocol.onNotification(it) } }
+                val kinds = observations.map { historySourceKindForTelemetry(it.origin, it.role) }.distinct()
+                val sourcesT = kinds.map { HistorySource(it.name.lowercase(), it, it.name) }
+                val rideT = HistoryRide("rideT", "wheel", startT, null, HistoryRideStatus.RECORDING)
+                store.begin(rideT, sourcesT)
+                val samplesT = observations.flatMapIndexed { i, o ->
+                    historyTelemetrySamples(sourcesT.single { it.kind == historySourceKindForTelemetry(o.origin, o.role) }, t(i * 55L), o)
+                }
+                val middle = samplesT[samplesT.size / 2].tick
+                val gapT = HistoryMarker(HistoryTick(middle.epochMillis + 1, middle.elapsedMillis + 1, 1),
+                    HistoryMarkerKind.BLE_GAP, sourcesT.first().id)
+                val chunksT = samplesT.chunked(128)
+                val carrier = chunksT.indexOfFirst { c -> c.any { it.tick.elapsedMillis >= gapT.tick.elapsedMillis } }
+                project(rideT, sourcesT, chunksT.mapIndexed { i, c ->
+                    HistoryBatch("rideT", c, emptyList(), if (i == carrier) listOf(gapT) else emptyList(), "t$i")
+                })
+                val lastT = samplesT.last().tick
+                store.finish("rideT", HistoryTick(lastT.epochMillis + 400, lastT.elapsedMillis + 400, 1), HistoryRideStatus.COMPLETED)
+
+                // Ride M.
+                val startM = HistoryTick(6_000_000, 2_000, 1)
+                fun m(ms: Long) = HistoryTick(startM.epochMillis + ms, startM.elapsedMillis + ms, 1)
+                val sourcesM = listOf("pack", "peer").map { HistorySource(it, HistorySourceKind.BATTERY, it) }
+                val rideM = HistoryRide("rideM", "bike", startM, null, HistoryRideStatus.RECORDING)
+                store.begin(rideM, sourcesM)
+                val packPower = HistorySeriesKey("pack", "power_w")
+                val packSoc = HistorySeriesKey("pack", "soc_percent")
+                val peerCurrent = HistorySeriesKey("peer", "current_a")
+                fun slice(fromMs: Long, toMs: Long) = (fromMs until toMs step 300).flatMap { ms ->
+                    buildList {
+                        add(HistorySample(m(ms), packPower, 100.0 + (ms / 300) % 17))
+                        // SOC: known, with a PARTIAL_SOURCE stretch between 40 s and 55 s.
+                        add(if (ms in 40_000L until 55_000L) HistorySample(m(ms), packSoc, null, HistoryUnknownReason.PARTIAL_SOURCE)
+                            else HistorySample(m(ms), packSoc, 90.0 - ms / 10_000.0))
+                        if (ms < 30_000) add(HistorySample(m(ms), peerCurrent, null, HistoryUnknownReason.UNAVAILABLE))
+                    }
+                }
+                project(rideM, sourcesM, listOf(
+                    HistoryBatch("rideM", slice(0, 19_800), emptyList(), emptyList(), "m0"),
+                    // Back-dated: 12.15 s lies inside peer's run, already stored up to 19.5 s. The slices keep the 300 ms
+                    // grid: a first draft started the second slice at 20 s, the run became uneven (one 200 ms step) and
+                    // the writer's interpolated cut moved the whole-ride chain edges by 40 ms (Task 5's stated bound).
+                    HistoryBatch("rideM", slice(19_800, 49_800), emptyList(),
+                        listOf(HistoryMarker(m(12_150), HistoryMarkerKind.BLE_GAP, "peer")), "m1"),
+                    HistoryBatch("rideM", slice(49_800, 90_000), emptyList(),
+                        listOf(HistoryMarker(m(60_150), HistoryMarkerKind.BLE_GAP, "pack"),
+                            HistoryMarker(m(70_150), HistoryMarkerKind.OVERFLOW)), "m2")))
+                store.finish("rideM", m(95_000), HistoryRideStatus.COMPLETED)
+
+                // Ride I.
+                val startI = HistoryTick(7_000_000, 3_000, 1)
+                fun i(ms: Long) = HistoryTick(startI.epochMillis + ms, startI.elapsedMillis + ms, 1)
+                val sourcesI = listOf(HistorySource("ctl", HistorySourceKind.CONTROLLER, "ctl"))
+                val rideI = HistoryRide("rideI", "bike", startI, null, HistoryRideStatus.RECORDING)
+                store.begin(rideI, sourcesI)
+                val power = HistorySeriesKey("ctl", "controller_power_w")
+                val temp = HistorySeriesKey("ctl", "esc_temperature_c")
+                project(rideI, sourcesI, listOf(HistoryBatch("rideI", (0L until 100L).flatMap {
+                    listOf(HistorySample(i(it * 300), power, 50.0 + it),
+                        HistorySample(i(it * 300), temp, null, HistoryUnknownReason.UNAVAILABLE))
+                }, emptyList(), emptyList(), "i0")))
+                assertEquals(1, store.recoverInterrupted())
+            }
         } finally { driver.close() }
     }
 

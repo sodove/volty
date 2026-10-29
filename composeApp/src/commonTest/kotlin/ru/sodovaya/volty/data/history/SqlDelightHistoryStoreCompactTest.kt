@@ -65,17 +65,24 @@ class SqlDelightHistoryStoreCompactTest {
         assertEquals(10L, f.db.rideHistoryV2Queries.getRide("ride").executeAsOne().nextSequence)
     }
 
-    @Test fun untilTheReadersLandANewRideStaysV2ByDefault() = runTest {
+    @Test fun aRideKeepsTheLayoutItBeganIn() = runTest {
+        // Renamed in Task 6: it was `untilTheReadersLandANewRideStaysV2ByDefault`; the default is compact now, and what
+        // stays true is that the KEY, not the flag, decides: a V2 ride stays V2 for a compact store, and the reverse.
         val f = fixture(compact = false); f.begin()
-        f.append(listOf(k(0, 60.0), u(300)))
+        // A default (compact-recording) store appending to that V2 ride writes V2 rows.
+        SqlDelightHistoryStore(f.provider).append(HistoryBatch("ride", listOf(k(0, 60.0), u(300)), emptyList(), emptyList()))
         assertEquals(0L, f.count("SELECT COUNT(*) FROM HistoryRideKeyV3"))
         assertEquals(0L, f.count("SELECT COUNT(*) FROM HistorySampleV3"))
         assertEquals(2L, f.count("SELECT COUNT(*) FROM HistorySampleV2"))
         // A ride begun compact stays compact for a store whose flag is off: dispatch is on the key.
         val g = fixture(); g.begin()
-        SqlDelightHistoryStore(g.provider).append(HistoryBatch("ride", listOf(k(0, 1.0)), emptyList(), emptyList()))
+        SqlDelightHistoryStore(g.provider, recordCompact = false).append(HistoryBatch("ride", listOf(k(0, 1.0)), emptyList(), emptyList()))
         assertEquals(1L, g.count("SELECT COUNT(*) FROM HistorySampleV3"))
         assertEquals(0L, g.count("SELECT COUNT(*) FROM HistorySampleV2"))
+        // The flip itself: a store built with defaults begins compact rides.
+        val h = fixture(compact = false)
+        SqlDelightHistoryStore(h.provider).begin(HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING), sources)
+        assertEquals(1L, h.count("SELECT COUNT(*) FROM HistoryRideKeyV3"))
     }
 
     @Test fun deadSeriesBecomesOneRun() = runTest {

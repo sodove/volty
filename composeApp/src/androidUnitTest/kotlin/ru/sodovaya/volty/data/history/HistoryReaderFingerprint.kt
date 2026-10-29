@@ -50,6 +50,21 @@ import java.util.concurrent.Executors
  * `n`/`sha` differ on an `overview` / `w<k>.overview` line only, and only when `markers`/`truncated` are equal and,
  * unless the baseline was `thinned`, `known` and `breaks` are equal too. Anything else still fails.
  *
+ * Measured in Task 6 (retraction of "row selection" as its only cause): with Ruling 2's exact-count expansion the
+ * selection no longer moves (`n` is equal), yet the line still differs on a series with an UNEVENLY spaced run, because
+ * `sha` hashes every overview point, and the interior unknown points of a run carry interpolated ticks (Global
+ * Constraint 2.3: interior ticks are not kept). `known` and `breaks` (each stretch's first and last) stay equal, which
+ * is exactly this tolerance's condition, so the same name covers it; no number the chart draws depends on an interior
+ * unknown's tick (a cursor there answers null either way, HistoryUnknownRun.kt). On evenly spaced runs it is exact.
+ *
+ * ## A window that cuts a run
+ * [Tolerance.RANGE_CUT_EDGE] (Ruling 4). A window opening or closing inside a run reads the run's expansion clipped,
+ * so its first or last unknown member is interpolated and lies less than one inter-sample step from the real one; one
+ * member may even cross the window edge. It applies to `w<k>.unknownEdges` and `w<k>.overview` lines ONLY, and only when
+ * that window's `w<k>.samples` line (known rows and chain count) is identical; for the overview also `markers`,
+ * `truncated` and, unless the baseline was `thinned`, `known` must be equal and `n` within 2 (one member per edge).
+ * Whole-ride lines never get it.
+ *
  * ## What is probed (review I2, I5)
  * Per series: all samples at one page size; the same samples re-paged at sizes 7 and 100 (an internal consistency
  * check, reported as an ERROR on mismatch); `stats`; `buckets`; the completeness walk and energy repair through the
@@ -71,7 +86,7 @@ object HistoryReaderFingerprint {
     const val OVERVIEW_THIN_THRESHOLD = 590
 
     /** Named differences [compare] may be told to accept. There is no blanket ignore. */
-    enum class Tolerance { OVERVIEW_ROW_SELECTION, CHAIN_MEMBERS }
+    enum class Tolerance { OVERVIEW_ROW_SELECTION, CHAIN_MEMBERS, RANGE_CUT_EDGE }
 
     sealed interface Segment {
         data class One(val sample: HistorySample) : Segment
@@ -496,11 +511,26 @@ object HistoryReaderFingerprint {
             if (x == y) continue
             val reader = location.substringAfterLast('|')
             if (Tolerance.CHAIN_MEMBERS in tolerate && reader == "chainMembers") continue
+            if (Tolerance.RANGE_CUT_EDGE in tolerate && x != null && y != null && rangeCutEdgeTolerated(location, x, y, a, b)) continue
             if (Tolerance.OVERVIEW_ROW_SELECTION in tolerate && (reader == "overview" || Regex("w\\d+\\.overview").matches(reader)) &&
                 x != null && y != null && overviewDifferenceTolerated(fields(x), fields(y))) continue
             differences += Difference(location, x, y, describe(x, y))
         }
         return differences
+    }
+
+    private fun rangeCutEdgeTolerated(location: String, x: String, y: String, a: Map<String, String>, b: Map<String, String>): Boolean {
+        val reader = location.substringAfterLast('|')
+        val window = Regex("""(w\d+)\.(unknownEdges|overview)""").matchEntire(reader) ?: return false
+        val samples = location.substringBeforeLast('|') + "|" + window.groupValues[1] + ".samples"
+        if (a[samples] == null || a[samples] != b[samples]) return false
+        if (window.groupValues[2] == "unknownEdges") return true
+        val p = fields(x); val q = fields(y)
+        if (p["markers"] != q["markers"] || p["truncated"] != q["truncated"] || p["markers"] == null) return false
+        if (p["thinned"] == "true") return true
+        val n = p["n"]?.toLongOrNull() ?: return false
+        val m = q["n"]?.toLongOrNull() ?: return false
+        return p["known"] == q["known"] && p["known"] != null && kotlin.math.abs(n - m) <= 2
     }
 
     private fun overviewDifferenceTolerated(x: Map<String, String>, y: Map<String, String>): Boolean {

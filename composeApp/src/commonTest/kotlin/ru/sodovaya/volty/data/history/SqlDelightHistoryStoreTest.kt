@@ -13,12 +13,13 @@ class SqlDelightHistoryStoreTest {
     private val range = HistoryRange(10000, 11000)
     private val key = HistorySeriesKey("pack", "current_a")
     private fun tick(delta: Long) = HistoryTick(10000 + delta, 100 + delta, 1)
-    private fun fixture(): Pair<JdbcSqliteDriver, SqlDelightHistoryStore> {
+    /** New rides record compact by default (Task 6); [compact] = false pins a test to a V2 ride, which still exist until Task 9. */
+    private fun fixture(compact: Boolean = true): Pair<JdbcSqliteDriver, SqlDelightHistoryStore> {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         drivers += driver
         driver.execute(null, "PRAGMA foreign_keys=ON", 0)
         VoltyDatabase.Schema.create(driver)
-        return driver to SqlDelightHistoryStore(VoltyDatabaseProvider(driver))
+        return driver to SqlDelightHistoryStore(VoltyDatabaseProvider(driver), recordCompact = compact)
     }
     private suspend fun begin(store: SqlDelightHistoryStore, id: String = "ride") {
         store.begin(HistoryRide(id, "bike", origin, null, HistoryRideStatus.RECORDING),
@@ -80,7 +81,8 @@ class SqlDelightHistoryStoreTest {
     }
 
     @Test fun oldRowBasedReceiptReplaysExactSourceScopeAndRejectsAScopeChange() = runTest {
-        val (driver, store) = fixture(); begin(store)
+        // A legacy (fingerprint-less) receipt exists only on V2 rides; a compact ride refuses one (Task 5).
+        val (driver, store) = fixture(compact = false); begin(store)
         val marker = HistoryMarker(tick(10), HistoryMarkerKind.BLE_GAP, "pack")
         val batch = HistoryBatch("ride", emptyList(), emptyList(), listOf(marker), "row-receipt")
         store.append(batch)
@@ -209,7 +211,8 @@ class SqlDelightHistoryStoreTest {
     }
 
     @Test fun legacyRowVerifiedReceiptCannotAcknowledgeDifferentGpsProvider() = runTest {
-        val (driver, store) = fixture(); begin(store)
+        // A legacy (fingerprint-less) receipt exists only on V2 rides; a compact ride refuses one (Task 5).
+        val (driver, store) = fixture(compact = false); begin(store)
         val fix = HistoryGpsFix(tick(10), 56.0, 60.0, 5.0, null, HistoryGpsProvider.GPS)
         val batch = HistoryBatch("ride", emptyList(), listOf(fix), emptyList(), "legacy-provider")
         store.append(batch)
@@ -319,7 +322,8 @@ class SqlDelightHistoryStoreTest {
 
     @Test fun sqliteFailureRollsBackEarlierRowsAndSequence() = runTest {
         val (driver, store) = fixture(); begin(store)
-        driver.execute(null, """CREATE TRIGGER reject_history BEFORE INSERT ON HistorySampleV2
+        // The new ride is compact; the same failure is injected into either layout's sample table.
+        for (table in listOf("HistorySampleV2", "HistorySampleV3")) driver.execute(null, """CREATE TRIGGER reject_$table BEFORE INSERT ON $table
             WHEN NEW.reading = 13 BEGIN SELECT RAISE(ABORT, 'injected failure'); END""", 0)
         assertFails { store.append(HistoryBatch("ride", listOf(
             HistorySample(tick(10), key, 10.0), HistorySample(tick(20), key, 13.0)), emptyList(), emptyList())) }
@@ -429,12 +433,12 @@ class SqlDelightHistoryStoreTest {
 
     @Test fun failedSqlTransactionDoesNotPublishReceipt() = runTest {
         val (driver, store) = fixture(); begin(store)
-        driver.execute(null, """CREATE TRIGGER reject_receipt BEFORE INSERT ON HistorySampleV2
+        for (table in listOf("HistorySampleV2", "HistorySampleV3")) driver.execute(null, """CREATE TRIGGER reject_$table BEFORE INSERT ON $table
             WHEN NEW.reading = 13 BEGIN SELECT RAISE(ABORT, 'injected failure'); END""", 0)
         val batch = HistoryBatch("ride", listOf(HistorySample(tick(10), key, 10.0),
             HistorySample(tick(20), key, 13.0)), emptyList(), emptyList(), "receipt-1")
         assertFails { store.append(batch) }
-        driver.execute(null, "DROP TRIGGER reject_receipt", 0)
+        for (table in listOf("HistorySampleV2", "HistorySampleV3")) driver.execute(null, "DROP TRIGGER reject_$table", 0)
         store.append(batch)
         store.append(batch)
         assertEquals(batch.samples, store.samples("ride", key, range, null).items)
@@ -565,7 +569,8 @@ class SqlDelightHistoryStoreTest {
     }
 
     @Test fun legacyNullFingerprintReceiptStillVerifiesRowsButCannotCertifySummaries() = runTest {
-        val (driver, store) = fixture(); begin(store)
+        // A legacy (fingerprint-less) receipt exists only on V2 rides; a compact ride refuses one (Task 5).
+        val (driver, store) = fixture(compact = false); begin(store)
         val sample = HistorySample(tick(10), key, -0.0)
         val batch = HistoryBatch("ride", listOf(sample), emptyList(), emptyList(), "old")
         store.append(batch)

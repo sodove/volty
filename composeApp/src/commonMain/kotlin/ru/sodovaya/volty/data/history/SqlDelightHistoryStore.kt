@@ -11,15 +11,18 @@ import ru.sodovaya.volty.domain.history.*
  * Borrows the application database; mutations commit atomically away from the UI thread.
  *
  * [recordCompact] (compact-history-storage plan, Task 5): when true, [begin] gives every new ride a `HistoryRideKeyV3`
- * and its samples are written to the compact tables only. It is OFF by default until Task 6 lands, because until then
- * every reader (samples, stats, recordedKeys, export, the other-sources probe) still reads `HistorySampleV2`, and a
- * compact ride would show as empty. The writer and deletion dispatch on the ride KEY, not on this flag, so a ride begun
- * compact stays compact whatever the flag says later, and a V2 ride stays V2. Task 6 flips the default.
+ * and its samples are written to the compact tables only. The writer, deletion and every `HistoryStore` reader
+ * (Task 6: samples, stats, recordedKeys, the other-sources probe) dispatch on the ride KEY, not on this flag, so a ride
+ * begun compact stays compact whatever the flag says later, and a V2 ride stays V2.
+ *
+ * ON by default since Task 6. An earlier revision kept it off "until Task 6 lands" because the readers read V2 only.
+ * Still open, stated: the export (`SqlDelightHistoryExportSource`, logui CSV) reads `HistorySampleV2` until Task 7, so
+ * a compact ride exports no sample rows (NO_DATA) in a build between Tasks 6 and 7; no build ships before Task 8.
  */
 class SqlDelightHistoryStore(
     provider: VoltyDatabaseProvider,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val recordCompact: Boolean = false,
+    private val recordCompact: Boolean = true,
 ) : HistoryStore {
     private val database = provider.database
     private val rides = database.rideHistoryV2Queries
@@ -156,14 +159,16 @@ class SqlDelightHistoryStore(
         }
     }
     override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistorySample> = withContext(dispatcher) {
-        reader.samples(rideId, key, range, after, limit)
+        // A compact page reads a carried run and the rows after it: one snapshot, so a concurrent append cannot land between.
+        database.transactionWithResult { reader.samples(rideId, key, range, after, limit) }
     }
     override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistoryGpsFix> = withContext(dispatcher) {
         reader.gps(rideId, range, after, limit)
     }
     override suspend fun lastSampleElapsedOfOtherSources(rideId: String, exceptSourceId: String, toElapsed: Long): Long? =
         withContext(dispatcher) {
-            sampleQueries.lastElapsedOfOtherSources(rideId, exceptSourceId, toElapsed).executeAsOne().lastElapsed
+            // One snapshot: a compact ride seeks every other series (exact; V2 approximated, see the reader's retraction).
+            database.transactionWithResult { reader.lastSampleElapsedOfOtherSources(rideId, exceptSourceId, toElapsed) }
         }
     override suspend fun markers(rideId: String, range: HistoryRange): List<HistoryMarker> = withContext(dispatcher) {
         reader.markers(rideId, range)

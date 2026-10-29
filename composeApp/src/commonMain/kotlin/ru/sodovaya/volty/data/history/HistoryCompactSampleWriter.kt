@@ -88,16 +88,13 @@ internal object HistoryCompactCodec {
 internal fun splitStoredRunAt(row: HistoryStoredSample, elapsed: Long): Pair<HistoryStoredSample, HistoryStoredSample>? {
     val run = row.run ?: return null
     if (run.count < 2 || elapsed <= row.sample.tick.elapsedMillis || elapsed > run.tick.elapsedMillis) return null
-    val members = expandForReaders(listOf(row))
-    val parts = (run.count - 1).toLong()
-    val spread = run.sequence - row.sequence
-    fun sequence(index: Int) = row.sequence + (spread * index + parts / 2).floorDiv(parts)
-    val cut = members.indexOfFirst { it.tick.elapsedMillis >= elapsed }
+    val members = HistoryRunMembers(row)
+    val cut = members.firstIndex { members.elapsed(it) >= elapsed }
     check(cut in 1 until members.size)
     fun part(from: Int, to: Int): HistoryStoredSample {
         val count = to - from + 1
-        val end = if (count >= 2) HistoryUnknownRunEnd(members[to].tick, sequence(to), count) else null
-        return HistoryStoredSample(members[from], sequence(from), end)
+        val end = if (count >= 2) HistoryUnknownRunEnd(members.tick(to), members.sequence(to), count) else null
+        return HistoryStoredSample(members.sample(from), members.sequence(from), end)
     }
     return part(0, cut - 1) to part(cut, members.size - 1)
 }

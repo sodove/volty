@@ -4,18 +4,41 @@ import ru.sodovaya.volty.data.db.VoltyDatabase
 import ru.sodovaya.volty.data.db.HistoryBucketV2
 import ru.sodovaya.volty.domain.history.*
 
+/**
+ * The `HistoryStore` readers. Each dispatches per ride (compact-history-storage plan, Task 6): a ride with a
+ * `HistoryRideKeyV3` reads the compact tables through [HistoryCompactReader], any other ride reads V2 (until Task 9
+ * converts it). Ride, source, GPS, marker and bucket tables are shared by both layouts.
+ *
+ * `nearestHistorySample` needs no run probe: the brief asked for a `runCovers(tick)` mark on the expansion, but Task 3
+ * retracted that probe (HistoryUnknownRun.kt, "Per-reader proofs"): the expansion keeps every member, so the chart
+ * cursor inside a run is nearest to an unknown member and answers null exactly as over V2.
+ */
 internal class HistoryStoreReader(private val database: VoltyDatabase) {
+    private val compact = HistoryCompactReader(database)
+
+    /** Exact for a compact ride (see [HistoryCompactReader.lastElapsedOfOtherSources], a recorded retraction). */
+    fun lastSampleElapsedOfOtherSources(rideId: String, exceptSourceId: String, toElapsed: Long): Long? {
+        val rideNo = compact.rideNo(rideId)
+            ?: return database.rideHistorySampleQueries.lastElapsedOfOtherSources(rideId, exceptSourceId, toElapsed).executeAsOne().lastElapsed
+        val origin = origin(rideId) ?: return null
+        return compact.lastElapsedOfOtherSources(rideNo, origin, exceptSourceId, toElapsed)
+    }
+
     fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
         require(limit in 1..20000)
         val empty = HistoryRecordedKeys(emptyList(), false)
         if (origin(rideId) == null) return empty
         val source = database.rideHistorySourceQueries.sourceForRide(rideId, sourceId).executeAsOneOrNull() ?: return empty
         val allowed = HistoryMetricRegistry.forSource(HistorySourceKind.valueOf(source.kind))
-        val rows = database.rideHistorySeriesQueries.recordedKeysForSource(rideId, sourceId,
-            allowed.filterNot { it.indexedByCell }.map { it.id },
-            allowed.filter { it.indexedByCell }.map { it.id }, limit.toLong() + 1).executeAsList()
-        return HistoryRecordedKeys(rows.take(limit).map {
-            HistorySeriesKey(sourceId, it.metricId, it.cellIndex.takeIf { index -> index >= 0 }?.toInt())
+        val scalar = allowed.filterNot { it.indexedByCell }.map { it.id }
+        val indexed = allowed.filter { it.indexedByCell }.map { it.id }
+        val rideNo = compact.rideNo(rideId)
+        val rows = if (rideNo == null) database.rideHistorySeriesQueries.recordedKeysForSource(rideId, sourceId,
+            scalar, indexed, limit.toLong() + 1).executeAsList().map { it.metricId to it.cellIndex }
+        else database.rideHistorySeriesQueries.recordedKeysForSourceV3(rideNo, sourceId, scalar, indexed, rideId,
+            limit.toLong() + 1).executeAsList().map { it.metricId to it.cellIndex }
+        return HistoryRecordedKeys(rows.take(limit).map { (metricId, cellIndex) ->
+            HistorySeriesKey(sourceId, metricId, cellIndex.takeIf { index -> index >= 0 }?.toInt())
         }, rows.size > limit)
     }
 
@@ -52,8 +75,12 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         // Retraction: a single detail page made healthy long rides incomplete
         // and omitted explicit tail extrema. Reduce the full indexed range to
         // one SQL row instead of materializing every detail sample in memory.
-        val detail = database.rideHistorySampleQueries.rangeDetailStats(rideId, key.sourceId,
+        val rideNo = compact.rideNo(rideId)
+        val detail = if (rideNo != null) compact.detail(rideNo, origin, key, bounds)
+            ?: HistoryCompactReader.Detail(null, null, 0, null)
+        else database.rideHistorySampleQueries.rangeDetailStats(rideId, key.sourceId,
             key.metricId, key.cellIndex?.toLong() ?: -1, bounds.first, bounds.last).executeAsOne()
+            .let { HistoryCompactReader.Detail(it.minimum, it.maximum, it.unknownCount, it.lastElapsed) }
         val minimum = listOfNotNull(summary.minimum, detail.minimum).minOrNull()
         val maximum = listOfNotNull(summary.maximum, detail.maximum).maxOrNull()
         val energy = summary.energyWh?.takeIf { it.isFinite() }
@@ -89,6 +116,11 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         val origin = origin(rideId) ?: return emptyPage()
         val bounds = bounds(origin, range) ?: return emptyPage()
         val cursor = cursor(origin, after)
+        compact.rideNo(rideId)?.let { rideNo ->
+            return compact.samples(rideNo, origin, key, bounds, cursor, limit) { tick, sequence ->
+                HistoryCursor(checkNotNull(historyAxisEpochMillis(origin, tick)), sequence.toString())
+            }
+        }
         val rows = database.rideHistorySampleQueries.pageSamples(rideId, key.sourceId, key.metricId,
             key.cellIndex?.toLong() ?: -1, bounds.first, bounds.last, cursor?.first,
             cursor?.second ?: 0, limit.toLong() + 1).executeAsList()
