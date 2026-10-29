@@ -6,10 +6,10 @@ CREATE TABLE HistorySeriesV3 (seriesId INTEGER NOT NULL PRIMARY KEY, rideNo INTE
   UNIQUE(rideNo, sourceId, metricId, cellIndex));
 CREATE TABLE HistorySampleV3 (seriesId INTEGER NOT NULL, elapsedMillis INTEGER NOT NULL, sequence INTEGER NOT NULL,
   epochSkew INTEGER NOT NULL DEFAULT 0, clockDelta INTEGER NOT NULL DEFAULT 0, reading REAL, unknownCode INTEGER,
-  runEndElapsed INTEGER, runEndSequence INTEGER, runCount INTEGER,
+  runEndElapsed INTEGER, runEndSequence INTEGER, runEndEpochSkew INTEGER, runCount INTEGER,
   PRIMARY KEY(seriesId, elapsedMillis, sequence),
   CHECK((reading IS NULL AND unknownCode IS NOT NULL AND unknownCode >= 1) OR (reading IS NOT NULL AND unknownCode IS NULL)),
-  CHECK((runCount IS NULL AND runEndElapsed IS NULL AND runEndSequence IS NULL) OR
+  CHECK((runCount IS NULL AND runEndElapsed IS NULL AND runEndSequence IS NULL AND runEndEpochSkew IS NULL) OR
     (unknownCode IS NOT NULL AND runCount IS NOT NULL AND runEndElapsed IS NOT NULL AND runEndSequence IS NOT NULL AND
-      runCount >= 2 AND runEndElapsed >= elapsedMillis AND runEndSequence > sequence))
+      runEndEpochSkew IS NOT NULL AND runCount >= 2 AND runEndElapsed >= elapsedMillis AND runEndSequence > sequence))
 ) WITHOUT ROWID;

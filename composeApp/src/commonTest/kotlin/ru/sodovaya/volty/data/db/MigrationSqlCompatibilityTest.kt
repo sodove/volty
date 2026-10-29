@@ -98,24 +98,26 @@ class MigrationSqlCompatibilityTest {
             try {
                 VoltyDatabase.Schema.migrate(driver, 27, 28)
                 val head = "INSERT INTO HistorySampleV3(seriesId, elapsedMillis, sequence, reading, unknownCode, " +
-                    "runEndElapsed, runEndSequence, runCount) VALUES "
+                    "runEndElapsed, runEndSequence, runEndEpochSkew, runCount) VALUES "
                 fun accepted(values: String): Boolean = runCatching { driver.execute(null, head + values, 0).value }.isSuccess
                 // Controls: the coherent shapes go in, so each failure below is the CHECK and not a typo.
-                assertTrue(accepted("(1, 0, 1, 1.0, NULL, NULL, NULL, NULL)"), "known")
-                assertTrue(accepted("(1, 10, 2, NULL, 1, NULL, NULL, NULL)"), "single unknown")
-                assertTrue(accepted("(1, 20, 3, NULL, 2, 2000, 5, 2)"), "run")
+                assertTrue(accepted("(1, 0, 1, 1.0, NULL, NULL, NULL, NULL, NULL)"), "known")
+                assertTrue(accepted("(1, 10, 2, NULL, 1, NULL, NULL, NULL, NULL)"), "single unknown")
+                assertTrue(accepted("(1, 20, 3, NULL, 2, 2000, 5, 0, 2)"), "run")
                 // Combinations no producer emits.
-                assertFalse(accepted("(1, 30, 6, 1.0, 1, NULL, NULL, NULL)"), "a value and a code")
-                assertFalse(accepted("(1, 31, 7, NULL, NULL, NULL, NULL, NULL)"), "neither a value nor a code")
-                assertTrue(accepted("(1, 32, 8, NULL, 6, NULL, NULL, NULL)"), "a 6th reason fits: the upper bound lives in the codec")
-                assertFalse(accepted("(1, 38, 17, NULL, 0, NULL, NULL, NULL)"), "code 0")
-                assertFalse(accepted("(1, 39, 18, NULL, 1, 50, 19, NULL)"), "end fields without a runCount")
-                assertFalse(accepted("(1, 33, 9, NULL, 1, 40, 10, 1)"), "runCount 1")
-                assertFalse(accepted("(1, 34, 11, NULL, 1, 40, 11, 2)"), "runEndSequence = sequence")
-                assertFalse(accepted("(1, 35, 12, NULL, 1, 34, 13, 2)"), "runEndElapsed < elapsed")
-                assertFalse(accepted("(1, 36, 14, 1.0, NULL, 40, 15, 2)"), "a known row as a run")
-                assertFalse(accepted("(1, 37, 16, NULL, 1, NULL, 20, 2)"), "partial run fields")
-                assertFalse(accepted("(1, 0, 1, 2.0, NULL, NULL, NULL, NULL)"), "duplicate primary key")
+                assertFalse(accepted("(1, 30, 6, 1.0, 1, NULL, NULL, NULL, NULL)"), "a value and a code")
+                assertFalse(accepted("(1, 31, 7, NULL, NULL, NULL, NULL, NULL, NULL)"), "neither a value nor a code")
+                assertTrue(accepted("(1, 32, 8, NULL, 6, NULL, NULL, NULL, NULL)"), "a 6th reason fits: the upper bound lives in the codec")
+                assertFalse(accepted("(1, 38, 17, NULL, 0, NULL, NULL, NULL, NULL)"), "code 0")
+                assertFalse(accepted("(1, 39, 18, NULL, 1, 50, 19, 0, NULL)"), "end fields without a runCount")
+                assertFalse(accepted("(1, 33, 9, NULL, 1, 40, 10, 0, 1)"), "runCount 1")
+                assertFalse(accepted("(1, 34, 11, NULL, 1, 40, 11, 0, 2)"), "runEndSequence = sequence")
+                assertFalse(accepted("(1, 35, 12, NULL, 1, 34, 13, 0, 2)"), "runEndElapsed < elapsed")
+                assertFalse(accepted("(1, 36, 14, 1.0, NULL, 40, 15, 0, 2)"), "a known row as a run")
+                assertFalse(accepted("(1, 37, 16, NULL, 1, NULL, 20, 0, 2)"), "partial run fields")
+                assertFalse(accepted("(1, 40, 21, NULL, 1, 50, 22, NULL, 2)"), "a run without its end skew")
+                assertFalse(accepted("(1, 41, 23, NULL, 1, NULL, NULL, 0, NULL)"), "an end skew without a run")
+                assertFalse(accepted("(1, 0, 1, 2.0, NULL, NULL, NULL, NULL, NULL)"), "duplicate primary key")
                 assertEquals(4L, long(driver, "SELECT COUNT(*) FROM HistorySampleV3"))
                 // Series: negative cell index and a duplicate (ride, source, metric, cell).
                 val series = "INSERT INTO HistorySeriesV3(seriesId, rideNo, sourceId, metricId, cellIndex) VALUES "

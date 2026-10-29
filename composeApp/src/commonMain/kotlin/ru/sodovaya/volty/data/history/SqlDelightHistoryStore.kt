@@ -87,6 +87,8 @@ class SqlDelightHistoryStore(
                 val t = marker.tick
                 markerQueries.insertMarker(batch.rideId, admit(t), t.epochMillis,
                     t.elapsedMillis, t.clockGeneration, marker.kind.name, marker.sourceId)
+                // A gap marker committed after a run already grew past its tick cuts that run (writer KDoc).
+                rideNo?.let { compact.splitRunsAt(it, origin, marker) }
             }
             bucketStorage.append(batch, origin, sources)?.let {
                 if (it.elapsedMillis >= last.elapsedMillis) last = it
@@ -136,6 +138,10 @@ class SqlDelightHistoryStore(
             val elapsed = row.lastElapsedMillis ?: row.startedElapsedMillis
             markerQueries.insertMarker(row.id, row.nextSequence, epoch, elapsed,
                 row.clockGeneration, HistoryMarkerKind.INTERRUPTED.name, null)
+            compact.rideNo(row.id)?.let {
+                compact.splitRunsAt(it, row.toHistoryRide().started,
+                    HistoryMarker(HistoryTick(epoch, elapsed, row.clockGeneration), HistoryMarkerKind.INTERRUPTED))
+            }
             rides.finishRide(epoch, elapsed, row.clockGeneration, HistoryRideStatus.INTERRUPTED.name, row.id)
         }
         return open.size

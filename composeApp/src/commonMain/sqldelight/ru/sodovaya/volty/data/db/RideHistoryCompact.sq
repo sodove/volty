@@ -29,6 +29,11 @@
 -- A run row (runCount IS NOT NULL) is an unknown that stands for runCount samples evenly spaced from
 -- (elapsedMillis, sequence) to (runEndElapsed, runEndSequence), runCount >= 2. Task 3: a stored run must satisfy
 -- runEndElapsed - elapsedMillis <= 2000 * (runCount - 1).
+-- runEndEpochSkew (set iff the row is a run) is the END member's own skew, so the end tick is exact. An earlier revision
+-- (Task 5 first draft) had no such column and rebuilt the end with the FIRST member's skew; that was wrong: a chain whose
+-- skew wobbled (36.5 % of real steps move 1 ms) read back an end epoch up to 14 ms off, which the `samples` reader and the
+-- Task 2 fingerprint print. It also forced the writer onto a first-member split rule that differed from
+-- collapseUnknownRuns. With the exact end the writer compares neighbours, exactly as collapseUnknownRuns does.
 -- Every CHECK spells out IS NOT NULL: a CHECK that evaluates to NULL PASSES in SQLite, so the first draft (without it)
 -- accepted a row with neither a reading nor a code, and a run with a NULL end. Both are rejected now (tested).
 -- No foreign keys: application foreign_keys are OFF (SqlDelightHistoryStore), deletion is explicit.
@@ -57,12 +62,13 @@ CREATE TABLE HistorySampleV3 (
   unknownCode INTEGER,
   runEndElapsed INTEGER,
   runEndSequence INTEGER,
+  runEndEpochSkew INTEGER,
   runCount INTEGER,
   PRIMARY KEY(seriesId, elapsedMillis, sequence),
   CHECK((reading IS NULL AND unknownCode IS NOT NULL AND unknownCode >= 1) OR (reading IS NOT NULL AND unknownCode IS NULL)),
-  CHECK((runCount IS NULL AND runEndElapsed IS NULL AND runEndSequence IS NULL) OR
+  CHECK((runCount IS NULL AND runEndElapsed IS NULL AND runEndSequence IS NULL AND runEndEpochSkew IS NULL) OR
     (unknownCode IS NOT NULL AND runCount IS NOT NULL AND runEndElapsed IS NOT NULL AND runEndSequence IS NOT NULL AND
-      runCount >= 2 AND runEndElapsed >= elapsedMillis AND runEndSequence > sequence))
+      runEndEpochSkew IS NOT NULL AND runCount >= 2 AND runEndElapsed >= elapsedMillis AND runEndSequence > sequence))
 ) WITHOUT ROWID;
 
 insertRideKeyV3:
@@ -91,9 +97,9 @@ SELECT * FROM HistorySeriesV3 WHERE rideNo = :rideNo ORDER BY seriesId;
 
 insertSampleV3:
 INSERT INTO HistorySampleV3(seriesId, elapsedMillis, sequence, epochSkew, clockDelta, reading, unknownCode,
-runEndElapsed, runEndSequence, runCount)
+runEndElapsed, runEndSequence, runEndEpochSkew, runCount)
 VALUES (:seriesId, :elapsedMillis, :sequence, :epochSkew, :clockDelta, :reading, :unknownCode,
-:runEndElapsed, :runEndSequence, :runCount);
+:runEndElapsed, :runEndSequence, :runEndEpochSkew, :runCount);
 
 deleteSamplesOfSeriesV3:
 DELETE FROM HistorySampleV3 WHERE seriesId = :seriesId;
@@ -105,13 +111,22 @@ deleteRideKeyV3:
 DELETE FROM HistoryRideKeyV3 WHERE rideNo = :rideNo;
 
 
--- Task 5 (writer). The newest row of a series in reader order: one seek on the primary key, read backwards.
-newestSampleOfSeriesV3:
-SELECT * FROM HistorySampleV3 WHERE seriesId = :seriesId ORDER BY elapsedMillis DESC, sequence DESC LIMIT 1;
+-- Task 5 (writer). The last row of a series at or before an elapsed, in reader order: one backwards seek on the primary
+-- key. For an in-order sample it is the series' newest row; for a late one it is the run that might contain it.
+latestAtOrBeforeV3:
+SELECT * FROM HistorySampleV3 WHERE seriesId = :seriesId AND elapsedMillis <= :elapsedMillis
+ORDER BY elapsedMillis DESC, sequence DESC LIMIT 1;
 
--- Extends a lone unknown or a run in place; the row is addressed by its full primary key.
+-- The last row that STARTS strictly before an elapsed: the only run a marker at that elapsed can cut.
+latestBeforeV3:
+SELECT * FROM HistorySampleV3 WHERE seriesId = :seriesId AND elapsedMillis < :elapsedMillis
+ORDER BY elapsedMillis DESC, sequence DESC LIMIT 1;
+
+-- Extends a lone unknown or a run in place, or (all NULL) shrinks a split run to its first member; the row is addressed
+-- by its full primary key.
 extendRunV3:
-UPDATE HistorySampleV3 SET runCount = :runCount, runEndElapsed = :runEndElapsed, runEndSequence = :runEndSequence
+UPDATE HistorySampleV3 SET runCount = :runCount, runEndElapsed = :runEndElapsed, runEndSequence = :runEndSequence,
+runEndEpochSkew = :runEndEpochSkew
 WHERE seriesId = :seriesId AND elapsedMillis = :elapsedMillis AND sequence = :sequence;
 
 deleteSamplesOfRideV3:

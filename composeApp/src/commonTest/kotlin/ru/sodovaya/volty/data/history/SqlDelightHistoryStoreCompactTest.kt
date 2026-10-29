@@ -144,6 +144,9 @@ class SqlDelightHistoryStoreCompactTest {
         // A wobble within 15 ms of the run's FIRST member extends it; 30 ms does not.
         assertEquals(listOf(null, 2L, null), rows.map { it.runCount })
         assertEquals(30L, rows[2].epochSkew)
+        // The run END keeps its own skew (9), exactly.
+        assertEquals(9L, rows[1].runEndEpochSkew)
+        assertEquals(tick(600, skew = 9), HistoryCompactCodec.decode(rows[1], pack, origin).run?.tick)
         assertEquals(tick(900, skew = 30), HistoryCompactCodec.decode(rows[2], pack, origin).sample.tick)
     }
 
@@ -173,17 +176,98 @@ class SqlDelightHistoryStoreCompactTest {
             session.write(u(0), 0)
             // Corrupt the lone row into a 2-member run spanning 4500 ms (> 2000 * 1): CHECK allows it, the writer must not
             // make it worse. The next step (100 ms) is within every rule of historyRunContinues.
-            q.extendRunV3(2, origin.elapsedMillis + 4500, 1, 1, origin.elapsedMillis, 0)
+            q.extendRunV3(2, origin.elapsedMillis + 4500, 1, 0, 1, origin.elapsedMillis, 0)
             session.write(u(4600), 2)
-            // A code this build does not know reads as invalid data and is never extended.
+            // A code this build does not know reads as invalid data and is never extended, not even by an INVALID_VALUE
+            // sample (the reason it decodes as), so the guard is on the code, not on the decoded reason.
             session.write(u(6000, ctl), 3)
             f.driver.execute(null, "UPDATE HistorySampleV3 SET unknownCode = 99 WHERE sequence = 3", 0)
-            session.write(u(6300, ctl), 4)
+            session.write(u(6300, ctl, HistoryUnknownReason.INVALID_VALUE), 4)
         }
         assertEquals(listOf(2L, null), f.rows(key = pack).map { it.runCount })
         assertEquals(listOf(null, null), f.rows(key = ctl).map { it.runCount })
         assertEquals(HistoryUnknownReason.INVALID_VALUE,
             HistoryCompactCodec.decode(f.rows(key = ctl)[0], ctl, origin).sample.unknown)
+    }
+
+    /** Writes [samples] (one series, in order, sequence = index) through the writer and returns its decoded rows. */
+    private fun written(samples: List<HistorySample>, markers: List<HistoryMarker> = emptyList()): List<HistoryStoredSample> {
+        val f = fixture()
+        val writer = HistoryCompactSampleWriter(f.db)
+        f.db.transaction {
+            writer.begin("ride")
+            val session = writer.session("ride", checkNotNull(writer.rideNo("ride")), origin, markers)
+            samples.forEachIndexed { i, sample -> session.write(sample, i.toLong()) }
+        }
+        return f.rows(key = samples.first().key).map { HistoryCompactCodec.decode(it, samples.first().key, origin) }
+    }
+
+    @Test fun theWriterSplitsExactlyWhereCollapseUnknownRunsDoes() {
+        // The review fixtures. Neighbour steps of 10 ms join (one run, although 30 ms from the first); a step of 20 ms
+        // splits (although every member is within 15 ms of the first).
+        val drifting = listOf(0L, 10L, 20L, 30L).mapIndexed { i, skew -> u(i * 300L, skew = skew) }
+        val jumping = listOf(0L, -10L, 10L).mapIndexed { i, skew -> u(i * 300L, skew = skew) }
+        assertEquals(1, collapseUnknownRuns(drifting, emptyList()).size)
+        assertEquals(2, collapseUnknownRuns(jumping, emptyList()).size)
+        for (samples in listOf(drifting, jumping)) {
+            assertEquals(collapseUnknownRuns(samples, emptyList()), written(samples))
+        }
+    }
+
+    @Test fun aBackDatedGapMarkerCutsTheRunItLandsIn() = runTest {
+        val f = fixture(); f.begin()
+        val samples = listOf(u(0), u(300), u(600), u(900))
+        f.append(samples)
+        assertEquals(1, f.rows(key = pack).size)
+        // OVERFLOW is committed on the metadata lane after packets with later ticks: it arrives behind the run.
+        val loss = HistoryMarker(tick(450), HistoryMarkerKind.OVERFLOW)
+        f.append(emptyList(), listOf(loss))
+        val stored = f.rows(key = pack).map { HistoryCompactCodec.decode(it, pack, origin) }
+        // Evenly spaced members: the cut is exact and equals what a conversion of the full rows makes.
+        assertEquals(collapseUnknownRuns(samples, listOf(loss)), stored)
+        assertEquals(2, stored.size)
+        // A marker of another source, or outside every run, cuts nothing.
+        f.append(emptyList(), listOf(HistoryMarker(tick(750), HistoryMarkerKind.BLE_GAP, "ctl"),
+            HistoryMarker(tick(2000), HistoryMarkerKind.OVERFLOW)))
+        assertEquals(stored, f.rows(key = pack).map { HistoryCompactCodec.decode(it, pack, origin) })
+    }
+
+    @Test fun anUnevenRunIsCutAtInterpolatedMembersWithinOneStep() {
+        // Real members at 0, 100, 1000, 1100; the expansion places them at 0, 367, 733, 1100. A cut at 500 keeps 2 + 2.
+        val row = written(listOf(u(0), u(100), u(1000), u(1100))).single()
+        val (head, tail) = assertNotNull(splitStoredRunAt(row, origin.elapsedMillis + 500))
+        assertEquals(2, head.run?.count); assertEquals(2, tail.run?.count)
+        assertEquals(row.sample, head.sample); assertEquals(row.run?.tick, tail.run?.tick)
+        assertEquals(row.run?.sequence, tail.run?.sequence)
+        assertTrue(head.run!!.sequence < tail.sequence)
+        assertTrue(tail.sample.tick.elapsedMillis - head.run!!.tick.elapsedMillis <= HISTORY_MAX_INTERVAL_MILLIS)
+        assertNull(splitStoredRunAt(row, origin.elapsedMillis), "a marker on the first member cuts no step")
+        assertNull(splitStoredRunAt(row, origin.elapsedMillis + 1101))
+    }
+
+    @Test fun recoveryCutsTheRunItsInterruptedMarkerLandsOn() = runTest {
+        // Measured once on the real database: recovery puts INTERRUPTED on the ride's last tick, which an unknown run
+        // already reached.
+        val f = fixture(); f.begin()
+        val samples = listOf(u(0), u(300), u(600))
+        f.append(samples)
+        assertEquals(1, f.store.recoverInterrupted())
+        val marker = f.store.markers("ride", HistoryRange(0, Long.MAX_VALUE)).single()
+        assertEquals(HistoryMarkerKind.INTERRUPTED, marker.kind)
+        assertEquals(collapseUnknownRuns(samples, listOf(marker)),
+            f.rows(key = pack).map { HistoryCompactCodec.decode(it, pack, origin) })
+        assertEquals(listOf(2L, null), f.rows(key = pack).map { it.runCount })
+    }
+
+    @Test fun aSampleInsideAStoredRunIsRefused() = runTest {
+        val f = fixture(); f.begin()
+        f.append(listOf(u(0), u(300), u(600)))
+        assertFailsWith<IllegalArgumentException> { f.append(listOf(u(300))) }
+        assertFailsWith<IllegalArgumentException> { f.append(listOf(k(0, 1.0))) }
+        // At the run end (a later sequence) is in order; so is a late sample of a series with no run there.
+        f.append(listOf(u(600, reason = HistoryUnknownReason.GAP)))
+        f.append(listOf(k(100, 1.0, ctl), k(50, 2.0, ctl)))
+        assertEquals(listOf(3L, null), f.rows(key = pack).map { it.runCount })
     }
 
     @Test fun codecIsAFixedTableAndRefusesANonFiniteReading() {
@@ -251,11 +335,14 @@ class SqlDelightHistoryStoreCompactTest {
         val ride = HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING)
         val v2 = fixture(compact = false); val v3 = fixture()
         listOf(v2, v3).forEach { it.store.begin(ride, replaySources) }
-        // ~55 ms per observation with a 0-1 ms wall/monotonic wobble, as HistoryRecordingClock reads them.
+        // ~55 ms per observation. The wall/monotonic skew walks 0, 9, 18, 27 (neighbour steps join, the drift from a
+        // run's first member does not), jumps back, then 0, -10, +10 (a 20 ms step splits though both are within 15 ms of
+        // the first): the two rules an earlier writer revision confused give different runs here.
+        val skews = longArrayOf(0, 9, 18, 27, 0, -10, 10)
         val samples = observations.flatMapIndexed { i, observation ->
             val kind = historySourceKindForTelemetry(observation.origin, observation.role)
             val ms = i * 55L
-            historyTelemetrySamples(replaySources.single { it.kind == kind }, tick(ms, skew = (i % 2).toLong()), observation)
+            historyTelemetrySamples(replaySources.single { it.kind == kind }, tick(ms, skew = skews[(i / 7) % skews.size]), observation)
         }
         val gapAt = samples[samples.size / 2].tick.elapsedMillis - origin.elapsedMillis + 1
         val gap = HistoryMarker(tick(gapAt), HistoryMarkerKind.BLE_GAP, replaySources.first().id)
@@ -292,7 +379,7 @@ class SqlDelightHistoryStoreCompactTest {
                     assertEquals(e.sample.tick, s.sample.tick, "$key"); assertEquals(e.sample.unknown, s.sample.unknown)
                     assertEquals(e.sample.value?.toRawBits(), s.sample.value?.toRawBits()); assertEquals(e.sequence, s.sequence)
                     assertEquals(e.run?.count, s.run?.count, "$key"); assertEquals(e.run?.sequence, s.run?.sequence)
-                    assertEquals(e.run?.tick?.elapsedMillis, s.run?.tick?.elapsedMillis)
+                    assertEquals(e.run?.tick, s.run?.tick, "$key: the run end, epoch included")
                     if (s.run != null) runs++
                 }
                 // Readers see the same number of samples at the same positions, and every known one bit-equal.
