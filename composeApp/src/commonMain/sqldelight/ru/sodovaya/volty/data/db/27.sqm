@@ -8,7 +8,7 @@ CREATE TABLE HistorySampleV3 (seriesId INTEGER NOT NULL, elapsedMillis INTEGER N
   epochSkew INTEGER NOT NULL DEFAULT 0, clockDelta INTEGER NOT NULL DEFAULT 0, reading REAL, unknownCode INTEGER,
   runEndElapsed INTEGER, runEndSequence INTEGER, runCount INTEGER,
   PRIMARY KEY(seriesId, elapsedMillis, sequence),
-  CHECK((reading IS NULL AND unknownCode IS NOT NULL AND unknownCode BETWEEN 1 AND 5) OR (reading IS NOT NULL AND unknownCode IS NULL)),
+  CHECK((reading IS NULL AND unknownCode IS NOT NULL AND unknownCode >= 1) OR (reading IS NOT NULL AND unknownCode IS NULL)),
   CHECK((runCount IS NULL AND runEndElapsed IS NULL AND runEndSequence IS NULL) OR
     (unknownCode IS NOT NULL AND runCount IS NOT NULL AND runEndElapsed IS NOT NULL AND runEndSequence IS NOT NULL AND
       runCount >= 2 AND runEndElapsed >= elapsedMillis AND runEndSequence > sequence))

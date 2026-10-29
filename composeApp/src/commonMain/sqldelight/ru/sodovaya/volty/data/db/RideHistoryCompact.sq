@@ -6,6 +6,13 @@
 -- HistorySampleV3    one row per known sample or per unknown RUN, WITHOUT ROWID so the primary key IS the table:
 --                    (seriesId, elapsedMillis, sequence) is the read order of every reader and there is no second index.
 --
+-- Ids are allocated by the writer as MAX+1 (maxRideNoV3, maxSeriesIdV3) and, with no AUTOINCREMENT, a deleted highest id is
+-- REUSED. That is safe only because a ride is deleted in ONE transaction (samples of its series, then the series, then the
+-- key); a delete that left samples behind would hand them to the next ride. Tasks 5/6 must keep that transaction.
+-- Task 8 must decide what to do with V2 samples whose HistoryRideV2 row is missing (no origin to compute skew from).
+-- Known-row epochSkew is 0 only while wall and monotonic clocks agree; NTP slew or a clock step makes later rows 1-5 bytes.
+-- Unmeasured on real data: Task 9 should record the distribution.
+--
 -- Per-sample epoch and clock generation, decided here (Task 4):
 --   epochSkew  = (sample.epochMillis - sample.elapsedMillis) - (ride.started.epochMillis - ride.started.elapsedMillis)
 --   clockDelta = sample.clockGeneration - ride.started.clockGeneration
@@ -15,7 +22,10 @@
 -- cost one byte. The ride origin comes from HistoryRideV2.started*. An earlier idea, one skew per run only, would have
 -- lost the epoch of known samples; known rows therefore keep their own.
 --
--- unknownCode: 1..5, the ordinal+1 of the unknown reason (mapping lives in the Task 5 codec, not in SQL).
+-- unknownCode: >= 1, the ordinal+1 of the unknown reason. The mapping AND its upper bound live in the Task 5 codec, not in
+-- SQL: a CHECK cannot be altered, so BETWEEN 1 AND 5 would have made a 6th HistoryUnknownReason (Part P) cost a table
+-- rebuild of hundreds of MB. An earlier revision capped the code at 5; that was wrong for that reason. An unmapped code reads
+-- back as invalid data. The writer maps NaN readings explicitly (SQLite stores NaN as NULL, which would hit the CHECK).
 -- A run row (runCount IS NOT NULL) is an unknown that stands for runCount samples evenly spaced from
 -- (elapsedMillis, sequence) to (runEndElapsed, runEndSequence), runCount >= 2. Task 3: a stored run must satisfy
 -- runEndElapsed - elapsedMillis <= 2000 * (runCount - 1).
@@ -49,7 +59,7 @@ CREATE TABLE HistorySampleV3 (
   runEndSequence INTEGER,
   runCount INTEGER,
   PRIMARY KEY(seriesId, elapsedMillis, sequence),
-  CHECK((reading IS NULL AND unknownCode IS NOT NULL AND unknownCode BETWEEN 1 AND 5) OR (reading IS NOT NULL AND unknownCode IS NULL)),
+  CHECK((reading IS NULL AND unknownCode IS NOT NULL AND unknownCode >= 1) OR (reading IS NOT NULL AND unknownCode IS NULL)),
   CHECK((runCount IS NULL AND runEndElapsed IS NULL AND runEndSequence IS NULL) OR
     (unknownCode IS NOT NULL AND runCount IS NOT NULL AND runEndElapsed IS NOT NULL AND runEndSequence IS NOT NULL AND
       runCount >= 2 AND runEndElapsed >= elapsedMillis AND runEndSequence > sequence))
@@ -64,6 +74,9 @@ SELECT rideNo FROM HistoryRideKeyV3 WHERE rideId = :rideId;
 maxRideNoV3:
 SELECT COALESCE(MAX(rideNo), 0) FROM HistoryRideKeyV3;
 
+maxSeriesIdV3:
+SELECT COALESCE(MAX(seriesId), 0) FROM HistorySeriesV3;
+
 insertSeriesV3:
 INSERT INTO HistorySeriesV3(seriesId, rideNo, sourceId, metricId, cellIndex)
 VALUES (:seriesId, :rideNo, :sourceId, :metricId, :cellIndex);
@@ -72,6 +85,7 @@ seriesForV3:
 SELECT seriesId FROM HistorySeriesV3
 WHERE rideNo = :rideNo AND sourceId = :sourceId AND metricId = :metricId AND cellIndex = :cellIndex;
 
+-- Sorts through a temp b-tree after the UNIQUE-index prefix scan; tens of rows per ride, so harmless.
 seriesOfRideV3:
 SELECT * FROM HistorySeriesV3 WHERE rideNo = :rideNo ORDER BY seriesId;
 
