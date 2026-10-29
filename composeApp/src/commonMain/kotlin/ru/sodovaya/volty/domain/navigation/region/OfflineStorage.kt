@@ -16,9 +16,10 @@ data class OfflineByteSize(val value: Double, val unit: OfflineByteUnit)
 object OfflineByteFormat {
     fun size(bytes: Long): OfflineByteSize {
         val b = bytes.coerceAtLeast(0L)
+        // Round first, then pick the unit, so 999,999 B is "1.0 MB", not "1000.0 KB".
         return when {
-            b >= 1_000_000_000L -> OfflineByteSize(tenth(b / 1e9), OfflineByteUnit.GB)
-            b >= 1_000_000L -> OfflineByteSize(tenth(b / 1e6), OfflineByteUnit.MB)
+            tenth(b / 1e6) >= 1000.0 -> OfflineByteSize(tenth(b / 1e9), OfflineByteUnit.GB)
+            b >= 1_000_000L || tenth(b / 1e3) >= 1000.0 -> OfflineByteSize(tenth(b / 1e6), OfflineByteUnit.MB)
             b >= 1_000L -> OfflineByteSize(tenth(b / 1e3), OfflineByteUnit.KB)
             else -> OfflineByteSize(b.toDouble(), OfflineByteUnit.B)
         }
@@ -49,25 +50,22 @@ interface OfflineStorageMeter {
 object OfflineDownloadStagingPolicy {
     const val ABANDONED_AFTER_MILLIS: Long = 7L * 24 * 60 * 60 * 1000
 
+    /**
+     * Anything touched this recently is left alone: downloads write outside the store's
+     * lock, so a download that starts between the "who is active" snapshot and the delete
+     * must not lose its directory.
+     */
+    const val SETTLING_MILLIS: Long = 10L * 60 * 1000
+
     fun isStale(
         directoryName: String,
         ageMillis: Long,
         installedReleases: Map<String, String>,
         activeRegionIds: Set<String>,
     ): Boolean {
+        if (ageMillis < SETTLING_MILLIS) return false
         if (activeRegionIds.any { directoryName.startsWith("$it-") }) return false
         if (installedReleases.any { (region, release) -> directoryName == "$region-$release" }) return true
         return ageMillis > ABANDONED_AFTER_MILLIS
     }
-}
-
-/**
- * MapLibre's shared "ambient" tile cache is capped explicitly instead of
- * inheriting the SDK default.  Offline packs are exempt from the cap, so it only
- * bounds what browsing outside a downloaded cell leaves behind (and the history
- * preview renderer feeds it too).  32 MiB holds a few hundred vector tiles - enough
- * for a ride's worth of re-panning - and is below the 50 MiB default.
- */
-object OfflineMapCachePolicy {
-    const val AMBIENT_CACHE_BYTES: Long = 32L * 1024 * 1024
 }

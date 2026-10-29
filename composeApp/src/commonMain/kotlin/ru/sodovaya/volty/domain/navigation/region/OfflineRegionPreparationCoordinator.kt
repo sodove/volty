@@ -228,10 +228,20 @@ class DefaultOfflineRegionPreparationCoordinator(
         // map" dialog on mobile data.  "Is this region already here and done" is
         // decided before any network question, and routing/search readiness follows
         // the installed package, never the map theme.
+        // Second retraction: gating on isInstalled alone made an explicit resume / retry /
+        // update of an installed region with a FAILED, PAUSED or newer release do nothing.
+        // The package request is skipped only when the installed release IS the published
+        // one (nothing to fetch), or when the trigger is automatic (opening the map never
+        // updates or repairs a package; that stays an explicit action).
         val installed = packageState.isInstalled
+        val packageWork = !OfflineRegionRequestPolicy.isAlreadyCurrent(
+            packageState.installedReleaseVersion,
+            packageState.latestRelease?.releaseVersion,
+        ) && trigger != OfflinePreparationTrigger.FIRST_MAP_OPEN
+        if (!installed && trigger == OfflinePreparationTrigger.FIRST_MAP_OPEN) return@supervisorScope
         val metadata = packageState.region.mapPack
         val revision = metadata?.ofmStyleRevision
-        if (installed && !force && store.completed(packageState.region.regionId, style, revision)) {
+        if (installed && !packageWork && !force && store.completed(packageState.region.regionId, style, revision)) {
             stateMutex.withLock { pending.remove(key) }
             return@supervisorScope
         }
@@ -270,7 +280,7 @@ class DefaultOfflineRegionPreparationCoordinator(
                     // activate a native map transfer first.  An installed region
                     // only waits for a usable network to fetch its map pack: no
                     // package request, no prompt.
-                    if (!installed) {
+                    if (packageWork) {
                         packages.requestDownload(packageState.region.regionId, downloadTrigger, meteredConfirmed)
                     }
                     return@supervisorScope
@@ -292,7 +302,7 @@ class DefaultOfflineRegionPreparationCoordinator(
         stateMutex.withLock { definitions[key] = definition }
         val mapJob = launch { mapPacks.prepare(definition) }
         val navigationJob = launch {
-            if (!installed) {
+            if (packageWork) {
                 val shouldRequest = stateMutex.withLock {
                     if (navigationRequested.contains(packageState.region.regionId)) false
                     else {

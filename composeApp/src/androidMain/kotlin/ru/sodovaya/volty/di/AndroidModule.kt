@@ -35,7 +35,6 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionRuntime
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationCoordinator
 import ru.sodovaya.volty.domain.navigation.region.DefaultOfflineRegionPreparationCoordinator
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationStore
-import ru.sodovaya.volty.domain.navigation.region.OfflineMapCachePolicy
 import ru.sodovaya.volty.domain.navigation.region.OfflineStorageMeter
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineStorageMeter
 import ru.sodovaya.volty.data.prefs.AppPrefs
@@ -489,22 +488,10 @@ val androidModule = module {
     single(named(OFFLINE_DOWNLOAD_SCOPE)) {
         CoroutineScope(SupervisorJob() + Dispatchers.IO)
     }
-    single {
-        OfflineManager.getInstance(androidContext()).also { manager ->
-            // Explicit ambient-cache cap instead of the SDK default (see OfflineMapCachePolicy).
-            runCatching {
-                manager.setMaximumAmbientCacheSize(
-                    OfflineMapCachePolicy.AMBIENT_CACHE_BYTES,
-                    object : OfflineManager.FileSourceCallback {
-                        override fun onSuccess() = Unit
-                        override fun onError(message: String) {
-                            android.util.Log.w("VoltyOffline", "Ambient cache cap not applied: $message")
-                        }
-                    },
-                )
-            }
-        }
-    }
+    // No setMaximumAmbientCacheSize: in MapLibre 13.0.2 offline packs count against the cap,
+    // so any cap below the pack size makes the ambient cache ~0 without shrinking
+    // mbgl-offline.db. The SDK default stays.
+    single { OfflineManager.getInstance(androidContext()) }
     single { AndroidOfflineStorageMeter(androidContext(), legacyRoutingUnused = BuildConfig.VOLTY_OFFLINE_RUNTIME_ENABLED) }
     single<OfflineStorageMeter> { get<AndroidOfflineStorageMeter>() }
     single { AndroidOfflineMapPackStore() }

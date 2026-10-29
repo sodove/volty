@@ -45,6 +45,10 @@ class ProductionConfig:
     # cell it can see, so enabling this needs an app that resolves the rider's
     # position through /offline/resolve.
     compact_catalog: bool = False
+    # Largest client-facing catalog.json the worker will publish.  0.7.59 clients reject
+    # anything above 4 MiB, so raise this only after an app with the 16 MiB limit is
+    # in riders' hands.
+    max_catalog_bytes: int = 4 * 1024 * 1024
 
 
 def _absolute(value: object, name: str) -> Path:
@@ -139,4 +143,5 @@ def load_config(path: Path) -> ProductionConfig:
         positive_int("pollSeconds", 30), positive_int("maxDownloadBytes", 1_073_741_824),
         positive_int("maxRuntimeSeconds", 86_400),
         _boolean(raw, "compactCatalog", False),
+        positive_int("maxCatalogBytes", 4 * 1024 * 1024),
     )

@@ -6,6 +6,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class OfflineStorageTest {
+    private val settled = OfflineDownloadStagingPolicy.SETTLING_MILLIS + 1
+
     @Test
     fun manifest_bytes_are_printed_in_decimal_megabytes_like_the_system_does() {
         // The live g1-146-240 download and installed sizes.
@@ -28,8 +30,8 @@ class OfflineStorageTest {
 
     @Test
     fun staging_of_an_already_installed_release_is_stale() {
-        assertTrue(OfflineDownloadStagingPolicy.isStale("g1-146-240-r1", 1, mapOf("g1-146-240" to "r1"), emptySet()))
-        assertFalse(OfflineDownloadStagingPolicy.isStale("g1-146-240-r2", 1, mapOf("g1-146-240" to "r1"), emptySet()))
+        assertTrue(OfflineDownloadStagingPolicy.isStale("g1-146-240-r1", settled, mapOf("g1-146-240" to "r1"), emptySet()))
+        assertFalse(OfflineDownloadStagingPolicy.isStale("g1-146-240-r2", settled, mapOf("g1-146-240" to "r1"), emptySet()))
     }
 
     @Test
@@ -50,7 +52,15 @@ class OfflineStorageTest {
     }
 
     @Test
-    fun ambient_cache_cap_is_explicit_and_below_the_sdk_default() {
-        assertTrue(OfflineMapCachePolicy.AMBIENT_CACHE_BYTES in 1..(50L * 1024 * 1024))
+    fun a_directory_touched_a_moment_ago_is_never_reaped() {
+        val recent = OfflineDownloadStagingPolicy.SETTLING_MILLIS - 1
+        assertFalse(OfflineDownloadStagingPolicy.isStale("g1-1-1-r1", recent, mapOf("g1-1-1" to "r1"), emptySet()))
+    }
+
+    @Test
+    fun rounding_never_prints_a_thousand_of_the_smaller_unit() {
+        assertEquals(OfflineByteSize(1.0, OfflineByteUnit.MB), OfflineByteFormat.size(999_999))
+        assertEquals(OfflineByteSize(1.0, OfflineByteUnit.GB), OfflineByteFormat.size(999_950_000))
+        assertEquals(OfflineByteSize(999.9, OfflineByteUnit.KB), OfflineByteFormat.size(999_900))
     }
 }

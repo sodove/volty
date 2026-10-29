@@ -27,6 +27,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from .config import ProductionConfig, load_config
 from .source_cache import SourceError, fetch_snapshot
 
+# catalog-index.json is read only by the package service, never by a client.
+INDEX_MAX_BYTES = 16 * 1024 * 1024
+
 
 class Worker:
     def __init__(self, config: ProductionConfig, queue_path: Path):
@@ -310,11 +313,24 @@ class Worker:
         spec = self.config.staging_root / spec_name
         spec.parent.mkdir(parents=True, exist_ok=True)
         spec.write_text(json.dumps({"regions": entries}, ensure_ascii=False), encoding="utf-8")
+        # Build beside the spec and publish only if it fits: an oversized catalog
+        # would make every client that still has the 4 MiB limit fail to refresh.
+        built = self.config.staging_root / ("out-" + output_name)
+        built.unlink(missing_ok=True)
         output = self.config.public_root / output_name
+        limit = INDEX_MAX_BYTES if output_name == "catalog-index.json" else self.config.max_catalog_bytes
         subprocess.run([sys.executable, str(Path(__file__).parents[1] / "build-catalog.py"), "--spec", str(spec),
-                        "--output", str(output), "--public-key", str(public_key), "--private-key",
+                        "--output", str(built), "--public-key", str(public_key), "--private-key",
                         str(self.config.signing_key), "--key-id", self.config.key_id,
                         "--current-app-version-code", str(self.config.min_app_version_code)], check=True, timeout=60)
+        if built.is_file():
+            size = built.stat().st_size
+            if size > limit:
+                built.unlink()
+                raise ValueError(f"{output_name} would be {size} bytes, over the {limit} byte limit; "
+                                 "keeping the previously published catalog")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(built, output)
 
     @staticmethod
     def _generated_region_name(manifest_path: Path | None) -> str | None:

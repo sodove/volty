@@ -43,7 +43,7 @@ class Config:
                  builder_url=None,
                  max_download_bytes=8*1024**3, max_expanded_bytes=24*1024**3,
                  max_cache_bytes=64*1024**3, min_free_bytes=1024**3, workers=2, max_pending=8,
-                 max_catalog_bytes=16*1024**2, prune_grace_seconds=7*86400,
+                 max_catalog_bytes=4*1024**2, prune_grace_seconds=7*86400,
                  refresh_seconds=900, request_timeout_seconds=30, download_timeout_seconds=1800,
                  ingest_root=None):
         self.root = Path(root).resolve()

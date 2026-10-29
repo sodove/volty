@@ -373,6 +373,99 @@ class OfflineRegionPreparationCoordinatorTest {
         assertEquals(listOf(OfflineMapStyleVariant.DARK), map.preparedStyles.distinct())
     }
 
+    // ---- Review I1: explicit actions on an installed region that is NOT current must work ----
+
+    private fun installedButBehind(status: OfflineRegionPackageStatus) =
+        // installed r0, published r1: the old release is on the device, the new one is not.
+        regionState(status, installedRelease = "r0")
+
+    @Test
+    fun explicit_update_of_an_installed_region_requests_the_package() = runTest {
+        val packages = FakePackages(installedButBehind(OfflineRegionPackageStatus.UPDATE_AVAILABLE))
+        val coordinator = coordinator(FakeMapManager(), packages, backgroundScope, OfflineNetworkAvailability.UNMETERED)
+
+        coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
+
+        assertEquals(1, packages.requestCalls)
+    }
+
+    @Test
+    fun resume_of_a_paused_update_requests_the_package() = runTest {
+        val packages = FakePackages(installedButBehind(OfflineRegionPackageStatus.PAUSED))
+        val coordinator = coordinator(FakeMapManager(), packages, backgroundScope, OfflineNetworkAvailability.UNMETERED)
+
+        coordinator.retry("first")
+
+        assertEquals(1, packages.requestCalls)
+    }
+
+    @Test
+    fun retry_of_a_failed_update_requests_the_package() = runTest {
+        val packages = FakePackages(installedButBehind(OfflineRegionPackageStatus.FAILED))
+        val coordinator = coordinator(FakeMapManager(), packages, backgroundScope, OfflineNetworkAvailability.UNMETERED)
+
+        coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
+        coordinator.retry("first")
+
+        assertTrue(packages.requestCalls >= 2)
+    }
+
+    @Test
+    fun explicit_update_on_a_metered_network_still_asks_for_approval() = runTest {
+        val map = FakeMapManager()
+        val packages = FakePackages(installedButBehind(OfflineRegionPackageStatus.UPDATE_AVAILABLE))
+        val coordinator = coordinator(map, packages, backgroundScope, OfflineNetworkAvailability.METERED)
+
+        coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
+
+        assertEquals(1, packages.requestCalls) // the repository turns this into the approval prompt
+        assertEquals(0, map.prepareCalls)      // and nothing native starts before approval
+    }
+
+    @Test
+    fun opening_the_map_never_updates_or_repairs_an_installed_region() = runTest {
+        for (status in listOf(
+            OfflineRegionPackageStatus.UPDATE_AVAILABLE,
+            OfflineRegionPackageStatus.FAILED,
+            OfflineRegionPackageStatus.PAUSED,
+        )) {
+            val packages = FakePackages(installedButBehind(status))
+            val coordinator = coordinator(FakeMapManager(), packages, backgroundScope, OfflineNetworkAvailability.UNMETERED)
+
+            coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+            advanceUntilIdle()
+
+            assertEquals(0, packages.requestCalls, "status=$status")
+        }
+    }
+
+    @Test
+    fun explicit_action_on_a_current_installed_region_does_not_request_the_package() = runTest {
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.READY, installed = true))
+        val coordinator = coordinator(FakeMapManager(), packages, backgroundScope, OfflineNetworkAvailability.METERED)
+
+        coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
+        coordinator.retry("first")
+
+        assertEquals(0, packages.requestCalls)
+    }
+
+    @Test
+    fun concurrent_current_region_opens_start_one_map_job() = runTest {
+        val map = FakeMapManager()
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.READY, installed = true))
+        val coordinator = coordinator(map, packages, backgroundScope)
+
+        coroutineScope {
+            repeat(20) {
+                launch { coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT) }
+            }
+        }
+
+        assertEquals(1, map.prepareCalls)
+        assertEquals(0, packages.requestCalls)
+    }
+
     @Test
     fun a_stale_completion_marker_does_not_block_an_explicit_reinstall() = runTest {
         // A deleted-then-redownloaded region keeps its durable completion marker.
@@ -475,6 +568,7 @@ class OfflineRegionPreparationCoordinatorTest {
         status: OfflineRegionPackageStatus,
         id: String = "first",
         installed: Boolean = false,
+        installedRelease: String? = if (installed) "r1" else null,
         bounds: OfflineRegionBounds = OfflineRegionBounds(56.0, 60.0, 57.0, 61.0),
     ) = OfflineRegionPackageState(
         region = OfflineRegionManifest(
@@ -491,7 +585,7 @@ class OfflineRegionPreparationCoordinatorTest {
         ),
         latestRelease = release(id),
         status = status,
-        installedReleaseVersion = if (installed) "r1" else null,
+        installedReleaseVersion = installedRelease,
         downloadedBytes = if (status == OfflineRegionPackageStatus.DOWNLOADING) 1L else 0L,
     )
 

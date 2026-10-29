@@ -190,7 +190,7 @@ class WorkerTest(unittest.TestCase):
 
             outputs = [call.args[0][call.args[0].index("--output") + 1] for call in run.call_args_list]
             # Index first: a reader that sees the compact catalog has already seen the index.
-            self.assertEqual(["catalog-index.json", "catalog.json"], [Path(o).name for o in outputs])
+            self.assertEqual(["out-catalog-index.json", "out-catalog.json"], [Path(o).name for o in outputs])
             index = json.loads((root / "staging" / "catalog-spec-index.json").read_text(encoding="utf-8"))
             client = json.loads((root / "staging" / "catalog-spec.json").read_text(encoding="utf-8"))
             self.assertEqual(3, len(index["regions"]))
@@ -223,6 +223,37 @@ class WorkerTest(unittest.TestCase):
             self.assertEqual(1, run.call_count)  # build-catalog.py refuses an empty region list
             client = json.loads((root / "staging" / "catalog-spec.json").read_text(encoding="utf-8"))
             self.assertEqual(3, len(client["regions"]))
+
+    def test_oversized_catalog_is_not_published_and_the_previous_one_survives(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self._compact_fixture(root, None)
+            self.assertEqual(4 * 1024 * 1024, config.max_catalog_bytes)
+            published = root / "public" / "catalog.json"
+            published.write_text("previous", encoding="utf-8")
+
+            def fake_builder(command, **_):
+                target = Path(command[command.index("--output") + 1])
+                target.write_bytes(b"x" * (config.max_catalog_bytes + 1))
+
+            with patch("production.worker.subprocess.run", side_effect=fake_builder):
+                with self.assertRaises(ValueError):
+                    Worker(config, root / "queue.json")._write_catalog()
+
+            self.assertEqual("previous", published.read_text(encoding="utf-8"))
+
+    def test_catalog_within_the_limit_replaces_the_published_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self._compact_fixture(root, None)
+
+            def fake_builder(command, **_):
+                Path(command[command.index("--output") + 1]).write_bytes(b"{}")
+
+            with patch("production.worker.subprocess.run", side_effect=fake_builder):
+                Worker(config, root / "queue.json")._write_catalog()
+
+            self.assertEqual(b"{}", (root / "public" / "catalog.json").read_bytes())
 
     def test_worker_does_not_fabricate_source_metadata(self):
         with tempfile.TemporaryDirectory() as directory:

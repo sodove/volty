@@ -23,6 +23,8 @@ from package_validation import (
 # Complete signed cell list (empty on-demand cells included) published next to a
 # compact catalog.json by a worker running with compactCatalog; service-internal.
 INDEX_NAME = 'catalog-index.json'
+# The index is never sent to a client, so it is not bound by the client catalog limit.
+INDEX_MAX_BYTES = 16 * 1024 ** 2
 
 class PackageManager:
     def __init__(self, config, fetch=None):
@@ -133,8 +135,8 @@ class PackageManager:
         if sum(c['installedBytes'] for c in components.values()) > self.config.max_expanded_bytes:
             raise ValueError('package_expansion_limit')
 
-    def _validate_catalog(self, data):
-        if len(data) > self.config.max_catalog_bytes:
+    def _validate_catalog(self, data, limit=None):
+        if len(data) > (limit or self.config.max_catalog_bytes):
             raise ValueError('catalog_limit')
         def pairs(items):
             result = {}
@@ -209,7 +211,7 @@ class PackageManager:
         if not path.is_file():
             return None
         try:
-            entries, _ = self._validate_catalog(path.read_bytes())
+            entries, _ = self._validate_catalog(path.read_bytes(), limit=INDEX_MAX_BYTES)
         except (KeyError, TypeError, UnicodeError) as error:
             raise ValueError('invalid_catalog_index') from error
         return entries

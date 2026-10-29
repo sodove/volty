@@ -11,6 +11,12 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineStorageUsage
  * Measures what the offline feature really occupies by summing file lengths,
  * including MapLibre's database, which the signed manifests know nothing about.
  *
+ * The map figure is the whole MapLibre database: offline packs PLUS its ambient tile
+ * cache, which MapLibre 13.0.2 budgets together (packs count against the ambient cap).
+ * The file is a SQLite database that is never vacuumed, so it does not shrink when a
+ * pack is deleted and no cap setting would reclaim it. Retraction: an earlier revision
+ * of this change set a 32 MiB ambient cap and presented it as a storage fix; it was not.
+ *
  * [legacyRoutingUnused] says the retired BRouter store (`offline-routing/`) can no
  * longer be read: release builds always run the Valhalla path
  * (VOLTY_OFFLINE_RUNTIME_ENABLED is hard-wired true there), so the store is dead

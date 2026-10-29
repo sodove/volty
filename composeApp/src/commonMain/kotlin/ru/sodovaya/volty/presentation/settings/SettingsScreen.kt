@@ -847,7 +847,14 @@ private fun OfflineMapsPage(
         fontSize = 11.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
-    (state.offlineCoverage as? OfflineCurrentCoverage.NotAvailable)?.let { coverage ->
+    (state.offlineCoverage as? OfflineCurrentCoverage.NotAvailable)
+        // Not while that very cell is already being prepared or downloaded.
+        ?.takeIf { coverage ->
+            state.offlineRegions.firstOrNull { it.region.regionId == coverage.regionId }?.status.let {
+                it == null || it == OfflineRegionPackageStatus.NOT_INSTALLED || it == OfflineRegionPackageStatus.FAILED
+            }
+        }
+        ?.let { coverage ->
         // Information first, action second: nothing was downloaded because of this.
         Column(
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
