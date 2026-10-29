@@ -59,34 +59,12 @@ object HistoryReaderFingerprint {
      * markers: only those of a gap kind that are global or scoped to the series' source split a chain.
      */
     fun collapseUnknownChains(samples: List<HistorySample>, markers: List<HistoryMarker>,
-        maxIntervalMillis: Long = HISTORY_MAX_INTERVAL_MILLIS): List<Segment> {
-        val sourceId = samples.firstOrNull()?.key?.sourceId
-        val breaks = markers.filter { it.kind in HISTORY_GAP_MARKERS && (it.sourceId == null || it.sourceId == sourceId) }
-            .map { it.tick.elapsedMillis }.sorted()
-        fun markerBetween(previous: Long, next: Long) = breaks.any { it > previous && it <= next }
-        fun skew(sample: HistorySample) = sample.tick.epochMillis - sample.tick.elapsedMillis
-        val result = ArrayList<Segment>()
-        var first: HistorySample? = null
-        var last: HistorySample? = null
-        var count = 0
-        fun flush() {
-            val head = first ?: return
-            result += if (count == 1) Segment.One(head) else Segment.Chain(head, checkNotNull(last), count)
-            first = null; last = null; count = 0
+        maxIntervalMillis: Long = HISTORY_MAX_INTERVAL_MILLIS): List<Segment> =
+        collapseUnknownRuns(samples, markers, maxIntervalMillis).map { row ->
+            val end = row.run
+            if (end == null) Segment.One(row.sample)
+            else Segment.Chain(row.sample, HistorySample(end.tick, row.sample.key, null, row.sample.unknown), end.count)
         }
-        for (sample in samples) {
-            if (sample.value != null) { flush(); result += Segment.One(sample); continue }
-            val previous = last
-            val continues = previous != null && previous.unknown == sample.unknown &&
-                previous.tick.clockGeneration == sample.tick.clockGeneration && skew(previous) == skew(sample) &&
-                sample.tick.elapsedMillis - previous.tick.elapsedMillis in 0..maxIntervalMillis &&
-                !markerBetween(previous.tick.elapsedMillis, sample.tick.elapsedMillis)
-            if (!continues) { flush(); first = sample }
-            last = sample; count++
-        }
-        flush()
-        return result
-    }
 
     /** Copies [source] to a temp file, fingerprints the copy into [out] and returns per-reader line counts. */
     fun run(source: File, out: File, verbose: Boolean = false): Map<String, Long> {
