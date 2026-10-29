@@ -429,10 +429,17 @@ tasks.configureEach {
 }
 
 // Reader fingerprint (HistoryReaderFingerprintTest.realDatabaseFingerprint): the gate properties must reach the test JVM,
-// which -D on the Gradle command line does not do by itself. Absent, the test is skipped; they are never set in the suite.
+// which -D on the Gradle command line does not do by itself. Absent, the test is skipped and nothing here applies.
+// Present, the run reads files Gradle does not track, so the task must never be UP-TO-DATE or served from a cache
+// (an earlier revision could be, silently, with a replaced database); it also gets the heap a 600 MB database needs.
+// Run it with --tests "*HistoryReaderFingerprintTest.realDatabaseFingerprint", or the whole suite runs under that heap.
 tasks.withType<Test>().configureEach {
-    if (System.getProperty("volty.fingerprintDb") != null) maxHeapSize = "3g"   // a 600 MB database: whole series are held for the collapse
-    listOf("volty.fingerprintDb", "volty.fingerprintOut", "volty.fingerprintVerbose").forEach { name ->
-        System.getProperty(name)?.let { systemProperty(name, it) }
+    val names = listOf("volty.fingerprintDb", "volty.fingerprintOut", "volty.fingerprintVerbose", "volty.fingerprintWork",
+        "volty.fingerprintCompare", "volty.fingerprintTolerate")
+    if (System.getProperty("volty.fingerprintDb") != null) {
+        maxHeapSize = "3g"
+        outputs.upToDateWhen { false }
+        outputs.cacheIf { false }
     }
+    names.forEach { name -> System.getProperty(name)?.let { systemProperty(name, it) } }
 }
