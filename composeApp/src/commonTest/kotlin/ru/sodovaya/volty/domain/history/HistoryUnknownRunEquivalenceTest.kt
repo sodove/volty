@@ -59,7 +59,7 @@ class HistoryUnknownRunEquivalenceTest {
         assertEquals(1, stored.size, "a dead series is one run")
         assertEquals(2752, stored.single().run?.count)
         val expanded = expandForReaders(stored)
-        assertEquals(2, expanded.size)
+        assertTrue(expanded.size > 2 && expanded.first() == full.first() && expanded.last() == full.last())
 
         val before = accumulate(full)
         val after = accumulate(expanded)
@@ -67,8 +67,8 @@ class HistoryUnknownRunEquivalenceTest {
         assertEquals(before.lastElapsed, after.lastElapsed)
         assertEquals(true, before.partial(856_000))
         assertEquals(before.partial(856_000), after.partial(856_000))
-        // The brief expected gapMillis to be equal here too. It is not: see gapMillisDivergesForRunsLongerThanTheInterval.
         assertEquals(0L, before.gapMillis)
+        assertEquals(before.gapMillis, after.gapMillis)
     }
 
     @Test fun gapMillisIsEqualForARunWithinTheIntervalLimit() {
@@ -82,11 +82,10 @@ class HistoryUnknownRunEquivalenceTest {
     }
 
     /**
-     * REPORTED DIVERGENCE (not adapted away). The expanded pair of a run is ONE step as long as the whole run. When that
-     * is over the interval limit, the accumulator calls it a genuine gap. The full series had only short unknown steps.
-     * The verdict `partial` is equal; `gapMillis`, hence the walk's `hasGap` (the energy tile's approximate mark), is not.
+     * A 4.5 s run inside a tolerance-exact series: with only first and end the expanded pair was a "genuine gap" and
+     * `hasGap` flipped. Fillers keep every step within the limit, so `gapMillis` is equal.
      */
-    @Test fun gapMillisDivergesForRunsLongerThanTheInterval() {
+    @Test fun gapMillisIsEqualForRunsLongerThanTheInterval() {
         val full = (0..333L).map { known(it * 300, 10.0 + it % 5) } +   // 0..99.9 s known
             unknownsBetween(100_200, 104_700) +                          // a 4.5 s unknown run
             (0..333L).map { known(105_000 + it * 300, 10.0 + it % 5) }
@@ -98,9 +97,31 @@ class HistoryUnknownRunEquivalenceTest {
         assertEquals(false, before.partial(rideEnd), "tolerated: well under max(2 %, 10 s)")
         assertEquals(before.partial(rideEnd), after.partial(rideEnd))
         assertEquals(0L, before.gapMillis)
-        assertEquals(false, before.gapMillis > 0)
-        assertEquals(true, after.gapMillis > 0, "the walk would report hasGap for the expanded form")
-        assertNotEquals(before.gapMillis, after.gapMillis)
+        assertEquals(before.gapMillis, after.gapMillis)
+        assertEquals(before.gapMillis > 0, after.gapMillis > 0, "the walk's hasGap")
+    }
+
+    @Test fun fillersNeverExceedTheIntervalLimitAndShortRunsAddNone() {
+        // A 4.5 s run: first, two fillers, end.
+        val run = unknownsBetween(100, 4_600)
+        val expanded = viaRuns(run)
+        assertEquals(listOf(100L, 2_100L, 4_100L, 4_600L), expanded.map { it.tick.elapsedMillis })
+        assertTrue(expanded.zipWithNext().all { (a, b) -> b.tick.elapsedMillis - a.tick.elapsedMillis in 1..HISTORY_MAX_INTERVAL_MILLIS })
+        assertTrue(expanded.all { it.unknown == dead && it.tick.clockGeneration == 1L && !clockBoundary(expanded.first().tick, it.tick) })
+        // Exactly the limit, and shorter: no filler.
+        assertEquals(listOf(0L, 2_000L), viaRuns(unknownsBetween(0, 2_000, step = 1_000)).map { it.tick.elapsedMillis })
+        assertEquals(listOf(0L, 600L), viaRuns(unknownsBetween(0, 600)).map { it.tick.elapsedMillis })
+        // Over a whole dead series the spacing holds, the first and end are exact and the reason survives.
+        var at = 0L
+        val dead2752 = List(2752) { index -> unknown(at).also { at += 279 + (index * 13L) % 45 } }
+        val big = viaRuns(dead2752)
+        assertEquals(dead2752.first(), big.first()); assertEquals(dead2752.last(), big.last())
+        assertTrue(big.zipWithNext().all { (a, b) -> b.tick.elapsedMillis - a.tick.elapsedMillis in 1..HISTORY_MAX_INTERVAL_MILLIS })
+        // Fillers keep a run's epoch skew and reason (a mixed-reason pair of runs).
+        val mixed = unknownsBetween(0, 5_000, step = 500, reason = partialSource) + unknownsBetween(5_500, 9_000, step = 500)
+        val mixedOut = viaRuns(mixed)
+        assertTrue(mixedOut.all { it.tick.epochMillis - it.tick.elapsedMillis == 1_000_000L })
+        assertEquals(listOf(partialSource, dead), mixedOut.map { it.unknown }.distinct())
     }
 
     @Test fun brokenAccumulatorKeepsGapInsideUnknowns() {
@@ -157,6 +178,7 @@ class HistoryUnknownRunEquivalenceTest {
         assertEquals(listOf(2, 4), runs.map { it.run!!.count })
         assertEquals(listOf(300L, 900L), runs.map { it.sample.tick.elapsedMillis })
         val expanded = viaRuns(full, scoped)
+        // First, end, and (for the 900..1800 run, 900 ms) no filler.
         assertEquals(listOf(0L, 300L, 600L, 900L, 1800L, 2100L), expanded.map { it.tick.elapsedMillis })
 
         val index = HistoryContinuityIndex(scoped)
@@ -181,6 +203,7 @@ class HistoryUnknownRunEquivalenceTest {
         val runs = collapseUnknownRuns(six, emptyList())
         assertEquals(listOf(3, 3), runs.map { it.run!!.count })
         assertEquals(listOf(0L, 600L, 900L, 1500L), expandForReaders(runs).map { it.tick.elapsedMillis })
+        assertEquals(listOf(3L, 3L, 4L, 4L), expandForReaders(runs).map { it.tick.clockGeneration })
         assertEquals(accumulate(six).brokenMillis, accumulate(expandForReaders(runs)).brokenMillis)
     }
 
@@ -294,10 +317,10 @@ class HistoryUnknownRunEquivalenceTest {
     }
 
     /**
-     * REPORTED DIVERGENCE (not adapted away): with GPS, the expanded pair of a run longer than 5 s is the existing "gap"
-     * case and credits the time GPS says the rider was moving. The full series credited nothing inside the unknowns.
+     * With GPS, a pair of unknowns more than 5 s apart would be the existing "gap" case and credit GPS-moving time, which
+     * the full series never did inside unknowns. Fillers (at most 2 s apart) keep the answer equal.
      */
-    @Test fun movingTimeWithGpsDivergesForRunsLongerThanFiveSeconds() {
+    @Test fun movingTimeWithGpsIsEqualForRunsLongerThanFiveSeconds() {
         val speedKey = HistorySeriesKey("ctl", "speed_kmh")
         val full = (0..3L).map { known(it * 300, 12.0, speedKey) } + unknownsBetween(2_000, 12_000, step = 1_000, k = speedKey) +
             known(13_000, 12.0, speedKey)
@@ -309,7 +332,7 @@ class HistoryUnknownRunEquivalenceTest {
         val after = historyMovingMillis(viaRuns(full), fixes, origin)
         assertEquals(true, before.approximate)
         assertEquals(true, after.approximate)
-        assertTrue(after.millis > before.millis, "expanded ${after.millis} ms vs full ${before.millis} ms")
+        assertEquals(before, after)
     }
 
     @Test fun batteryUsedIsEqualOverRuns() {
@@ -406,7 +429,7 @@ class HistoryUnknownRunEquivalenceTest {
     @Test fun cursorInsideRunReadsUnknown() {
         val full = listOf(known(0, 5.0)) + unknownsBetween(300, 3000) + known(3300, 6.0)
         val expanded = viaRuns(full)
-        assertEquals(listOf(0L, 300L, 3000L, 3300L), expanded.map { it.tick.elapsedMillis })
+        assertEquals(listOf(0L, 300L, 2300L, 3000L, 3300L), expanded.map { it.tick.elapsedMillis }, "one filler at 2300")
         assertEquals(null, nearestHistorySample(full, tick(1500), 5000))
         assertEquals(null, nearestHistorySample(expanded, tick(1500), 5000))
         // Every cursor tick, not just one: the endpoints stay, so the answer never changes.

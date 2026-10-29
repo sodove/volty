@@ -52,14 +52,14 @@ package ru.sodovaya.volty.domain.history
  *    dropping interior unknowns frees budget. Within the budget the drawn known points and the break stretches are
  *    equal. Above it the expanded series may choose more real points; none is invented.
  *
- * ## Divergences the proof found (reported, not adapted away)
- * Two readers change their answer, because the expanded pair is ONE step as long as the whole run:
- *  1. `HistoryBrokenAccumulator.gapMillis`: a run longer than the interval limit makes `end - first > max`, which the
- *     accumulator calls a genuine gap. `gapMillis` (and so the walk's `hasGap`, which makes the energy tile
- *     "approximate") differs for a series that is otherwise exact by tolerance. `brokenMillis`, `partial` and
- *     `lastElapsed` are equal. The plan's Task 3 brief said `gapMillis` was equal; that was wrong for this reason.
- *  2. `historyMovingMillis` with GPS: a pair of unknown samples more than 5 s apart is the existing "gap" case, which
- *     credits time from GPS speed. The full series never had such a pair inside a run.
+ * ## Fillers (retraction)
+ * An earlier revision expanded a run to just its first and end samples. That was wrong: the pair is one step as long as
+ * the whole run, so `HistoryBrokenAccumulator` called it a genuine gap (`gapMillis`, hence the walk's `hasGap`, differed)
+ * and `historyMovingMillis` met a pair more than 5 s apart and credited GPS-moving time. Both answers changed.
+ * [expandForReaders] therefore inserts in-memory FILLER unknowns, at most [HISTORY_MAX_INTERVAL_MILLIS] apart, between
+ * the first and the end sample (same reason, clock generation and epoch skew). Storage stays runs. Every step is then
+ * unknown to unknown within the interval limit, exactly the shape of the full series, so each reader above is equal,
+ * including `gapMillis` and moving time with GPS. A run no longer than the limit adds no filler.
  */
 data class HistoryUnknownRunEnd(val tick: HistoryTick, val sequence: Long, val count: Int) {
     init { require(count >= 1) }
@@ -120,11 +120,22 @@ fun collapseUnknownRuns(samples: List<HistorySample>, markers: List<HistoryMarke
     return result
 }
 
-/** What a reader that needs ticks is given: a run's first sample, plus its end sample when it has two or more members. */
-fun expandForReaders(stored: List<HistoryStoredSample>): List<HistorySample> = buildList {
+/**
+ * What a reader that needs ticks is given: a run's first sample, fillers at most [maxIntervalMillis] apart, and its end
+ * sample when it has two or more members. Fillers are never stored; see the class comment.
+ */
+fun expandForReaders(stored: List<HistoryStoredSample>, maxIntervalMillis: Long = HISTORY_MAX_INTERVAL_MILLIS): List<HistorySample> = buildList {
     for (row in stored) {
         add(row.sample)
         val end = row.run ?: continue
-        if (end.count >= 2) add(HistorySample(end.tick, row.sample.key, null, row.sample.unknown))
+        if (end.count < 2) continue
+        val first = row.sample.tick
+        var elapsed = first.elapsedMillis + maxIntervalMillis
+        while (elapsed < end.tick.elapsedMillis) {
+            add(HistorySample(HistoryTick(first.epochMillis + (elapsed - first.elapsedMillis), elapsed, first.clockGeneration),
+                row.sample.key, null, row.sample.unknown))
+            elapsed += maxIntervalMillis
+        }
+        add(HistorySample(end.tick, row.sample.key, null, row.sample.unknown))
     }
 }
