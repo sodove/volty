@@ -21,8 +21,9 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
         val from: Long, val through: Long, val shape: Shape, val rideNo: Long?)
 
     private fun shape(id: String, rideNo: Long?, from: Long, through: Long): Shape =
+        // exportV3Shape takes its parameters in the order they first appear in the SQL: toElapsed, rideNo, fromElapsed, rideId.
         if (rideNo == null) queries.exportV2Shape(id, from, through).executeAsOne().let { Shape(it.sampleCount, it.gpsCount, it.markerCount) }
-        else queries.exportV3Shape(rideNo, from, through, id).executeAsOne().let { Shape(it.sampleCount, it.gpsCount, it.markerCount) }
+        else queries.exportV3Shape(through, rideNo, from, id).executeAsOne().let { Shape(it.sampleCount, it.gpsCount, it.markerCount) }
 
     override suspend fun open(request: HistoryExportRequest): HistoryExportInput {
         if (request.source.kind == HistoryStorageKind.LEGACY) return openLegacy(request)
@@ -118,6 +119,8 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
         var afterElapsed: Long? = null
         var afterSequence = 0L
         var exhausted = false
+        /** The highest stored sequence of the rows paged so far (a run counts at its end): the series must climb strictly. */
+        var lastSequence = Long.MIN_VALUE
     }
 
     /**
@@ -127,13 +130,18 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
      * each paged on its primary key `(elapsedMillis, sequence)` at [pageSize] rows (one short transaction per page, as
      * for V2), merged on the stored sequence of the row's first member and then on the series id. Within a series PK order
      * equals sequence order iff its elapsed never decreases in sequence order, which the recorder guarantees for projected
-     * recordings; a ride that breaks that is merged in PK order per series (time order within it), so the logui
-     * `droppedLate` can only fall, never rise. Cross-series order uses ONLY stored sequences of first members and run
-     * ends, never an interpolated interior one (those may coincide with another series').
+     * recordings (and Task 9's conversion enforces). A series that breaks it is REFUSED with INVALID_DATA instead of merged:
+     * an earlier revision merged it in PK order and claimed `droppedLate` could only fall; that was unproven (heads would
+     * not be monotone, so the cross-series permutation differs from both V2 and time order). Cross-series order uses ONLY
+     * stored sequences of first members and run ends, never an interpolated interior one (those may coincide with
+     * another series').
      *
-     * A run is emitted as its first and its end member (two unknown records, the exact stored ticks): every encoder
-     * ignores unknowns beyond validating the key, so the interior members are not materialised. The count of records
-     * emitted is what `exportV3Shape` counts. A run is in range when it starts in range, as a V2 row is.
+     * A run that starts in range is emitted as its first member and, only if the stored end lies at or before
+     * `snapshot.through`, its end member (exact stored ticks). A run that ends after `through` emits its first member alone:
+     * the encoders validate every record's tick against the range, and V2 never had a member past it. A run that starts
+     * before `from` and ends inside is not emitted at all (V2 emitted its in-range interior members). Every encoder
+     * ignores unknowns beyond validating the key, so none of this changes a byte of the CSV or GPX. The records emitted
+     * are what `exportV3Shape` counts.
      */
     private suspend fun emitCompactSamples(snapshot: Snapshot, rideNo: Long, emit: suspend (HistoryExportRecord.Numeric) -> Unit) {
         val id = snapshot.metadata.ride.id
@@ -148,9 +156,11 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                     compact.pageSamplesV3(stream.seriesId, maxOf(snapshot.from, stream.afterElapsed ?: Long.MIN_VALUE), snapshot.through, stream.afterElapsed,
                         stream.afterSequence, pageSize.toLong()).executeAsList() }
                 for (row in rows) {
+                    if (row.sequence <= stream.lastSequence) fail(HistoryExportFailure.INVALID_DATA)
+                    stream.lastSequence = row.runEndSequence ?: row.sequence
                     val members = HistoryRunMembers(HistoryCompactCodec.decode(row, stream.key, origin))
                     stream.buffer.addLast(row.sequence to HistoryExportRecord.Numeric(members.sample(0)))
-                    if (members.size >= 2) stream.buffer.addLast(checkNotNull(row.runEndSequence) to
+                    if (members.size >= 2 && checkNotNull(row.runEndElapsed) <= snapshot.through) stream.buffer.addLast(checkNotNull(row.runEndSequence) to
                         HistoryExportRecord.Numeric(members.sample(members.size - 1)))
                 }
                 rows.lastOrNull()?.let { stream.afterElapsed = it.elapsedMillis; stream.afterSequence = it.sequence }

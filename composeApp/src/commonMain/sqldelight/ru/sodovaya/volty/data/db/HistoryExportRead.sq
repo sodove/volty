@@ -6,10 +6,10 @@ SELECT
 
 -- Compact (V3) rides. The export streams a ride as the records the encoders read: a known row is one record, a lone
 -- unknown is one, and an unknown RUN is two (its first and its end member), so the count below is the number of records
--- emitted, not of stored members (Task 7 of the compact-history-storage plan). A run counts when it STARTS in range.
+-- emitted, not of stored members (Task 7 of the compact-history-storage plan). A run counts when it STARTS in range, and its end member only when the end is in range too.
 exportV3Shape:
 SELECT
- (SELECT COALESCE(SUM(CASE WHEN s.unknownCode IS NOT NULL AND s.runCount IS NOT NULL THEN 2 ELSE 1 END), 0)
+ (SELECT COALESCE(SUM(CASE WHEN s.unknownCode IS NOT NULL AND s.runCount IS NOT NULL AND s.runEndElapsed <= :toElapsed THEN 2 ELSE 1 END), 0)
   FROM HistorySeriesV3 v JOIN HistorySampleV3 s ON s.seriesId = v.seriesId
   WHERE v.rideNo = :rideNo AND s.elapsedMillis >= :fromElapsed AND s.elapsedMillis <= :toElapsed) AS sampleCount,
  (SELECT COUNT(*) FROM HistoryGpsV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS gpsCount,
