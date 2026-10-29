@@ -11,7 +11,7 @@ import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 
 enum class NearbyAuthMode { LOGIN, REGISTER }
 enum class NearbyShellSection { SERVERS, FRIENDS, PROFILE }
-enum class NearbyShellError { INVALID_FORM, INVALID_CREDENTIALS, UNAUTHORIZED, FORBIDDEN, CONFLICT, RATE_LIMITED, UNAVAILABLE }
+enum class NearbyShellError { INVALID_FORM, INVALID_CREDENTIALS, UNAUTHORIZED, FORBIDDEN, CONFLICT, RATE_LIMITED, UNAVAILABLE, DELETE_OFFLINE, DELETE_FAILED }
 data class NearbyAuthDraft(val mode: NearbyAuthMode=NearbyAuthMode.LOGIN,
     val email: String="",val password: String="",val displayName: String="",val recoveryRequested: Boolean=false) {
     override fun toString()="NearbyAuthDraft(mode=$mode, email=$email, password=<redacted>, displayName=$displayName)"
@@ -23,7 +23,9 @@ data class NearbyProfileDraft(val displayName: String = "", val saved: Boolean =
 data class VoiceSpacesNearbyState(val session: SocialSession=SocialSession.LoggedOut,
     val auth: NearbyAuthDraft=NearbyAuthDraft(),val section: NearbyShellSection=NearbyShellSection.SERVERS,
     val busy: Boolean=false,val error: NearbyShellError?=null,val friends: NearbyFriendsState=NearbyFriendsState(),
-    val profile: NearbyProfileDraft = NearbyProfileDraft())
+    val profile: NearbyProfileDraft = NearbyProfileDraft(),
+    /** True while the "delete account" confirmation is on screen; nothing has been sent yet. */
+    val confirmingDeletion: Boolean = false)
 
 /** Forms and account-bound reads belong to this screen; conversation commands belong to Root. */
 class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,parent: CoroutineScope,
@@ -55,7 +57,7 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
                 if(account !== previous) {
                     previous=account;operation++
                     form.update {it.copy(auth=NearbyAuthDraft(),section=NearbyShellSection.SERVERS,busy=false,error=null,
-                        profile=NearbyProfileDraft())}
+                        profile=NearbyProfileDraft(),confirmingDeletion=false)}
                 }
                 friends.bind(account)
                 if(account!=null) {
@@ -71,7 +73,8 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
             combine(repository.session,form,friends.state) {session,form,page ->
                 val visible=nearbyVisibleSession(session,repository.authenticatedAccount.value)
                 form.copy(session=visible,friends=page,
-                    profile=if(visible is SocialSession.Authenticated) form.profile else NearbyProfileDraft())
+                    profile=if(visible is SocialSession.Authenticated) form.profile else NearbyProfileDraft(),
+                    confirmingDeletion=visible is SocialSession.Authenticated && form.confirmingDeletion)
             }
                 .collect {if(lifetime.isActive) output.value=it}
         }
@@ -163,6 +166,28 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
                 }
             }
         }
+    }
+    /** Step one: only asks for confirmation. Nothing leaves the phone until [confirmDeleteAccount]. */
+    fun requestDeleteAccount() {
+        val account=repository.authenticatedAccount.value ?: return
+        if(!enabled() || form.value.busy || !friends.current(account) || form.value.section!=NearbyShellSection.PROFILE) return
+        form.update {it.copy(confirmingDeletion=true,error=null)}
+    }
+    fun cancelDeleteAccount() {if(enabled() && !form.value.busy) form.update {it.copy(confirmingDeletion=false)}}
+    /**
+     * Step two. Dismisses the dialog and marks the shell busy before the request starts, so a second tap
+     * cannot send a second DELETE. The repository retires the local session itself on success; on failure
+     * the account stays signed in and the rider may retry.
+     */
+    fun confirmDeleteAccount() {
+        val account=repository.authenticatedAccount.value ?: return
+        if(!enabled() || form.value.busy || !form.value.confirmingDeletion || !friends.current(account)) return
+        form.update {it.copy(confirmingDeletion=false)}
+        command(account,errorMap={when(it) {
+            is SocialFailure.Network -> NearbyShellError.DELETE_OFFLINE
+            SocialFailure.Unauthorized,SocialFailure.Forbidden,is SocialFailure.RateLimited -> it.shellError()
+            else -> NearbyShellError.DELETE_FAILED
+        }}) {repository.deleteAccount()}
     }
     fun openServers() {if(enabled()) form.update {it.copy(section=NearbyShellSection.SERVERS)}}
     fun openFriends() {if(enabled()) form.update {it.copy(section=NearbyShellSection.FRIENDS)}}

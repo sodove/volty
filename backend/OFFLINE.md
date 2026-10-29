@@ -115,7 +115,7 @@ Worker limits can be set directly in its environment. Byte limits are integers:
 | `MAX_CACHE_BYTES` | 64 GiB, including reserved validation space |
 | `MIN_FREE_BYTES` | 1 GiB |
 | `WORKERS` / `MAX_PENDING` | 2 / 8 |
-| `MAX_CATALOG_BYTES` | 4 MiB |
+| `MAX_CATALOG_BYTES` | 4 MiB (see "Catalog size and rollout order") |
 | `PRUNE_GRACE_SECONDS` | 604800 |
 | `REFRESH_SECONDS` | 900 |
 | `REQUEST_TIMEOUT_SECONDS` / `DOWNLOAD_TIMEOUT_SECONDS` | 30 / 1800 |
@@ -148,3 +148,31 @@ Ingest is optional: ordinary client requests fetch pipeline artifacts over HTTPS
 `search_schema`, `search_metadata`, `pmtiles_header`, `storage_limit`, `queue_full`,
 `upstream_unavailable` and `release_unavailable`. No file paths or credentials are
 returned in public failure messages.
+
+## Catalog size and rollout order
+
+The signed catalog was 3,999,559 bytes in October 2026 against a 4 MiB limit
+(4,194,304). App 0.7.59 and earlier reject a larger catalog ("Catalog is too large")
+and then cannot refresh, update or add regions. App 0.7.60 accepts 16 MiB. The
+server therefore keeps 4 MiB as its default: the package service
+(`VOLTY_OFFLINE_MAX_CATALOG_BYTES`) and the worker (`maxCatalogBytes` in
+`production.json`, which refuses to publish a larger `catalog.json` and keeps the
+previous one). Order:
+
+1. Ship app >= 0.7.60 and wait until riders have it.
+2. Raise both limits (up to 16 MiB).
+3. Only then build many more cells, or enable `compactCatalog` once the app can ask
+   `/offline/resolve` for the rider's position.
+
+`catalog-index.json` is never sent to a client and has its own 16 MiB limit.
+
+## Compact catalog (optional, off by default)
+
+The signed catalog lists every 1 degree on-demand cell, built or not (5,740 entries,
+about 4 MB in October 2026). With `"compactCatalog": true` in the worker's
+`production.json`, the worker publishes two signed files: `catalog-index.json`
+(every cell, read only by the package service for `/resolve` and `ensure`) and
+`catalog.json` (built releases only, what clients download). Both use the same key.
+
+Do not enable it until the app can ask `/offline/resolve` for the rider's position:
+a client can only request a cell it can see in `catalog.json`.

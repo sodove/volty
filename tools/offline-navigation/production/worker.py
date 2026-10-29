@@ -27,6 +27,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from .config import ProductionConfig, load_config
 from .source_cache import SourceError, fetch_snapshot
 
+# catalog-index.json is read only by the package service, never by a client.
+INDEX_MAX_BYTES = 16 * 1024 * 1024
+
 
 class Worker:
     def __init__(self, config: ProductionConfig, queue_path: Path):
@@ -283,20 +286,51 @@ class Worker:
             if manifest_path is not None:
                 entry["manifest"] = str(manifest_path)
             entries.append(entry)
-        spec = self.config.staging_root / "catalog-spec.json"
-        spec.parent.mkdir(parents=True, exist_ok=True)
-        spec.write_text(json.dumps({"regions": entries}, ensure_ascii=False), encoding="utf-8")
         public_key = self.config.staging_root / "public-key.txt"
+        self.config.staging_root.mkdir(parents=True, exist_ok=True)
         key = serialization.load_pem_private_key(self.config.signing_key.read_bytes(), password=None)
         if not isinstance(key, Ed25519PrivateKey):
             raise ValueError("signing key must be Ed25519")
         public_key.write_text(base64.b64encode(key.public_key().public_bytes(serialization.Encoding.Raw,
                                                                               serialization.PublicFormat.Raw)).decode(), encoding="ascii")
-        output = self.config.public_root / "catalog.json"
+        built = [entry for entry in entries if "manifest" in entry]
+        if self.config.compact_catalog and built:
+            # The package service needs every empty on-demand cell to resolve a
+            # coordinate and to start a build, but a client downloads (and
+            # verifies) the whole catalog.  Publish the complete signed list
+            # as catalog-index.json FIRST, then the client catalog with only
+            # the built releases: a reader that sees the new catalog.json has
+            # already seen an index that is at least as complete.
+            self._build_signed_catalog(entries, "catalog-spec-index.json", "catalog-index.json", public_key)
+            self._build_signed_catalog(built, "catalog-spec.json", "catalog.json", public_key)
+        else:
+            # A stale index from an earlier compact run must not outlive the
+            # switch back: the package service prefers it over catalog.json.
+            (self.config.public_root / "catalog-index.json").unlink(missing_ok=True)
+            self._build_signed_catalog(entries, "catalog-spec.json", "catalog.json", public_key)
+
+    def _build_signed_catalog(self, entries: list, spec_name: str, output_name: str, public_key: Path) -> None:
+        spec = self.config.staging_root / spec_name
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(json.dumps({"regions": entries}, ensure_ascii=False), encoding="utf-8")
+        # Build beside the spec and publish only if it fits: an oversized catalog
+        # would make every client that still has the 4 MiB limit fail to refresh.
+        built = self.config.staging_root / ("out-" + output_name)
+        built.unlink(missing_ok=True)
+        output = self.config.public_root / output_name
+        limit = INDEX_MAX_BYTES if output_name == "catalog-index.json" else self.config.max_catalog_bytes
         subprocess.run([sys.executable, str(Path(__file__).parents[1] / "build-catalog.py"), "--spec", str(spec),
-                        "--output", str(output), "--public-key", str(public_key), "--private-key",
+                        "--output", str(built), "--public-key", str(public_key), "--private-key",
                         str(self.config.signing_key), "--key-id", self.config.key_id,
                         "--current-app-version-code", str(self.config.min_app_version_code)], check=True, timeout=60)
+        if built.is_file():
+            size = built.stat().st_size
+            if size > limit:
+                built.unlink()
+                raise ValueError(f"{output_name} would be {size} bytes, over the {limit} byte limit; "
+                                 "keeping the previously published catalog")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(built, output)
 
     @staticmethod
     def _generated_region_name(manifest_path: Path | None) -> str | None:

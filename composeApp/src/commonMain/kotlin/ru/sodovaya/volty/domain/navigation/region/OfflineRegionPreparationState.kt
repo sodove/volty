@@ -27,8 +27,50 @@ data class OfflineRegionPreparationState(
     val routing: OfflineNavigationComponentState,
 )
 
+/**
+ * What the offline data says about where the rider currently is.  It is
+ * information only: nothing is downloaded because of it.
+ */
+sealed interface OfflineCurrentCoverage {
+    /** No fix yet, or the catalog has not named a cell for it. */
+    data object Unknown : OfflineCurrentCoverage
+
+    /** The cell holding the fix is installed. */
+    data class Covered(val regionId: String) : OfflineCurrentCoverage
+
+    /** The cell holding the fix is not on the device: search and routing need a connection here. */
+    data class NotAvailable(val regionId: String) : OfflineCurrentCoverage
+}
+
+object OfflineCurrentCoveragePolicy {
+    /** Installed regions win over catalog cells that merely overlap the fix. */
+    fun cellFor(coordinate: GeoCoordinate, states: List<OfflineRegionPackageState>): OfflineRegionPackageState? {
+        val containing = states.filter { it.region.bounds.contains(coordinate) }
+        return containing.filter { it.isInstalled }.minByOrNull { it.region.regionId }
+            ?: containing.minByOrNull { it.region.regionId }
+    }
+
+    fun resolve(coordinate: GeoCoordinate, states: List<OfflineRegionPackageState>): OfflineCurrentCoverage {
+        val cell = cellFor(coordinate, states) ?: return OfflineCurrentCoverage.Unknown
+        return if (cell.isInstalled) OfflineCurrentCoverage.Covered(cell.region.regionId)
+        else OfflineCurrentCoverage.NotAvailable(cell.region.regionId)
+    }
+}
+
 interface OfflineRegionPreparationCoordinator {
     val states: StateFlow<List<OfflineRegionPreparationState>>
+
+    /** Updated by [prepareCurrentRegion]; drives the honest "not available offline" notice. */
+    val currentCoverage: StateFlow<OfflineCurrentCoverage>
+
+    /**
+     * Called on every map open with the rider's fix.  It only ever prepares the
+     * MAP PACK of a region that is already installed.  It never asks the
+     * repository to download or build a cell: an earlier revision did, which
+     * silently downloaded neighbouring on-demand cells over Wi-Fi and raised a
+     * mobile-data prompt for them.  Downloading is an explicit action
+     * ([prepareExplicitRegion]).
+     */
     suspend fun prepareCurrentRegion(coordinate: GeoCoordinate, style: OfflineMapStyleVariant)
     suspend fun prepareExplicitRegion(regionId: String, style: OfflineMapStyleVariant)
 

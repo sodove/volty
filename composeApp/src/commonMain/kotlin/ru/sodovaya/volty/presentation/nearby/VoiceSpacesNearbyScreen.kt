@@ -49,6 +49,19 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
             Text(stringResource(it.shellMessage()),Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.error)
         }
         if(state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if(state.confirmingDeletion) AlertDialog(
+            onDismissRequest=component::cancelDeleteAccount,
+            title={Text(stringResource(Res.string.nearby_delete_account_title))},
+            text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(Res.string.nearby_delete_account_removed))
+                Text(stringResource(Res.string.nearby_delete_account_kept))
+                Text(stringResource(Res.string.nearby_delete_account_irreversible),color=MaterialTheme.colorScheme.error)
+            }},
+            confirmButton={TextButton(onClick=component::confirmDeleteAccount) {
+                Text(stringResource(Res.string.nearby_delete_account_confirm),color=MaterialTheme.colorScheme.error)
+            }},
+            dismissButton={TextButton(onClick=component::cancelDeleteAccount) {Text(stringResource(Res.string.nearby_delete_account_cancel))}},
+        )
         if(state.session !is SocialSession.Authenticated) {
             NearbyAuthForm(state,component,Modifier.weight(1f))
         } else {
@@ -92,6 +105,9 @@ private fun NearbyProfileForm(state: VoiceSpacesNearbyState,component: DefaultVo
         item {NearbyCallNotificationSettings(Modifier.widthIn(max=520.dp).fillMaxWidth())}
         item {TextButton(onClick=component::logout,enabled=!state.busy) {
             Text(stringResource(Res.string.nearby_logout),color=MaterialTheme.colorScheme.error)
+        }}
+        item {TextButton(onClick=component::requestDeleteAccount,enabled=!state.busy) {
+            Text(stringResource(Res.string.nearby_delete_account),color=MaterialTheme.colorScheme.error)
         }}
     }
 }
@@ -157,4 +173,6 @@ internal fun NearbyShellError.shellMessage(): StringResource = when(this) {
     NearbyShellError.CONFLICT -> Res.string.nearby_shell_conflict
     NearbyShellError.RATE_LIMITED -> Res.string.nearby_shell_rate_limited
     NearbyShellError.UNAVAILABLE -> Res.string.nearby_shell_unavailable
+    NearbyShellError.DELETE_OFFLINE -> Res.string.nearby_delete_account_offline
+    NearbyShellError.DELETE_FAILED -> Res.string.nearby_delete_account_failed
 }

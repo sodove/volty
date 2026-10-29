@@ -1,5 +1,8 @@
 # Third-party material
 
+Volty itself is licensed under the GNU Affero General Public License v3.0 or later
+(see `LICENSE` and `NOTICE.md`). The material below keeps its own, compatible license.
+
 Ride History UI adaptations from **Vescape**, project author **Kacper Kozak**, use
 upstream revision `2527c346bbdb25d4e018fdd68e916621e20fac27` of
 https://github.com/vescape-app/vescape and are licensed **GPL-3.0-or-later**.

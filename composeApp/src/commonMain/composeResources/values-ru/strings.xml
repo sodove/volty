@@ -816,6 +816,13 @@
     <string name="settings_offline_preparing">Готовим регион…</string>
     <string name="settings_offline_no_region_match">Регион не найден</string>
     <string name="settings_offline_size_line">Скачивание: %1$s · На устройстве: %2$s</string>
+    <string name="offline_unit_b">Б</string>
+    <string name="offline_unit_kb">КБ</string>
+    <string name="offline_unit_mb">МБ</string>
+    <string name="offline_unit_gb">ГБ</string>
+    <string name="settings_offline_coverage_unavailable">Для вашего текущего места нет скачанных офлайн-данных: поиск и маршруты здесь работают только при наличии интернета.</string>
+    <string name="settings_offline_coverage_download">Скачать эту область</string>
+    <string name="settings_offline_storage_line">На устройстве: %1$s · маршруты и поиск %2$s · карта %3$s · временные файлы %4$s</string>
     <string name="settings_offline_download">Скачать</string>
     <string name="settings_offline_download_mobile">Скачать через мобильную сеть</string>
     <string name="settings_offline_pause">Пауза</string>
@@ -1651,4 +1658,13 @@
     <string name="info_choice_pwm_alarm_quiet">молчит</string>
     <string name="info_unit_volt_per_kmh">В на км/ч</string>
     <string name="info_unit_ohm">Ом</string>
+    <string name="nearby_delete_account">Удалить аккаунт</string>
+    <string name="nearby_delete_account_title">Удалить аккаунт?</string>
+    <string name="nearby_delete_account_removed">Аккаунт Volty будет закрыт на сервере: войти в него больше не получится, вы выйдете из всех групп и серверов, созданные вами группы удалятся для всех участников, а передача местоположения прекратится.</string>
+    <string name="nearby_delete_account_kept">Поездки, транспорт и настройки останутся на этом телефоне. С телефона ничего не стирается.</string>
+    <string name="nearby_delete_account_irreversible">Это действие нельзя отменить.</string>
+    <string name="nearby_delete_account_confirm">Удалить аккаунт</string>
+    <string name="nearby_delete_account_cancel">Отмена</string>
+    <string name="nearby_delete_account_offline">Для удаления аккаунта нужен интернет. Аккаунт не удалён, попробуйте ещё раз, когда появится связь.</string>
+    <string name="nearby_delete_account_failed">Не удалось удалить аккаунт. Аккаунт не удалён, попробуйте ещё раз.</string>
 </resources>

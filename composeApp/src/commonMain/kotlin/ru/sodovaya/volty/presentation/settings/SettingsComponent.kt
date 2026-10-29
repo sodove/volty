@@ -31,6 +31,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -102,6 +104,11 @@ interface SettingsComponent {
         val offlineSkipMeteredConfirmation: Boolean = false,
         val offlineRegions: List<OfflineRegionPackageState> = emptyList(),
         val offlinePreparation: List<OfflineRegionPreparationState> = emptyList(),
+        /** Where the rider is, as far as the offline data goes; information only. */
+        val offlineCoverage: ru.sodovaya.volty.domain.navigation.region.OfflineCurrentCoverage =
+            ru.sodovaya.volty.domain.navigation.region.OfflineCurrentCoverage.Unknown,
+        /** Measured on disk; null until the first measurement lands. */
+        val offlineStorage: ru.sodovaya.volty.domain.navigation.region.OfflineStorageUsage? = null,
         val offlineCatalogRefreshing: Boolean = false,
         val offlineCatalogError: Boolean = false,
         val vehicles: List<Vehicle> = emptyList(),
@@ -116,6 +123,7 @@ class DefaultSettingsComponent(
     private val vehicleRepository: VehicleRepository,
     private val offlineRegionsRepository: OfflineRegionPackageRepository,
     private val offlinePreparationCoordinator: OfflineRegionPreparationCoordinator,
+    private val offlineStorageMeter: ru.sodovaya.volty.domain.navigation.region.OfflineStorageMeter? = null,
     private val logExporter: LogExporter,
     private val bleDiagnosticsRepository: BleDiagnosticsRepository,
     private val bmsRepository: BmsRepository,
@@ -186,6 +194,20 @@ class DefaultSettingsComponent(
         } }
         scope.launch { appPrefs.offlineSkipMeteredConfirmation.collect { v -> _state.update { it.copy(offlineSkipMeteredConfirmation = v) } } }
         scope.launch { offlineRegionsRepository.states.collect { v -> _state.update { it.copy(offlineRegions = v) } } }
+        scope.launch { offlinePreparationCoordinator.currentCoverage.collect { v -> _state.update { it.copy(offlineCoverage = v) } } }
+        offlineStorageMeter?.let { meter ->
+            scope.launch {
+                // Re-measure when a region changes status (installed, deleted, download ended),
+                // not on every progress tick.
+                offlineRegionsRepository.states
+                    .map { list -> list.map { it.region.regionId to it.status } }
+                    .distinctUntilChanged()
+                    .collect {
+                        runCatching { meter.measure() }.getOrNull()
+                            ?.let { usage -> _state.update { it.copy(offlineStorage = usage) } }
+                    }
+            }
+        }
         scope.launch { offlinePreparationCoordinator.states.collect { v -> _state.update { it.copy(offlinePreparation = v) } } }
         scope.launch { bleDiagnosticsRepository.state.collect { v -> _state.update { it.copy(diagnostics = v) } } }
         scope.launch { bmsRepository.activeVehicle.collect { v -> _state.update { it.copy(activeVehicle = v) } } }

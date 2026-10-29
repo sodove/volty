@@ -1013,6 +1013,7 @@ class DefaultRootComponent(
                     vehicleRepository = get(),
                     offlineRegionsRepository = get<OfflineRegionPackageRepository>(),
                     offlinePreparationCoordinator = get(),
+                    offlineStorageMeter = get<ru.sodovaya.volty.domain.navigation.region.OfflineStorageMeter>(),
                     logExporter = get(),
                     bleDiagnosticsRepository = get(),
                     bmsRepository = bmsRepository,
