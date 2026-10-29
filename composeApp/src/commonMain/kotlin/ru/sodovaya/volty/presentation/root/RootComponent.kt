@@ -1014,6 +1014,13 @@ class DefaultRootComponent(
                     offlineRegionsRepository = get<OfflineRegionPackageRepository>(),
                     offlinePreparationCoordinator = get(),
                     logExporter = get(),
+                    databaseShare = ru.sodovaya.volty.diagnostics.DatabaseShareAction(
+                        exporter = get(),
+                        isRecording = {
+                            get<ru.sodovaya.volty.domain.history.HistoryRecordingRepository>()
+                                .states.first().ride != null
+                        },
+                    ),
                     bleDiagnosticsRepository = get(),
                     bmsRepository = bmsRepository,
                     onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },

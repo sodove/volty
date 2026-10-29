@@ -2,6 +2,8 @@
 <paths>
     <!-- Matches File(context.cacheDir, "logs") in LogExporter. -->
     <cache-path name="logs" path="logs/" />
+    <!-- Matches File(context.cacheDir, "db-share") in AndroidDatabaseSnapshotExporter. -->
+    <cache-path name="db_share" path="db-share/" />
     <files-path name="history_media" path="history-media-v1/" />
     <cache-path name="history_exports" path="history-exports-v1/" />
 </paths>

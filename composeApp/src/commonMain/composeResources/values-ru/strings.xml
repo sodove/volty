@@ -267,6 +267,15 @@
     <string name="settings_add_new_battery">+ Добавить новый транспорт</string>
     <string name="settings_diagnostics">Диагностика</string>
     <string name="settings_send_logs">Отправить логи приложения</string>
+    <string name="settings_share_database">Поделиться базой данных (отладка)</string>
+    <string name="settings_share_database_subtitle">Файл содержит треки поездок</string>
+    <string name="settings_share_database_warning_title">Поделиться базой данных?</string>
+    <string name="settings_share_database_warning">В файле все ваши поездки и GPS-треки, в том числе места, где вы бывали. Отправляйте его только тому, кому доверяете.</string>
+    <string name="settings_share_database_confirm">Поделиться</string>
+    <string name="settings_share_database_busy">Готовлю файл…</string>
+    <string name="settings_share_database_recording">Сейчас идёт запись поездки. Сначала остановите её.</string>
+    <string name="settings_share_database_no_space">Не хватает свободного места для копии.</string>
+    <string name="settings_share_database_failed">Не удалось подготовить файл.</string>
     <string name="settings_send_logs_subtitle">Поделиться logcat приложения для диагностики</string>
     <string name="settings_delete">Удалить</string>
     <string name="settings_delete_title">Удалить «%1$s»?</string>

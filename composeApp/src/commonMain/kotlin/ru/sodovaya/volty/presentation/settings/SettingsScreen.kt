@@ -98,6 +98,15 @@ import volty.composeapp.generated.resources.settings_minutes
 import volty.composeapp.generated.resources.settings_delete
 import volty.composeapp.generated.resources.settings_delete_text
 import volty.composeapp.generated.resources.settings_diagnostics
+import volty.composeapp.generated.resources.settings_share_database
+import volty.composeapp.generated.resources.settings_share_database_subtitle
+import volty.composeapp.generated.resources.settings_share_database_warning_title
+import volty.composeapp.generated.resources.settings_share_database_warning
+import volty.composeapp.generated.resources.settings_share_database_confirm
+import volty.composeapp.generated.resources.settings_share_database_busy
+import volty.composeapp.generated.resources.settings_share_database_recording
+import volty.composeapp.generated.resources.settings_share_database_no_space
+import volty.composeapp.generated.resources.settings_share_database_failed
 import volty.composeapp.generated.resources.settings_send_logs
 import volty.composeapp.generated.resources.settings_send_logs_subtitle
 import volty.composeapp.generated.resources.settings_delete_title
@@ -936,7 +945,55 @@ private fun DeveloperPage(state: SettingsComponent.State, component: SettingsCom
             )
         }
     }
+    DatabaseShareRow(state, component)
     DebugSettingsTab(state, component::onStartBleCapture, component::onStopBleCapture, component::onClearBleCapture, component::onShareBleCapture)
+}
+
+/** Warns first: the file holds every ride and GPS track. Layout is judged on a device. */
+@Composable
+private fun DatabaseShareRow(state: SettingsComponent.State, component: SettingsComponent) {
+    var confirming by rememberSaveable { mutableStateOf(false) }
+    val status = when {
+        state.databaseShareBusy -> stringResource(Res.string.settings_share_database_busy)
+        state.databaseShareOutcome is ru.sodovaya.volty.diagnostics.DatabaseShareOutcome.Refused -> when (state.databaseShareOutcome.reason) {
+            ru.sodovaya.volty.diagnostics.SnapshotRefusal.RECORDING -> stringResource(Res.string.settings_share_database_recording)
+            ru.sodovaya.volty.diagnostics.SnapshotRefusal.NO_SPACE -> stringResource(Res.string.settings_share_database_no_space)
+        }
+        state.databaseShareOutcome is ru.sodovaya.volty.diagnostics.DatabaseShareOutcome.Failed ->
+            stringResource(Res.string.settings_share_database_failed)
+        else -> stringResource(Res.string.settings_share_database_subtitle)
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .clickable(enabled = !state.databaseShareBusy) { confirming = true }
+            .padding(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Icon(Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(stringResource(Res.string.settings_share_database), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+            Text(status, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    if (confirming) {
+        AlertDialog(
+            onDismissRequest = { confirming = false },
+            title = { Text(stringResource(Res.string.settings_share_database_warning_title)) },
+            text = { Text(stringResource(Res.string.settings_share_database_warning)) },
+            confirmButton = {
+                TextButton(onClick = { confirming = false; component.onShareDatabase() }) {
+                    Text(stringResource(Res.string.settings_share_database_confirm))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirming = false }) { Text(stringResource(Res.string.action_cancel)) }
+            },
+        )
+    }
 }
 
 @Composable

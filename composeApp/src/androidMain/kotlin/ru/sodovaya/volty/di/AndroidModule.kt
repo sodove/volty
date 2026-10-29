@@ -562,6 +562,9 @@ val androidModule = module {
         })
     }
     single { LogExporter(androidContext()) }
+    single<ru.sodovaya.volty.diagnostics.DatabaseSnapshotExporter> {
+        ru.sodovaya.volty.diagnostics.AndroidDatabaseSnapshotExporter(androidContext(), get())
+    }
     single { ru.sodovaya.volty.diagnostics.VoiceDiagnosticLauncher(androidContext()) }
     single { ru.sodovaya.volty.diagnostics.voice.AndroidVoiceDiagnosticRuntime(androidContext(), get(), get(), get<AppPrefs>().voiceListenSettings, get<AppPrefs>().micProcessingSettings) }
 }

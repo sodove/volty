@@ -68,6 +68,8 @@ interface SettingsComponent {
     fun onDeleteVehicle(id: String)
     fun onAddBattery()
     fun onSendLogs()
+    /** Debug: share a consistent copy of the history database. The screen shows a warning first. */
+    fun onShareDatabase()
     fun onOpenPage(page: SettingsPage)
     /** Closes an open page first; leaves the settings screen only from the hub. */
     fun onBack()
@@ -106,7 +108,9 @@ interface SettingsComponent {
         val offlineCatalogError: Boolean = false,
         val vehicles: List<Vehicle> = emptyList(),
         val diagnostics: BleDiagnosticsState = BleDiagnosticsState(),
-        val activeVehicle: Vehicle? = null
+        val activeVehicle: Vehicle? = null,
+        val databaseShareBusy: Boolean = false,
+        val databaseShareOutcome: ru.sodovaya.volty.diagnostics.DatabaseShareOutcome? = null,
     )
 }
 
@@ -117,6 +121,7 @@ class DefaultSettingsComponent(
     private val offlineRegionsRepository: OfflineRegionPackageRepository,
     private val offlinePreparationCoordinator: OfflineRegionPreparationCoordinator,
     private val logExporter: LogExporter,
+    private val databaseShare: ru.sodovaya.volty.diagnostics.DatabaseShareAction,
     private val bleDiagnosticsRepository: BleDiagnosticsRepository,
     private val bmsRepository: BmsRepository,
     private val onEditVehicleRequested: (String) -> Unit,
@@ -253,6 +258,15 @@ class DefaultSettingsComponent(
     override fun onDeleteVehicle(id: String) { scope.launch { vehicleRepository.delete(id) } }
     override fun onAddBattery() { onAddBatteryRequested() }
     override fun onSendLogs() { logExporter.exportLogs() }
+    override fun onShareDatabase() {
+        if (_state.value.databaseShareBusy) return
+        _state.update { it.copy(databaseShareBusy = true, databaseShareOutcome = null) }
+        scope.launch {
+            val outcome = runCatching { databaseShare.run() }
+                .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else ru.sodovaya.volty.diagnostics.DatabaseShareOutcome.Failed }
+            _state.update { it.copy(databaseShareBusy = false, databaseShareOutcome = outcome) }
+        }
+    }
     override fun onOpenPage(page: SettingsPage) {
         pages.open(page)
         pageBackCallback.isEnabled = true
