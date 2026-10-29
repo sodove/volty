@@ -8,6 +8,7 @@ import ru.sodovaya.volty.domain.plausibility.historyRobustPeak
 import ru.sodovaya.volty.presentation.history.historyBatteryUsed
 import ru.sodovaya.volty.presentation.history.historyMovingMillis
 import ru.sodovaya.volty.presentation.history.historyRideWalk
+import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -59,7 +60,8 @@ class HistoryUnknownRunEquivalenceTest {
         assertEquals(1, stored.size, "a dead series is one run")
         assertEquals(2752, stored.single().run?.count)
         val expanded = expandForReaders(stored)
-        assertTrue(expanded.size > 2 && expanded.first() == full.first() && expanded.last() == full.last())
+        assertEquals(2752, expanded.size, "exactly the stored count")
+        assertTrue(expanded.first() == full.first() && expanded.last() == full.last())
 
         val before = accumulate(full)
         val after = accumulate(expanded)
@@ -101,27 +103,163 @@ class HistoryUnknownRunEquivalenceTest {
         assertEquals(before.gapMillis > 0, after.gapMillis > 0, "the walk's hasGap")
     }
 
-    @Test fun fillersNeverExceedTheIntervalLimitAndShortRunsAddNone() {
-        // A 4.5 s run: first, two fillers, end.
+    @Test fun expansionHasExactlyCountSamplesEvenlySpacedWithinTheLimit() {
+        // 16 members over 4.5 s: the expansion has 16 rows, first and end exact, spacing 300 ms.
         val run = unknownsBetween(100, 4_600)
         val expanded = viaRuns(run)
-        assertEquals(listOf(100L, 2_100L, 4_100L, 4_600L), expanded.map { it.tick.elapsedMillis })
-        assertTrue(expanded.zipWithNext().all { (a, b) -> b.tick.elapsedMillis - a.tick.elapsedMillis in 1..HISTORY_MAX_INTERVAL_MILLIS })
-        assertTrue(expanded.all { it.unknown == dead && it.tick.clockGeneration == 1L && !clockBoundary(expanded.first().tick, it.tick) })
-        // Exactly the limit, and shorter: no filler.
-        assertEquals(listOf(0L, 2_000L), viaRuns(unknownsBetween(0, 2_000, step = 1_000)).map { it.tick.elapsedMillis })
-        assertEquals(listOf(0L, 600L), viaRuns(unknownsBetween(0, 600)).map { it.tick.elapsedMillis })
-        // Over a whole dead series the spacing holds, the first and end are exact and the reason survives.
-        var at = 0L
-        val dead2752 = List(2752) { index -> unknown(at).also { at += 279 + (index * 13L) % 45 } }
-        val big = viaRuns(dead2752)
-        assertEquals(dead2752.first(), big.first()); assertEquals(dead2752.last(), big.last())
-        assertTrue(big.zipWithNext().all { (a, b) -> b.tick.elapsedMillis - a.tick.elapsedMillis in 1..HISTORY_MAX_INTERVAL_MILLIS })
-        // Fillers keep a run's epoch skew and reason (a mixed-reason pair of runs).
+        assertEquals(16, expanded.size)
+        assertEquals(run.first(), expanded.first()); assertEquals(run.last(), expanded.last())
+        assertTrue(expanded.zipWithNext().all { (a, b) -> b.tick.elapsedMillis - a.tick.elapsedMillis in 0..HISTORY_MAX_INTERVAL_MILLIS })
+        assertTrue(expanded.all { it.unknown == dead && it.tick.clockGeneration == 1L })
+        // Two members, and the limit exactly: no synthesised interior at all.
+        assertEquals(listOf(0L, 2_000L), viaRuns(unknownsBetween(0, 2_000, step = 2_000)).map { it.tick.elapsedMillis })
+        assertEquals(1, runsOf(unknownsBetween(0, 2_000, step = 2_000)).size, "a step of exactly the limit continues (M2)")
+        assertEquals(2, collapseUnknownRuns(unknownsBetween(0, 2_001, step = 2_001), emptyList()).size)
+        // Irregular cadence with the maximum step: spacing never exceeds the limit, count and ends are kept.
+        val irregular = listOf(2_000L, 2_000L, 2_000L, 1_999L, 2_000L).runningFold(0L) { acc, step -> acc + step }.map { unknown(it) }
+        val back = viaRuns(irregular)
+        assertEquals(irregular.size, back.size)
+        assertEquals(irregular.first(), back.first()); assertEquals(irregular.last(), back.last())
+        assertTrue(back.zipWithNext().all { (a, b) -> b.tick.elapsedMillis - a.tick.elapsedMillis in 0..HISTORY_MAX_INTERVAL_MILLIS })
+        // A corrupt stored run (its span cannot be a chain of <= 2000 ms steps) is refused, not fed to a reader as a gap.
+        val corrupt = HistoryStoredSample(unknown(0), 0, HistoryUnknownRunEnd(tick(10_000), 3, 3))
+        assertFailsWith<IllegalArgumentException> { expandForReaders(listOf(corrupt)) }
+        assertFailsWith<IllegalArgumentException> {
+            expandForReaders(listOf(HistoryStoredSample(unknown(5_000), 0, HistoryUnknownRunEnd(tick(4_000), 3, 3))))
+        }
+        // Reason and clock generation are kept in a mixed pair of runs.
         val mixed = unknownsBetween(0, 5_000, step = 500, reason = partialSource) + unknownsBetween(5_500, 9_000, step = 500)
         val mixedOut = viaRuns(mixed)
-        assertTrue(mixedOut.all { it.tick.epochMillis - it.tick.elapsedMillis == 1_000_000L })
+        assertEquals(mixed.size, mixedOut.size)
         assertEquals(listOf(partialSource, dead), mixedOut.map { it.unknown }.distinct())
+    }
+
+    // Irregular steps (every <= 2000 ms): the interior ticks of the expansion are NOT the original ticks, so a reader
+    // that depended on them would show here. Deterministic, no randomness.
+    private fun jitteredUnknowns(from: Long, count: Int, k: HistorySeriesKey = key, reason: HistoryUnknownReason = dead): List<HistorySample> {
+        var at = from
+        return List(count) { index -> unknown(at, reason, k).also { at += 130L + (index * 389L) % 1_700 } }
+    }
+
+    @Test fun jitteredRunsExpandToTheSameCountWithTheSameEnds() {
+        val run = jitteredUnknowns(0, 40)
+        assertTrue(run.zipWithNext().any { (a, b) -> b.tick.elapsedMillis - a.tick.elapsedMillis > 1_500 })
+        val back = viaRuns(run)
+        assertEquals(run.size, back.size)
+        assertEquals(run.first(), back.first()); assertEquals(run.last(), back.last())
+        assertNotEquals(run.map { it.tick }, back.map { it.tick }, "the interior ticks are synthesised")
+    }
+
+    /** The reviewer's fixture: the noise window of a needle counts indices, so the run must keep its row count. */
+    @Test fun robustPeakNoiseWindowSeesTheSameRowsAsTheFullSeries() {
+        val head = listOf(0.0, 5.0, 0.0, 5.0, 0.0).mapIndexed { i, v -> known(i * 300L, v) }
+        val short = head + unknownsBetween(1_500, 2_750, step = 250) +
+            listOf(10.0, 13.0, 10.0, 10.0).mapIndexed { i, v -> known(3_000L + i * 300, v) }
+        val before = checkNotNull(historyRobustPeak(short))
+        assertEquals(10.0, before.value); assertEquals(1, before.needlesExcluded); assertEquals(13.0, before.largestExcluded)
+        val after = checkNotNull(historyRobustPeak(viaRuns(short)))
+        assertEquals(before.value, after.value); assertEquals(before.needlesExcluded, after.needlesExcluded)
+        assertEquals(before.largestExcluded, after.largestExcluded)
+        // The same with a run far longer than the 2000 ms step, and with irregular spacing.
+        for (run in listOf(unknownsBetween(1_500, 5_100), jitteredUnknowns(1_500, 13))) {
+            val runEnd = run.last().tick.elapsedMillis
+            val tail = listOf(10.0, 13.0, 10.0, 10.0).mapIndexed { i, v -> known(runEnd + 300L + i * 300, v) }
+            val long = head + run + tail
+            val b = checkNotNull(historyRobustPeak(long)); val a = checkNotNull(historyRobustPeak(viaRuns(long)))
+            assertEquals(1, runsOf(long).size)
+            assertEquals(b.value, a.value); assertEquals(b.needlesExcluded, a.needlesExcluded); assertEquals(b.largestExcluded, a.largestExcluded)
+        }
+        // Known candidates on BOTH sides of a run, within 8 entries of it.
+        val both = head + unknownsBetween(1_500, 3_900, step = 400) + listOf(10.0, 13.0, 10.0, 10.0, 0.0, 10.0, 10.0)
+            .mapIndexed { i, v -> known(4_200L + i * 300, v) }
+        val b = checkNotNull(historyRobustPeak(both)); val a = checkNotNull(historyRobustPeak(viaRuns(both)))
+        assertEquals(b.value, a.value); assertEquals(b.needlesExcluded, a.needlesExcluded)
+    }
+
+    @Test fun overviewChunkingIsEqualOverBudgetAndOnTheFallbackPath() {
+        // Mandatory points fit under the budget but the series does not: bucket choice by index.
+        val body = (0..999L).map { known(it * 300, ((it * 37) % 101).toDouble()) }
+        val mid = body + jitteredUnknowns(300_000, 25) + (0..999L).map { known(1_000_000 + it * 300, ((it * 53) % 97).toDouble()) }
+        assertEquals(1, runsOf(mid).size)
+        val full = historyOverview(mid, emptyList()); val back = historyOverview(viaRuns(mid), emptyList())
+        assertEquals(knownPoints(full), knownPoints(back))
+        assertEquals(stretches(full), stretches(back))
+        assertEquals(full.size, back.size)
+        // The fallback path (more mandatory points than the budget): the fixture of overviewEqualWithinBudget, jittered.
+        var at = 0L
+        val chains = overviewFixture().map { sample ->
+            val tickAt = at; at += 130L + (tickAt / 7 % 1_700)
+            if (sample.value == null) unknown(tickAt) else known(tickAt, checkNotNull(sample.value))
+        }
+        assertTrue(runsOf(chains).size >= 3)
+        assertEquals(knownPoints(historyOverview(chains, emptyList())), knownPoints(historyOverview(viaRuns(chains), emptyList())))
+        assertEquals(stretches(historyOverview(chains, emptyList())), stretches(historyOverview(viaRuns(chains), emptyList())))
+    }
+
+    @Test fun counterGateWalkIsEqualWithJitteredRunsBetweenResets() {
+        val origin = tick(0)
+        val counterKey = HistorySeriesKey("ctl", "trip_distance_km")
+        // A counter reset right after an unknown run and a confirmation chain right before one.
+        val full = (0..8L).map { known(it * 300, 0.001 * it, counterKey) } + jitteredUnknowns(2_700, 30, counterKey) +
+            (0..8L).map { known(60_000 + it * 300, 0.0005 * it, counterKey) } +
+            jitteredUnknowns(63_000, 12, counterKey) + (0..8L).map { known(80_000 + it * 300, 0.5 + 0.001 * it, counterKey) }
+        assertTrue(runsOf(full).size >= 2)
+        val before = historyRideWalk(full, emptyList(), origin, null, 90_000, emptyList())
+        val after = historyRideWalk(viaRuns(full), emptyList(), origin, null, 90_000, emptyList())
+        assertEquals(before.distance, after.distance); assertEquals(before.acceptedM, after.acceptedM)
+        assertEquals(before.crossChecked, after.crossChecked)
+    }
+
+    @Test fun skewWobbleInsideAChainDoesNotSplitButARealClockStepDoes() {
+        fun at(elapsed: Long, skew: Long) = HistorySample(HistoryTick(elapsed + skew, elapsed, 1), key, null, dead)
+        // 0 / 1 ms wobble, as measured on the rider's database: one run.
+        val wobble = (0..40L).map { at(it * 300, 1_000_000 + it % 2) }
+        assertEquals(listOf(41), runsOf(wobble).map { it.run!!.count })
+        // The change is bounded per step: 15 ms continues, 16 ms splits.
+        assertEquals(listOf(2), runsOf(listOf(at(0, 1_000_000), at(300, 1_000_015))).map { it.run!!.count })
+        assertEquals(0, runsOf(listOf(at(0, 1_000_000), at(300, 1_000_016))).size)
+        // A drift of 3 ms per step over 40 steps (120 ms in all) stays one run, and the fillers interpolate monotonically.
+        val drift = (0..40L).map { at(it * 300, 1_000_000 + it * 3) }
+        assertEquals(listOf(41), runsOf(drift).map { it.run!!.count })
+        val back = viaRuns(drift)
+        assertEquals(drift.first(), back.first()); assertEquals(drift.last(), back.last())
+        assertTrue(back.zipWithNext().none { (a, b) -> clockBoundary(a.tick, b.tick) || b.tick.epochMillis < a.tick.epochMillis })
+        assertTrue(back.all { it.tick.epochMillis - it.tick.elapsedMillis in 1_000_000L..1_000_120L })
+        // Readers that look at the wall clock agree: the accumulator sees no genuine gap in either form.
+        assertEquals(accumulate(drift).gapMillis, accumulate(back).gapMillis)
+        assertEquals(accumulate(drift).brokenMillis, accumulate(back).brokenMillis)
+    }
+
+    @Test fun aMarkerExactlyAtThePreviousTickSplitsOnlyTheStepBeforeIt() {
+        val full = unknownsBetween(0, 900)
+        // The marker at 300 lies in (0, 300] and not in (300, 600]: the lone 0 is cut off, 300..900 stays one run.
+        val stored = collapseUnknownRuns(full, listOf(gap(300)))
+        assertEquals(listOf(0L, 300L), stored.map { it.sample.tick.elapsedMillis })
+        assertEquals(listOf(null, 3), stored.map { it.run?.count })
+    }
+
+    /**
+     * A range that starts or ends inside a run reads the expansion and clips it. The in-range first and last members move
+     * by less than one inter-sample step, so `brokenMillis` of that range moves by under two (one per cut edge) and the
+     * whole-ride answer is untouched.
+     */
+    @Test fun aRangeCuttingARunShiftsAReaderByLessThanOneStepPerEdge() {
+        val full = listOf(known(0, 1.0)) + jitteredUnknowns(300, 60) + known(70_000, 2.0)
+        val back = viaRuns(full)
+        assertEquals(1, runsOf(full).size)
+        val whole = accumulate(full); val wholeBack = accumulate(back)
+        assertEquals(whole.brokenMillis, wholeBack.brokenMillis)
+        assertEquals(whole.gapMillis, wholeBack.gapMillis)
+        val maxStep = full.zipWithNext().maxOf { (a, b) -> b.tick.elapsedMillis - a.tick.elapsedMillis }
+        for ((from, to) in listOf(10_000L to 40_000L, 20_000L to 30_000L, 5_000L to 69_000L)) {
+            fun clip(samples: List<HistorySample>) = samples.filter { it.tick.elapsedMillis in from..to }
+            val f = clip(full); val b = clip(back)
+            assertTrue(abs(f.first().tick.elapsedMillis - b.first().tick.elapsedMillis) < maxStep)
+            assertTrue(abs(f.last().tick.elapsedMillis - b.last().tick.elapsedMillis) < maxStep)
+            val shift = abs(accumulate(f).brokenMillis - accumulate(b).brokenMillis)
+            assertTrue(shift < 2 * maxStep, "range $from..$to shifted $shift ms")
+            assertEquals(0L, accumulate(f).gapMillis); assertEquals(0L, accumulate(b).gapMillis)
+        }
     }
 
     @Test fun brokenAccumulatorKeepsGapInsideUnknowns() {
@@ -178,8 +316,7 @@ class HistoryUnknownRunEquivalenceTest {
         assertEquals(listOf(2, 4), runs.map { it.run!!.count })
         assertEquals(listOf(300L, 900L), runs.map { it.sample.tick.elapsedMillis })
         val expanded = viaRuns(full, scoped)
-        // First, end, and (for the 900..1800 run, 900 ms) no filler.
-        assertEquals(listOf(0L, 300L, 600L, 900L, 1800L, 2100L), expanded.map { it.tick.elapsedMillis })
+        assertEquals(listOf(0L, 300L, 600L, 900L, 1200L, 1500L, 1800L, 2100L), expanded.map { it.tick.elapsedMillis })
 
         val index = HistoryContinuityIndex(scoped)
         fun breaks(samples: List<HistorySample>) = samples.zipWithNext().mapNotNull { (a, b) -> index.breakTick(a, b) }
@@ -202,8 +339,8 @@ class HistoryUnknownRunEquivalenceTest {
         val six = (0L..2L).map { unknown(it * 300, generation = 3) } + (3L..5L).map { unknown(it * 300, generation = 4) }
         val runs = collapseUnknownRuns(six, emptyList())
         assertEquals(listOf(3, 3), runs.map { it.run!!.count })
-        assertEquals(listOf(0L, 600L, 900L, 1500L), expandForReaders(runs).map { it.tick.elapsedMillis })
-        assertEquals(listOf(3L, 3L, 4L, 4L), expandForReaders(runs).map { it.tick.clockGeneration })
+        assertEquals(listOf(0L, 300L, 600L, 900L, 1200L, 1500L), expandForReaders(runs).map { it.tick.elapsedMillis })
+        assertEquals(listOf(3L, 3L, 3L, 4L, 4L, 4L), expandForReaders(runs).map { it.tick.clockGeneration })
         assertEquals(accumulate(six).brokenMillis, accumulate(expandForReaders(runs)).brokenMillis)
     }
 
@@ -218,7 +355,7 @@ class HistoryUnknownRunEquivalenceTest {
         val runs = collapseUnknownRuns(mixed, emptyList())
         assertEquals(listOf(dead, partialSource), runs.map { it.sample.unknown })
         assertEquals(listOf(4, 4), runs.map { it.run!!.count })
-        assertEquals(listOf(dead, dead, partialSource, partialSource), expandForReaders(runs).map { it.unknown })
+        assertEquals(List(4) { dead } + List(4) { partialSource }, expandForReaders(runs).map { it.unknown })
     }
 
     @Test fun epochSkewAndBackwardsStepsSplit() {
@@ -395,7 +532,7 @@ class HistoryUnknownRunEquivalenceTest {
         assertEquals(1000, full.count { it.value == null })
         assertEquals(3, runsOf(full).size)
         val expanded = viaRuns(full)
-        assertTrue(expanded.size < full.size)
+        assertEquals(full.size, expanded.size, "the expansion has the stored count")
 
         val before = historyOverview(full, emptyList(), 20_000)
         val after = historyOverview(expanded, emptyList(), 20_000)
@@ -412,24 +549,19 @@ class HistoryUnknownRunEquivalenceTest {
         assertEquals(knownPoints(before), knownPoints(streamed(full)))
     }
 
-    /**
-     * The accepted change: over the 600-point budget the unknowns of the full series were all mandatory, so the overview
-     * fell back to four extrema and the expanded form can show far more of the real points. None is invented.
-     */
-    @Test fun overviewOverBudgetDrawsMoreRealPointsNeverInvented() {
+    /** Over the 600-point budget the answer is equal too (an earlier revision called a difference here accepted). */
+    @Test fun overviewOverBudgetIsEqualToo() {
         val full = overviewFixture()
-        val realKnown = full.filter { it.value != null }.map { it.tick to it.value }.toSet()
-        val before = knownPoints(historyOverview(full, emptyList()))
-        val after = knownPoints(historyOverview(viaRuns(full), emptyList()))
-        assertTrue(after.size > before.size, "expanded ${after.size} known points vs full ${before.size}")
-        assertTrue(after.all { it in realKnown }, "no point is invented")
-        assertTrue(before.all { it in realKnown })
+        val before = historyOverview(full, emptyList()); val after = historyOverview(viaRuns(full), emptyList())
+        assertEquals(knownPoints(before), knownPoints(after))
+        assertEquals(stretches(before), stretches(after))
+        assertEquals(before.size, after.size)
     }
 
     @Test fun cursorInsideRunReadsUnknown() {
         val full = listOf(known(0, 5.0)) + unknownsBetween(300, 3000) + known(3300, 6.0)
         val expanded = viaRuns(full)
-        assertEquals(listOf(0L, 300L, 2300L, 3000L, 3300L), expanded.map { it.tick.elapsedMillis }, "one filler at 2300")
+        assertEquals(full.map { it.tick.elapsedMillis }, expanded.map { it.tick.elapsedMillis })
         assertEquals(null, nearestHistorySample(full, tick(1500), 5000))
         assertEquals(null, nearestHistorySample(expanded, tick(1500), 5000))
         // Every cursor tick, not just one: the endpoints stay, so the answer never changes.
