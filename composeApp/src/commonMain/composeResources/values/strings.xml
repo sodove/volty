@@ -1653,4 +1653,13 @@
     <string name="info_choice_pwm_alarm_quiet">silent</string>
     <string name="info_unit_volt_per_kmh">V per km/h</string>
     <string name="info_unit_ohm">Ohm</string>
+    <string name="nearby_delete_account">Delete account</string>
+    <string name="nearby_delete_account_title">Delete account?</string>
+    <string name="nearby_delete_account_removed">Your Volty account will be closed on the server: you will no longer be able to sign in, you are removed from all groups and servers, groups you own are deleted for everyone, and live location sharing stops.</string>
+    <string name="nearby_delete_account_kept">Your rides, vehicles and settings stay on this phone. Nothing on the phone is erased.</string>
+    <string name="nearby_delete_account_irreversible">This cannot be undone.</string>
+    <string name="nearby_delete_account_confirm">Delete account</string>
+    <string name="nearby_delete_account_cancel">Cancel</string>
+    <string name="nearby_delete_account_offline">Deleting the account needs an internet connection. Your account was not deleted; try again when online.</string>
+    <string name="nearby_delete_account_failed">Could not delete the account. Your account was not deleted; try again.</string>
 </resources>

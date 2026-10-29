@@ -1651,4 +1651,13 @@
     <string name="info_choice_pwm_alarm_quiet">молчит</string>
     <string name="info_unit_volt_per_kmh">В на км/ч</string>
     <string name="info_unit_ohm">Ом</string>
+    <string name="nearby_delete_account">Удалить аккаунт</string>
+    <string name="nearby_delete_account_title">Удалить аккаунт?</string>
+    <string name="nearby_delete_account_removed">Аккаунт Volty будет закрыт на сервере: войти в него больше не получится, вы выйдете из всех групп и серверов, созданные вами группы удалятся для всех участников, а передача местоположения прекратится.</string>
+    <string name="nearby_delete_account_kept">Поездки, транспорт и настройки останутся на этом телефоне. С телефона ничего не стирается.</string>
+    <string name="nearby_delete_account_irreversible">Это действие нельзя отменить.</string>
+    <string name="nearby_delete_account_confirm">Удалить аккаунт</string>
+    <string name="nearby_delete_account_cancel">Отмена</string>
+    <string name="nearby_delete_account_offline">Для удаления аккаунта нужен интернет. Аккаунт не удалён, попробуйте ещё раз, когда появится связь.</string>
+    <string name="nearby_delete_account_failed">Не удалось удалить аккаунт. Аккаунт не удалён, попробуйте ещё раз.</string>
 </resources>
