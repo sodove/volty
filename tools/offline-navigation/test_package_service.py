@@ -223,6 +223,52 @@ class PackageServiceTest(unittest.TestCase):
         self.assertEqual(updated, manager.catalog_bytes())
         self.assertEqual('ekb-east', manager.resolve(56.8, 61.5)['regionId'])
 
+    def _signed(self, catalog):
+        return json.dumps(catalog_tools.sign_catalog(catalog, self.key, 'release-key'), ensure_ascii=False).encode()
+
+    def _empty_cell(self):
+        return {
+            'region': {
+                'regionId': 'ekb-east',
+                'displayName': 'Восток',
+                'bounds': {'south': 56.5, 'west': 61.0, 'north': 57.0, 'east': 62.0},
+            },
+            'latestRelease': None,
+            'onDemand': {'enabled': True},
+        }
+
+    def test_catalog_limit_defaults_to_sixteen_mebibytes(self):
+        self.assertEqual(16 * 1024 ** 2, self.config.max_catalog_bytes)
+
+    def test_compact_catalog_is_served_while_the_index_still_resolves_empty_cells(self):
+        manager = self.manager()
+        manager.refresh()
+        full = json.loads(self.catalog_bytes)
+        full['generatedAt'] = '2026-09-06T00:00:00Z'
+        compact = copy.deepcopy(full)
+        full['regions'].append(self._empty_cell())
+        compact_bytes = self._signed(compact)
+        (self.root / 'cache' / 'catalog-index.json').write_bytes(self._signed(full))
+        (self.root / 'cache' / 'catalog.json').write_bytes(compact_bytes)
+
+        self.assertEqual(compact_bytes, manager.catalog_bytes())
+        self.assertNotIn(b'ekb-east', manager.catalog_bytes())
+        self.assertEqual('ekb-east', manager.resolve(56.8, 61.5)['regionId'])
+        self.assertEqual('available', manager.resolve(56.8, 61.5)['status'])
+
+    def test_index_that_disagrees_with_the_published_releases_is_ignored(self):
+        manager = self.manager()
+        manager.refresh()
+        before = manager.catalog_bytes()
+        full = json.loads(self.catalog_bytes)
+        full['generatedAt'] = '2026-09-06T00:00:00Z'
+        compact = copy.deepcopy(full)
+        full['regions'] = [self._empty_cell()]  # drops the published release the compact catalog advertises
+        (self.root / 'cache' / 'catalog-index.json').write_bytes(self._signed(full))
+        (self.root / 'cache' / 'catalog.json').write_bytes(self._signed(compact))
+
+        self.assertEqual(before, manager.catalog_bytes())
+
     def test_prune_accepts_on_demand_entries_without_release(self):
         manager = self.manager()
         manager.refresh()

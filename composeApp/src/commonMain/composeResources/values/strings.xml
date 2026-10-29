@@ -818,6 +818,13 @@
     <string name="settings_offline_preparing">Preparing region…</string>
     <string name="settings_offline_no_region_match">Region not found</string>
     <string name="settings_offline_size_line">%1$s download · %2$s on device</string>
+    <string name="offline_unit_b">B</string>
+    <string name="offline_unit_kb">KB</string>
+    <string name="offline_unit_mb">MB</string>
+    <string name="offline_unit_gb">GB</string>
+    <string name="settings_offline_coverage_unavailable">Offline data is not downloaded for your current location, so search and routes here need a connection.</string>
+    <string name="settings_offline_coverage_download">Download this area</string>
+    <string name="settings_offline_storage_line">On device: %1$s · routing and search %2$s · map %3$s · temporary files %4$s</string>
     <string name="settings_offline_download">Download</string>
     <string name="settings_offline_download_mobile">Download over mobile data</string>
     <string name="settings_offline_pause">Pause</string>

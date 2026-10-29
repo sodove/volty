@@ -74,6 +74,16 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationState
+import ru.sodovaya.volty.domain.navigation.region.OfflineByteFormat
+import ru.sodovaya.volty.domain.navigation.region.OfflineByteUnit
+import ru.sodovaya.volty.domain.navigation.region.OfflineCurrentCoverage
+import volty.composeapp.generated.resources.offline_unit_b
+import volty.composeapp.generated.resources.offline_unit_kb
+import volty.composeapp.generated.resources.offline_unit_mb
+import volty.composeapp.generated.resources.offline_unit_gb
+import volty.composeapp.generated.resources.settings_offline_coverage_unavailable
+import volty.composeapp.generated.resources.settings_offline_coverage_download
+import volty.composeapp.generated.resources.settings_offline_storage_line
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackState
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
@@ -837,6 +847,34 @@ private fun OfflineMapsPage(
         fontSize = 11.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    (state.offlineCoverage as? OfflineCurrentCoverage.NotAvailable)?.let { coverage ->
+        // Information first, action second: nothing was downloaded because of this.
+        Column(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(stringResource(Res.string.settings_offline_coverage_unavailable), fontSize = 12.sp)
+            TextButton(onClick = { component.onDownloadOfflineRegion(coverage.regionId) }) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(stringResource(Res.string.settings_offline_coverage_download))
+            }
+        }
+    }
+    state.offlineStorage?.let { usage ->
+        Text(
+            stringResource(
+                Res.string.settings_offline_storage_line,
+                formatOfflineBytes(usage.totalBytes),
+                formatOfflineBytes(usage.packagesBytes),
+                formatOfflineBytes(usage.mapBytes),
+                formatOfflineBytes(usage.downloadsBytes + usage.legacyBytes),
+            ),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     SettingsGroup(null) {
         SettingsSwitchRow(
             title = stringResource(Res.string.settings_offline_mobile_data),
@@ -1083,11 +1121,19 @@ private fun offlineRegionStatusText(
     OfflineRegionPackageStatus.NOT_INSTALLED -> version
 }
 
-private fun formatOfflineBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
-    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
-    bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
-    else -> "$bytes B"
+@Composable
+private fun formatOfflineBytes(bytes: Long): String {
+    val size = OfflineByteFormat.size(bytes)
+    val unit = stringResource(
+        when (size.unit) {
+            OfflineByteUnit.B -> Res.string.offline_unit_b
+            OfflineByteUnit.KB -> Res.string.offline_unit_kb
+            OfflineByteUnit.MB -> Res.string.offline_unit_mb
+            OfflineByteUnit.GB -> Res.string.offline_unit_gb
+        },
+    )
+    val number = if (size.unit == OfflineByteUnit.B) "%d".format(size.value.toLong()) else "%.1f".format(size.value)
+    return "$number $unit"
 }
 
 @Composable

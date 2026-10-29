@@ -115,7 +115,7 @@ Worker limits can be set directly in its environment. Byte limits are integers:
 | `MAX_CACHE_BYTES` | 64 GiB, including reserved validation space |
 | `MIN_FREE_BYTES` | 1 GiB |
 | `WORKERS` / `MAX_PENDING` | 2 / 8 |
-| `MAX_CATALOG_BYTES` | 4 MiB |
+| `MAX_CATALOG_BYTES` | 16 MiB (was 4 MiB; the app limit is 16 MiB too) |
 | `PRUNE_GRACE_SECONDS` | 604800 |
 | `REFRESH_SECONDS` | 900 |
 | `REQUEST_TIMEOUT_SECONDS` / `DOWNLOAD_TIMEOUT_SECONDS` | 30 / 1800 |
@@ -148,3 +148,14 @@ Ingest is optional: ordinary client requests fetch pipeline artifacts over HTTPS
 `search_schema`, `search_metadata`, `pmtiles_header`, `storage_limit`, `queue_full`,
 `upstream_unavailable` and `release_unavailable`. No file paths or credentials are
 returned in public failure messages.
+
+## Compact catalog (optional, off by default)
+
+The signed catalog lists every 1 degree on-demand cell, built or not (5,740 entries,
+about 4 MB in October 2026). With `"compactCatalog": true` in the worker's
+`production.json`, the worker publishes two signed files: `catalog-index.json`
+(every cell, read only by the package service for `/resolve` and `ensure`) and
+`catalog.json` (built releases only, what clients download). Both use the same key.
+
+Do not enable it until the app can ask `/offline/resolve` for the rider's position:
+a client can only request a cell it can see in `catalog.json`.

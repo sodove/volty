@@ -47,6 +47,13 @@ class VoltyApplication : Application() {
             appScope.launch {
                 runCatching { packageRepository.refreshCatalog() }
             }
+            appScope.launch {
+                runCatching {
+                    val freed = koinApp.koin.get<ru.sodovaya.volty.data.navigation.offline.AndroidOfflineStorageMeter>()
+                        .reclaimUnusedLegacy()
+                    if (freed > 0) android.util.Log.i("VoltyOffline", "Reclaimed $freed bytes of the retired BRouter store")
+                }
+            }
         }
     }
 }

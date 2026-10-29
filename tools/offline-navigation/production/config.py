@@ -39,6 +39,12 @@ class ProductionConfig:
     poll_seconds: int = 30
     max_download_bytes: int = 1_073_741_824
     max_runtime_seconds: int = 86_400
+    # When true, catalog.json lists only built releases and the complete list
+    # (including empty on-demand cells) moves to catalog-index.json, which only
+    # the package service reads.  Off by default: a client can only request a
+    # cell it can see, so enabling this needs an app that resolves the rider's
+    # position through /offline/resolve.
+    compact_catalog: bool = False
 
 
 def _absolute(value: object, name: str) -> Path:
@@ -56,6 +62,13 @@ def _contains(parent: Path, child: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _boolean(raw: dict, key: str, default: bool) -> bool:
+    value = raw.get(key, default)
+    if not isinstance(value, bool):
+        raise ConfigError(f"{key} must be a boolean")
+    return value
 
 
 def load_config(path: Path) -> ProductionConfig:
@@ -125,4 +138,5 @@ def load_config(path: Path) -> ProductionConfig:
         public_base_url.rstrip("/"), key_id, positive_int("minAppVersionCode", 1), build_script,
         positive_int("pollSeconds", 30), positive_int("maxDownloadBytes", 1_073_741_824),
         positive_int("maxRuntimeSeconds", 86_400),
+        _boolean(raw, "compactCatalog", False),
     )

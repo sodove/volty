@@ -20,6 +20,10 @@ from package_validation import (
     fetch_https, sync_directory, validate_routing, validate_search,
 )
 
+# Complete signed cell list (empty on-demand cells included) published next to a
+# compact catalog.json by a worker running with compactCatalog; service-internal.
+INDEX_NAME = 'catalog-index.json'
+
 class PackageManager:
     def __init__(self, config, fetch=None):
         self.config = config
@@ -73,6 +77,7 @@ class PackageManager:
             try:
                 data = cached.read_bytes()
                 self._entries, self._catalog_time = self._validate_catalog(data)
+                self._entries = self._with_index(self._entries, self._read_index())
                 self._catalog = data
                 for entry in self._entries.values():
                     manifest = entry['latestRelease']
@@ -80,7 +85,7 @@ class PackageManager:
                         self._identities.setdefault(self._identity_key(manifest), self._fingerprint(manifest))
             except (ValueError, OSError):
                 LOG.exception('Discarding invalid cached catalog')
-        self._catalog_mtime_ns = self._catalog_file_mtime(self.root / 'catalog.json')
+        self._catalog_mtime_ns = self._catalog_files_mtime()
         self._index_ready_releases()
 
     def close(self):
@@ -198,9 +203,42 @@ class PackageManager:
         except OSError:
             return None
 
-    def _install_catalog(self, data, persist=False, observed_mtime=None):
+    def _read_index(self):
+        """The complete signed cell list a compact catalog.json leaves out, or None."""
+        path = self.root / INDEX_NAME
+        if not path.is_file():
+            return None
+        try:
+            entries, _ = self._validate_catalog(path.read_bytes())
+        except (KeyError, TypeError, UnicodeError) as error:
+            raise ValueError('invalid_catalog_index') from error
+        return entries
+
+    @staticmethod
+    def _with_index(entries, index):
+        """Entries the service resolves and builds from.
+
+        The client-facing catalog may list only built releases; the index adds
+        the empty on-demand cells.  Every published entry must also be in the
+        index, so a stale index cannot hide a release or add a different one.
+        """
+        if index is None:
+            return entries
+        for region_id, entry in entries.items():
+            indexed = index.get(region_id)
+            if indexed is None or indexed.get('latestRelease') != entry.get('latestRelease'):
+                raise ValueError('catalog_index_mismatch')
+        return {**index, **entries}
+
+    def _catalog_files_mtime(self):
+        return (self._catalog_file_mtime(self.root / 'catalog.json'),
+                self._catalog_file_mtime(self.root / INDEX_NAME))
+
+    def _install_catalog(self, data, persist=False, observed_mtime=None, use_index=False):
         try:
             entries, timestamp = self._validate_catalog(data)
+            if use_index:
+                entries = self._with_index(entries, self._read_index())
         except (KeyError, TypeError, UnicodeError) as error:
             raise ValueError('invalid_catalog') from error
         with self._lock:
@@ -237,20 +275,20 @@ class PackageManager:
                 atomic_bytes(self.root / 'catalog.json', data)
             self._identities = identities
             self._entries, self._catalog, self._catalog_time = entries, data, timestamp
-            self._catalog_mtime_ns = observed_mtime or self._catalog_file_mtime(self.root / 'catalog.json')
+            self._catalog_mtime_ns = observed_mtime or self._catalog_files_mtime()
         return {'status': 'ready', 'regions': len(entries)}
 
     def _reload_catalog_file_if_changed(self):
         path = self.root / 'catalog.json'
-        mtime = self._catalog_file_mtime(path)
-        if mtime is None or mtime == self._catalog_mtime_ns:
+        mtime = self._catalog_files_mtime()
+        if mtime[0] is None or mtime == self._catalog_mtime_ns:
             return
         with self._refresh_lock:
-            mtime = self._catalog_file_mtime(path)
-            if mtime is None or mtime == self._catalog_mtime_ns:
+            mtime = self._catalog_files_mtime()
+            if mtime[0] is None or mtime == self._catalog_mtime_ns:
                 return
             try:
-                self._install_catalog(path.read_bytes(), observed_mtime=mtime)
+                self._install_catalog(path.read_bytes(), observed_mtime=mtime, use_index=True)
                 self._index_ready_releases()
             except (OSError, ValueError):
                 # Keep serving the last verified catalog until the writer

@@ -283,16 +283,34 @@ class Worker:
             if manifest_path is not None:
                 entry["manifest"] = str(manifest_path)
             entries.append(entry)
-        spec = self.config.staging_root / "catalog-spec.json"
-        spec.parent.mkdir(parents=True, exist_ok=True)
-        spec.write_text(json.dumps({"regions": entries}, ensure_ascii=False), encoding="utf-8")
         public_key = self.config.staging_root / "public-key.txt"
+        self.config.staging_root.mkdir(parents=True, exist_ok=True)
         key = serialization.load_pem_private_key(self.config.signing_key.read_bytes(), password=None)
         if not isinstance(key, Ed25519PrivateKey):
             raise ValueError("signing key must be Ed25519")
         public_key.write_text(base64.b64encode(key.public_key().public_bytes(serialization.Encoding.Raw,
                                                                               serialization.PublicFormat.Raw)).decode(), encoding="ascii")
-        output = self.config.public_root / "catalog.json"
+        built = [entry for entry in entries if "manifest" in entry]
+        if self.config.compact_catalog and built:
+            # The package service needs every empty on-demand cell to resolve a
+            # coordinate and to start a build, but a client downloads (and
+            # verifies) the whole catalog.  Publish the complete signed list
+            # as catalog-index.json FIRST, then the client catalog with only
+            # the built releases: a reader that sees the new catalog.json has
+            # already seen an index that is at least as complete.
+            self._build_signed_catalog(entries, "catalog-spec-index.json", "catalog-index.json", public_key)
+            self._build_signed_catalog(built, "catalog-spec.json", "catalog.json", public_key)
+        else:
+            # A stale index from an earlier compact run must not outlive the
+            # switch back: the package service prefers it over catalog.json.
+            (self.config.public_root / "catalog-index.json").unlink(missing_ok=True)
+            self._build_signed_catalog(entries, "catalog-spec.json", "catalog.json", public_key)
+
+    def _build_signed_catalog(self, entries: list, spec_name: str, output_name: str, public_key: Path) -> None:
+        spec = self.config.staging_root / spec_name
+        spec.parent.mkdir(parents=True, exist_ok=True)
+        spec.write_text(json.dumps({"regions": entries}, ensure_ascii=False), encoding="utf-8")
+        output = self.config.public_root / output_name
         subprocess.run([sys.executable, str(Path(__file__).parents[1] / "build-catalog.py"), "--spec", str(spec),
                         "--output", str(output), "--public-key", str(public_key), "--private-key",
                         str(self.config.signing_key), "--key-id", self.config.key_id,

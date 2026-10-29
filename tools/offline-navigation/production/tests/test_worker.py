@@ -147,6 +147,83 @@ class WorkerTest(unittest.TestCase):
             self.assertNotIn("manifest", spec["regions"][0])
             self.assertEqual({"enabled": True}, spec["regions"][0]["onDemand"])
 
+    def _compact_fixture(self, root: Path, compact):
+        key_path = root / "keys" / "signing-key.pem"
+        key_path.parent.mkdir()
+        key_path.write_bytes(Ed25519PrivateKey.generate().private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ))
+        raw = {
+            "publicRoot": str(root / "public"),
+            "stagingRoot": str(root / "staging"),
+            "sourceRoot": str(root / "sources"),
+            "signingKey": str(key_path),
+            "regions": [
+                {"id": "g1-146-240", "displayName": "Екатеринбург", "bbox": "60.0,56.0,61.0,57.0",
+                 "sourceUrl": "https://download.example/region.pbf"},
+                {"id": "g1-147-240", "bbox": "60.0,57.0,61.0,58.0", "sourceUrl": "https://download.example/region.pbf"},
+                {"id": "g1-148-240", "bbox": "60.0,58.0,61.0,59.0", "sourceUrl": "https://download.example/region.pbf"},
+            ],
+        }
+        if compact is not None:
+            raw["compactCatalog"] = compact
+        config_path = root / "config.json"
+        config_path.write_text(json.dumps(raw), encoding="utf-8")
+        manifest_path = root / "public" / "regions" / "g1-146-240" / "2026-09-06" / "manifest.json"
+        manifest_path.parent.mkdir(parents=True)
+        manifest_path.write_text(json.dumps({
+            "schemaVersion": 3, "regionId": "g1-146-240",
+            "coverage": {"bbox": [60.0, 56.0, 61.0, 57.0]},
+            "components": {"routing": {}, "search": {}},
+        }), encoding="utf-8")
+        return load_config(config_path)
+
+    def test_compact_catalog_publishes_only_built_releases_and_keeps_every_cell_in_the_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self._compact_fixture(root, True)
+            self.assertTrue(config.compact_catalog)
+            with patch("production.worker.subprocess.run") as run:
+                Worker(config, root / "queue.json")._write_catalog()
+
+            outputs = [call.args[0][call.args[0].index("--output") + 1] for call in run.call_args_list]
+            # Index first: a reader that sees the compact catalog has already seen the index.
+            self.assertEqual(["catalog-index.json", "catalog.json"], [Path(o).name for o in outputs])
+            index = json.loads((root / "staging" / "catalog-spec-index.json").read_text(encoding="utf-8"))
+            client = json.loads((root / "staging" / "catalog-spec.json").read_text(encoding="utf-8"))
+            self.assertEqual(3, len(index["regions"]))
+            self.assertEqual(["g1-146-240"], [r["regionId"] for r in client["regions"]])
+            self.assertTrue(all("manifest" in r for r in client["regions"]))
+
+    def test_catalog_stays_complete_by_default_and_drops_a_stale_index(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self._compact_fixture(root, None)
+            self.assertFalse(config.compact_catalog)
+            stale = root / "public" / "catalog-index.json"
+            stale.write_text("{}", encoding="utf-8")
+            with patch("production.worker.subprocess.run") as run:
+                Worker(config, root / "queue.json")._write_catalog()
+
+            self.assertEqual(1, run.call_count)
+            client = json.loads((root / "staging" / "catalog-spec.json").read_text(encoding="utf-8"))
+            self.assertEqual(3, len(client["regions"]))
+            self.assertFalse(stale.exists())
+
+    def test_compact_catalog_with_nothing_built_falls_back_to_the_complete_catalog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self._compact_fixture(root, True)
+            (root / "public" / "regions" / "g1-146-240" / "2026-09-06" / "manifest.json").unlink()
+            with patch("production.worker.subprocess.run") as run:
+                Worker(config, root / "queue.json")._write_catalog()
+
+            self.assertEqual(1, run.call_count)  # build-catalog.py refuses an empty region list
+            client = json.loads((root / "staging" / "catalog-spec.json").read_text(encoding="utf-8"))
+            self.assertEqual(3, len(client["regions"]))
+
     def test_worker_does_not_fabricate_source_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

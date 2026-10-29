@@ -16,6 +16,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import ru.sodovaya.volty.domain.navigation.region.OfflineDownloadStagingPolicy
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionComponent
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlan
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifest
@@ -54,7 +55,36 @@ class AndroidOfflineRegionPackageStore internal constructor(
             ensureDirectories()
             cleanupStaging()
             cleanupOrphanedPackages()
+            // Nothing can be downloading while the store is being constructed.
+            reapStaleDownloads(emptySet())
         }
+    }
+
+    /**
+     * Deletes `downloads/` staging that can no longer be resumed into anything
+     * useful: the release is already installed, or nobody touched it for a week.
+     * Retraction: only `staging-*` was ever reaped, so a failed or superseded
+     * download kept its ~100 MB archives forever.  Directories of regions in
+     * [activeRegionIds] are never touched.
+     */
+    fun reapStaleDownloads(activeRegionIds: Set<String>): Long = synchronized(lock) {
+        val downloads = File(root, DOWNLOADS_DIRECTORY)
+        val installed = installedRegionIds().mapNotNull { id ->
+            val name = runCatching { File(active, "$id.pointer").readText(Charsets.UTF_8).trim() }.getOrNull()
+                ?: return@mapNotNull null
+            val manifest = readManifest(File(File(packages, id), name)) ?: return@mapNotNull null
+            id to manifest.releaseVersion
+        }.toMap()
+        val now = System.currentTimeMillis()
+        var freed = 0L
+        downloads.listFiles()?.filter { it.isDirectory }?.forEach { directory ->
+            val newest = directory.walkTopDown().maxOfOrNull { it.lastModified() } ?: directory.lastModified()
+            if (OfflineDownloadStagingPolicy.isStale(directory.name, now - newest, installed, activeRegionIds)) {
+                freed += directory.walkTopDown().filter(File::isFile).sumOf(File::length)
+                directory.deleteRecursively()
+            }
+        }
+        freed
     }
 
     fun install(
@@ -596,7 +626,14 @@ class AndroidOfflineRegionPackageStore internal constructor(
                             packageDirectory.canonicalFile.parentFile == regionDirectory.canonicalFile
                     }
                     ?.filterNot { packageDirectory ->
-                        "${regionDirectory.name}/${packageDirectory.name}" in referenced || hasLegacyManifest(packageDirectory)
+                        val key = "${regionDirectory.name}/${packageDirectory.name}"
+                        // Retraction: legacy v2 directories were kept "as rollback input" even
+                        // after the active pointer moved to a verified v3 package or to the
+                        // self-contained navigation-v2 copy, doubling the region's footprint
+                        // (~215 MB).  They are now kept only while NO verified package of the
+                        // region is active - then they may still be the only usable data.
+                        key in referenced ||
+                            (hasLegacyManifest(packageDirectory) && referenced.none { it.startsWith("${regionDirectory.name}/") })
                     }
                     ?.forEach(File::deleteRecursively)
                 if (regionDirectory.listFiles().isNullOrEmpty()) regionDirectory.delete()
