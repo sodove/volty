@@ -1018,7 +1018,7 @@ class DefaultRootComponent(
                         exporter = get(),
                         isRecording = {
                             get<ru.sodovaya.volty.domain.history.HistoryRecordingRepository>()
-                                .states.first().ride != null
+                                .states.first().let { ru.sodovaya.volty.diagnostics.historyRecordingInProgress(it) }
                         },
                     ),
                     bleDiagnosticsRepository = get(),

@@ -1,7 +1,13 @@
 package ru.sodovaya.volty.diagnostics
 
 /** Why a database share was declined; the settings page turns it into a sentence. */
-enum class SnapshotRefusal { RECORDING, NO_SPACE }
+enum class SnapshotRefusal {
+    RECORDING, NO_SPACE,
+    /** The write lock could not be taken within the driver's busy timeout; try again. */
+    BUSY,
+    /** The checkpoint reported success yet a WAL remained: the files disagree, so no copy is trusted. */
+    INCONSISTENT,
+}
 
 sealed interface SnapshotPlan {
     data object Copy : SnapshotPlan
@@ -24,12 +30,43 @@ fun databaseSnapshotPlan(recording: Boolean, dbBytes: Long, freeBytes: Long): Sn
     else -> SnapshotPlan.Copy
 }
 
-/** `volty-db-<yyyy-MM-dd_HH-mm-ss>.db`, `.db.gz` when compressed. */
+/** What to copy once the checkpoint inside the write transaction has been tried. */
+sealed interface SnapshotFiles {
+    data object DbOnly : SnapshotFiles
+    /** Committed data may still live in `volty.db-wal`: ship it with the main file. */
+    data object DbAndWal : SnapshotFiles
+    data class Refuse(val reason: SnapshotRefusal) : SnapshotFiles
+}
+
+/**
+ * [checkpointBusy] is the `busy` column of `PRAGMA wal_checkpoint(TRUNCATE)` run inside the
+ * write transaction (null when it threw: unknown). A non-empty WAL always travels with the db,
+ * because a snapshot that silently misses committed data is worse than none. A checkpoint that
+ * claims success while a WAL remains cannot happen under our lock, so it is refused.
+ */
+fun snapshotFilesDecision(checkpointBusy: Boolean?, walBytes: Long): SnapshotFiles = when {
+    walBytes <= 0L -> SnapshotFiles.DbOnly
+    checkpointBusy == false -> SnapshotFiles.Refuse(SnapshotRefusal.INCONSISTENT)
+    else -> SnapshotFiles.DbAndWal
+}
+
+/**
+ * True while the recorder owns the database: an open ride, or a GPS route starting/recording/
+ * stopping. The same fields the app's own recording UI reads (`canStop` is `ride != null`).
+ */
+fun historyRecordingInProgress(status: ru.sodovaya.volty.domain.history.HistoryRecordingStatus): Boolean =
+    status.ride != null || status.route == ru.sodovaya.volty.domain.history.HistoryRecordingRouteStatus.STARTING ||
+        status.route == ru.sodovaya.volty.domain.history.HistoryRecordingRouteStatus.RECORDING ||
+        status.route == ru.sodovaya.volty.domain.history.HistoryRecordingRouteStatus.STOPPING
+
+/** `volty-db-<yyyy-MM-dd_HH-mm-ss>.db`, `.db.gz` when compressed, `.zip` for db + WAL. */
 fun databaseSnapshotFileName(
     year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int, compressed: Boolean,
+    withWal: Boolean = false,
 ): String {
     fun two(v: Int) = v.toString().padStart(2, '0')
     val stamp = "${year.toString().padStart(4, '0')}-${two(month)}-${two(day)}_${two(hour)}-${two(minute)}-${two(second)}"
+    if (withWal) return "volty-db-$stamp.zip"
     return "volty-db-$stamp.db" + if (compressed) ".gz" else ""
 }
 
@@ -47,7 +84,11 @@ sealed interface DatabaseShareOutcome {
  * the database. Does its own IO off the caller's thread.
  */
 interface DatabaseSnapshotExporter {
-    suspend fun share(recording: Boolean): DatabaseShareOutcome
+    /**
+     * [isRecording] is asked before any work and again inside the write transaction, so a ride
+     * that starts in between still refuses the copy.
+     */
+    suspend fun share(isRecording: suspend () -> Boolean): DatabaseShareOutcome
 }
 
 /** The part of the settings page that decides *whether* to share, split out so it is testable. */
@@ -55,5 +96,5 @@ class DatabaseShareAction(
     private val exporter: DatabaseSnapshotExporter,
     private val isRecording: suspend () -> Boolean,
 ) {
-    suspend fun run(): DatabaseShareOutcome = exporter.share(isRecording())
+    suspend fun run(): DatabaseShareOutcome = exporter.share(isRecording)
 }

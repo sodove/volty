@@ -107,6 +107,8 @@ import volty.composeapp.generated.resources.settings_share_database_busy
 import volty.composeapp.generated.resources.settings_share_database_recording
 import volty.composeapp.generated.resources.settings_share_database_no_space
 import volty.composeapp.generated.resources.settings_share_database_failed
+import volty.composeapp.generated.resources.settings_share_database_app_busy
+import volty.composeapp.generated.resources.settings_share_database_inconsistent
 import volty.composeapp.generated.resources.settings_send_logs
 import volty.composeapp.generated.resources.settings_send_logs_subtitle
 import volty.composeapp.generated.resources.settings_delete_title
@@ -958,6 +960,8 @@ private fun DatabaseShareRow(state: SettingsComponent.State, component: Settings
         state.databaseShareOutcome is ru.sodovaya.volty.diagnostics.DatabaseShareOutcome.Refused -> when (state.databaseShareOutcome.reason) {
             ru.sodovaya.volty.diagnostics.SnapshotRefusal.RECORDING -> stringResource(Res.string.settings_share_database_recording)
             ru.sodovaya.volty.diagnostics.SnapshotRefusal.NO_SPACE -> stringResource(Res.string.settings_share_database_no_space)
+            ru.sodovaya.volty.diagnostics.SnapshotRefusal.BUSY -> stringResource(Res.string.settings_share_database_app_busy)
+            ru.sodovaya.volty.diagnostics.SnapshotRefusal.INCONSISTENT -> stringResource(Res.string.settings_share_database_inconsistent)
         }
         state.databaseShareOutcome is ru.sodovaya.volty.diagnostics.DatabaseShareOutcome.Failed ->
             stringResource(Res.string.settings_share_database_failed)

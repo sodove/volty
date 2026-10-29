@@ -33,10 +33,41 @@ class DatabaseSnapshotPlanTest {
         assertEquals(true, shouldCompressSnapshot(SNAPSHOT_COMPRESS_FROM_BYTES))
     }
 
+    @Test
+    fun walTravelsWithTheDbUnlessTheCheckpointEmptiedIt() {
+        assertEquals(SnapshotFiles.DbOnly, snapshotFilesDecision(checkpointBusy = false, walBytes = 0))
+        assertEquals(SnapshotFiles.DbOnly, snapshotFilesDecision(checkpointBusy = true, walBytes = 0))
+        assertEquals(SnapshotFiles.DbOnly, snapshotFilesDecision(checkpointBusy = null, walBytes = 0))
+        assertEquals(SnapshotFiles.DbAndWal, snapshotFilesDecision(checkpointBusy = true, walBytes = 4096))
+        assertEquals(SnapshotFiles.DbAndWal, snapshotFilesDecision(checkpointBusy = null, walBytes = 4096))
+        // Incoherent: "checkpoint done" yet a WAL remains. No producer emits it; it must be refused.
+        assertEquals(
+            SnapshotFiles.Refuse(SnapshotRefusal.INCONSISTENT),
+            snapshotFilesDecision(checkpointBusy = false, walBytes = 4096),
+        )
+    }
+
+    @Test
+    fun recordingSignalCoversRideAndRouteButNotAnIdleStatus() {
+        val idle = ru.sodovaya.volty.domain.history.HistoryRecordingStatus()
+        assertEquals(false, historyRecordingInProgress(idle))
+        assertEquals(false, historyRecordingInProgress(idle.copy(route = ru.sodovaya.volty.domain.history.HistoryRecordingRouteStatus.UNAVAILABLE)))
+        for (r in listOf(
+            ru.sodovaya.volty.domain.history.HistoryRecordingRouteStatus.STARTING,
+            ru.sodovaya.volty.domain.history.HistoryRecordingRouteStatus.RECORDING,
+            ru.sodovaya.volty.domain.history.HistoryRecordingRouteStatus.STOPPING,
+        )) assertEquals(true, historyRecordingInProgress(idle.copy(route = r)), r.name)
+    }
+
+    @Test
+    fun zipNameWhenWalTravels() {
+        assertEquals("volty-db-2026-10-29_07-05-09.zip", databaseSnapshotFileName(2026, 10, 29, 7, 5, 9, compressed = true, withWal = true))
+    }
+
     private class FakeExporter : DatabaseSnapshotExporter {
         val calls = mutableListOf<Boolean>()
-        override suspend fun share(recording: Boolean): DatabaseShareOutcome {
-            calls += recording
+        override suspend fun share(isRecording: suspend () -> Boolean): DatabaseShareOutcome {
+            calls += isRecording()
             return DatabaseShareOutcome.Shared
         }
     }

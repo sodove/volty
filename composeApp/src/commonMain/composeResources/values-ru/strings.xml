@@ -275,6 +275,8 @@
     <string name="settings_share_database_busy">Готовлю файл…</string>
     <string name="settings_share_database_recording">Сейчас идёт запись поездки. Сначала остановите её.</string>
     <string name="settings_share_database_no_space">Не хватает свободного места для копии.</string>
+    <string name="settings_share_database_app_busy">Приложение занято. Попробуйте ещё раз.</string>
+    <string name="settings_share_database_inconsistent">Не удалось получить согласованную копию. Попробуйте ещё раз.</string>
     <string name="settings_share_database_failed">Не удалось подготовить файл.</string>
     <string name="settings_send_logs_subtitle">Поделиться logcat приложения для диагностики</string>
     <string name="settings_delete">Удалить</string>

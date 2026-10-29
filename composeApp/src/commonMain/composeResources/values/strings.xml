@@ -277,6 +277,8 @@
     <string name="settings_share_database_busy">Preparing the file…</string>
     <string name="settings_share_database_recording">A ride is being recorded. Stop it first.</string>
     <string name="settings_share_database_no_space">Not enough free space for a copy.</string>
+    <string name="settings_share_database_app_busy">The app is busy. Try again.</string>
+    <string name="settings_share_database_inconsistent">Could not get a consistent copy. Try again.</string>
     <string name="settings_share_database_failed">Could not prepare the file.</string>
     <string name="settings_send_logs_subtitle">Share the app's logcat for troubleshooting</string>
     <string name="settings_delete">Delete</string>
