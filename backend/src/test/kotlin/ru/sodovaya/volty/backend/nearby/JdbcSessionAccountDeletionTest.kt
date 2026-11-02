@@ -60,6 +60,38 @@ class JdbcSessionAccountDeletionTest {
         assertEquals(1, count("groups")); assertEquals(1, count("sharing_sessions")); assertEquals(1, count("live_updates"))
         assertEquals(before, JdbcRosterJournal(source).revision())
     }
+    @Test fun deletion_erases_profile_credentials_contacts_and_push_binding_but_preserves_cleanup() {
+        val v = voice(owner, otherChannel)
+        val deletedOwned = id()
+        val deletedOwnedChannel = create(owner, deletedOwned)
+        sql("UPDATE nearby_communities SET state='DELETED',name='Private group name',description='Private group description' WHERE id='$deletedOwned'")
+        sql("UPDATE nearby_voice_channels SET name='Private channel name' WHERE id='$deletedOwnedChannel'")
+        val email = "$owner@example.invalid"
+        sql("INSERT INTO refresh_tokens VALUES ('${id()}','$owner','refresh-secret',999999,0,NULL,NULL)")
+        sql("INSERT INTO one_time_tokens VALUES ('${id()}','$owner','PASSWORD_RESET','reset-secret',999999,NULL)")
+        sql("INSERT INTO friendships VALUES ('${id()}','$owner','$member','ACCEPTED',0)")
+        sql("INSERT INTO nearby_push_devices VALUES ('${id()}','${"a".repeat(64)}',1,'${id()}','$owner',0,'push-secret','${"b".repeat(64)}',0)")
+        val generation = id()
+        sql("INSERT INTO nearby_channel_sharing_consent VALUES ('$owner','${v.session}','$generation','ACTIVE','FULL',1000,0)")
+        sql("INSERT INTO nearby_channel_sharing_packets VALUES ('$owner','${v.session}','$generation',1,'hash','{\"location\":\"private\"}',0,1000)")
+        val store = JdbcStore(source, Json)
+        assertNotNull(store.findUserByEmail(email))
+        assertEquals(1, store.deleteAccount(owner))
+        assertNull(store.findUserByEmail(email))
+        assertEquals(0, count("users", "id='$owner' AND (email='$email' OR password_hash='test' OR display_name='Rider')"))
+        for (table in listOf("refresh_tokens", "one_time_tokens")) assertEquals(0, count(table, "user_id='$owner'"), table)
+        assertEquals(0, count("friendships", "requester_id='$owner' OR addressee_id='$owner'"))
+        assertEquals(0, count("nearby_push_devices", "actor_id='$owner'"))
+        assertEquals(0, count("nearby_channel_sharing_packets", "actor_id='$owner'"))
+        assertEquals(0, count("nearby_channel_sharing_consent", "actor_id='$owner'"))
+        assertTrue(sessions.findSession(owner, v.session)!!.cleanupPending)
+        assertEquals(1, count("nearby_communities", "id='$deletedOwned' AND state='DELETED' AND name='[deleted]' AND description=''"))
+        assertEquals(1, count("nearby_voice_channels", "id='$deletedOwnedChannel' AND name='[deleted]'"))
+        assertEquals(0, count("nearby_community_outbox", "community_id='$deletedOwned' AND kind='DELETED'"))
+        // An unrelated profile remains usable and the email is no longer reserved by the tombstone.
+        assertNotNull(store.findUserById(member))
+        assertEquals(0, count("users", "email='$email'"))
+    }
     @Test fun repeatedDeletionCannotReissueCredentialsOrInventAnotherRevision() {
         val v = voice(owner, otherChannel)
         val store = JdbcStore(source, Json)

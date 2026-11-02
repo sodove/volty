@@ -52,10 +52,11 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
     val imageWidth = (imageHeight*86.0/88).roundToInt().coerceIn(1,512)
     val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
     val primary = MaterialTheme.colorScheme.primary.toArgb(); val tertiary = MaterialTheme.colorScheme.tertiary.toArgb()
-    val renderKeys = remember(previews.previews,selectedRideId,previewRevision,imageWidth,imageHeight,dark,primary,tertiary) {
+    val mapPalette = ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette.current
+    val renderKeys = remember(previews.previews,selectedRideId,previewRevision,imageWidth,imageHeight,dark,primary,tertiary,mapPalette) {
         previews.previews.mapNotNull { (id,data) ->
             if (data.segments.all { it.fixes.isEmpty() }) null else id to HistoryPreviewImageKey(id,previewRevision,imageWidth,imageHeight,
-                dark,if (id == selectedRideId) primary else tertiary,data.segments)
+                dark,if (id == selectedRideId) primary else tertiary,data.segments,mapPalette = mapPalette)
         }.toMap()
     }
     val rideKeys = remember(state.rides) { state.rides.associateBy { "ride:${it.id}" } }

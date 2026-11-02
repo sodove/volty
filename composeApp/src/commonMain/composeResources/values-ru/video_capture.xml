@@ -1,0 +1,21 @@
+<resources>
+    <string name="video_title">Камера поездки</string>
+    <string name="video_back">Назад</string>
+    <string name="video_permissions">Разрешите доступ к камере для записи поездки. На Android 8–9 также нужен доступ к хранилищу для сохранения видео в галерее.</string>
+    <string name="video_allow">Разрешить камеру</string>
+    <string name="video_app_settings">Разрешения приложения</string>
+    <string name="video_record">Запись</string>
+    <string name="video_stop">Стоп</string>
+    <string name="video_stopping">Сохранение…</string>
+    <string name="video_starting">Запуск…</string>
+    <string name="video_audio">Микрофон</string>
+    <string name="video_audio_denied">Нет доступа к микрофону. Можно записать видео без звука.</string>
+    <string name="video_switch">Сменить камеру</string>
+    <string name="video_overlay">Оверлей</string>
+    <string name="video_saved">Видео сохранено в Movies/Volty</string>
+    <string name="video_saved_interrupted">Запись прервана. Снятая часть сохранена в Movies/Volty.</string>
+    <string name="video_error">Запись недоступна или прервана</string>
+    <string name="video_retry">Повторить подключение камеры</string>
+    <string name="video_foreground_hint">При выходе с этого экрана запись завершится.</string>
+    <string name="video_no_telemetry">Неизвестные значения отображаются как —</string>
+</resources>

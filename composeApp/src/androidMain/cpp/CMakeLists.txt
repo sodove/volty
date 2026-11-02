@@ -23,6 +23,8 @@ add_library(volty_rnnoise SHARED
 target_include_directories(volty_rnnoise PRIVATE ${RNNOISE_DIR}/include ${RNNOISE_DIR}/src ${RNNOISE_MODEL_DIR}/src)
 # -O2 keeps the 10 ms frame well inside the audio callback; the generated model needs no warnings.
 target_compile_options(volty_rnnoise PRIVATE -O2 -w)
+# Align ELF segments for Android devices using 16 KB memory pages.
+target_link_options(volty_rnnoise PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,-z,common-page-size=16384")
 # The model carries float copies of its int8 weights for debugging only; the int8 path is what runs.
 # Without this the library is ~15 MB per ABI instead of ~4 MB.
 target_compile_definitions(volty_rnnoise PRIVATE DISABLE_DEBUG_FLOAT)

@@ -27,7 +27,7 @@ deployed. It never silently substitutes a third-party provider or a car/bicycle 
 | POST | `/auth/password-reset` | `{token,newPassword}` -> `{reset:true}` |
 | GET | `/profile` | bearer -> authenticated profile |
 | PATCH | `/profile` | `{displayName}` -> authenticated profile |
-| DELETE | `/account` | bearer -> `204`; revokes and soft-deletes account |
+| DELETE | `/account` | bearer -> `204`; revokes access, erases profile/credentials/contacts/sharing/push data, and closes owned communities; internal UUID tombstones remain for fenced cleanup |
 
 ## Friends and invite-only groups
 

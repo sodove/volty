@@ -10,6 +10,7 @@ import ru.sodovaya.volty.domain.audio.AlertSoundKind
 import ru.sodovaya.volty.domain.audio.AlertSoundSettings
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.BleDiagnosticsState
+import ru.sodovaya.volty.domain.model.ThemeAccent
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.domain.voice.VoiceInputPreference
@@ -23,6 +24,9 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationCoordinator
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationState
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapStyleVariant
+import ru.sodovaya.volty.presentation.settings.credits.CreditsComponent
+import ru.sodovaya.volty.presentation.settings.credits.DefaultCreditsComponent
+import ru.sodovaya.volty.presentation.settings.credits.loadBundledCreditsCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -31,6 +35,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
@@ -38,9 +44,12 @@ interface SettingsComponent {
     val state: StateFlow<State>
     /** The open settings page, or null while the hub itself is showing. */
     val page: StateFlow<SettingsPage?>
+    /** Credits data and nested navigation, when provided by this component. */
+    val credits: CreditsComponent? get() = null
 
     fun onThemeChanged(theme: String)
     fun onDynamicColorChanged(enabled: Boolean)
+    fun onThemeAccentChanged(accent: ThemeAccent) {}
     fun onScanTimeoutChanged(sec: Int)
     fun onAutoConnectCountdownChanged(sec: Int)
     fun onUnitSystemChanged(system: UnitSystem)
@@ -87,6 +96,7 @@ interface SettingsComponent {
     data class State(
         val themeMode: String = "system",
         val dynamicColor: Boolean = true,
+        val themeAccent: ThemeAccent = ThemeAccent.DEFAULT,
         val scanTimeoutSec: Int = 5,
         val autoConnectCountdownSec: Int = 3,
         val unitSystem: UnitSystem = UnitSystem.METRIC,
@@ -104,6 +114,11 @@ interface SettingsComponent {
         val offlineSkipMeteredConfirmation: Boolean = false,
         val offlineRegions: List<OfflineRegionPackageState> = emptyList(),
         val offlinePreparation: List<OfflineRegionPreparationState> = emptyList(),
+        /** Where the rider is, as far as the offline data goes; information only. */
+        val offlineCoverage: ru.sodovaya.volty.domain.navigation.region.OfflineCurrentCoverage =
+            ru.sodovaya.volty.domain.navigation.region.OfflineCurrentCoverage.Unknown,
+        /** Measured on disk; null until the first measurement lands. */
+        val offlineStorage: ru.sodovaya.volty.domain.navigation.region.OfflineStorageUsage? = null,
         val offlineCatalogRefreshing: Boolean = false,
         val offlineCatalogError: Boolean = false,
         val vehicles: List<Vehicle> = emptyList(),
@@ -120,6 +135,7 @@ class DefaultSettingsComponent(
     private val vehicleRepository: VehicleRepository,
     private val offlineRegionsRepository: OfflineRegionPackageRepository,
     private val offlinePreparationCoordinator: OfflineRegionPreparationCoordinator,
+    private val offlineStorageMeter: ru.sodovaya.volty.domain.navigation.region.OfflineStorageMeter? = null,
     private val logExporter: LogExporter,
     private val databaseShare: ru.sodovaya.volty.diagnostics.DatabaseShareAction,
     private val bleDiagnosticsRepository: BleDiagnosticsRepository,
@@ -132,12 +148,16 @@ class DefaultSettingsComponent(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val pages = SettingsPageNavigator(onExit = onBackRequested)
     override val page: StateFlow<SettingsPage?> = pages.page
+    override val credits: CreditsComponent = DefaultCreditsComponent(scope) {
+        loadBundledCreditsCatalog()
+    }
     // Only while a page is open: the system back gesture then closes the page instead of the screen.
     private val pageBackCallback = BackCallback(isEnabled = false) { onBack() }
     private val _state = MutableStateFlow(
         SettingsComponent.State(
             themeMode = appPrefs.themeMode.value,
             dynamicColor = appPrefs.dynamicColorEnabled.value,
+            themeAccent = appPrefs.themeAccent.value,
             scanTimeoutSec = appPrefs.scanTimeoutSec.value,
             autoConnectCountdownSec = appPrefs.autoConnectCountdownSec.value,
             unitSystem = appPrefs.unitSystem.value,
@@ -167,6 +187,7 @@ class DefaultSettingsComponent(
         }
         scope.launch { appPrefs.themeMode.collect { v -> _state.update { it.copy(themeMode = v) } } }
         scope.launch { appPrefs.dynamicColorEnabled.collect { v -> _state.update { it.copy(dynamicColor = v) } } }
+        scope.launch { appPrefs.themeAccent.collect { v -> _state.update { it.copy(themeAccent = v) } } }
         scope.launch { appPrefs.scanTimeoutSec.collect { v -> _state.update { it.copy(scanTimeoutSec = v) } } }
         scope.launch { appPrefs.autoConnectCountdownSec.collect { v -> _state.update { it.copy(autoConnectCountdownSec = v) } } }
         scope.launch { appPrefs.unitSystem.collect { v -> _state.update { it.copy(unitSystem = v) } } }
@@ -191,6 +212,20 @@ class DefaultSettingsComponent(
         } }
         scope.launch { appPrefs.offlineSkipMeteredConfirmation.collect { v -> _state.update { it.copy(offlineSkipMeteredConfirmation = v) } } }
         scope.launch { offlineRegionsRepository.states.collect { v -> _state.update { it.copy(offlineRegions = v) } } }
+        scope.launch { offlinePreparationCoordinator.currentCoverage.collect { v -> _state.update { it.copy(offlineCoverage = v) } } }
+        offlineStorageMeter?.let { meter ->
+            scope.launch {
+                // Re-measure when a region changes status (installed, deleted, download ended),
+                // not on every progress tick.
+                offlineRegionsRepository.states
+                    .map { list -> list.map { it.region.regionId to it.status } }
+                    .distinctUntilChanged()
+                    .collect {
+                        runCatching { meter.measure() }.getOrNull()
+                            ?.let { usage -> _state.update { it.copy(offlineStorage = usage) } }
+                    }
+            }
+        }
         scope.launch { offlinePreparationCoordinator.states.collect { v -> _state.update { it.copy(offlinePreparation = v) } } }
         scope.launch { bleDiagnosticsRepository.state.collect { v -> _state.update { it.copy(diagnostics = v) } } }
         scope.launch { bmsRepository.activeVehicle.collect { v -> _state.update { it.copy(activeVehicle = v) } } }
@@ -198,6 +233,7 @@ class DefaultSettingsComponent(
 
     override fun onThemeChanged(theme: String) { scope.launch { appPrefs.setThemeMode(theme) } }
     override fun onDynamicColorChanged(enabled: Boolean) { scope.launch { appPrefs.setDynamicColorEnabled(enabled) } }
+    override fun onThemeAccentChanged(accent: ThemeAccent) { scope.launch { appPrefs.setThemeAccent(accent) } }
     override fun onScanTimeoutChanged(sec: Int) { scope.launch { appPrefs.setScanTimeoutSec(sec) } }
     override fun onAutoConnectCountdownChanged(sec: Int) { scope.launch { appPrefs.setAutoConnectCountdownSec(sec) } }
     override fun onUnitSystemChanged(system: UnitSystem) { scope.launch { appPrefs.setUnitSystem(system) } }
@@ -270,8 +306,10 @@ class DefaultSettingsComponent(
     override fun onOpenPage(page: SettingsPage) {
         pages.open(page)
         pageBackCallback.isEnabled = true
+        if (page == SettingsPage.CREDITS) credits.onLoad()
     }
     override fun onBack() {
+        if (pages.page.value == SettingsPage.CREDITS && credits.onBack()) return
         pages.back()
         pageBackCallback.isEnabled = pages.page.value != null
     }

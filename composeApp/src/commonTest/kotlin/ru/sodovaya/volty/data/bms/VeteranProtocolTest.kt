@@ -17,7 +17,9 @@ class VeteranProtocolTest {
         val protocol = VeteranProtocol()
         val observed = mutableListOf<TelemetryObservation>()
         protocol.telemetryObserver = observed::add
-        val frame = controllerFrame(voltageRaw = 12_525, speedRaw = -321,
+        // Exercise the modern sign convention with actual CRC framing, rather
+        // than the helper's legacy default under a synthetic Lynx version.
+        val frame = controllerFrame(len = 71, voltageRaw = 12_525, speedRaw = -321,
             phaseCurrentRaw = -250, temperatureRaw = 3500, pwmRaw = 7850)
         protocol.onNotification(frame.copyOfRange(0, 13))
         assertTrue(observed.isEmpty())
@@ -134,6 +136,9 @@ class VeteranProtocolTest {
     fun `valid controller frame is reassembled across noise and split notifications`() {
         val protocol = VeteranProtocol()
         val frame = controllerFrame(
+            // A Lynx uses modern CRC framing. The former synthetic 36-byte fixture
+            // named a Lynx but exercised legacy Sherman framing and its torque axes.
+            len = 71,
             voltageRaw = 12_525,
             speedRaw = -321,
             distanceRaw = 54_321,

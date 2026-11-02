@@ -17,7 +17,6 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.callid.CallId
-import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.defaultheaders.DefaultHeaders
@@ -274,7 +273,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     val logger = LoggerFactory.getLogger("VoltyBackend")
     val scope = CoroutineScope(SupervisorJob(coroutineContext[kotlinx.coroutines.Job]) + Dispatchers.IO)
 
-    install(CallLogging)
+    installBackendCallLogging()
     install(CallId) {
         generate { uuid() }
         verify { it.isNotBlank() }
@@ -336,6 +335,14 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     }
 
     routing {
+        get("/remove_account") {
+            val nonce = java.util.Base64.getEncoder().encodeToString(java.security.SecureRandom().generateSeed(24))
+            val page = checkNotNull(PasswordResetDelivery::class.java.getResourceAsStream("/remove-account.html"))
+                .bufferedReader(Charsets.UTF_8).use { it.readText() }.replace("__CSP_NONCE__", nonce)
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            call.response.header("Content-Security-Policy", "default-src 'none'; script-src 'nonce-$nonce'; style-src 'nonce-$nonce'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            call.respondText(page, ContentType.Text.Html)
+        }
         get("/reset-password") {
             val nonce = java.util.Base64.getEncoder().encodeToString(java.security.SecureRandom().generateSeed(24))
             val page = checkNotNull(PasswordResetDelivery::class.java.getResourceAsStream("/password-reset.html"))

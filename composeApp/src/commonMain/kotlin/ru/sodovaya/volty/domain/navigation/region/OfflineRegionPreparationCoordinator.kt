@@ -62,6 +62,11 @@ class DefaultOfflineRegionPreparationCoordinator(
     private val activeStyles = mutableMapOf<String, OfflineMapStyleVariant>()
     private val _states = MutableStateFlow<List<OfflineRegionPreparationState>>(emptyList())
     override val states: StateFlow<List<OfflineRegionPreparationState>> = _states.asStateFlow()
+    /** The theme the rider actually sees; Settings has no theme of its own and used to force BRIGHT. */
+    @Volatile
+    private var observedStyle: OfflineMapStyleVariant? = null
+    private val _coverage = MutableStateFlow<OfflineCurrentCoverage>(OfflineCurrentCoverage.Unknown)
+    override val currentCoverage: StateFlow<OfflineCurrentCoverage> = _coverage.asStateFlow()
 
     init {
         scope.launch {
@@ -78,9 +83,15 @@ class DefaultOfflineRegionPreparationCoordinator(
     }
 
     override suspend fun prepareCurrentRegion(coordinate: GeoCoordinate, style: OfflineMapStyleVariant) {
-        val state = packages.states.value
-            .filter { it.region.bounds.contains(coordinate) }
-            .minByOrNull { it.region.regionId } ?: return
+        observedStyle = style
+        val states = packages.states.value
+        _coverage.value = OfflineCurrentCoveragePolicy.resolve(coordinate, states)
+        val state = OfflineCurrentCoveragePolicy.cellFor(coordinate, states) ?: return
+        // Retraction: an earlier revision prepared WHATEVER cell held the fix, which
+        // asked the repository to build/download empty on-demand neighbours (silently
+        // over Wi-Fi, with a prompt over mobile data).  Opening the map is not consent
+        // to a 100-200 MB download; only an installed region gets its map pack here.
+        if (!state.isInstalled) return
         prepare(state, style, OfflinePreparationTrigger.FIRST_MAP_OPEN)
     }
 
@@ -102,8 +113,11 @@ class DefaultOfflineRegionPreparationCoordinator(
         meteredConfirmed: Boolean,
         force: Boolean = false,
     ) {
+        // Only the theme in use is prepared: a Settings tap after the map showed DARK
+        // must not also fetch a BRIGHT pack.
+        val effectiveStyle = observedStyle ?: style
         packages.states.value.firstOrNull { it.region.regionId == regionId }
-            ?.let { prepare(it, style, OfflinePreparationTrigger.SETTINGS, force = force, meteredConfirmed = meteredConfirmed) }
+            ?.let { prepare(it, effectiveStyle, OfflinePreparationTrigger.SETTINGS, force = force, meteredConfirmed = meteredConfirmed) }
     }
 
     override suspend fun pause(regionId: String) {
@@ -208,6 +222,29 @@ class DefaultOfflineRegionPreparationCoordinator(
         } else {
             OfflineRegionDownloadTrigger.SETTINGS
         }
+        // Retraction: the network gate used to run FIRST and, when it blocked, called
+        // requestDownload unconditionally - even for an installed region - which
+        // overwrote READY with AWAITING_METERED_APPROVAL and raised the "download the
+        // map" dialog on mobile data.  "Is this region already here and done" is
+        // decided before any network question, and routing/search readiness follows
+        // the installed package, never the map theme.
+        // Second retraction: gating on isInstalled alone made an explicit resume / retry /
+        // update of an installed region with a FAILED, PAUSED or newer release do nothing.
+        // The package request is skipped only when the installed release IS the published
+        // one (nothing to fetch), or when the trigger is automatic (opening the map never
+        // updates or repairs a package; that stays an explicit action).
+        val installed = packageState.isInstalled
+        val packageWork = !OfflineRegionRequestPolicy.isAlreadyCurrent(
+            packageState.installedReleaseVersion,
+            packageState.latestRelease?.releaseVersion,
+        ) && trigger != OfflinePreparationTrigger.FIRST_MAP_OPEN
+        if (!installed && trigger == OfflinePreparationTrigger.FIRST_MAP_OPEN) return@supervisorScope
+        val metadata = packageState.region.mapPack
+        val revision = metadata?.ofmStyleRevision
+        if (installed && !packageWork && !force && store.completed(packageState.region.regionId, style, revision)) {
+            stateMutex.withLock { pending.remove(key) }
+            return@supervisorScope
+        }
         if (network != null) {
             val initialDecision = OfflineRegionDownloadPolicy.decide(
                 network.current(),
@@ -239,16 +276,18 @@ class DefaultOfflineRegionPreparationCoordinator(
                 }
                 if (stillBlocked) {
                     // Let the package repository expose the waiting/approval
-                    // state, but never activate a native map transfer first.
-                    packages.requestDownload(packageState.region.regionId, downloadTrigger, meteredConfirmed)
+                    // state for a region that is NOT on the device, but never
+                    // activate a native map transfer first.  An installed region
+                    // only waits for a usable network to fetch its map pack: no
+                    // package request, no prompt.
+                    if (packageWork) {
+                        packages.requestDownload(packageState.region.regionId, downloadTrigger, meteredConfirmed)
+                    }
                     return@supervisorScope
                 }
             }
         }
         stateMutex.withLock { pending.remove(key) }
-        val metadata = packageState.region.mapPack
-        val revision = metadata?.ofmStyleRevision
-        if (!force && store.completed(packageState.region.regionId, style, revision)) return@supervisorScope
         val definition = OfflineMapPackPolicy.definition(
             packageState.region,
             style,
@@ -263,9 +302,7 @@ class DefaultOfflineRegionPreparationCoordinator(
         stateMutex.withLock { definitions[key] = definition }
         val mapJob = launch { mapPacks.prepare(definition) }
         val navigationJob = launch {
-            if (packageState.status != OfflineRegionPackageStatus.READY &&
-                packageState.status != OfflineRegionPackageStatus.UPDATE_AVAILABLE
-            ) {
+            if (packageWork) {
                 val shouldRequest = stateMutex.withLock {
                     if (navigationRequested.contains(packageState.region.regionId)) false
                     else {

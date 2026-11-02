@@ -33,11 +33,19 @@ import kotlin.math.abs
  * be read-only.
  *
  * Frame `A9` is wheel-level live telemetry: voltage (bytes 2..3, 0.01 V),
- * signed current (10..11, 0.01 A), board temperature (12..13, 0.01 °C), and
- * the lifetime distance at bytes 6..9.  `B9` supplies the latched controller
- * temperature and `F5` byte 15 supplies a reported duty percentage.  A9 byte
- * 15 is normally the `E0` pedal-mode marker rather than a reliable fuel
- * gauge; therefore this protocol leaves SoC unknown for an A9-only wheel.
+ * signed current (10..11, 0.01 A), ESC temperature (12..13, 0.01 °C), and
+ * the lifetime distance at bytes 6..9. `B9` carries the secondary/motor
+ * temperature at bytes 14..15, and `F5` byte 15 supplies a reported duty
+ * percentage. WheelLog's [pinned `KingsongAdapter` source](https://github.com/Wheellog/Wheellog.Android/blob/f44e39e5388e500a5d2f315d1dcf32f167607bf8/app/src/main/java/com/cooper/wheellog/utils/KingsongAdapter.java)
+ * maps A9 and B9 into separate primary and secondary temperature slots; it
+ * does not label the second slot as motor temperature. Loeuc's [pinned
+ * `KingSongProtocolEngine` at ae10acc](https://github.com/cancelledbit/loeuc-core/blob/ae10acc6e6de20b459928925531f2cbfd10bd56a/loeuc-core/src/commonMain/kotlin/pw/vasilevskiy/loeuc/shared/protocol/KingSongProtocolEngine.kt)
+ * identifies that second sensor as the motor, citing an S18 Pro+ cold-start
+ * capture and an S22 owner's report about the official app. An earlier
+ * revision of this decoder described B9 as the controller temperature; that
+ * interpretation is retracted. A9 byte 15 is normally the `E0` pedal-mode
+ * marker rather than a reliable fuel gauge; therefore this protocol leaves
+ * SoC unknown for an A9-only wheel.
  * Smart BMS frames `F1` and `F2` carry one battery each.  Page `00` supplies
  * voltage/current, remaining/factory capacity and cycle count (the latter
  * is byte 10), page `01` has seven temperatures in deci-kelvin, and pages
@@ -82,7 +90,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
      * its whole size to the trip, and a persistent backward step sat at 0 until it passed the old baseline.
      */
     private val tripCounter = TripCounter(TYPE_LIVE)
-    private var rideStatsTemperatureC: Float? = null
+    private var motorTemperatureC: Float? = null
     private var dutyPercentValue: Float? = null
 
     private data class BmsState(
@@ -133,7 +141,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
 
     /**
      * Nothing: every field this decoder reads already reaches [ControllerData] / [BmsData] - A9
-     * voltage, current, speed, lifetime distance and board temperature, B9 controller temperature,
+     * voltage, current, speed, lifetime distance and ESC temperature, B9 motor temperature,
      * F5 duty, and the F1/F2 smart-BMS pages (SoC, cycles, cells, temperatures). The BMS
      * remaining/factory capacity words only feed that SoC and their unit is not established here,
      * so they are not offered as facts; A9 byte 15 (E0) is a mode marker the decoder does not
@@ -168,7 +176,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         motion = null
         tripCounter.reset()
         resetLedger()
-        rideStatsTemperatureC = null
+        motorTemperatureC = null
         dutyPercentValue = null
     }
 
@@ -227,6 +235,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         }
 
         // Byte 15 is normally E0 (the mode marker), not a measured SoC.
+        // A9's temperature belongs to the ESC, not this virtual battery rail.
         val decodedBattery = BmsData(
             voltage = voltage,
             current = current,
@@ -235,7 +244,6 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
             hasPower = false,
             soc = 0f,
             socKnown = false,
-            temperatures = listOf(temperature),
             isConnected = true
         )
         liveData = publishBatteryUpdate(
@@ -262,8 +270,9 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
             hasInputVoltage = true,
             powerW = voltage * -current,
             hasPower = true,
-            escTempC = rideStatsTemperatureC ?: temperature,
-            hasMotorTemp = false,
+            escTempC = temperature,
+            motorTempC = motorTemperatureC ?: NO_TEMP_SENSOR_C,
+            hasMotorTemp = motorTemperatureC != null,
             odometerKm = distanceMeters / 1000f,
             tripKm = tripKm,
             hasDistance = true,
@@ -275,9 +284,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
             add(TelemetryMetric.CONTROLLER_BATTERY_CURRENT)
             add(TelemetryMetric.INPUT_VOLTAGE)
             add(TelemetryMetric.CONTROLLER_POWER)
-            // Once B9 has supplied the latched controller temperature, later
-            // A9 board temperatures no longer update this ControllerData field.
-            if (rideStatsTemperatureC == null) add(TelemetryMetric.ESC_TEMPERATURE)
+            add(TelemetryMetric.ESC_TEMPERATURE)
             add(TelemetryMetric.ODOMETER)
             add(TelemetryMetric.TRIP)
         }
@@ -287,11 +294,16 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
     private fun parseRideStats(frame: ByteArray) {
         val temperature = frame.i16Le(14) / 100f
         if (temperature !in -40f..150f) return
-        rideStatsTemperatureC = temperature
+        motorTemperatureC = temperature
         val hadMotion = motion != null
-        val decoded = motion?.copy(escTempC = temperature)
-            ?: ControllerData(escTempC = temperature, isConnected = true)
-        val published = publishControllerUpdate(decoded, setOf(TelemetryMetric.ESC_TEMPERATURE))
+        val decoded = motion?.copy(motorTempC = temperature, hasMotorTemp = true)
+            ?: ControllerData(
+                escTempC = NO_TEMP_SENSOR_C,
+                motorTempC = temperature,
+                hasMotorTemp = true,
+                isConnected = true
+            )
+        val published = publishControllerUpdate(decoded, setOf(TelemetryMetric.MOTOR_TEMPERATURE))
         if (hadMotion) motion = published
     }
 
@@ -462,6 +474,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
         const val PAGE_CELLS_START = 0x02
         const val PAGE_CELLS_END = 0x06
         const val PAGE_SIX_TEMPERATURE_OFFSET = 10
+        const val NO_TEMP_SENSOR_C = -100f
         const val CELLS_PER_PAGE = 7
         const val MAX_CELLS = 30
         const val TEMPERATURE_COUNT = 7

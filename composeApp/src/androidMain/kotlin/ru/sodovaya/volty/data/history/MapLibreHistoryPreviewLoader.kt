@@ -14,6 +14,8 @@ import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.offline.*
 import org.maplibre.android.snapshotter.MapSnapshotter
 import ru.sodovaya.volty.presentation.history.*
+import ru.sodovaya.volty.presentation.map.MapThemePalette
+import ru.sodovaya.volty.presentation.map.themeMapStyle
 import java.io.ByteArrayOutputStream
 import java.io.DataOutputStream
 import java.io.File
@@ -38,7 +40,7 @@ class MapLibreHistoryPreviewLoader(context: Context, provider: ru.sodovaya.volty
     private val database = provider.database
     private val mainHandler = Handler(Looper.getMainLooper())
     private var needsCleanup = true
-    private val styles = mutableMapOf<Boolean,PreparedStyle>()
+    private val styles = mutableMapOf<Pair<Boolean,MapThemePalette?>,PreparedStyle>()
     private val styleServer=HistoryPreviewStyleServer()
     // Retraction: even canonical file:/// styles stalled offline preflight at
     // 0/1 on API34/SDK13.0.2. Like the existing PMTiles transport, this serves
@@ -51,7 +53,7 @@ class MapLibreHistoryPreviewLoader(context: Context, provider: ru.sodovaya.volty
     override suspend fun load(key: HistoryPreviewImageKey): HistoryPreviewImage? = try { serial.withLock {
         if (!withContext(Dispatchers.IO) { derived.reconcileLocked() && exists(key.rideId) }) return@withLock null
         val camera = historyPreviewCamera(key) ?: return@withLock null
-        val style = withContext(Dispatchers.IO) { prepareStyle(key.darkTheme) } ?: return@withLock null
+        val style = withContext(Dispatchers.IO) { prepareStyle(key.darkTheme, key.mapPalette) } ?: return@withLock null
         val digest = digest(key,style.hash)
         val cached = withContext(Dispatchers.IO) {
             try { files.read(digest)?.takeIf { validPng(it,key) } } catch (_: IOException) { null }
@@ -201,13 +203,18 @@ class MapLibreHistoryPreviewLoader(context: Context, provider: ru.sodovaya.volty
         BitmapFactory.decodeByteArray(bytes,0,bytes.size,info)
         return info.outMimeType == "image/png" && info.outWidth == key.width && info.outHeight == key.height
     }
-    private fun prepareStyle(dark: Boolean): PreparedStyle? {
-        styles[dark]?.let { return it }
+    private fun prepareStyle(dark: Boolean, palette: MapThemePalette?): PreparedStyle? {
+        val key = dark to palette
+        styles[key]?.let { return it }
         val theme=if(dark) "dark" else "bright"
         val template=app.assets.open("offline-map-styles/openfreemap-$theme.json").bufferedReader().use { it.readText() }
-        val json=historyPreviewStyle(template) ?: return null
+        val base=historyPreviewStyle(template) ?: return null
+        val json=if (palette == null) base else themeMapStyle(base, palette, dark)
         val bytes=json.toByteArray()
-        return PreparedStyle(bytes,hash(bytes)).also { styles[dark]=it }
+        return PreparedStyle(bytes,hash(bytes)).also {
+            if (styles.size >= 8) styles.clear()
+            styles[key]=it
+        }
     }
     private fun digest(key: HistoryPreviewImageKey,styleHash: String): String {
         val output=ByteArrayOutputStream()

@@ -34,7 +34,10 @@ class OfflineRegionPackageStoreTest {
         assertTrue(migrated.routingConfig.readText().contains(migrated.directory.canonicalPath.replace('\\', '/')))
         assertEquals(before, original.walkTopDown().filter(File::isFile).associate { it.relativeTo(original).path to it.readBytes().toList() })
         assertEquals(migrated.directory, assertNotNull(store(files).active("ru-sve-ekb")).directory)
-        assertTrue(original.isDirectory)
+        // Retraction: the original used to be kept forever as "rollback input". Once the
+        // pointer names the verified, self-contained copy, it is provably unused.
+        assertFalse(original.exists())
+        assertTrue(migrated.directory.isDirectory)
     }
 
     @Test
@@ -59,7 +62,7 @@ class OfflineRegionPackageStoreTest {
     }
 
     @Test
-    fun v3_installs_only_navigation_and_keeps_the_legacy_rollback_directory() = withFiles { files ->
+    fun v3_install_reclaims_the_legacy_directory_it_replaced() = withFiles { files ->
         val original = installedLegacy(files)
         val store = store(files)
         val (manifest, artifacts) = download(files)
@@ -70,7 +73,36 @@ class OfflineRegionPackageStoreTest {
         assertFalse(installed.mapFile.exists())
         assertEquals(3, installed.directory.listFiles()!!.size)
         assertEquals(installed.directory, assertNotNull(store(files).active("ru-sve-ekb")).directory)
-        assertTrue(File(original, "map/map.pmtiles").isFile)
+        assertFalse(original.exists())
+    }
+
+    @Test
+    fun legacy_directory_is_kept_while_no_verified_package_is_active() = withFiles { files ->
+        val original = installedLegacy(files)
+        File(original, "search/places.sqlite").writeBytes(byteArrayOf(1)) // invalid: nothing verified
+        store(files)
+        assertTrue(original.isDirectory)
+    }
+
+    @Test
+    fun stale_download_staging_is_reaped_and_an_active_one_is_not() = withFiles { files ->
+        val store = store(files) // construction reaps with nothing active, so build the fixture after it
+        val downloads = File(files, "offline-regions/downloads").apply { mkdirs() }
+        val old = File(downloads, "g1-1-1-r1").apply { mkdirs() }
+        File(old, "a.part").writeBytes(ByteArray(10))
+        val fresh = File(downloads, "g1-2-2-r1").apply { mkdirs() }
+        File(fresh, "a.part").writeBytes(ByteArray(10))
+        val busy = File(downloads, "g1-3-3-r1").apply { mkdirs() }
+        File(busy, "a.part").writeBytes(ByteArray(10))
+        val longAgo = System.currentTimeMillis() - OfflineDownloadStagingPolicy.ABANDONED_AFTER_MILLIS - 60_000
+        listOf(old, busy).forEach { dir -> dir.walkTopDown().forEach { it.setLastModified(longAgo) } }
+
+        val freed = store.reapStaleDownloads(setOf("g1-3-3"))
+
+        assertFalse(old.exists())
+        assertTrue(fresh.exists())
+        assertTrue(busy.exists())
+        assertEquals(10L, freed)
     }
 
     @Test

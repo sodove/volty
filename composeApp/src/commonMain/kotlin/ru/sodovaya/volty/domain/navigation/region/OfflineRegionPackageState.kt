@@ -49,6 +49,19 @@ data class OfflineRegionPackageState(
         }
     }
 
+    /**
+     * True once a release is on the device, whatever the status says right
+     * now.  A transient status (an approval prompt, a failed update attempt)
+     * is written over [status] but never over [installedReleaseVersion], so
+     * this is the question automatic preparation must ask.  An earlier
+     * revision looked at [status] alone, and a READY region that had been
+     * overwritten with AWAITING_METERED_APPROVAL looked "not downloaded".
+     */
+    val isInstalled: Boolean
+        get() = installedReleaseVersion != null ||
+            status == OfflineRegionPackageStatus.READY ||
+            status == OfflineRegionPackageStatus.UPDATE_AVAILABLE
+
     val totalDownloadBytes: Long
         get() = latestRelease?.let { release ->
             release.components.routing.downloadBytes +
@@ -87,4 +100,36 @@ interface OfflineRegionPackageRepository {
     suspend fun resumeDownload(regionId: String)
 
     suspend fun deletePackage(regionId: String)
+}
+
+/**
+ * Whether a download request has anything left to do.  The repository asks
+ * this before it touches the state: a region whose installed release is the
+ * published one must never be re-downloaded and must never have its READY
+ * status replaced by a metered-approval prompt.
+ */
+object OfflineRegionRequestPolicy {
+    fun isAlreadyCurrent(installedReleaseVersion: String?, latestReleaseVersion: String?): Boolean =
+        installedReleaseVersion != null && installedReleaseVersion == latestReleaseVersion
+
+    /**
+     * The state a request for [state] must leave behind when the installed
+     * release already is [latest]: READY, with any approval/waiting/failure
+     * residue cleared, or null when there is real work to do.
+     */
+    fun settledIfCurrent(
+        state: OfflineRegionPackageState,
+        installedReleaseVersion: String?,
+        latest: OfflineRegionPackageManifest,
+    ): OfflineRegionPackageState? {
+        if (!isAlreadyCurrent(installedReleaseVersion, latest.releaseVersion)) return null
+        val total = latest.components.routing.downloadBytes + latest.components.search.downloadBytes
+        return state.copy(
+            latestRelease = latest,
+            status = OfflineRegionPackageStatus.READY,
+            installedReleaseVersion = installedReleaseVersion,
+            downloadedBytes = total,
+            failure = null,
+        )
+    }
 }

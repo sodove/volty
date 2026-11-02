@@ -93,8 +93,8 @@ abstract class VerifyProductionReleaseTask : DefaultTask() {
     }
 }
 
-val appVersionCode = 82
-val appVersionName = "0.7.59"
+val appVersionCode = 86
+val appVersionName = "0.7.63"
 val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
     value.toBooleanStrictOrNull()
         ?: error("voltyProductionRelease must be true or false")
@@ -111,6 +111,24 @@ plugins {
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.sqldelight)
+    id("com.mikepenz.aboutlibraries.plugin") version "13.2.1"
+}
+
+apply(from = rootProject.file("gradle/credits.gradle.kts"))
+
+aboutLibraries {
+    collect {
+        filterVariants.set(setOf("release"))
+        includeTestVariants.set(false)
+        includePlatform.set(false)
+    }
+    export {
+        outputFile.set(layout.buildDirectory.file("reports/credits/aboutlibraries.json"))
+        prettyPrint.set(true)
+    }
+    library {
+        duplicationMode.set(com.mikepenz.aboutlibraries.plugin.DuplicateMode.KEEP)
+    }
 }
 
 kotlin {
@@ -136,6 +154,8 @@ kotlin {
             implementation(libs.koin.compose)
             implementation(libs.coroutines.core)
             implementation(libs.serialization.json)
+            // Standalone HCT engine: full tonal palettes for maps, without a second UI toolkit.
+            implementation("com.materialkolor:material-color-utilities:4.0.5")
             implementation(libs.kable.core)
             implementation(libs.ktor.client.core)
             implementation(libs.ktor.client.websockets)
@@ -153,6 +173,11 @@ kotlin {
         }
 
         androidMain.dependencies {
+            implementation("androidx.camera:camera-camera2:1.5.3")
+            implementation("androidx.camera:camera-lifecycle:1.5.3")
+            implementation("androidx.camera:camera-video:1.5.3")
+            implementation("androidx.camera:camera-view:1.5.3")
+            implementation("androidx.camera:camera-effects:1.5.3")
             implementation(project.dependencies.platform(libs.firebase.bom))
             implementation(libs.firebase.messaging)
             implementation(libs.workmanager.runtime)

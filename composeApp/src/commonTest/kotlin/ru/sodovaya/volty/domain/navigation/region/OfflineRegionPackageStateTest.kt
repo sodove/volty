@@ -56,6 +56,50 @@ class OfflineRegionPackageStateTest {
         }
     }
 
+    @Test
+    fun installed_is_decided_by_the_installed_release_not_by_the_transient_status() {
+        // Incoherent on purpose: a prompt status written over a region that is on the device.
+        val overwritten = OfflineRegionPackageState(
+            region = region(),
+            latestRelease = release(),
+            status = OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL,
+            installedReleaseVersion = release().releaseVersion,
+        )
+        val empty = overwritten.copy(installedReleaseVersion = null)
+        assertEquals(true, overwritten.isInstalled)
+        assertEquals(false, empty.isInstalled)
+        assertEquals(true, empty.copy(status = OfflineRegionPackageStatus.READY).isInstalled)
+        assertEquals(true, empty.copy(status = OfflineRegionPackageStatus.UPDATE_AVAILABLE).isInstalled)
+    }
+
+    @Test
+    fun a_request_for_the_installed_release_settles_back_to_ready_and_clears_the_prompt() {
+        val latest = release()
+        val overwritten = OfflineRegionPackageState(
+            region = region(),
+            latestRelease = latest,
+            status = OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL,
+            installedReleaseVersion = latest.releaseVersion,
+            failure = OfflineRegionPackageFailure.NETWORK,
+        )
+
+        val settled = OfflineRegionRequestPolicy.settledIfCurrent(overwritten, latest.releaseVersion, latest)
+
+        assertEquals(OfflineRegionPackageStatus.READY, settled?.status)
+        assertNull(settled?.failure)
+        assertEquals(55L, settled?.downloadedBytes)
+    }
+
+    @Test
+    fun a_request_with_a_newer_or_no_installed_release_has_work_to_do() {
+        val latest = release()
+        val state = OfflineRegionPackageState(
+            region = region(), latestRelease = latest, status = OfflineRegionPackageStatus.NOT_INSTALLED,
+        )
+        assertNull(OfflineRegionRequestPolicy.settledIfCurrent(state, null, latest))
+        assertNull(OfflineRegionRequestPolicy.settledIfCurrent(state, "older-release", latest))
+    }
+
     private fun region() = OfflineRegionManifest(
         regionId = "ru-sve-yekaterinburg-agglomeration",
         displayName = "Екатеринбург и агломерация",

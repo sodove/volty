@@ -46,6 +46,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPolicy
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionRequestPolicy
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanResult
 
@@ -128,6 +129,7 @@ class AndroidOfflineRegionPackageRepository(
         val loaded = fetchCatalog()
         catalog = loaded
         publishStates()
+        runCatching { packageStore.reapStaleDownloads(jobs.keys.toSet()) }
         Log.i(TAG, "Offline catalog loaded: ${loaded.regions.size} regions")
         Unit
     }
@@ -201,6 +203,23 @@ class AndroidOfflineRegionPackageRepository(
         }
         val preparedRelease = release ?: run {
             updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.FAILED, failure = OfflineRegionPackageFailure.INCOMPATIBLE) }
+            return
+        }
+        // Idempotence: the published release is already on the device.  Nothing to
+        // download, and above all nothing to ask about - an earlier revision fell
+        // through to downloadAllowed(), which replaced READY with
+        // AWAITING_METERED_APPROVAL and raised the "download the map" dialog for a
+        // region that was installed and current.  Also repairs a state that was
+        // overwritten that way earlier in this process.
+        val settled = _states.value.firstOrNull { it.region.regionId == regionId }?.let { current ->
+            OfflineRegionRequestPolicy.settledIfCurrent(
+                current,
+                packageStore.active(regionId)?.manifest?.releaseVersion,
+                preparedRelease,
+            )
+        }
+        if (settled != null) {
+            updateState(regionId) { settled }
             return
         }
         val plan = when (val result = OfflineRegionDownloadPlanFactory.create(
@@ -598,7 +617,10 @@ class AndroidOfflineRegionPackageRepository(
 
     private companion object {
         const val TAG = "VoltyOffline"
-        const val MAX_CATALOG_BYTES = 4L * 1024L * 1024L
+        // Retraction: this was 4 MiB while the live catalog (5,740 cells) was already
+        // 3,999,559 bytes, so ~150 more releases would have made every client throw
+        // "Catalog is too large".  16 MiB matches the package service's limit.
+        const val MAX_CATALOG_BYTES = 16L * 1024L * 1024L
         const val COPY_BUFFER_SIZE = 16 * 1024
         const val CATALOG_CONNECT_TIMEOUT_MILLIS = 10_000
         const val CATALOG_READ_TIMEOUT_MILLIS = 15_000

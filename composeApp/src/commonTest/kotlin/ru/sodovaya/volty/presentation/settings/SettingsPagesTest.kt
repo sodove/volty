@@ -73,9 +73,9 @@ class SettingsPagesTest {
 
     @Test
     fun everyPageIsListedOnce() {
-        assertEquals(5, SettingsPage.entries.size)
+        assertEquals(6, SettingsPage.entries.size)
         assertEquals(
-            setOf("ALERT_SOUND", "VOICE", "MICROPHONE", "OFFLINE_MAPS", "DEVELOPER"),
+            setOf("ALERT_SOUND", "VOICE", "MICROPHONE", "OFFLINE_MAPS", "DEVELOPER", "CREDITS"),
             SettingsPage.entries.map { it.name }.toSet(),
         )
     }

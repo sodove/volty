@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -74,11 +75,22 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationState
+import ru.sodovaya.volty.domain.navigation.region.OfflineByteFormat
+import ru.sodovaya.volty.domain.navigation.region.OfflineByteUnit
+import ru.sodovaya.volty.domain.navigation.region.OfflineCurrentCoverage
+import volty.composeapp.generated.resources.offline_unit_b
+import volty.composeapp.generated.resources.offline_unit_kb
+import volty.composeapp.generated.resources.offline_unit_mb
+import volty.composeapp.generated.resources.offline_unit_gb
+import volty.composeapp.generated.resources.settings_offline_coverage_unavailable
+import volty.composeapp.generated.resources.settings_offline_coverage_download
+import volty.composeapp.generated.resources.settings_offline_storage_line
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackState
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
+import ru.sodovaya.volty.presentation.common.supportsDynamicColor
 import ru.sodovaya.volty.util.UnitSystem
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
@@ -212,6 +224,7 @@ import volty.composeapp.generated.resources.settings_page_microphone
 import volty.composeapp.generated.resources.settings_page_offline_maps
 import volty.composeapp.generated.resources.settings_page_theme
 import volty.composeapp.generated.resources.settings_page_developer
+import volty.composeapp.generated.resources.settings_page_credits
 import volty.composeapp.generated.resources.settings_summary_connection
 import volty.composeapp.generated.resources.settings_summary_theme_dynamic
 import volty.composeapp.generated.resources.settings_summary_alerts
@@ -225,6 +238,7 @@ import volty.composeapp.generated.resources.settings_summary_offline_none
 import volty.composeapp.generated.resources.settings_summary_offline_installed
 import volty.composeapp.generated.resources.settings_summary_offline_downloading
 import volty.composeapp.generated.resources.settings_summary_developer
+import volty.composeapp.generated.resources.settings_summary_credits
 import volty.composeapp.generated.resources.settings_voice_duck_music
 import volty.composeapp.generated.resources.settings_voice_duck_music_hint
 import volty.composeapp.generated.resources.alerts_music_mode
@@ -259,6 +273,7 @@ import ru.sodovaya.volty.presentation.common.settings.SettingsExpandableRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsGroup
 import ru.sodovaya.volty.presentation.common.settings.pageDirection
 import ru.sodovaya.volty.presentation.common.settings.toggleExpanded
+import ru.sodovaya.volty.presentation.settings.credits.CreditsScreen
 import ru.sodovaya.volty.presentation.common.settings.SettingsNavRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsRowDivider
 import ru.sodovaya.volty.presentation.common.settings.SettingsSliderRow
@@ -316,36 +331,42 @@ fun SettingsScreen(component: SettingsComponent) {
             },
             label = "settings-page",
         ) { shown ->
-        // The hub keeps its scroll position while a page is open; a page starts at the top each time.
-        val scroll = if (shown == null) hubScroll else rememberScrollState()
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scroll)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            when (shown) {
-                null -> SettingsHub(
-                    state = state,
-                    component = component,
-                    expanded = expanded,
-                    onToggle = { expandedName = toggleExpanded(expanded, it)?.name },
-                )
-                SettingsPage.ALERT_SOUND -> AlertSoundPage(state, component)
-                SettingsPage.VOICE -> VoicePage(state, component)
-                SettingsPage.MICROPHONE -> MicrophonePage(state, component)
-                SettingsPage.OFFLINE_MAPS -> OfflineMapsPage(
-                    state = state,
-                    component = component,
-                    query = offlineRegionQuery,
-                    onQueryChange = { offlineRegionQuery = it },
-                    onDeleteRequest = { pendingOfflineDelete = it },
-                )
-                SettingsPage.DEVELOPER -> DeveloperPage(state, component)
+            if (shown == SettingsPage.CREDITS) {
+                // Credits owns its bounded LazyColumn; it cannot live under the shared verticalScroll.
+                CreditsScreen(component.credits, modifier = Modifier.fillMaxSize())
+            } else {
+                // The hub keeps its scroll position while a page is open; a page starts at the top each time.
+                val scroll = if (shown == null) hubScroll else rememberScrollState()
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    when (shown) {
+                        null -> SettingsHub(
+                            state = state,
+                            component = component,
+                            expanded = expanded,
+                            onToggle = { expandedName = toggleExpanded(expanded, it)?.name },
+                        )
+                        SettingsPage.ALERT_SOUND -> AlertSoundPage(state, component)
+                        SettingsPage.VOICE -> VoicePage(state, component)
+                        SettingsPage.MICROPHONE -> MicrophonePage(state, component)
+                        SettingsPage.OFFLINE_MAPS -> OfflineMapsPage(
+                            state = state,
+                            component = component,
+                            query = offlineRegionQuery,
+                            onQueryChange = { offlineRegionQuery = it },
+                            onDeleteRequest = { pendingOfflineDelete = it },
+                        )
+                        SettingsPage.DEVELOPER -> DeveloperPage(state, component)
+                        SettingsPage.CREDITS -> Unit
+                    }
+                    Spacer(Modifier.height(24.dp))
+                }
             }
-            Spacer(Modifier.height(24.dp))
-        }
         }
 
         pendingOfflineDelete?.let { region ->
@@ -382,6 +403,7 @@ private fun settingsPageTitle(page: SettingsPage): String = stringResource(
         SettingsPage.MICROPHONE -> Res.string.settings_page_microphone
         SettingsPage.OFFLINE_MAPS -> Res.string.settings_page_offline_maps
         SettingsPage.DEVELOPER -> Res.string.settings_page_developer
+        SettingsPage.CREDITS -> Res.string.settings_page_credits
     }
 )
 
@@ -484,6 +506,14 @@ private fun SettingsHub(
         ) {
             ThemeControls(state, component)
         }
+        SettingsRowDivider()
+        SettingsNavRow(
+            icon = Icons.Filled.FavoriteBorder,
+            tint = SettingsTint.MAPS,
+            title = stringResource(Res.string.settings_page_credits),
+            summary = stringResource(Res.string.settings_summary_credits),
+            onClick = { component.onOpenPage(SettingsPage.CREDITS) },
+        )
     }
     SettingsGroup(stringResource(Res.string.settings_group_vehicles)) {
         state.vehicles.forEach { v ->
@@ -593,6 +623,13 @@ private fun ColumnScope.ThemeControls(state: SettingsComponent.State, component:
             checked = state.dynamicColor,
             onChange = component::onDynamicColorChanged,
         )
+        if (!state.dynamicColor || !supportsDynamicColor()) {
+            SettingsRowDivider()
+            ThemeAccentControls(
+                selectedAccent = state.themeAccent,
+                onAccentSelected = component::onThemeAccentChanged,
+            )
+        }
     }
 }
 
@@ -848,6 +885,41 @@ private fun OfflineMapsPage(
         fontSize = 11.sp,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )
+    (state.offlineCoverage as? OfflineCurrentCoverage.NotAvailable)
+        // Not while that very cell is already being prepared or downloaded.
+        ?.takeIf { coverage ->
+            state.offlineRegions.firstOrNull { it.region.regionId == coverage.regionId }?.status.let {
+                it == null || it == OfflineRegionPackageStatus.NOT_INSTALLED || it == OfflineRegionPackageStatus.FAILED
+            }
+        }
+        ?.let { coverage ->
+        // Information first, action second: nothing was downloaded because of this.
+        Column(
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer).padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(stringResource(Res.string.settings_offline_coverage_unavailable), fontSize = 12.sp)
+            TextButton(onClick = { component.onDownloadOfflineRegion(coverage.regionId) }) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(stringResource(Res.string.settings_offline_coverage_download))
+            }
+        }
+    }
+    state.offlineStorage?.let { usage ->
+        Text(
+            stringResource(
+                Res.string.settings_offline_storage_line,
+                formatOfflineBytes(usage.totalBytes),
+                formatOfflineBytes(usage.packagesBytes),
+                formatOfflineBytes(usage.mapBytes),
+                formatOfflineBytes(usage.downloadsBytes + usage.legacyBytes),
+            ),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
     SettingsGroup(null) {
         SettingsSwitchRow(
             title = stringResource(Res.string.settings_offline_mobile_data),
@@ -1144,11 +1216,19 @@ private fun offlineRegionStatusText(
     OfflineRegionPackageStatus.NOT_INSTALLED -> version
 }
 
-private fun formatOfflineBytes(bytes: Long): String = when {
-    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
-    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
-    bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
-    else -> "$bytes B"
+@Composable
+private fun formatOfflineBytes(bytes: Long): String {
+    val size = OfflineByteFormat.size(bytes)
+    val unit = stringResource(
+        when (size.unit) {
+            OfflineByteUnit.B -> Res.string.offline_unit_b
+            OfflineByteUnit.KB -> Res.string.offline_unit_kb
+            OfflineByteUnit.MB -> Res.string.offline_unit_mb
+            OfflineByteUnit.GB -> Res.string.offline_unit_gb
+        },
+    )
+    val number = if (size.unit == OfflineByteUnit.B) "%d".format(size.value.toLong()) else "%.1f".format(size.value)
+    return "$number $unit"
 }
 
 @Composable

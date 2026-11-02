@@ -48,6 +48,8 @@ class VoiceSpacesNearbyComponentTest {
         }
         override suspend fun getProfile(accessToken: String)=SocialResult.Success(SocialSession.Authenticated(SocialUserId(actor),"Rider",SessionTokenState.ACTIVE,true))
         override suspend fun logout(accessToken: String)=SocialResult.Success(Unit)
+        var delete: suspend ()->SocialResult<Unit> = {SocialResult.Success(Unit)}
+        override suspend fun deleteAccount(accessToken: String):SocialResult<Unit> {issued+="delete:$accessToken";return delete()}
         override suspend fun listFriends(accessToken: String):SocialResult<List<FriendSummary>> {issued+="friends:$accessToken";return friends(accessToken)}
         override suspend fun searchUsers(accessToken: String,query: String):SocialResult<List<UserSearchResult>> {issued+="search:$query:$accessToken";return search(query)}
         override suspend fun respondToFriendRequest(accessToken: String,friendshipId: String,accept: Boolean):SocialResult<Unit> {
@@ -59,7 +61,7 @@ class VoiceSpacesNearbyComponentTest {
         override suspend fun listGroups(accessToken: String):SocialResult<List<RideGroup>> = error("New shell must never read legacy groups")
     }
     private inner class Fixture(test: TestScope) {
-        val transport=Transport();val repository=DefaultSocialRepository(transport,Credentials(),test.backgroundScope)
+        val transport=Transport();val store=Credentials();val repository=DefaultSocialRepository(transport,store,test.backgroundScope)
         val parent=SupervisorJob(test.coroutineContext[Job]);val scope=CoroutineScope(test.coroutineContext+parent)
         val lifecycle=LifecycleRegistry().apply {create()}
         val calls=mutableListOf<Pair<SocialAuthenticatedAccount,FriendSummary>>()
@@ -354,6 +356,86 @@ class VoiceSpacesNearbyComponentTest {
             f.component.requestFriend(pending.userId);runCurrent()
             assertFalse(f.transport.issued.any {it.startsWith("request:")})
         } finally {f.close();runCurrent()}
+    }
+
+    @Test fun delete_account_signs_out_and_clears_the_stored_session_after_one_request()=runTest {
+        val f=Fixture(this);val release=CompletableDeferred<Unit>()
+        f.transport.delete={release.await();SocialResult.Success(Unit)}
+        try {
+            f.login();runCurrent();f.component.openProfile();runCurrent()
+            assertNotNull(f.store.value)
+            f.component.requestDeleteAccount();runCurrent()
+            assertTrue(f.component.state.value.confirmingDeletion)
+            assertFalse(f.transport.issued.any {it.startsWith("delete:")})
+            f.component.confirmDeleteAccount();f.component.confirmDeleteAccount();runCurrent()
+            assertEquals(listOf("delete:token-1"),f.transport.issued.filter {it.startsWith("delete:")})
+            assertTrue(f.component.state.value.busy);assertFalse(f.component.state.value.confirmingDeletion)
+            release.complete(Unit);runCurrent()
+            assertEquals(listOf("delete:token-1"),f.transport.issued.filter {it.startsWith("delete:")})
+            assertEquals(SocialSession.LoggedOut,f.repository.session.value)
+            assertNull(f.repository.authenticatedAccount.value);assertNull(f.store.value)
+            assertEquals(SocialSession.LoggedOut,f.component.state.value.session)
+            assertFalse(f.component.state.value.busy);assertNull(f.component.state.value.error)
+            assertFalse(f.component.state.value.confirmingDeletion)
+            assertEquals(NearbyShellSection.SERVERS,f.component.state.value.section)
+        } finally {release.complete(Unit);f.close();f.lifecycle.destroy();runCurrent()}
+    }
+
+    @Test fun failed_delete_keeps_the_account_and_allows_a_retry()=runTest {
+        val f=Fixture(this);var attempt=0
+        f.transport.delete={if(++attempt==1) SocialResult.Failure(SocialFailure.Server("boom")) else SocialResult.Success(Unit)}
+        try {
+            f.login();runCurrent();f.component.openProfile();f.component.requestDeleteAccount();runCurrent()
+            f.component.confirmDeleteAccount();runCurrent()
+            assertEquals(NearbyShellError.DELETE_FAILED,f.component.state.value.error)
+            assertFalse(f.component.state.value.busy)
+            assertIs<SocialSession.Authenticated>(f.repository.session.value)
+            assertNotNull(f.repository.authenticatedAccount.value);assertNotNull(f.store.value)
+            // The dialog closed on confirm: a retry is a new request and a new confirmation.
+            f.component.confirmDeleteAccount();runCurrent()
+            assertEquals(1,f.transport.issued.count {it.startsWith("delete:")})
+            f.component.requestDeleteAccount();runCurrent();f.component.confirmDeleteAccount();runCurrent()
+            assertEquals(2,f.transport.issued.count {it.startsWith("delete:")})
+            assertEquals(SocialSession.LoggedOut,f.repository.session.value);assertNull(f.store.value)
+        } finally {f.close();f.lifecycle.destroy();runCurrent()}
+    }
+
+    @Test fun offline_delete_explains_it_needs_a_connection_and_keeps_the_session()=runTest {
+        val f=Fixture(this)
+        f.transport.delete={SocialResult.Failure(SocialFailure.Network("down"))}
+        try {
+            f.login();runCurrent();f.component.openProfile();f.component.requestDeleteAccount();runCurrent()
+            f.component.confirmDeleteAccount();runCurrent()
+            assertEquals(NearbyShellError.DELETE_OFFLINE,f.component.state.value.error)
+            assertIs<SocialSession.Authenticated>(f.repository.session.value);assertNotNull(f.store.value)
+        } finally {f.close();f.lifecycle.destroy();runCurrent()}
+    }
+
+    @Test fun cancelling_or_never_confirming_sends_nothing_and_confirm_needs_a_prior_request()=runTest {
+        val f=Fixture(this)
+        try {
+            f.login();runCurrent();f.component.openProfile();runCurrent()
+            f.component.confirmDeleteAccount();runCurrent()   // no dialog was ever shown
+            f.component.requestDeleteAccount();runCurrent()
+            assertTrue(f.component.state.value.confirmingDeletion)
+            f.component.cancelDeleteAccount();runCurrent()
+            assertFalse(f.component.state.value.confirmingDeletion)
+            f.component.confirmDeleteAccount();runCurrent()   // dismissed dialog cannot be confirmed
+            assertFalse(f.transport.issued.any {it.startsWith("delete:")})
+            assertIs<SocialSession.Authenticated>(f.repository.session.value);assertNotNull(f.store.value)
+            assertFalse(f.component.state.value.busy)
+        } finally {f.close();f.lifecycle.destroy();runCurrent()}
+    }
+
+    @Test fun delete_cannot_be_requested_when_signed_out_or_outside_the_profile()=runTest {
+        val f=Fixture(this)
+        try {
+            runCurrent();f.component.requestDeleteAccount();assertFalse(f.component.state.value.confirmingDeletion)
+            f.login();runCurrent();f.component.requestDeleteAccount();runCurrent()
+            assertFalse(f.component.state.value.confirmingDeletion)   // still on the servers tab
+            f.component.confirmDeleteAccount();runCurrent()
+            assertFalse(f.transport.issued.any {it.startsWith("delete:")})
+        } finally {f.close();f.lifecycle.destroy();runCurrent()}
     }
 
     private class Drafts(override val actorId: String):InvitationDraftStore {
