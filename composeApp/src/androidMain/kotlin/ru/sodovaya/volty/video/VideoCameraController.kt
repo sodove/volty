@@ -14,6 +14,7 @@ import android.os.Environment
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import android.os.StatFs
 import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
@@ -61,6 +62,11 @@ internal data class VideoCameraState(
     /** The camera's REALTIME timebase claim was caught lying; telemetry is matched by an estimated offset. */
     val clockMismatch: Boolean = false,
     val segmentMinutes: Int = VideoSegmentPolicy.DEFAULT_SEGMENT_MINUTES,
+    /** Measured on the camera stream; null until a second of frames has gone by. */
+    val frameRate: Int? = null,
+    /** The current file's size and length so far, for the time-left estimate. */
+    val recordedBytes: Long = 0,
+    val recordedNanos: Long = 0,
 )
 
 /** Main-thread camera owner; only the overlay listener runs on its dedicated GL thread. */
@@ -83,6 +89,10 @@ internal class VideoCameraController(private val context: Context, private val o
     private val tripTracker = VideoTripTracker()
     @Volatile private var recordedSeconds = 0L
     @Volatile private var overlayRecording = false
+    private val shutterGuard = VideoShutterGuard()
+    private val frameRate = VideoFrameRateMeter()
+    /** The microphone choice, from the screen; the volume keys need it as much as the shutter does. */
+    @Volatile var audioWanted = false
     @Volatile var preset: OverlayPreset = OverlayTemplates.hud()
     /** C3's time and distance: per recording by default, a user setting. */
     @Volatile var tripScope: OverlayTripScope = OverlayTripScope.RECORDING
@@ -226,6 +236,9 @@ internal class VideoCameraController(private val context: Context, private val o
                 // recording, so nothing in here may throw. Returning true even after a failure keeps the frame
                 // flowing to the encoder (false would DROP it): it just carries the previous overlay or none.
                 val drawn = guard.attempt {
+                    frameRate.onFrame(frame.timestampNanos)?.let { rate ->
+                        if (rate != state.value.frameRate) mutableState.update { it.copy(frameRate = rate) }
+                    }
                     val now = SystemClock.elapsedRealtime()
                     val time = clock.frameMillis(frame.timestampNanos, now)
                     if (clock.timebaseMismatch && !clockReported) {
@@ -279,7 +292,20 @@ internal class VideoCameraController(private val context: Context, private val o
         } catch (error: Exception) { failed(error) }
     }
 
-    fun start(audio: Boolean) {
+    /** The one thing the on-screen shutter and the volume keys both press. Only ever called from a press. */
+    fun shutter() {
+        val action = videoShutterAction(state.value.phase, state.value.ready)
+        if (action == VideoShutterAction.NONE || !shutterGuard.allow(SystemClock.elapsedRealtime())) return
+        if (action == VideoShutterAction.START) start(audioWanted) else stop()
+    }
+
+    /** Free bytes where the video goes, or null when that cannot be read. */
+    fun freeBytes(): Long? = runCatching {
+        @Suppress("DEPRECATION") val directory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+        StatFs((directory.takeIf { it.exists() } ?: Environment.getExternalStorageDirectory()).path).availableBytes
+    }.getOrNull()
+
+    private fun start(audio: Boolean) {
         if (!state.value.ready || !canEditVideoOverlay(state.value.phase) || recording != null) return
         if (audio && ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             failed(SecurityException("Microphone permission required")); return
@@ -290,7 +316,7 @@ internal class VideoCameraController(private val context: Context, private val o
         rideStamp = "Volty_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.ROOT).format(Date())}"
         // The file's rotation is fixed when a recording starts: take the sensor's latest word now.
         orientation.rotation?.let { capture?.targetRotation = it }
-        mutableState.update { it.copy(phase = VideoRecordingPhase.STARTING, saved = null, savedParts = 0, interrupted = false, error = null, durationSeconds = 0) }
+        mutableState.update { it.copy(phase = VideoRecordingPhase.STARTING, saved = null, savedParts = 0, interrupted = false, error = null, durationSeconds = 0, recordedBytes = 0, recordedNanos = 0) }
         finalization.recordingStarted()
         try {
             launchSegment()
@@ -339,7 +365,8 @@ internal class VideoCameraController(private val context: Context, private val o
                 val nanos = event.recordingStats.recordedDurationNanos
                 val totalSeconds = ledger.totalNanos(nanos) / 1_000_000_000
                 recordedSeconds = totalSeconds
-                mutableState.update { it.copy(durationSeconds = totalSeconds) }
+                val bytes = event.recordingStats.numBytesRecorded
+                mutableState.update { it.copy(durationSeconds = totalSeconds, recordedBytes = bytes, recordedNanos = nanos) }
                 if (state.value.phase == VideoRecordingPhase.RECORDING && segmentPolicy.shouldRotate(nanos, rotating)) rotate(segment)
             }
             is VideoRecordEvent.Finalize -> finalizeSegment(segment, event)
@@ -433,6 +460,7 @@ internal class VideoCameraController(private val context: Context, private val o
     }
 
     private fun failed(error: Throwable) {
+        Log.w(TAG, "Camera failed", error)
         mutableState.update { it.copy(ready = false, error = error.message ?: error.javaClass.simpleName) }
         if (recording != null) stop() else mutableState.update { it.copy(phase = VideoRecordingPhase.IDLE) }
     }

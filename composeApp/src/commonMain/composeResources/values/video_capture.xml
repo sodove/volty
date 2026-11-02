@@ -17,5 +17,18 @@
     <string name="video_error">Recording unavailable or interrupted</string>
     <string name="video_retry">Retry camera</string>
     <string name="video_foreground_hint">Recording stops when you leave this screen.</string>
-    <string name="video_no_telemetry">Unavailable readings appear as —</string>
+    <string name="video_sheet_quality">Video quality</string>
+    <string name="video_sheet_overlay">Telemetry on video</string>
+    <string name="video_overlay_customize">Customize</string>
+    <string name="video_trip_scope_title">Time and distance</string>
+    <string name="video_trip_scope_recording">This recording</string>
+    <string name="video_trip_scope_ride">This ride</string>
+    <string name="video_link_none">Vehicle not connected</string>
+    <string name="video_link_waiting">No data yet</string>
+    <string name="video_link_live">%1$s · %2$s s</string>
+    <string name="video_link_lost">No link · %1$s</string>
+    <string name="video_storage_gb">%1$s GB</string>
+    <string name="video_storage_mb">%1$s MB</string>
+    <string name="video_storage_hours">%1$d h %2$d min</string>
+    <string name="video_storage_minutes">%1$d min</string>
 </resources>

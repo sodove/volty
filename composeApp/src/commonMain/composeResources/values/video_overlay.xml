@@ -18,9 +18,9 @@
     <string name="video_unit_km">km</string>
     <string name="video_chip_no_link">NO LINK</string>
 
-    <string name="video_stop_confirm_title">Stop recording?</string>
-    <string name="video_stop_confirm_text">The video recorded so far will be saved.</string>
-    <string name="video_stop_confirm_stop">Stop and exit</string>
+    <string name="video_stop_confirm_title">Recording</string>
+    <string name="video_stop_confirm_text">The video stops only if you confirm. What was recorded is saved.</string>
+    <string name="video_stop_confirm_stop">Stop and save</string>
     <string name="video_stop_confirm_continue">Keep recording</string>
 
     <string name="video_overlay_failed">The telemetry overlay failed on some frames. They were recorded without it.</string>

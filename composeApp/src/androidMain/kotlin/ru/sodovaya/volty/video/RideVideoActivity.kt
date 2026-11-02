@@ -4,6 +4,7 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,6 +27,8 @@ class RideVideoActivity : ComponentActivity() {
     private val appVisibility: ru.sodovaya.volty.data.radio.AppVisibility by inject()
     private val appPrefs: ru.sodovaya.volty.data.prefs.AppPrefs by inject()
     private lateinit var camera: VideoCameraController
+    private val linkMonitor = VideoLinkMonitor()
+    private var editingOverlay = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,18 +58,33 @@ class RideVideoActivity : ComponentActivity() {
                 val dutyHold = VideoDutyHold()
                 combine(repository.activeVehicleData, repository.activeVehicle, repository.connectionState) { data, vehicle, connection ->
                     videoTelemetrySnapshot(data, vehicle, connection, SystemClock.elapsedRealtime(), System.currentTimeMillis(), dutyHold)
-                }.collect(camera::offer)
+                }.collect { snapshot ->
+                    linkMonitor.onSample(snapshot)
+                    camera.offer(snapshot)
+                }
             }
         }
         setContent {
             VoltyTheme {
-                VideoCameraScreen(camera, component,
+                VideoCameraScreen(camera, component, linkMonitor, repository.activeVehicle,
                     onClose = { camera.closeWhenFinalized { finish() } },
+                    onEditing = { editingOverlay = it },
                     onSegmentMinutes = { minutes ->
                         camera.setSegmentMinutes(minutes)
                         store.edit().putInt(SEGMENT_MINUTES_KEY, camera.state.value.segmentMinutes).apply()
                     })
             }
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        val volumeKey = keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        if (!volumeKey || !::camera.isInitialized) return super.onKeyDown(keyCode, event)
+        val state = camera.state.value
+        return when (videoVolumeKey(state.phase, state.ready, editingOverlay, event.repeatCount)) {
+            VideoVolumeKey.PASS -> super.onKeyDown(keyCode, event)
+            VideoVolumeKey.CONSUME -> true
+            VideoVolumeKey.SHUTTER -> { camera.shutter(); true }
         }
     }
 

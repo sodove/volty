@@ -18,9 +18,9 @@
     <string name="video_unit_km">км</string>
     <string name="video_chip_no_link">НЕТ СВЯЗИ</string>
 
-    <string name="video_stop_confirm_title">Остановить запись?</string>
-    <string name="video_stop_confirm_text">Снятое видео будет сохранено.</string>
-    <string name="video_stop_confirm_stop">Остановить и выйти</string>
+    <string name="video_stop_confirm_title">Запись идёт</string>
+    <string name="video_stop_confirm_text">Видео остановится только после подтверждения. Снятое будет сохранено.</string>
+    <string name="video_stop_confirm_stop">Остановить и сохранить</string>
     <string name="video_stop_confirm_continue">Продолжить запись</string>
 
     <string name="video_overlay_failed">Оверлей телеметрии дал сбой на части кадров. Они записаны без него.</string>
