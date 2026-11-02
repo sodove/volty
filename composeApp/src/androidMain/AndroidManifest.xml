@@ -42,6 +42,9 @@
     <application
         android:name=".VoltyApplication"
         android:label="Volty"
+    <!-- LiveKit previously declared screen capture, but Volty only uses voice. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION"
+        tools:node="remove" />
         android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:enableOnBackInvokedCallback="true"
@@ -57,6 +60,8 @@
             android:name="ru.sodovaya.volty.offline.catalog_url"
             android:value="${voltyOfflineCatalogUrl}" />
         <meta-data
+        <service android:name="io.livekit.android.room.track.screencapture.ScreenCaptureService"
+            tools:node="remove" />
             android:name="ru.sodovaya.volty.offline.manifest_key_id"
             android:value="${voltyOfflineManifestKeyId}" />
         <meta-data
