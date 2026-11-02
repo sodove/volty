@@ -242,6 +242,13 @@
     <string name="settings_theme_dark">Dark</string>
     <string name="settings_dynamic_color">Dynamic color</string>
     <string name="settings_dynamic_color_subtitle">Use the wallpaper palette on Android 12+</string>
+    <string name="settings_theme_accent">Color palette</string>
+    <string name="settings_theme_accent_default">Default</string>
+    <string name="settings_theme_accent_orange">Orange</string>
+    <string name="settings_theme_accent_green">Green</string>
+    <string name="settings_theme_accent_teal">Teal</string>
+    <string name="settings_theme_accent_blue">Blue</string>
+    <string name="settings_theme_accent_pink">Pink</string>
     <string name="settings_scan_timeout">Default scan timeout</string>
     <string name="settings_auto_connect_countdown">Default auto-connect countdown</string>
     <string name="settings_seconds">%1$d s</string>
@@ -1669,4 +1676,19 @@
     <string name="nearby_delete_account_cancel">Cancel</string>
     <string name="nearby_delete_account_offline">Deleting the account needs an internet connection. Your account was not deleted; try again when online.</string>
     <string name="nearby_delete_account_failed">Could not delete the account. Your account was not deleted; try again.</string>
+    <string name="settings_page_credits">Credits and licenses</string>
+    <string name="settings_summary_credits">Projects behind Volty</string>
+    <string name="credits_intro">Volty stands on the work of many people. Thank you for sharing your code.</string>
+    <string name="credits_search">Search projects, authors, or licenses</string>
+    <string name="credits_loading">Loading credits…</string>
+    <string name="credits_load_error">Could not load credits and license information.</string>
+    <string name="credits_retry">Try again</string>
+    <string name="credits_no_results">No projects found</string>
+    <string name="credits_empty_catalog">No project information is available.</string>
+    <string name="credits_version">Version %1$s</string>
+    <string name="credits_authors">Authors</string>
+    <string name="credits_open_source">Open project source</string>
+    <string name="credits_licenses">Licenses</string>
+    <string name="credits_read_license">Read license</string>
+    <string name="credits_notice">Copyright and notices</string>
 </resources>

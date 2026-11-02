@@ -1,0 +1,20 @@
+Native WebRTC binary
+====================
+
+Volty ships `liblkjingle_peerconnection_so.so` from the Maven artifact
+`io.github.webrtc-sdk:android-prefixed:144.7559.09` for Android ABIs
+`arm64-v8a` and `armeabi-v7a`. The artifact POM identifies the 3-Clause BSD
+License; its cached AAR has no embedded `LICENSE` or `NOTICE` file.
+
+The matching native release, `libwebrtc.m144.7559.09`, identifies its source as
+`webrtc-sdk/webrtc` `m144_release` at commit
+`b1800a61db8320af5c14456c13622d8b85b1ed39`. The corresponding Android SDK
+release is `v144.7559.09`. The upstream WebRTC `LICENSE` at
+`refs/branch-heads/7559` is reproduced in `../licenses/WebRTC-native.txt`;
+its text matches the license at the pinned native source commit.
+
+Sources:
+- Android SDK release: https://github.com/webrtc-sdk/android/releases/tag/v144.7559.09
+- Native build release and source revision: https://github.com/webrtc-sdk/libwebrtc/releases/tag/libwebrtc.m144.7559.09
+- Pinned native source license: https://github.com/webrtc-sdk/webrtc/blob/b1800a61db8320af5c14456c13622d8b85b1ed39/LICENSE
+- Upstream WebRTC branch license: https://webrtc.googlesource.com/src/+/refs/branch-heads/7559/LICENSE?format=TEXT

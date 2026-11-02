@@ -9,7 +9,8 @@ import kotlinx.coroutines.sync.withPermit
 
 data class HistoryPreviewImageKey(val rideId: String, val revision: Long, val width: Int, val height: Int,
     val darkTheme: Boolean, val routeColor: Int, val segments: List<HistoryMapSegment>,
-    val styleRevision: String = "thumbnail-v2:${ru.sodovaya.volty.presentation.map.MapRenderSourcePolicy.styleUrl(darkTheme)}") {
+    val styleRevision: String = "thumbnail-v2:${ru.sodovaya.volty.presentation.map.MapRenderSourcePolicy.styleUrl(darkTheme)}",
+    val mapPalette: ru.sodovaya.volty.presentation.map.MapThemePalette? = null) {
     init {
         require(rideId.isNotBlank() && revision >= 0 && width in 1..512 && height in 1..512 && styleRevision.isNotBlank())
         require(segments.sumOf { it.fixes.size } <= 128)

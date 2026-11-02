@@ -7,3 +7,6 @@ expect fun supportsDynamicColor(): Boolean
 
 @Composable
 expect fun dynamicVoltyColors(darkTheme: Boolean): ColorScheme
+
+@Composable
+expect fun dynamicVoltyTonalColors(): VoltyTonalColors

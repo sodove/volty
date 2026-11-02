@@ -193,6 +193,10 @@ private fun AndroidMapLibreView(
     active: Boolean = true,
 ) {
     val context = LocalContext.current
+    val palette = LocalVoltyMapPalette.current
+    val latestPalette = rememberUpdatedState(palette)
+    val latestDarkTheme = rememberUpdatedState(darkTheme)
+    val styleThemer = remember(context) { MapThemeStyleApplier(context.applicationContext) }
     val lifecycleOwner = LocalLifecycleOwner.current
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember(cacheKey) { mutableStateOf(false) }
@@ -217,13 +221,20 @@ private fun AndroidMapLibreView(
         if (readyMap.style?.uri == targetStyleUrl &&
             readyMap.style?.isFullyLoaded == true
         ) {
+            readyMap.style?.let { style ->
+                styleThemer.apply(style, latestPalette.value, darkTheme)
+                applyOverlayTheme(style, latestPalette.value)
+            }
             styleReady = true
             return@LaunchedEffect
         }
         styleReady = false
         readyMap.setStyle(Style.Builder().fromUri(targetStyleUrl)) { style ->
+            if (style.uri != MapRenderSourcePolicy.styleUrl(latestDarkTheme.value)) return@setStyle
             LegacyBuildingLayer.add(style)
             configureStyle(style, darkTheme)
+            styleThemer.apply(style, latestPalette.value, darkTheme)
+            applyOverlayTheme(style, latestPalette.value)
             lastCameraRequest = null
             if (defaultRideMapCameraPolicy.appliesWithoutTarget) {
                 readyMap.moveCamera(
@@ -235,6 +246,13 @@ private fun AndroidMapLibreView(
                 )
             }
             styleReady = true
+        }
+    }
+
+    LaunchedEffect(map, styleReady, palette) {
+        if (styleReady) map?.style?.let { style ->
+            styleThemer.apply(style, palette, darkTheme)
+            applyOverlayTheme(style, palette)
         }
     }
 
@@ -457,7 +475,7 @@ private fun AndroidMapLibreView(
             })))
     }
 
-    Box(modifier = modifier.background(ComposeColor(0xFF07131E))) {
+    Box(modifier = modifier.background(ComposeColor(palette.background))) {
         AndroidView(
             // The map is retained across root destinations.  AndroidView's
             // holder always attaches the factory result to a new parent, so a
@@ -603,6 +621,19 @@ private const val MAP_BOTTOM_BLUR_BAND_FRACTION = 0.40f
 @Composable
 private fun MapBlurBand(modifier: Modifier) {
     Box(modifier = modifier)
+}
+
+private fun applyOverlayTheme(style: Style, palette: MapThemePalette) {
+    mapOf(
+        HISTORY_ROUTE_LAYER_ID to palette.routeInactive,
+        TRAIL_LAYER_ID to palette.accentSecondary,
+        INACTIVE_ROUTE_LAYER_ID to palette.routeInactive,
+        SELECTED_ROUTE_LAYER_ID to palette.accent,
+    ).forEach { (id, color) -> style.getLayerAs<LineLayer>(id)?.setProperties(lineColor(color)) }
+    listOf(OWN_LAYER_ID, HISTORY_CURSOR_LAYER_ID).forEach { id ->
+        style.getLayerAs<CircleLayer>(id)?.setProperties(circleColor(palette.accent), circleStrokeColor(palette.halo))
+    }
+    style.getLayerAs<SymbolLayer>(GROUP_LABEL_LAYER_ID)?.setProperties(textColor(palette.text), textHaloColor(palette.halo))
 }
 
 private fun configureStyle(style: Style, darkTheme: Boolean) {

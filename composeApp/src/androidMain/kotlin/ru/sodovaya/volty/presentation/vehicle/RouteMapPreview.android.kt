@@ -35,18 +35,21 @@ import org.maplibre.android.style.layers.Property
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.maplibre.geojson.LineString
 import org.maplibre.geojson.Point
-import ru.sodovaya.volty.presentation.map.MapRenderSourcePolicy
+import ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette
+import ru.sodovaya.volty.presentation.map.MapThemePalette
+import ru.sodovaya.volty.presentation.map.themeMapStyle
 import kotlin.coroutines.resume
 
 @Composable
 internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkTheme: Boolean, modifier: Modifier) {
     val context = LocalContext.current
     val density = LocalDensity.current.density
+    val palette = LocalVoltyMapPalette.current
     BoxWithConstraints(modifier.clip(RoundedCornerShape(14.dp))) {
         val width = constraints.maxWidth; val height = constraints.maxHeight
-        val snapshot by produceState<ImageBitmap?>(null, points, darkTheme, width, height) {
+        val snapshot by produceState<ImageBitmap?>(null, points, darkTheme, width, height, palette) {
             value = if (width <= 0 || height <= 0) null
-            else routeSnapshot(context.applicationContext, points, darkTheme, width / density, height / density, density)
+            else routeSnapshot(context.applicationContext, points, darkTheme, width / density, height / density, density, palette)
         }
         snapshot?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
             ?: RouteSketch(points, Modifier.fillMaxSize())
@@ -55,17 +58,20 @@ internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkThem
 
 /** The track is a layer of the snapshot's own style, so it sits on the streets it was ridden on. Null on any failure. */
 private suspend fun routeSnapshot(context: Context, points: List<Pair<Double, Double>>, darkTheme: Boolean,
-    widthDp: Float, heightDp: Float, pixelRatio: Float): ImageBitmap? {
+    widthDp: Float, heightDp: Float, pixelRatio: Float, palette: MapThemePalette): ImageBitmap? {
     val bounds = routePreviewBounds(points) ?: return null
     val line = LineString.fromLngLats(points.map { Point.fromLngLat(it.second, it.first) })
-    val style = Style.Builder().fromUri(MapRenderSourcePolicy.styleUrl(darkTheme))
+    val theme = if (darkTheme) "dark" else "bright"
+    val template = context.assets.open("offline-map-styles/openfreemap-$theme.json").bufferedReader().use { it.readText() }
+        .replace("__TILEJSON_DOMAIN__", "tiles.openfreemap.org")
+    val style = Style.Builder().fromJson(themeMapStyle(template, palette, darkTheme))
         .withSource(GeoJsonSource(SOURCE_ID, line))
-        .withLayer(LineLayer(LAYER_ID, SOURCE_ID).withProperties(lineColor("#1E9E86"), lineWidth(4f),
+        .withLayer(LineLayer(LAYER_ID, SOURCE_ID).withProperties(lineColor(palette.accent), lineWidth(4f),
             lineCap(Property.LINE_CAP_ROUND), lineJoin(Property.LINE_JOIN_ROUND)))
         // Where the ride ended: a ride that stood still has no line to see, only this.
         .withSource(GeoJsonSource(END_SOURCE_ID, Point.fromLngLat(points.last().second, points.last().first)))
-        .withLayer(CircleLayer(END_LAYER_ID, END_SOURCE_ID).withProperties(circleRadius(6f), circleColor("#1E9E86"),
-            circleStrokeColor("#FFFFFF"), circleStrokeWidth(2f)))
+        .withLayer(CircleLayer(END_LAYER_ID, END_SOURCE_ID).withProperties(circleRadius(6f), circleColor(palette.accent),
+            circleStrokeColor(palette.halo), circleStrokeWidth(2f)))
     val options = MapSnapshotter.Options(widthDp.toInt().coerceAtLeast(1), heightDp.toInt().coerceAtLeast(1))
         .withStyleBuilder(style)
         .withRegion(LatLngBounds.Builder().include(LatLng(bounds.south, bounds.west)).include(LatLng(bounds.north, bounds.east)).build())

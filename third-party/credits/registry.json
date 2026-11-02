@@ -1,0 +1,192 @@
+{
+  "projects": [
+    {
+      "id": "manual:loeuc",
+      "name": "loeuc-core",
+      "authors": [
+        "Nikita Vasilevskiy"
+      ],
+      "website": "https://github.com/cancelledbit/loeuc-core",
+      "licenseIds": [
+        "loeuc-MIT"
+      ]
+    },
+    {
+      "id": "manual:vescape",
+      "name": "Vescape",
+      "authors": [
+        "Kacper Kozak"
+      ],
+      "website": "https://github.com/vescape-app/vescape",
+      "licenseIds": [
+        "Vescape-GPL-3.0"
+      ]
+    },
+    {
+      "id": "manual:rnnoise",
+      "name": "RNNoise",
+      "authors": [
+        "Jean-Marc Valin",
+        "Xiph.Org Foundation",
+        "RNNoise contributors"
+      ],
+      "website": "https://github.com/xiph/rnnoise",
+      "licenseIds": [
+        "RNNoise-BSD"
+      ]
+    },
+    {
+      "id": "manual:audioswitch",
+      "name": "AudioSwitch",
+      "authors": [
+        "Twilio"
+      ],
+      "website": "https://github.com/twilio/audioswitch",
+      "licenseIds": [
+        "AudioSwitch-Apache"
+      ],
+      "artifact": "file:audioswitch-039a35aefab7747c557242fa216c9ea11743b604.aar"
+    },
+    {
+      "id": "manual:brouter",
+      "name": "BRouter",
+      "authors": [
+        "BRouter contributors"
+      ],
+      "website": "https://github.com/abrensch/brouter",
+      "licenseIds": [
+        "BRouter-MIT"
+      ],
+      "artifact": "file:brouter-1.7.10-all.jar"
+    },
+    {
+      "id": "manual:noto",
+      "name": "Noto Sans",
+      "authors": [
+        "Google",
+        "The Noto Project Authors"
+      ],
+      "website": "https://github.com/notofonts/noto-fonts",
+      "licenseIds": [
+        "Noto-OFL"
+      ],
+      "noticePath": "third-party/credits/notices/Noto.txt"
+    },
+    {
+      "id": "manual:openfreemap",
+      "name": "OpenFreeMap styles",
+      "authors": [
+        "Zsolt Ero",
+        "OpenMapTiles contributors",
+        "Mapbox"
+      ],
+      "website": "https://github.com/hyperknot/openfreemap-styles",
+      "licenseIds": [
+        "OpenFreeMap-MIT",
+        "OpenMapTiles-BSD",
+        "CC-BY-4.0"
+      ],
+      "noticePath": "third-party/credits/notices/OpenFreeMap.txt"
+    }
+  ],
+  "licenses": {
+    "loeuc-MIT": {
+      "name": "MIT",
+      "path": "third-party/credits/licenses/loeuc-MIT.txt"
+    },
+    "Vescape-GPL-3.0": {
+      "name": "GPL-3.0-or-later",
+      "path": "third-party/credits/licenses/Vescape-GPL-3.0.txt"
+    },
+    "RNNoise-BSD": {
+      "name": "BSD-3-Clause",
+      "path": "third-party/credits/licenses/RNNoise.txt"
+    },
+    "AudioSwitch-Apache": {
+      "name": "Apache-2.0",
+      "path": "third-party/credits/licenses/AudioSwitch.txt"
+    },
+    "BRouter-MIT": {
+      "name": "MIT",
+      "path": "third-party/credits/licenses/BRouter.txt"
+    },
+    "Noto-OFL": {
+      "name": "SIL OFL-1.1",
+      "path": "third-party/credits/licenses/Noto-OFL.txt"
+    },
+    "OpenFreeMap-MIT": {
+      "name": "MIT and upstream notices",
+      "path": "third-party/credits/licenses/OpenFreeMap.txt"
+    },
+    "OpenMapTiles-BSD": {
+      "name": "BSD-3-Clause and attribution",
+      "path": "third-party/credits/licenses/OpenMapTiles.txt"
+    },
+    "CC-BY-4.0": {
+      "name": "CC BY 4.0",
+      "path": "third-party/credits/licenses/CC-BY-4.0.txt"
+    },
+    "WebRTC-wrapper-MIT": {
+      "name": "MIT",
+      "path": "third-party/credits/licenses/WebRTC.txt"
+    },
+    "JAIN-SIP-Spec": {
+      "name": "JAIN SIP Specification License",
+      "path": "third-party/credits/licenses/JAIN-SIP-Spec.txt"
+    }
+  },
+  "licenseOverrides": {
+    "44d1a25c593283261968a15c8cc213cd": {
+      "name": "libyuv BSD-3-Clause",
+      "path": "third-party/credits/licenses/libyuv-BSD.txt"
+    },
+    "58a0fed5c0bf6a367ee905fc49842212": {
+      "name": "BSD-3-Clause",
+      "path": "third-party/credits/licenses/WebRTC-native.txt"
+    },
+    "73252b46f36df25ef51a7994de439aea": {
+      "name": "Bouncy Castle License",
+      "path": "third-party/credits/licenses/BouncyCastle.txt"
+    },
+    "793a4cf6f6c2a2511f55feeb3c74eeb2": {
+      "name": "Concentus BSD-3-Clause",
+      "path": "third-party/credits/licenses/Concentus.txt"
+    },
+    "ASDKL": {
+      "name": "Android SDK License",
+      "path": "third-party/credits/licenses/Android-SDK.txt"
+    },
+    "fa7f33c49aa6110f3cedeb2975e140e0": {
+      "name": "NIST public domain notice",
+      "path": "third-party/credits/licenses/JAIN-SIP.txt"
+    }
+  },
+  "libraryOverrides": {
+    "io.github.webrtc-sdk:android-prefixed": {
+      "licenseIds": [
+        "58a0fed5c0bf6a367ee905fc49842212",
+        "WebRTC-wrapper-MIT"
+      ],
+      "noticePath": "third-party/credits/notices/WebRTC.txt"
+    },
+    "javax.sip:android-jain-sip-ri": {
+      "licenseIds": [
+        "fa7f33c49aa6110f3cedeb2975e140e0",
+        "JAIN-SIP-Spec"
+      ],
+      "noticePath": "third-party/credits/notices/JAIN-SIP.txt"
+    }
+  },
+  "inputs": [
+    "THIRD_PARTY_NOTICES.md",
+    "composeApp/src/androidMain/assets/offline-map-styles/NOTICE.txt",
+    "composeApp/src/androidMain/assets/offline-map-glyphs/NOTICE.txt",
+    "composeApp/src/androidMain/cpp/rnnoise/COPYING",
+    "composeApp/src/androidMain/cpp/rnnoise/VERSION",
+    "composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/history/ported/LICENSE"
+  ],
+  "binaryInputs": [
+    "composeApp/libs/audioswitch-039a35aefab7747c557242fa216c9ea11743b604.aar",
+    "composeApp/libs/brouter-1.7.10-all.jar"
+  ]
+}

@@ -13,7 +13,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
  * a [SettingsInlineSection].
  */
 enum class SettingsPage {
-    ALERT_SOUND, VOICE, MICROPHONE, OFFLINE_MAPS, DEVELOPER
+    ALERT_SOUND, VOICE, MICROPHONE, OFFLINE_MAPS, DEVELOPER, CREDITS
 }
 
 /**

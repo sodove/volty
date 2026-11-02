@@ -32,6 +32,22 @@ class HistoryPreviewImagesComponentTest {
             c.setVisible(listOf(key()));runCurrent();assertEquals(1,reads.size);assertSame(image,c.state.value.images["a"])
         }finally{c.close()}
     }
+    @Test fun mapBackgroundChangeWithSameRouteColorRequestsNewImageAndReusesPriorPaletteOnReturn() = runTest {
+        val reads = mutableListOf<HistoryPreviewImageKey>()
+        val c = owner { reads += it; image }
+        val palette = ru.sodovaya.volty.presentation.map.mapThemePalette(
+            ru.sodovaya.volty.presentation.common.seededTonalColors(0xFFC45C20.toInt()), false)
+        val first = key().copy(mapPalette = palette)
+        val second = first.copy(mapPalette = palette.copy(background = 0xFFF5F0E8.toInt()))
+        try {
+            c.setVisible(listOf(first)); runCurrent()
+            c.setVisible(listOf(second)); runCurrent()
+            assertEquals(listOf(first, second), reads)
+            assertEquals(second, c.state.value.renderKeys["a"])
+            c.setVisible(listOf(first)); runCurrent()
+            assertEquals(2, reads.size)
+        } finally { c.close() }
+    }
     @Test fun lateRetiredImageCannotPublishOrPoisonReentryCache()=runTest {
         val entered=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>();val reads=mutableListOf<String>()
         val c=owner{request->reads+=request.rideId;if(request.rideId=="a" && reads.count{it=="a"}==1)

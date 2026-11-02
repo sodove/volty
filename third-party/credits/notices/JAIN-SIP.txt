@@ -1,0 +1,4 @@
+JAIN SIP implementation: National Institute of Standards and Technology (NIST).
+JAIN SIP API: Copyright 2003 Sun Microsystems, Inc.; Copyright 2005 BEA Systems, Inc.
+The implementation and the API have separate terms.
+Source: https://github.com/usnistgov/jsip/tree/master/licenses

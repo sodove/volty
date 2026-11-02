@@ -10,6 +10,7 @@ import ru.sodovaya.volty.domain.audio.AlertSoundKind
 import ru.sodovaya.volty.domain.audio.AlertSoundSettings
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.BleDiagnosticsState
+import ru.sodovaya.volty.domain.model.ThemeAccent
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.domain.voice.VoiceInputPreference
@@ -23,6 +24,9 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationCoordinator
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationState
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapStyleVariant
+import ru.sodovaya.volty.presentation.settings.credits.CreditsComponent
+import ru.sodovaya.volty.presentation.settings.credits.DefaultCreditsComponent
+import ru.sodovaya.volty.presentation.settings.credits.loadBundledCreditsCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -40,9 +44,12 @@ interface SettingsComponent {
     val state: StateFlow<State>
     /** The open settings page, or null while the hub itself is showing. */
     val page: StateFlow<SettingsPage?>
+    /** Credits data and nested navigation, when provided by this component. */
+    val credits: CreditsComponent? get() = null
 
     fun onThemeChanged(theme: String)
     fun onDynamicColorChanged(enabled: Boolean)
+    fun onThemeAccentChanged(accent: ThemeAccent) {}
     fun onScanTimeoutChanged(sec: Int)
     fun onAutoConnectCountdownChanged(sec: Int)
     fun onUnitSystemChanged(system: UnitSystem)
@@ -87,6 +94,7 @@ interface SettingsComponent {
     data class State(
         val themeMode: String = "system",
         val dynamicColor: Boolean = true,
+        val themeAccent: ThemeAccent = ThemeAccent.DEFAULT,
         val scanTimeoutSec: Int = 5,
         val autoConnectCountdownSec: Int = 3,
         val unitSystem: UnitSystem = UnitSystem.METRIC,
@@ -135,12 +143,16 @@ class DefaultSettingsComponent(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val pages = SettingsPageNavigator(onExit = onBackRequested)
     override val page: StateFlow<SettingsPage?> = pages.page
+    override val credits: CreditsComponent = DefaultCreditsComponent(scope) {
+        loadBundledCreditsCatalog()
+    }
     // Only while a page is open: the system back gesture then closes the page instead of the screen.
     private val pageBackCallback = BackCallback(isEnabled = false) { onBack() }
     private val _state = MutableStateFlow(
         SettingsComponent.State(
             themeMode = appPrefs.themeMode.value,
             dynamicColor = appPrefs.dynamicColorEnabled.value,
+            themeAccent = appPrefs.themeAccent.value,
             scanTimeoutSec = appPrefs.scanTimeoutSec.value,
             autoConnectCountdownSec = appPrefs.autoConnectCountdownSec.value,
             unitSystem = appPrefs.unitSystem.value,
@@ -170,6 +182,7 @@ class DefaultSettingsComponent(
         }
         scope.launch { appPrefs.themeMode.collect { v -> _state.update { it.copy(themeMode = v) } } }
         scope.launch { appPrefs.dynamicColorEnabled.collect { v -> _state.update { it.copy(dynamicColor = v) } } }
+        scope.launch { appPrefs.themeAccent.collect { v -> _state.update { it.copy(themeAccent = v) } } }
         scope.launch { appPrefs.scanTimeoutSec.collect { v -> _state.update { it.copy(scanTimeoutSec = v) } } }
         scope.launch { appPrefs.autoConnectCountdownSec.collect { v -> _state.update { it.copy(autoConnectCountdownSec = v) } } }
         scope.launch { appPrefs.unitSystem.collect { v -> _state.update { it.copy(unitSystem = v) } } }
@@ -215,6 +228,7 @@ class DefaultSettingsComponent(
 
     override fun onThemeChanged(theme: String) { scope.launch { appPrefs.setThemeMode(theme) } }
     override fun onDynamicColorChanged(enabled: Boolean) { scope.launch { appPrefs.setDynamicColorEnabled(enabled) } }
+    override fun onThemeAccentChanged(accent: ThemeAccent) { scope.launch { appPrefs.setThemeAccent(accent) } }
     override fun onScanTimeoutChanged(sec: Int) { scope.launch { appPrefs.setScanTimeoutSec(sec) } }
     override fun onAutoConnectCountdownChanged(sec: Int) { scope.launch { appPrefs.setAutoConnectCountdownSec(sec) } }
     override fun onUnitSystemChanged(system: UnitSystem) { scope.launch { appPrefs.setUnitSystem(system) } }
@@ -278,8 +292,10 @@ class DefaultSettingsComponent(
     override fun onOpenPage(page: SettingsPage) {
         pages.open(page)
         pageBackCallback.isEnabled = true
+        if (page == SettingsPage.CREDITS) credits.onLoad()
     }
     override fun onBack() {
+        if (pages.page.value == SettingsPage.CREDITS && credits.onBack()) return
         pages.back()
         pageBackCallback.isEnabled = pages.page.value != null
     }

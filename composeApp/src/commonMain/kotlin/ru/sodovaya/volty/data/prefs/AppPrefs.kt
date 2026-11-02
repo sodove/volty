@@ -34,6 +34,7 @@ import ru.sodovaya.volty.domain.audio.encodeParticipants
 import ru.sodovaya.volty.domain.navigation.routing.NavigationPreferencesStore
 import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.ThemeAccent
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
 import ru.sodovaya.volty.domain.voice.VoiceInputPreference
@@ -56,6 +57,10 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     val dynamicColorEnabled: StateFlow<Boolean> = store.data
         .map { it[Keys.DYNAMIC_COLOR] ?: true }
         .stateIn(scope, SharingStarted.Eagerly, true)
+
+    val themeAccent: StateFlow<ThemeAccent> = store.data
+        .map { ThemeAccent.fromId(it[Keys.THEME_ACCENT]) }
+        .stateIn(scope, SharingStarted.Eagerly, ThemeAccent.DEFAULT)
 
     val firstLaunchDone: StateFlow<Boolean> = store.data
         .map { it[Keys.FIRST_LAUNCH_DONE] ?: false }
@@ -234,6 +239,7 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     }
     suspend fun setThemeMode(mode: String) = store.edit { it[Keys.THEME_MODE] = mode }
     suspend fun setDynamicColorEnabled(enabled: Boolean) = store.edit { it[Keys.DYNAMIC_COLOR] = enabled }
+    suspend fun setThemeAccent(accent: ThemeAccent) = store.edit { it[Keys.THEME_ACCENT] = accent.id }
     suspend fun setFirstLaunchDone() = store.edit { it[Keys.FIRST_LAUNCH_DONE] = true }
     suspend fun setScanTimeoutSec(sec: Int) = store.edit { it[Keys.SCAN_TIMEOUT_SEC] = sec.coerceIn(1, 15) }
     suspend fun setAutoConnectCountdownSec(sec: Int) = store.edit { it[Keys.AUTO_CONNECT_COUNTDOWN_SEC] = sec }
@@ -336,6 +342,7 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         val LAST_VEHICLE_ID = stringPreferencesKey("last_vehicle_id")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color_enabled")
+        val THEME_ACCENT = stringPreferencesKey("theme_accent")
         val FIRST_LAUNCH_DONE = booleanPreferencesKey("first_launch_done")
         val SCAN_TIMEOUT_SEC = intPreferencesKey("scan_timeout_sec")
         val AUTO_CONNECT_COUNTDOWN_SEC = intPreferencesKey("auto_connect_countdown_sec")

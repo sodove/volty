@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -89,6 +90,7 @@ import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
+import ru.sodovaya.volty.presentation.common.supportsDynamicColor
 import ru.sodovaya.volty.util.UnitSystem
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
@@ -211,6 +213,7 @@ import volty.composeapp.generated.resources.settings_page_microphone
 import volty.composeapp.generated.resources.settings_page_offline_maps
 import volty.composeapp.generated.resources.settings_page_theme
 import volty.composeapp.generated.resources.settings_page_developer
+import volty.composeapp.generated.resources.settings_page_credits
 import volty.composeapp.generated.resources.settings_summary_connection
 import volty.composeapp.generated.resources.settings_summary_theme_dynamic
 import volty.composeapp.generated.resources.settings_summary_alerts
@@ -224,6 +227,7 @@ import volty.composeapp.generated.resources.settings_summary_offline_none
 import volty.composeapp.generated.resources.settings_summary_offline_installed
 import volty.composeapp.generated.resources.settings_summary_offline_downloading
 import volty.composeapp.generated.resources.settings_summary_developer
+import volty.composeapp.generated.resources.settings_summary_credits
 import volty.composeapp.generated.resources.settings_voice_duck_music
 import volty.composeapp.generated.resources.settings_voice_duck_music_hint
 import volty.composeapp.generated.resources.alerts_music_mode
@@ -258,6 +262,7 @@ import ru.sodovaya.volty.presentation.common.settings.SettingsExpandableRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsGroup
 import ru.sodovaya.volty.presentation.common.settings.pageDirection
 import ru.sodovaya.volty.presentation.common.settings.toggleExpanded
+import ru.sodovaya.volty.presentation.settings.credits.CreditsScreen
 import ru.sodovaya.volty.presentation.common.settings.SettingsNavRow
 import ru.sodovaya.volty.presentation.common.settings.SettingsRowDivider
 import ru.sodovaya.volty.presentation.common.settings.SettingsSliderRow
@@ -315,36 +320,42 @@ fun SettingsScreen(component: SettingsComponent) {
             },
             label = "settings-page",
         ) { shown ->
-        // The hub keeps its scroll position while a page is open; a page starts at the top each time.
-        val scroll = if (shown == null) hubScroll else rememberScrollState()
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scroll)
-                .padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) {
-            when (shown) {
-                null -> SettingsHub(
-                    state = state,
-                    component = component,
-                    expanded = expanded,
-                    onToggle = { expandedName = toggleExpanded(expanded, it)?.name },
-                )
-                SettingsPage.ALERT_SOUND -> AlertSoundPage(state, component)
-                SettingsPage.VOICE -> VoicePage(state, component)
-                SettingsPage.MICROPHONE -> MicrophonePage(state, component)
-                SettingsPage.OFFLINE_MAPS -> OfflineMapsPage(
-                    state = state,
-                    component = component,
-                    query = offlineRegionQuery,
-                    onQueryChange = { offlineRegionQuery = it },
-                    onDeleteRequest = { pendingOfflineDelete = it },
-                )
-                SettingsPage.DEVELOPER -> DeveloperPage(state, component)
+            if (shown == SettingsPage.CREDITS) {
+                // Credits owns its bounded LazyColumn; it cannot live under the shared verticalScroll.
+                CreditsScreen(component.credits, modifier = Modifier.fillMaxSize())
+            } else {
+                // The hub keeps its scroll position while a page is open; a page starts at the top each time.
+                val scroll = if (shown == null) hubScroll else rememberScrollState()
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(scroll)
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    when (shown) {
+                        null -> SettingsHub(
+                            state = state,
+                            component = component,
+                            expanded = expanded,
+                            onToggle = { expandedName = toggleExpanded(expanded, it)?.name },
+                        )
+                        SettingsPage.ALERT_SOUND -> AlertSoundPage(state, component)
+                        SettingsPage.VOICE -> VoicePage(state, component)
+                        SettingsPage.MICROPHONE -> MicrophonePage(state, component)
+                        SettingsPage.OFFLINE_MAPS -> OfflineMapsPage(
+                            state = state,
+                            component = component,
+                            query = offlineRegionQuery,
+                            onQueryChange = { offlineRegionQuery = it },
+                            onDeleteRequest = { pendingOfflineDelete = it },
+                        )
+                        SettingsPage.DEVELOPER -> DeveloperPage(state, component)
+                        SettingsPage.CREDITS -> Unit
+                    }
+                    Spacer(Modifier.height(24.dp))
+                }
             }
-            Spacer(Modifier.height(24.dp))
-        }
         }
 
         pendingOfflineDelete?.let { region ->
@@ -381,6 +392,7 @@ private fun settingsPageTitle(page: SettingsPage): String = stringResource(
         SettingsPage.MICROPHONE -> Res.string.settings_page_microphone
         SettingsPage.OFFLINE_MAPS -> Res.string.settings_page_offline_maps
         SettingsPage.DEVELOPER -> Res.string.settings_page_developer
+        SettingsPage.CREDITS -> Res.string.settings_page_credits
     }
 )
 
@@ -483,6 +495,14 @@ private fun SettingsHub(
         ) {
             ThemeControls(state, component)
         }
+        SettingsRowDivider()
+        SettingsNavRow(
+            icon = Icons.Filled.FavoriteBorder,
+            tint = SettingsTint.MAPS,
+            title = stringResource(Res.string.settings_page_credits),
+            summary = stringResource(Res.string.settings_summary_credits),
+            onClick = { component.onOpenPage(SettingsPage.CREDITS) },
+        )
     }
     SettingsGroup(stringResource(Res.string.settings_group_vehicles)) {
         state.vehicles.forEach { v ->
@@ -592,6 +612,13 @@ private fun ColumnScope.ThemeControls(state: SettingsComponent.State, component:
             checked = state.dynamicColor,
             onChange = component::onDynamicColorChanged,
         )
+        if (!state.dynamicColor || !supportsDynamicColor()) {
+            SettingsRowDivider()
+            ThemeAccentControls(
+                selectedAccent = state.themeAccent,
+                onAccentSelected = component::onThemeAccentChanged,
+            )
+        }
     }
 }
 
