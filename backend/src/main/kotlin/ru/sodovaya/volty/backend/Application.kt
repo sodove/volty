@@ -17,7 +17,6 @@ import io.ktor.server.auth.jwt.JWTPrincipal
 import io.ktor.server.auth.jwt.jwt
 import io.ktor.server.plugins.callid.callId
 import io.ktor.server.plugins.callid.CallId
-import io.ktor.server.plugins.calllogging.CallLogging
 import io.ktor.server.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.server.plugins.cors.routing.CORS
 import io.ktor.server.plugins.defaultheaders.DefaultHeaders
@@ -274,7 +273,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     val logger = LoggerFactory.getLogger("VoltyBackend")
     val scope = CoroutineScope(SupervisorJob(coroutineContext[kotlinx.coroutines.Job]) + Dispatchers.IO)
 
-    install(CallLogging)
+    installBackendCallLogging()
     install(CallId) {
         generate { uuid() }
         verify { it.isNotBlank() }
