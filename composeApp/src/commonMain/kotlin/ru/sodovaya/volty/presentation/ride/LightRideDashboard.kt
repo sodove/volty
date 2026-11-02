@@ -192,7 +192,13 @@ internal fun LightRideDashboard(
     navigationCallbacks: LightNavigationCallbacks? = null,
 ) {
     SyncLightDashboardSystemBars(darkTheme = LocalVoltyDarkTheme.current)
-    val palette = if (LocalVoltyDarkTheme.current) DarkLightHudPalette else BrightLightHudPalette
+    val mapPalette = ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette.current
+    val darkTheme = LocalVoltyDarkTheme.current
+    val palette = (if (darkTheme) DarkLightHudPalette else BrightLightHudPalette).copy(
+        text = Color(mapPalette.text), muted = Color(mapPalette.textMuted),
+        surface = Color(mapPalette.land).copy(alpha = if (darkTheme) 0.40f else 0.72f),
+        surfaceStrong = Color(mapPalette.building).copy(alpha = if (darkTheme) 0.50f else 0.85f),
+    )
     val targetTelemetry = LightDashboardMapper.values(
         motion = state.motion,
         battery = state.battery,
@@ -380,6 +386,7 @@ internal fun LightRideDashboard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                     LightCircleButton(Icons.Default.ShowChart, "Графики", onClick = onOpenGraph)
+                    ru.sodovaya.volty.presentation.video.RideVideoButton()
                     Spacer(Modifier.weight(1f))
                     LightCircleButton(Icons.Default.BatteryFull, "Батарея", onClick = onOpenBattery)
                 }
@@ -841,11 +848,7 @@ private fun LightMapFallback() {
 @Composable
 private fun LightMapVignette(darkTheme: Boolean, modifier: Modifier = Modifier) {
     val spec = lightMapOverlaySpec(darkTheme)
-    val tint = if (spec.fallbackTone == LightVignetteTone.DARK) {
-        Color(0xFF07131E)
-    } else {
-        Color.White
-    }
+    val tint = Color(ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette.current.background)
     Canvas(modifier) {
         val center = Offset(size.width / 2f, size.height / 2f)
         val radius = sqrt(center.x * center.x + center.y * center.y)

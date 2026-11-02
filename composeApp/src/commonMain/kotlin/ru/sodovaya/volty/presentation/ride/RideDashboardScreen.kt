@@ -360,6 +360,8 @@ fun RideDashboardScreen(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
+                ru.sodovaya.volty.presentation.video.RideVideoButton()
+                Spacer(Modifier.width(8.dp))
                 NearbyLinkButton(onClick = onOpenNearby)
                 Spacer(Modifier.width(8.dp))
                 GraphLinkButton(onClick = component::onOpenGraph)

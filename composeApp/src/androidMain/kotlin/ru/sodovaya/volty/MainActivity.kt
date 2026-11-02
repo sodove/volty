@@ -23,6 +23,7 @@ import org.koin.android.ext.android.getKoin
 class MainActivity : ComponentActivity() {
 
     private val bmsRepository: BmsRepository by inject()
+    private val appVisibility: ru.sodovaya.volty.data.radio.AppVisibility by inject()
     private val historyLocation: ru.sodovaya.volty.data.history.AndroidHistoryLocationForegroundController by inject()
     private lateinit var rootComponent: DefaultRootComponent
     private var nearbyPermissions: ru.sodovaya.volty.presentation.root.nearby.AndroidNearbyPermissionBridge? = null
@@ -138,7 +139,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         lifecycleScope.launch {
-            runCatching { bmsRepository.onAppPaused() }
+            // The ride camera is a separate Activity. Leaving the dashboard for it must
+            // not downgrade the live BLE connection while another app screen is visible.
+            runCatching { if (!appVisibility.isVisible) bmsRepository.onAppPaused() }
         }
         super.onStop()
     }
