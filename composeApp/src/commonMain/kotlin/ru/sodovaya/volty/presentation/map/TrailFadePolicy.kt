@@ -27,3 +27,29 @@ internal fun trailOpacityForAgeMillis(ageMillis: Long): Float {
 
 internal fun shouldRetainTrailPoint(ageMillis: Long): Boolean =
     ageMillis < TRAIL_MAX_AGE_MILLIS
+
+/**
+ * Lowest opacity a *visible* trail segment may have. The trail is the one line on the map the rider
+ * drew by riding, so it fades with age and distance but never to a ghost: the first fade was linear
+ * to zero, which left most of the 180 m window pale against 3D buildings and dashed footpaths.
+ */
+internal const val TRAIL_MIN_OPACITY = 0.45f
+
+/** Core line width in dp-ish map pixels (was 3.2) and the extra width of the contrasting casing. */
+internal const val TRAIL_LINE_WIDTH = 6f
+internal const val TRAIL_CASING_EXTRA_WIDTH = 3.5f
+
+/**
+ * Opacity of a trail segment [distanceBehindMeters] behind the rider and [ageMillis] old: 1 when
+ * fresh, easing to [TRAIL_MIN_OPACITY] at the edge of the window, 0 only once the segment has left
+ * the window (past [TRAIL_FADE_DISTANCE_METERS] or [TRAIL_MAX_AGE_MILLIS]) and is dropped.
+ */
+internal fun trailSegmentOpacity(distanceBehindMeters: Double, ageMillis: Long): Float {
+    if (!distanceBehindMeters.isFinite() || distanceBehindMeters >= TRAIL_FADE_DISTANCE_METERS) return 0f
+    if (!shouldRetainTrailPoint(ageMillis)) return 0f
+    val fade = minOf(
+        trailOpacityForDistanceMeters(distanceBehindMeters),
+        trailOpacityForAgeMillis(ageMillis),
+    )
+    return TRAIL_MIN_OPACITY + (1f - TRAIL_MIN_OPACITY) * fade
+}
