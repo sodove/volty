@@ -77,6 +77,20 @@ class VoltyThemeContrastTest {
         }
     }
 
+    @Test fun warning_banner_pair_is_amber_and_AA_in_light_and_dark() {
+        for (dark in listOf(false, true)) {
+            val status = voltyStatusColors(dark)
+            val ratio = contrast(status.onWarnContainer, status.warnContainer)
+            assertTrue(ratio >= 4.5, "dark=$dark banner text on amber container $ratio < 4.5")
+            // The regression: the container used to be tertiaryContainer, which is green.
+            val hue = Hct.fromInt(status.warnContainer.toArgb()).hue
+            assertTrue(hue in 50.0..95.0, "dark=$dark warnContainer hue $hue is not amber")
+            for ((name, s) in schemes().filter { it.first.endsWith(if (dark) "dark" else "light") }) {
+                assertTrue(status.warnContainer != s.tertiaryContainer, "$name warn banner must not be the tertiary container")
+            }
+        }
+    }
+
     @Test fun status_colours_do_not_depend_on_the_accent() {
         for (dark in listOf(false, true)) {
             val expected = voltyStatusColors(dark)

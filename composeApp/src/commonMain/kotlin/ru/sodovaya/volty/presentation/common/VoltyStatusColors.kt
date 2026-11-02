@@ -15,7 +15,14 @@ import com.materialkolor.hct.Hct
  *
  * Errors stay `colorScheme.error`, which [seededVoltyColorScheme] now pins to a fixed red family.
  */
-data class VoltyStatusColors(val connected: Color, val warn: Color)
+data class VoltyStatusColors(
+    val connected: Color,
+    val warn: Color,
+    /** Fill of a warnings-only banner: the same amber hue as [warn], at the container tone (30 dark, 90 light). */
+    val warnContainer: Color,
+    /** Text on [warnContainer]. */
+    val onWarnContainer: Color,
+)
 
 private const val CONNECTED_HUE = 145.0
 private const val CONNECTED_CHROMA = 30.0
@@ -27,6 +34,10 @@ fun voltyStatusColors(dark: Boolean): VoltyStatusColors {
     return VoltyStatusColors(
         connected = Color(Hct.from(CONNECTED_HUE, CONNECTED_CHROMA, tone).toInt()),
         warn = Color(Hct.from(WARN_HUE, WARN_CHROMA, tone).toInt()),
+        // M3 container pairing: tone 30 / 90 fill, tone 90 / 10 text. Tertiary's container used to
+        // fill this banner and is green by design, so a warning read as "all good".
+        warnContainer = Color(Hct.from(WARN_HUE, WARN_CHROMA, if (dark) 30.0 else 90.0).toInt()),
+        onWarnContainer = Color(Hct.from(WARN_HUE, 20.0, if (dark) 90.0 else 10.0).toInt()),
     )
 }
 

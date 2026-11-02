@@ -393,11 +393,11 @@ internal fun RideFaultsBanner(
     modifier: Modifier = Modifier,
 ) {
     // The container colour is the stack's worst severity (bannerTone): the same red as ever for
-    // faults and CRITICAL alerts, the tertiary pair when only warnings are listed. Which is which
+    // faults and CRITICAL alerts, the fixed amber status pair when only warnings are listed. Which is which
     // is decided in AlertBannerRow.kt; this only paints it.
     val (container, onContainer) = when (bannerTone(faults)) {
         BannerTone.ERROR -> MaterialTheme.colorScheme.errorContainer to MaterialTheme.colorScheme.onErrorContainer
-        BannerTone.WARNING -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
+        BannerTone.WARNING -> voltyStatusColors().let { it.warnContainer to it.onWarnContainer }
     }
     Column(
         modifier = Modifier
