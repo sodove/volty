@@ -3,15 +3,35 @@ Bundled OpenFreeMap style snapshots
 
 This directory contains the dark and bright OpenFreeMap styles, sourced from
 https://github.com/hyperknot/openfreemap-styles at commit
-72e1480dfc92858d334647037988bd2591fdb021.
+72e1480dfc92858d334647037988bd2591fdb021.  The original repository is
+MIT-licensed: Copyright (c) 2023 Zsolt Ero.
 
-The snapshots are transformed at runtime only to replace remote tile and font
-URLs with Volty's local PMTiles loopback server and to remove decorations that
-need an unavailable sprite atlas.  The original repository is MIT-licensed:
-Copyright (c) 2023 Zsolt Ero.
+Lineage of the two styles (they are not the same family):
+- Bright derives from OpenMapTiles / OSM Bright GL Style
+  (https://github.com/openmaptiles/osm-bright-gl-style).
+- Dark derives from OpenMapTiles / Dark Matter GL Style
+  (https://github.com/openmaptiles/dark-matter-gl-style), whose design is
+  derived from CartoDB Basemaps by Stamen and Paul Norman for CartoDB Inc.,
+  licensed CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/).
+The code of these styles is BSD 3-Clause and their visual design CC BY 4.0
+(CC BY 3.0 for the CartoDB-derived design of Dark).
 
-The styles derive from OpenMapTiles / OSM Bright GL Style.  Their code is BSD
-3-Clause and visual design is CC BY 4.0.  Volty exposes the required map
-attribution in the map corner: © OpenMapTiles © OpenStreetMap contributors.
+CHANGES made by Volty (indications of modification, as CC BY requires):
+- At runtime the snapshots are transformed to replace remote tile and font
+  URLs with Volty's local PMTiles loopback server and to remove decorations
+  that need an unavailable sprite atlas.
+- The colours of selected layers are modified at runtime to follow the app's
+  theme accent and light/dark mode: the background, land use, buildings and
+  place and road labels in both styles, and in the dark style also the roads,
+  road casings and footpaths.  Only paint colours are changed, by shifting the
+  tone of each upstream colour; hues and chroma of those layers are replaced by
+  a neutral tint of the chosen accent.  Water, parks, railways, boundaries and
+  all geometry, sources, tile URLs, sprite and glyph references are untouched.
+  The bright style keeps OpenFreeMap's own road colours.
+- The dark style's labels are brighter than upstream for legibility.
+
+Volty exposes the required map attribution in the map corner, as links:
+(c) OpenFreeMap (c) OpenMapTiles (c) OpenStreetMap.  The attribution is also
+shown on every route preview snapshot.
 See the upstream LICENSE.md for the full notices:
 https://github.com/hyperknot/openfreemap-styles/blob/72e1480dfc92858d334647037988bd2591fdb021/LICENSE.md

@@ -24,6 +24,7 @@ import kotlin.time.ExperimentalTime
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.history.HistoryRide
 import ru.sodovaya.volty.domain.history.HistoryUnit
+import ru.sodovaya.volty.presentation.history.HistoryPreviewAttribution
 import ru.sodovaya.volty.presentation.history.HistoryTotal
 import ru.sodovaya.volty.presentation.history.HistoryTotalKind
 import ru.sodovaya.volty.presentation.history.historyUnitText
@@ -77,7 +78,11 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
                 item {
                     ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().clickable { component.onOpenRide(ride.id) }) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (state.lastRoute.size >= 2) RouteMapPreview(state.lastRoute, LocalVoltyDarkTheme.current, Modifier.fillMaxWidth().height(160.dp))
+                            if (state.lastRoute.size >= 2) {
+                                RouteMapPreview(state.lastRoute, LocalVoltyDarkTheme.current, Modifier.fillMaxWidth().height(160.dp))
+                                // The snapshot hides MapLibre's own logo, so the licence-required credit is drawn here.
+                                HistoryPreviewAttribution()
+                            }
                             if (state.lastTotals.isNotEmpty()) TotalsTiles(state.lastTotals)
                         }
                     }
