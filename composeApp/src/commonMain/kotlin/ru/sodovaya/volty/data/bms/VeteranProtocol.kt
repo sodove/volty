@@ -23,9 +23,10 @@ import kotlin.math.abs
  * `length + 4` is the complete frame size (three-byte preamble, length byte,
  * and the length bytes themselves).  Frames with `length > 38` carry a
  * big-endian CRC32 over bytes `0 until length`; older frames have no checksum.
- * No byte-escaping scheme is described by either source; header-like bytes in
- * the payload are therefore ordinary data and are ignored until the declared
- * frame length has been consumed.
+ * No byte-escaping scheme is described by either source. CRC-frame payloads
+ * keep header-like bytes as ordinary data. Retraction: the earlier blanket
+ * rule to consume every declared frame first missed lost legacy tails; an
+ * exact nested legacy header now restarts the 36-byte no-CRC frame instead.
  * Notifications may split or concatenate frames, and arbitrary bytes before a
  * preamble are discarded.  Veteran's FFE1 characteristic is also its command
  * channel, so this adapter intentionally never writes to it.
@@ -198,11 +199,19 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
                 buffer.trimLeading(1)
                 continue
             }
+            if (length == LEGACY_FRAME_LENGTH) {
+                val nestedHeader = findNestedLegacyHeader(candidate)
+                if (nestedHeader >= 0) {
+                    buffer.trimLeading(nestedHeader)
+                    continue
+                }
+            }
             val frameSize = length + FRAME_SIZE_ADJUSTMENT
             if (candidate.size < frameSize) return
 
             val frame = candidate.copyOf(frameSize)
             val hasCrc = length > CRC_THRESHOLD
+            val isLegacyFrame = !hasCrc && length == LEGACY_FRAME_LENGTH
             if (!hasValidShape(frame) || (hasCrc && !hasValidCrc(frame, length))) {
                 buffer.trimLeading(1)
                 continue
@@ -211,9 +220,28 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
             // All offsets below describe the payload. A CRC-valid frame's last
             // four bytes are not telemetry, even when a short model happens to
             // put an otherwise plausible field offset inside that trailer.
-            parseFrame(if (hasCrc) frame.copyOf(length) else frame)
+            parseFrame(if (hasCrc) frame.copyOf(length) else frame, isLegacyFrame)
             buffer.trimLeading(frameSize)
         }
+    }
+
+    /**
+     * Legacy frames have no checksum. A complete nested `DC 5A 5C 20` before
+     * their 36-byte boundary is therefore the available signal that their tail
+     * was lost and a new legacy frame began. This framing signal is inherently
+     * ambiguous with the same four payload bytes; no payload plausibility or
+     * absolute telemetry limits are used to guess between those cases.
+     */
+    private fun findNestedLegacyHeader(bytes: ByteArray): Int {
+        val lastStart = minOf(BASE_FRAME_SIZE - 1, bytes.size - LENGTH_HEADER_SIZE)
+        for (i in (HEADER_SIZE + 1)..lastStart) {
+            if (bytes[i].u8() == 0xDC && bytes[i + 1].u8() == 0x5A &&
+                bytes[i + 2].u8() == 0x5C && bytes[i + 3].u8() == LEGACY_FRAME_LENGTH
+            ) {
+                return i
+            }
+        }
+        return -1
     }
 
     private fun findHeader(bytes: ByteArray): Int {
@@ -240,7 +268,7 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
         return crc32(frame, length) == provided
     }
 
-    private fun parseFrame(frame: ByteArray) {
+    private fun parseFrame(frame: ByteArray, isLegacyFrame: Boolean) {
         val rawVersion = frame.versionAt(28)
         if (rawVersion != null && rawVersion > 0) {
             versionRaw = rawVersion
@@ -252,10 +280,10 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
         if (major >= SMART_BMS_MIN_MAJOR && frame.size > BMS_PACKET_OFFSET) {
             parseSmartBms(frame)
         }
-        parseController(frame, major)
+        parseController(frame, major, isLegacyFrame)
     }
 
-    private fun parseController(frame: ByteArray, major: Int) {
+    private fun parseController(frame: ByteArray, major: Int, isLegacyFrame: Boolean) {
         val voltage = frame.u16BE(4) / 100f
         val voltageKnown = voltage in 20f..200f
         val speedRaw = frame.i16BE(6)
@@ -269,7 +297,11 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
         val pwmRaw = if (frame.size >= 36) frame.u16BE(34) else -1
         val dutyKnown = pwmRaw in 0..MAX_PWM_RAW
         val duty = if (dutyKnown) pwmRaw / DUTY_RAW_PER_PERCENT else 0f
-        val outputCurrent = if (dutyKnown) powerFlowSign(phaseCurrentRaw, speedRaw) * abs(phaseCurrent) * duty / 100f else 0f
+        val outputCurrent = if (dutyKnown) {
+            powerFlowSign(phaseCurrentRaw, speedRaw, isLegacyFrame) * abs(phaseCurrent) * duty / 100f
+        } else {
+            0f
+        }
         val powerKnown = voltageKnown && speedKnown && dutyKnown
 
         if (voltageKnown) {
@@ -442,9 +474,18 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
         return nextIndex - 1 + (rawVoltage - lower) / (upper - lower)
     }
 
-    private fun powerFlowSign(currentRaw: Int, speedRaw: Int): Float {
+    /**
+     * Retraction: applying the CRC-frame convention to every Leaperkim frame was wrong.
+     * Upstream commit ae10acc classifies the exact 36-byte, no-CRC Sherman Max frame as legacy
+     * and uses sign agreement for draw; CRC32 frames keep the opposite convention. The original
+     * framing bit is passed from [parseAvailable], never inferred from the stripped frame or
+     * firmware version. See upstream [LeaperKimProtocolEngine.kt](https://github.com/cancelledbit/loeuc-core/blob/ae10acc6e6de20b459928925531f2cbfd10bd56a/loeuc-core/src/commonMain/kotlin/pw/vasilevskiy/loeuc/shared/protocol/LeaperKimProtocolEngine.kt).
+     */
+    private fun powerFlowSign(currentRaw: Int, speedRaw: Int, isLegacyFrame: Boolean): Float {
         if (speedRaw == 0 || currentRaw == 0) return 1f
-        return if ((currentRaw < 0) == (speedRaw < 0)) -1f else 1f
+        val signsAgree = (currentRaw < 0) == (speedRaw < 0)
+        val drawsPower = if (isLegacyFrame) signsAgree else !signsAgree
+        return if (drawsPower) 1f else -1f
     }
 
     private fun estimateSoc(voltageRaw: Float, major: Int): Float? {
@@ -549,6 +590,7 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
         const val MIN_LENGTH = BASE_FRAME_SIZE - FRAME_SIZE_ADJUSTMENT
         const val MAX_LENGTH = 240
         const val CRC_THRESHOLD = 38
+        const val LEGACY_FRAME_LENGTH = 0x20
         const val CRC_SIZE = 4
         const val CRC32_POLYNOMIAL = 0xEDB88320L
         const val BMS_PACKET_OFFSET = 46

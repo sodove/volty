@@ -95,7 +95,8 @@ class KingSongProtocolTest {
         protocol.onNotification(frame(0xB9, 0x14).apply { putLe(14, 2400) })
         val stats = observed.single()
         assertEquals(TelemetryOrigin.CONTROLLER, stats.origin)
-        assertEquals(setOf(TelemetryMetric.ESC_TEMPERATURE), stats.metrics())
+        assertEquals(setOf(TelemetryMetric.MOTOR_TEMPERATURE), stats.metrics())
+        assertEquals(24.0, stats.reading(TelemetryMetric.MOTOR_TEMPERATURE).value!!, 0.001)
         observed.clear()
 
         protocol.onNotification(frame(0xF5, 0x14).apply { this[15] = 44 })
@@ -205,7 +206,7 @@ class KingSongProtocolTest {
         assertTrue(data.hasCurrent)
         assertFalse(data.hasPower)
         assertFalse(data.socKnown, "A9 byte 15 is the E0 mode marker, not a proven SoC")
-        assertEquals(listOf(21.5f), data.temperatures)
+        assertEquals(emptyList(), data.temperatures)
         assertTrue(data.cellVoltages.isEmpty())
 
         val motion = assertNotNull(protocol.latestMotion(0))
@@ -317,20 +318,141 @@ class KingSongProtocolTest {
     }
 
     @Test
-    fun `B9 temperature latches over later A9 temperature`() {
+    fun `A9 owns ESC temperature and B9 updates retained motor temperature`() {
         val protocol = KingSongProtocol()
-        val live = liveFrame(temperatureCentiC = 2_800)
+        val observed = capture(protocol)
+        val firstLive = liveFrame(temperatureCentiC = 2_800)
         val rideStats = frame(0xB9, 0x14).apply {
             putLe(14, 2_400)
         }
 
-        protocol.onNotification(live)
-        protocol.onNotification(rideStats)
-        assertEquals(24f, assertNotNull(protocol.latestMotion(0)).escTempC, 0.001f)
+        protocol.onNotification(firstLive)
+        val firstMotion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(28f, firstMotion.escTempC, 0.001f)
+        assertFalse(firstMotion.hasMotorTemp)
+        val firstLiveController = observed.single { it.origin == TelemetryOrigin.CONTROLLER }
+        assertTrue(TelemetryMetric.ESC_TEMPERATURE in firstLiveController.metrics())
+        assertFalse(TelemetryMetric.MOTOR_TEMPERATURE in firstLiveController.metrics())
+        observed.clear()
 
-        protocol.onNotification(live)
-        assertEquals(24f, assertNotNull(protocol.latestMotion(0)).escTempC, 0.001f)
-        assertEquals(listOf(28f), assertNotNull(protocol.latestData()).temperatures)
+        protocol.onNotification(rideStats)
+        val motorUpdate = observed.single()
+        assertEquals(setOf(TelemetryMetric.MOTOR_TEMPERATURE), motorUpdate.metrics())
+        assertEquals(24.0, motorUpdate.reading(TelemetryMetric.MOTOR_TEMPERATURE).value!!, 0.001)
+        val afterMotor = assertNotNull(protocol.latestMotion(0))
+        assertEquals(28f, afterMotor.escTempC, 0.001f)
+        assertEquals(24f, afterMotor.motorTempC, 0.001f)
+        assertTrue(afterMotor.hasMotorTemp)
+        observed.clear()
+
+        protocol.onNotification(liveFrame(temperatureCentiC = 3_100))
+        val nextLiveController = observed.single { it.origin == TelemetryOrigin.CONTROLLER }
+        assertTrue(TelemetryMetric.ESC_TEMPERATURE in nextLiveController.metrics())
+        assertFalse(TelemetryMetric.MOTOR_TEMPERATURE in nextLiveController.metrics())
+        val afterLive = assertNotNull(protocol.latestMotion(0))
+        assertEquals(31f, afterLive.escTempC, 0.001f)
+        assertEquals(24f, afterLive.motorTempC, 0.001f)
+        assertTrue(afterLive.hasMotorTemp)
+        assertEquals(emptyList(), assertNotNull(protocol.latestData()).temperatures)
+    }
+
+    @Test
+    fun `only real BMS sensors populate battery pack temperatures`() {
+        val protocol = KingSongProtocol()
+        protocol.onNotification(liveFrame(temperatureCentiC = 3_500))
+        protocol.onNotification(frame(0xB9, 0x14).apply { putLe(14, 4_500) })
+
+        assertEquals(emptyList(), assertNotNull(protocol.latestData()).temperatures)
+
+        protocol.onNotification(bmsFrame(0xF1, 0x00).apply {
+            putLe(2, 12_500); putLe(4, 0); putLe(6, 800); putLe(8, 1_000)
+        })
+        protocol.onNotification(bmsFrame(0xF2, 0x00).apply {
+            putLe(2, 12_400); putLe(4, -100); putLe(6, 700); putLe(8, 1_000)
+        })
+        protocol.onNotification(bmsFrame(0xF1, 0x01).apply {
+            repeat(7) { index -> putLe(2 + index * 2, 2_930 + index * 10) }
+        })
+        protocol.onNotification(bmsFrame(0xF2, 0x01).apply {
+            repeat(7) { index -> putLe(2 + index * 2, 3_030 + index * 10) }
+        })
+
+        assertEquals((20..26).map { it.toFloat() }, assertNotNull(protocol.latestData(0)).temperatures)
+        assertEquals((30..36).map { it.toFloat() }, assertNotNull(protocol.latestData(1)).temperatures)
+    }
+
+    @Test
+    fun `B9 before first A9 publishes only motor temperature and carries it into A9`() {
+        val protocol = KingSongProtocol()
+        val observed = capture(protocol)
+
+        protocol.onNotification(frame(0xB9, 0x14).apply { putLe(14, 2_400) })
+
+        val motorUpdate = observed.single()
+        assertEquals(setOf(TelemetryMetric.MOTOR_TEMPERATURE), motorUpdate.metrics())
+        assertEquals(24.0, motorUpdate.reading(TelemetryMetric.MOTOR_TEMPERATURE).value!!, 0.001)
+        assertNull(protocol.latestMotion(0), "B9 alone must not fabricate a live controller sample")
+        observed.clear()
+
+        protocol.onNotification(liveFrame(temperatureCentiC = 3_200))
+
+        val liveController = observed.single { it.origin == TelemetryOrigin.CONTROLLER }
+        assertTrue(TelemetryMetric.ESC_TEMPERATURE in liveController.metrics())
+        assertFalse(TelemetryMetric.MOTOR_TEMPERATURE in liveController.metrics())
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(32f, motion.escTempC, 0.001f)
+        assertEquals(24f, motion.motorTempC, 0.001f)
+        assertTrue(motion.hasMotorTemp)
+    }
+
+    @Test
+    fun `B9 zero is a valid observed motor temperature`() {
+        val protocol = KingSongProtocol()
+        val observed = capture(protocol)
+        protocol.onNotification(liveFrame())
+        observed.clear()
+
+        protocol.onNotification(frame(0xB9, 0x14))
+
+        val motorUpdate = observed.single()
+        assertEquals(setOf(TelemetryMetric.MOTOR_TEMPERATURE), motorUpdate.metrics())
+        assertEquals(0.0, motorUpdate.reading(TelemetryMetric.MOTOR_TEMPERATURE).value!!, 0.0)
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(0f, motion.motorTempC, 0f)
+        assertTrue(motion.hasMotorTemp)
+    }
+
+    @Test
+    fun `reset clears both retained KingSong temperatures`() {
+        val protocol = KingSongProtocol()
+        val observed = capture(protocol)
+        protocol.onNotification(liveFrame(temperatureCentiC = 3_000))
+        protocol.onNotification(frame(0xB9, 0x14).apply { putLe(14, 4_500) })
+        assertTrue(assertNotNull(protocol.latestMotion(0)).hasMotorTemp)
+
+        protocol.reset()
+        assertNull(protocol.latestMotion(0))
+        observed.clear()
+        protocol.onNotification(liveFrame(temperatureCentiC = 2_200))
+
+        val controller = observed.single { it.origin == TelemetryOrigin.CONTROLLER }
+        assertTrue(TelemetryMetric.ESC_TEMPERATURE in controller.metrics())
+        assertFalse(TelemetryMetric.MOTOR_TEMPERATURE in controller.metrics())
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(22f, motion.escTempC, 0.001f)
+        assertFalse(motion.hasMotorTemp)
+    }
+
+    @Test
+    fun `invalid B9 temperature does not establish motor temperature`() {
+        val protocol = KingSongProtocol()
+        val observed = capture(protocol)
+
+        protocol.onNotification(frame(0xB9, 0x14).apply { putLe(14, 15_100) })
+
+        assertTrue(observed.isEmpty())
+        protocol.onNotification(liveFrame(temperatureCentiC = 2_800))
+        assertFalse(assertNotNull(protocol.latestMotion(0)).hasMotorTemp)
     }
 
     @Test
@@ -426,7 +548,7 @@ class KingSongProtocolTest {
     }
 
     // KingSong decodes nothing the common sections lack: A9 voltage/current/speed/distance/board temperature,
-    // B9 controller temperature, F5 duty and the F1/F2 smart-BMS pages (SoC, cycles, cells, temperatures)
+    // B9 motor temperature, F5 duty and the F1/F2 smart-BMS pages (SoC, cycles, cells, temperatures)
     // all reach ControllerData / BmsData. The remaining/factory capacity words only feed the SoC, and
     // their unit is not established by this decoder, so they are not facts. Hence: an empty list.
     @Test
