@@ -387,7 +387,10 @@ internal fun LightRideDashboard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                     LightCircleButton(Icons.Default.ShowChart, "Графики", onClick = onOpenGraph)
-                    ru.sodovaya.volty.presentation.video.RideVideoButton()
+                    ru.sodovaya.volty.presentation.video.RideVideoButton(
+                        fill = LocalLightHudPalette.current.surface,
+                        tint = LocalLightHudPalette.current.text.copy(alpha = 0.85f),
+                    )
                     Spacer(Modifier.weight(1f))
                     LightCircleButton(Icons.Default.BatteryFull, "Батарея", onClick = onOpenBattery)
                 }
