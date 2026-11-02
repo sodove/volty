@@ -148,6 +148,29 @@ class RideMapMotionEstimatorTest {
         assertTrue(vehicleSpeedEstimate.coordinate.longitude > locationSpeedEstimate.coordinate.longitude)
     }
 
+    @Test
+    fun a_fix_reporting_speed_zero_while_the_position_moved_still_yields_speed_and_heading() {
+        // The fix says 0 m/s (a mocked or fused fix with a hasSpeed it did not earn) yet moved ~7 m east in a second.
+        // Deliberately incoherent: no real provider emits both, which is why it separates the rule from the habit.
+        val estimator = RideMapMotionEstimator()
+        estimator.accept(fix(timestampMillis = 0L, speedMetersPerSecond = 0f, bearingDegrees = null))
+        estimator.accept(fix(timestampMillis = 1_000L, longitude = 60.6001, speedMetersPerSecond = 0f, bearingDegrees = null))
+
+        val estimate = checkNotNull(estimator.estimate(nowMillis = 1_000L))
+
+        assertTrue((estimate.speedMetersPerSecond ?: 0f) > 3f, "speed ${estimate.speedMetersPerSecond}")
+        assertTrue(abs((estimate.bearingDegrees ?: 0f) - 90f) < 15f, "bearing ${estimate.bearingDegrees}")
+    }
+
+    @Test
+    fun a_faster_fix_speed_still_wins_over_a_slower_displacement() {
+        val estimator = RideMapMotionEstimator()
+        estimator.accept(fix(timestampMillis = 0L, speedMetersPerSecond = 20f, bearingDegrees = 90f))
+        estimator.accept(fix(timestampMillis = 1_000L, longitude = 60.6001, speedMetersPerSecond = 20f, bearingDegrees = 90f))
+
+        assertEquals(20f, checkNotNull(estimator.estimate(nowMillis = 1_000L)).speedMetersPerSecond)
+    }
+
     private fun fix(
         timestampMillis: Long,
         latitude: Double = 56.8,
