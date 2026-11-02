@@ -53,6 +53,7 @@ import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.NearbyLinkButton
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
+import ru.sodovaya.volty.presentation.common.voltyStatusColors
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.common.ResponsiveLayoutMode
@@ -247,7 +248,7 @@ fun RideDashboardScreen(
         val (statusLabel, statusColor) = when (val c = state.connection) {
             is ConnectionState.Connected -> when (connectionSummary.kind) {
                 RideConnectionSummary.Kind.CONNECTED ->
-                    ("● " + stringResource(Res.string.status_connected, sourceLabel)) to MaterialTheme.colorScheme.tertiary
+                    ("● " + stringResource(Res.string.status_connected, sourceLabel)) to voltyStatusColors().connected
                 RideConnectionSummary.Kind.MIXED ->
                     ("● " + stringResource(Res.string.status_mixed, sourceLabel, controllerIssueLabel)) to MaterialTheme.colorScheme.secondary
                 RideConnectionSummary.Kind.CONTROLLER_UNAVAILABLE ->
@@ -486,7 +487,7 @@ private const val SPARKLINE_MAX_POINTS = 40
 @Composable
 internal fun severityColor(level: DutyLevel): Color = when (level) {
     DutyLevel.NORMAL -> MaterialTheme.colorScheme.primary
-    DutyLevel.WARN -> MaterialTheme.colorScheme.tertiary
+    DutyLevel.WARN -> voltyStatusColors().warn
     DutyLevel.CRITICAL -> MaterialTheme.colorScheme.error
 }
 

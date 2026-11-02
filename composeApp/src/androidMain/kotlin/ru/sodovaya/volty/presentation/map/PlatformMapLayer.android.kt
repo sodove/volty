@@ -87,6 +87,7 @@ import kotlin.math.sqrt
 
 private const val TRAIL_SOURCE_ID = "volty-trail-source"
 private const val TRAIL_LAYER_ID = "volty-trail-layer"
+private const val TRAIL_CASING_LAYER_ID = "volty-trail-casing-layer"
 private const val OWN_SOURCE_ID = "volty-own-source"
 private const val OWN_LAYER_ID = "volty-own-layer"
 private const val GROUP_SOURCE_ID = "volty-group-source"
@@ -491,11 +492,9 @@ private fun AndroidMapLibreView(
                 .hazeSource(state = hazeState, zIndex = 0f),
         )
         MapTopBottomBlur(hazeState = hazeState, modifier = Modifier.fillMaxSize())
-        if (showAttribution) Text(
-            text = "© OpenFreeMap © OpenMapTiles © OpenStreetMap",
-            color = if (darkTheme) ComposeColor(0xB8C8D4DA) else ComposeColor(0x88364048),
-            fontSize = 9.sp,
-            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 6.dp, bottom = 4.dp),
+        if (showAttribution) MapAttributionCorner(
+            darkTheme = darkTheme,
+            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 4.dp, bottom = 2.dp),
         )
     }
 }
@@ -626,13 +625,16 @@ private fun MapBlurBand(modifier: Modifier) {
 private fun applyOverlayTheme(style: Style, palette: MapThemePalette) {
     mapOf(
         HISTORY_ROUTE_LAYER_ID to palette.routeInactive,
-        TRAIL_LAYER_ID to palette.accentSecondary,
         INACTIVE_ROUTE_LAYER_ID to palette.routeInactive,
         SELECTED_ROUTE_LAYER_ID to palette.accent,
     ).forEach { (id, color) -> style.getLayerAs<LineLayer>(id)?.setProperties(lineColor(color)) }
     listOf(OWN_LAYER_ID, HISTORY_CURSOR_LAYER_ID).forEach { id ->
         style.getLayerAs<CircleLayer>(id)?.setProperties(circleColor(palette.accent), circleStrokeColor(palette.halo))
     }
+    // The trail core keeps its own vivid colour in both themes (it used to be recoloured to the
+    // pale accentSecondary, tone 72 at chroma 20, which is why it looked half dead); only the
+    // casing follows the map, so it is always the contrasting edge: near-black on dark, white on light.
+    style.getLayerAs<LineLayer>(TRAIL_CASING_LAYER_ID)?.setProperties(lineColor(palette.halo))
     style.getLayerAs<SymbolLayer>(GROUP_LABEL_LAYER_ID)?.setProperties(textColor(palette.text), textHaloColor(palette.halo))
 }
 
@@ -658,7 +660,8 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
     if (style.getLayer(HISTORY_CURSOR_LAYER_ID) == null) style.addLayer(
         CircleLayer(HISTORY_CURSOR_LAYER_ID, HISTORY_CURSOR_SOURCE_ID).withProperties(
             circleColor(Color.parseColor("#39B9FF")), circleRadius(8f), circleStrokeColor(Color.WHITE), circleStrokeWidth(2f)))
-    addLineSourceAndLayer(style, TRAIL_SOURCE_ID, TRAIL_LAYER_ID, "#D16AFF", 3.2f, Expression.get("opacity"))
+    addLineSourceAndLayer(style, TRAIL_SOURCE_ID, TRAIL_CASING_LAYER_ID, "#000000", TRAIL_LINE_WIDTH + TRAIL_CASING_EXTRA_WIDTH, Expression.get("opacity"))
+    addLineSourceAndLayer(style, TRAIL_SOURCE_ID, TRAIL_LAYER_ID, "#D16AFF", TRAIL_LINE_WIDTH, Expression.get("opacity"))
     addLineSourceAndLayer(style, INACTIVE_ROUTE_SOURCE_ID, INACTIVE_ROUTE_LAYER_ID, "#8496A1", 4.0f, 0.50f)
     addLineSourceAndLayer(style, SELECTED_ROUTE_SOURCE_ID, SELECTED_ROUTE_LAYER_ID, "#39B9FF", 6.0f, 0.96f)
     addLineSourceAndLayer(style, COMPLETED_ROUTE_SOURCE_ID, COMPLETED_ROUTE_LAYER_ID, "#72E3A2", 7.0f, 0.95f)
@@ -867,10 +870,7 @@ private fun trailFeatureCollection(samples: List<RideMapTrailSample>, nowMillis:
             val older = segment[index - 1]
             val newer = segment[index]
             val ageMillis = (nowMillis - newer.timestampMillis).coerceAtLeast(0L)
-            val opacity = minOf(
-                trailOpacityForDistanceMeters(distanceBehind),
-                trailOpacityForAgeMillis(ageMillis),
-            )
+            val opacity = trailSegmentOpacity(distanceBehind, ageMillis)
             if (opacity > 0f) {
                 Feature.fromGeometry(
                     LineString.fromLngLats(

@@ -51,6 +51,7 @@ import ru.sodovaya.volty.presentation.common.PowerRangeBar
 import ru.sodovaya.volty.presentation.common.ResponsiveLayoutMode
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
+import ru.sodovaya.volty.presentation.common.voltyStatusColors
 import ru.sodovaya.volty.domain.stats.BmsReadings
 import ru.sodovaya.volty.presentation.common.SourcePreference
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
@@ -123,7 +124,7 @@ fun DashboardScreen(
         // real source.
         val bmsLabel = vehicleSourceLabel(vehicle, prefer = SourcePreference.BMS) ?: "—"
         val (statusLabel, statusColor) = when (val c = state.connection) {
-            is ConnectionState.Connected -> ("● " + stringResource(Res.string.status_connected, bmsLabel)) to MaterialTheme.colorScheme.tertiary
+            is ConnectionState.Connected -> ("● " + stringResource(Res.string.status_connected, bmsLabel)) to voltyStatusColors().connected
             is ConnectionState.Connecting -> ("● " + stringResource(Res.string.status_connecting)) to MaterialTheme.colorScheme.secondary
             is ConnectionState.Reconnecting -> ("● " + stringResource(Res.string.status_reconnecting, c.reason)) to MaterialTheme.colorScheme.secondary
             is ConnectionState.Failed -> ("● " + stringResource(Res.string.status_reconnecting, c.reason)) to MaterialTheme.colorScheme.error

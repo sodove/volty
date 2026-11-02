@@ -25,7 +25,7 @@ internal class MapThemeStyleApplier(context: Context) {
             val targets = mapLayerThemeColors(id, template.getValue("type").jsonPrimitive.content, palette, dark)
             for ((property, target) in targets) {
                 val original = paint[property] ?: continue
-                val themed = themedMapColor(original, target)
+                val themed = themedMapColor(original, target.color, target.referenceTone)
                 val expression = (themed as? JsonArray)?.let { Expression.raw(it.toString()) }
                 val text = (themed as? JsonPrimitive)?.content.orEmpty()
                 // PropertyFactory supplies PaintPropertyValue. A plain PropertyValue would

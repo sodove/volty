@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.sp
 fun VehiclePill(
     name: String,
     statusText: String,
-    statusColor: Color = MaterialTheme.colorScheme.tertiary,
+    statusColor: Color = voltyStatusColors().connected,
     iconEmoji: String = "⚡",
     onClick: () -> Unit
 ) {

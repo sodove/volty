@@ -42,6 +42,9 @@ import ru.sodovaya.volty.domain.radio.RadioMode
 import ru.sodovaya.volty.domain.voice.VoiceOutputPreference
 import ru.sodovaya.volty.util.UnitSystem
 
+/** One consistent read of the stored theme choice; see [AppPrefs.themePrefs]. */
+data class ThemePrefs(val mode: String, val dynamicColor: Boolean, val accent: ThemeAccent)
+
 class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreferencesStore {
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -61,6 +64,16 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     val themeAccent: StateFlow<ThemeAccent> = store.data
         .map { ThemeAccent.fromId(it[Keys.THEME_ACCENT]) }
         .stateIn(scope, SharingStarted.Eagerly, ThemeAccent.DEFAULT)
+
+    /**
+     * The three theme inputs read together from one DataStore emission, null until it arrives.
+     * The individual flows above start at placeholder defaults, so a first frame composed from them
+     * flashes the default accent for a user who picked another. [ThemePrefs] has no such value:
+     * the theme host composes nothing until the stored choice is known.
+     */
+    val themePrefs: StateFlow<ThemePrefs?> = store.data
+        .map { ThemePrefs(it[Keys.THEME_MODE] ?: "system", it[Keys.DYNAMIC_COLOR] ?: true, ThemeAccent.fromId(it[Keys.THEME_ACCENT])) }
+        .stateIn(scope, SharingStarted.Eagerly, null)
 
     val firstLaunchDone: StateFlow<Boolean> = store.data
         .map { it[Keys.FIRST_LAUNCH_DONE] ?: false }

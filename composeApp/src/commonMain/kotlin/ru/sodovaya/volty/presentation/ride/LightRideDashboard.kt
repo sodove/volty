@@ -196,8 +196,8 @@ internal fun LightRideDashboard(
     val darkTheme = LocalVoltyDarkTheme.current
     val palette = (if (darkTheme) DarkLightHudPalette else BrightLightHudPalette).copy(
         text = Color(mapPalette.text), muted = Color(mapPalette.textMuted),
-        surface = Color(mapPalette.land).copy(alpha = if (darkTheme) 0.40f else 0.72f),
-        surfaceStrong = Color(mapPalette.building).copy(alpha = if (darkTheme) 0.50f else 0.85f),
+        surface = Color(mapPalette.hudSurface).copy(alpha = if (darkTheme) 0.40f else LIGHT_HUD_SURFACE_ALPHA),
+        surfaceStrong = Color(mapPalette.hudSurfaceStrong).copy(alpha = if (darkTheme) 0.50f else LIGHT_HUD_SURFACE_STRONG_ALPHA),
     )
     val targetTelemetry = LightDashboardMapper.values(
         motion = state.motion,
@@ -872,3 +872,11 @@ private fun appendKnown(target: MutableList<Float>, value: Float?) {
     target += value
     while (target.size > MAX_HISTORY_POINTS) target.removeAt(0)
 }
+
+/**
+ * Light-theme HUD card opacity over the map. Raised from 0.72 / 0.85 after the themes review:
+ * in direct sun the light map ground washes out, and the lower alphas let it through the cards.
+ * The dark theme keeps its own (0.40 / 0.50) pair, set inline where the palette is built.
+ */
+internal const val LIGHT_HUD_SURFACE_ALPHA = 0.80f
+internal const val LIGHT_HUD_SURFACE_STRONG_ALPHA = 0.90f

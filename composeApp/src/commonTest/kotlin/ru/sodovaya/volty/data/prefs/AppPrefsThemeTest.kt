@@ -22,6 +22,32 @@ class AppPrefsThemeTest {
     }
 
     @Test
+    fun themePrefsNeverShowsAPlaceholderForAStoredNonDefaultChoice() = runTest {
+        val fixture = prefs(
+            mutablePreferencesOf(
+                stringPreferencesKey("theme_accent") to "orange",
+                stringPreferencesKey("theme_mode") to "dark",
+                androidx.datastore.preferences.core.booleanPreferencesKey("dynamic_color_enabled") to false,
+            ),
+        )
+
+        // Null means "not loaded yet" and the theme host composes nothing for it; the first value
+        // anyone can observe is already the stored choice, never DEFAULT / system / dynamic-on.
+        val first = fixture.appPrefs.themePrefs.first { it != null }
+        assertEquals(ThemePrefs("dark", false, ThemeAccent.ORANGE), first)
+    }
+
+    @Test
+    fun themePrefsFollowsLaterChanges() = runTest {
+        val fixture = prefs()
+        fixture.appPrefs.themePrefs.first { it != null }
+
+        fixture.appPrefs.setThemeAccent(ThemeAccent.PINK)
+
+        assertEquals(ThemeAccent.PINK, fixture.appPrefs.themePrefs.first { it?.accent == ThemeAccent.PINK }?.accent)
+    }
+
+    @Test
     fun accentSelectionRoundTripsThroughPreferences() = runTest {
         val fixture = prefs()
 
