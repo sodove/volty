@@ -74,6 +74,15 @@ data class OverlayArc(
     val thickness: Float = 9f,
 )
 
+/**
+ * [label] empty means "follow the metric" (the localized word from [VideoOverlayStrings]); text the rider typed is
+ * burned in as typed. An earlier revision stored English defaults here ("U batt"); [isAutoOverlayLabel] still
+ * reads those as automatic so saved presets keep working.
+ *
+ * [unit] is kept only so documents saved earlier still decode (and the format needs no version bump). It is NOT
+ * rendered: the burned-in unit comes from [VideoOverlayStrings.unit] and the app's unit system, because a free-text
+ * unit could say `mph` over a km/h number and nothing converted anything.
+ */
 @Serializable
 data class OverlayWidget(
     val id: String,

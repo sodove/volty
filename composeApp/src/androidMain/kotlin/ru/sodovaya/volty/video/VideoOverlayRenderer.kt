@@ -9,7 +9,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import androidx.camera.effects.Frame
 import ru.sodovaya.volty.domain.video.*
-import java.util.Locale
+import ru.sodovaya.volty.util.UnitSystem
 import kotlin.math.min
 
 /** One renderer for CameraX preview AND encoded video; UI controls never enter the output. */
@@ -19,10 +19,15 @@ internal class VideoOverlayRenderer {
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
         fontFeatureSettings = "tnum"
     }
+    private var strings = VideoOverlayStrings()
+    private var system = UnitSystem.METRIC
 
-    fun draw(frame: Frame, preset: OverlayPreset, snapshot: VideoSnapshot?) {
-        val canvas = frame.overlayCanvas
-        canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
+    fun draw(frame: Frame, canvas: Canvas, preset: OverlayPreset, snapshot: VideoSnapshot?, strings: VideoOverlayStrings, system: UnitSystem) {
+        this.strings = strings
+        this.system = system
+        textPaint.textAlign = Paint.Align.LEFT
+        paint.clearShadowLayer()
+        clear(canvas)
         val crop = frame.cropRect
         if (crop.isEmpty) return
         val rotated = frame.rotationDegrees % 180 != 0
@@ -48,10 +53,13 @@ internal class VideoOverlayRenderer {
         if (snapshot?.demo == true) {
             textPaint.textSize = 26f
             textPaint.color = Color.YELLOW
-            canvas.drawText("DEMO", 24f, designHeight - 24f, textPaint)
+            canvas.drawText(strings.demo, 24f, designHeight - 24f, textPaint)
         }
         canvas.restore()
     }
+
+    /** Wipes the overlay surface, e.g. after a failed draw left it half painted. */
+    fun clear(canvas: Canvas) = canvas.drawColor(Color.TRANSPARENT, PorterDuff.Mode.CLEAR)
 
     private data class Card(val widget: OverlayWidget, val reading: VideoReading?, val style: OverlayStyle,
         val text: String, val width: Float, val height: Float)
@@ -65,20 +73,16 @@ internal class VideoOverlayRenderer {
         preset.widgets.filter { it.kind != OverlayWidgetKind.ARC }.forEach { widget ->
             val reading = snapshot?.readings?.get(widget.metric)
             val style = overlayStyle(widget, reading)
-            val text = "${number(reading)} ${widget.unit}".trim()
+            val unit = strings.unit(widget.metric, system)
+            val text = "${videoValueText(widget.metric, reading, system)} $unit".trim()
             textPaint.textSize = style.fontSize
             val iconSpace = if (widget.kind == OverlayWidgetKind.ICON_VALUE) style.fontSize * 1.4f else 0f
             // Studio reserves a value box before laying out rows. Live data has no future maximum;
             // reserve digits by metric instead so 9 -> 10 or unknown -> measured never shifts a row.
-            val exemplar = when (widget.metric) {
-                VideoMetric.CONTROLLER_POWER, VideoMetric.BATTERY_POWER -> "−999999"
-                VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.BATTERY_CURRENT -> "−9999"
-                VideoMetric.DUTY -> "≥100"
-                else -> "999"
-            } + " " + widget.unit
+            val exemplar = videoValueExemplar(widget.metric) + " " + unit
             val valueWidth = textPaint.measureText(exemplar) + iconSpace
             textPaint.textSize = style.fontSize * .55f
-            val labelWidth = if (widget.kind == OverlayWidgetKind.VALUE_CARD) textPaint.measureText(widget.label.ifBlank { symbol(widget.metric) }) else 0f
+            val labelWidth = if (widget.kind == OverlayWidgetKind.VALUE_CARD) textPaint.measureText(overlayLabel(widget, strings)) else 0f
             val w = min(DESIGN_WIDTH - margin * 2, maxOf(valueWidth, labelWidth) + style.padding * 2)
             val labelHeight = if (widget.kind == OverlayWidgetKind.VALUE_CARD) style.fontSize * .75f else 0f
             val h = style.fontSize * 1.4f + style.padding * 2 + labelHeight
@@ -114,7 +118,7 @@ internal class VideoOverlayRenderer {
                 if (labelHeight > 0) {
                     textPaint.textSize = card.style.fontSize * .55f
                     textPaint.alpha = (textPaint.alpha * .8f).toInt()
-                    val label = card.widget.label.ifBlank { symbol(card.widget.metric) }
+                    val label = overlayLabel(card.widget, strings)
                     canvas.drawText(label, x + (card.width - textPaint.measureText(label)) / 2,
                         y + card.style.padding - textPaint.fontMetrics.ascent, textPaint)
                 }
@@ -156,28 +160,14 @@ internal class VideoOverlayRenderer {
         textPaint.color = Color.parseColor(style.foreground)
         textPaint.textAlign = Paint.Align.CENTER
         textPaint.textSize = style.fontSize * 2
-        canvas.drawText(number(reading), x, y + style.fontSize / 2, textPaint)
+        canvas.drawText(videoValueText(widget.metric, reading, system), x, y + style.fontSize / 2, textPaint)
         textPaint.textSize = style.fontSize * .65f
-        canvas.drawText(widget.label.ifBlank { symbol(widget.metric) } + " · " + widget.unit, x, y + style.fontSize * 1.7f, textPaint)
+        canvas.drawText(overlayLabel(widget, strings) + " · " + strings.unit(widget.metric, system), x, y + style.fontSize * 1.7f, textPaint)
         textPaint.textAlign = Paint.Align.LEFT
     }
 
-    private fun number(reading: VideoReading?): String {
-        val value = reading?.value?.takeIf { it.isFinite() } ?: return "—"
-        if (reading.estimated && reading.atCeiling) return "≥100"
-        val prefix = if (reading.estimated) "~" else ""
-        return prefix + String.format(Locale.ROOT, "%.0f", value)
-    }
-
     private fun drawIcon(canvas: Canvas, widget: OverlayWidget, x: Float, y: Float, size: Float, color: String) {
-        val icon = if (widget.icon != OverlayIcon.AUTO) widget.icon else when (widget.metric) {
-            VideoMetric.SPEED -> OverlayIcon.GAUGE
-            VideoMetric.DUTY -> OverlayIcon.WARNING
-            VideoMetric.SOC, VideoMetric.VOLTAGE -> OverlayIcon.BATTERY
-            VideoMetric.BATTERY_POWER, VideoMetric.CONTROLLER_POWER -> OverlayIcon.BOLT
-            VideoMetric.BATTERY_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.MOTOR_CURRENT -> OverlayIcon.CURRENT
-            else -> OverlayIcon.TEMPERATURE
-        }
+        val icon = if (widget.icon != OverlayIcon.AUTO) widget.icon else autoOverlayIcon(widget.metric)
         canvas.save()
         canvas.translate(x, y)
         canvas.scale(size / 24f, size / 24f)
@@ -221,21 +211,6 @@ internal class VideoOverlayRenderer {
         }
         paint.style = Paint.Style.FILL
         canvas.restore()
-    }
-
-    private fun symbol(metric: VideoMetric): String = when (metric) {
-        VideoMetric.SPEED -> "v"
-        VideoMetric.DUTY -> "PWM"
-        VideoMetric.ESC_TEMPERATURE -> "T ESC"
-        VideoMetric.MOTOR_TEMPERATURE -> "T motor"
-        VideoMetric.BATTERY_TEMPERATURE -> "T batt"
-        VideoMetric.SOC -> "SOC"
-        VideoMetric.VOLTAGE -> "U batt"
-        VideoMetric.MOTOR_CURRENT -> "I motor"
-        VideoMetric.CONTROLLER_CURRENT -> "I ESC"
-        VideoMetric.BATTERY_CURRENT -> "I batt"
-        VideoMetric.BATTERY_POWER -> "P batt"
-        VideoMetric.CONTROLLER_POWER -> "P ESC"
     }
 
     companion object { private const val DESIGN_WIDTH = 1920f }

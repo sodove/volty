@@ -22,3 +22,26 @@ data class OverlayTextDraft(
         if (!focused && value != modelText) copy(text = value, modelText = value, invalid = false)
         else copy(modelText = value)
 }
+
+/**
+ * Switches [widget] to [metric] and takes the label with it.
+ *
+ * **Retraction.** The editor used to change only the metric and the unit, so a card could read «Скорость · контроллер»
+ * over a charge percentage, burned into the file for good. A label that is the old metric's own default (or blank)
+ * becomes blank, which means "follow the metric"; text the rider typed is theirs and stays. An icon that was only
+ * the old metric's automatic one goes back to AUTO; a deliberate choice stays.
+ */
+fun overlayWidgetWithMetric(widget: OverlayWidget, metric: VideoMetric): OverlayWidget {
+    if (metric == widget.metric) return widget
+    val icon = if (widget.icon == OverlayIcon.AUTO || widget.icon == autoOverlayIcon(widget.metric)) {
+        OverlayIcon.AUTO
+    } else {
+        widget.icon
+    }
+    return widget.copy(
+        metric = metric,
+        label = if (isAutoOverlayLabel(widget)) "" else widget.label,
+        icon = icon,
+        unit = metric.unit,
+    )
+}

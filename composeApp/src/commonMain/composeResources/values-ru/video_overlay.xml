@@ -1,0 +1,29 @@
+<resources>
+    <!-- Слова, вшиваемые в видео поездки. Короткие: делят карточку со значением. -->
+    <string name="video_label_speed">Скорость</string>
+    <string name="video_label_duty">ШИМ</string>
+    <string name="video_label_esc_temperature">T контр.</string>
+    <string name="video_label_motor_temperature">T мотора</string>
+    <string name="video_label_motor_current">I мотора</string>
+    <string name="video_label_controller_current">I контр.</string>
+    <string name="video_label_controller_power">P контр.</string>
+    <string name="video_label_soc">Заряд</string>
+    <string name="video_label_voltage">Напряжение</string>
+    <string name="video_label_battery_current">I бат.</string>
+    <string name="video_label_battery_power">P бат.</string>
+    <string name="video_label_battery_temperature">T бат.</string>
+    <string name="video_demo">ДЕМО</string>
+
+    <string name="video_stop_confirm_title">Остановить запись?</string>
+    <string name="video_stop_confirm_text">Снятое видео будет сохранено.</string>
+    <string name="video_stop_confirm_stop">Остановить и выйти</string>
+    <string name="video_stop_confirm_continue">Продолжить запись</string>
+
+    <string name="video_overlay_failed">Оверлей телеметрии дал сбой на части кадров. Они записаны без него.</string>
+    <string name="video_clock_mismatch">Часы кадров этой камеры расходятся с системными. Значения сопоставлены приблизительно, возможен небольшой сдвиг.</string>
+
+    <string name="video_segments">Делить на части</string>
+    <string name="video_segments_off">Выкл</string>
+    <string name="video_segments_minutes">%1$d мин</string>
+    <string name="video_saved_parts">Сохранено частей: %1$d, папка Movies/Volty</string>
+</resources>

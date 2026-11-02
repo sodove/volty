@@ -55,6 +55,7 @@ import ru.sodovaya.volty.domain.video.OverlayComparison
 import ru.sodovaya.volty.domain.video.OverlayTextDraft
 import ru.sodovaya.volty.domain.video.overlayColorAlpha
 import ru.sodovaya.volty.domain.video.overlayColorWithAlpha
+import ru.sodovaya.volty.domain.video.overlayWidgetWithMetric
 import ru.sodovaya.volty.domain.video.OverlayDocument
 import ru.sodovaya.volty.domain.video.OverlayIcon
 import ru.sodovaya.volty.domain.video.OverlayCodec
@@ -162,7 +163,6 @@ internal fun VideoOverlayEditor(
         UUID.randomUUID().toString()
     }
     val defaultMetric = VideoMetric.SPEED
-    val defaultMetricLabel = videoMetricLabel(defaultMetric)
     val templateDraft = document.selected.copy(id = templateDraftId, name = newTemplateName.trim())
     val canSaveTemplate = newTemplateName.isNotBlank() &&
         document.saved.size < MAX_SAVED_TEMPLATES &&
@@ -284,7 +284,6 @@ internal fun VideoOverlayEditor(
                     val widget = OverlayWidget(
                         id = UUID.randomUUID().toString(),
                         metric = defaultMetric,
-                        label = defaultMetricLabel,
                     )
                     updatePreset(document, onChange) { it.copy(widgets = it.widgets + widget) }
                 },
@@ -376,7 +375,7 @@ private fun WidgetEditor(
                     choices = VideoMetric.entries,
                     display = { videoMetricLabel(it) },
                     onSelected = { metric ->
-                        onUpdate(widget.copy(metric = metric, unit = metric.unit))
+                        onUpdate(overlayWidgetWithMetric(widget, metric))
                     },
                     modifier = Modifier.weight(1f),
                 )
@@ -401,18 +400,13 @@ private fun WidgetEditor(
                 )
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                DraftTextField(
-                    value = widget.label,
-                    label = stringResource(Res.string.video_editor_label),
-                    modifier = Modifier.weight(1f),
-                ) { value -> onUpdate(widget.copy(label = value)) }
-                DraftTextField(
-                    value = widget.unit,
-                    label = stringResource(Res.string.video_editor_unit),
-                    modifier = Modifier.weight(1f),
-                ) { value -> onUpdate(widget.copy(unit = value)) }
-            }
+            // No unit field: the burned-in unit comes from the unit system (see VideoOverlayStrings.unit). An empty label
+            // follows the metric; typing one pins it.
+            DraftTextField(
+                value = widget.label,
+                label = stringResource(Res.string.video_editor_label),
+                modifier = Modifier.fillMaxWidth(),
+            ) { value -> onUpdate(widget.copy(label = value)) }
 
             if (widget.kind == OverlayWidgetKind.ARC) {
                 HorizontalDivider()
