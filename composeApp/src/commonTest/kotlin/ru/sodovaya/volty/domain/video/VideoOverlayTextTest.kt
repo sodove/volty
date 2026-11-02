@@ -91,8 +91,8 @@ class VideoOverlayTextTest {
     }
 
     @Test
-    fun onlySpeedChangesWithTheUnitSystem() {
-        VideoMetric.entries.filter { it != VideoMetric.SPEED }.forEach { metric ->
+    fun onlySpeedAndDistanceChangeWithTheUnitSystem() {
+        VideoMetric.entries.filter { it != VideoMetric.SPEED && it != VideoMetric.DISTANCE }.forEach { metric ->
             assertEquals(
                 VideoOverlayStrings().unit(metric, UnitSystem.METRIC),
                 VideoOverlayStrings().unit(metric, UnitSystem.IMPERIAL),
@@ -124,14 +124,14 @@ class VideoOverlayTextTest {
 
     @Test
     fun aSmallNegativeIsZeroNotMinusZero() {
-        VideoMetric.entries.forEach { metric ->
+        (VideoMetric.entries - VideoMetric.ELAPSED - VideoMetric.DISTANCE - VideoMetric.VOLTAGE).forEach { metric ->
             listOf(-0.3, -0.49, -0.0).forEach { value ->
                 val text = videoValueText(metric, VideoReading(value), UnitSystem.METRIC)
                 assertFalse("-0" in text, "$metric $value -> $text")
                 assertEquals("0", text, "$metric $value")
             }
         }
-        assertEquals("-2", videoValueText(VideoMetric.CONTROLLER_POWER, VideoReading(-1.6), UnitSystem.METRIC))
+        assertEquals("−2", videoValueText(VideoMetric.CONTROLLER_POWER, VideoReading(-1.6), UnitSystem.METRIC))
         assertEquals("0", videoValueText(VideoMetric.SPEED, VideoReading(-0.3), UnitSystem.IMPERIAL))
     }
 
@@ -154,9 +154,15 @@ class VideoOverlayTextTest {
     }
 
     @Test
+    fun voltageKeepsItsDecimalLikeTheDashboard() {
+        assertEquals("96.4", videoValueText(VideoMetric.VOLTAGE, VideoReading(96.42), UnitSystem.METRIC))
+    }
+
+    @Test
     fun theExemplarsUseTheSameMinusAsTheValues() {
+        assertEquals("−12", videoValueText(VideoMetric.BATTERY_CURRENT, VideoReading(-12.0), UnitSystem.METRIC))
         VideoMetric.entries.forEach { metric ->
-            assertFalse('−' in videoValueExemplar(metric), "${metric.name} exemplar must use the ASCII minus the values print")
+            assertFalse('-' in videoValueExemplar(metric), "${metric.name} exemplar must use the minus the values print")
         }
     }
 }

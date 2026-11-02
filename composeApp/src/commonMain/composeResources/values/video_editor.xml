@@ -74,4 +74,12 @@
     <string name="video_editor_metric_battery_current">Current · battery</string>
     <string name="video_editor_metric_battery_power">Power · battery</string>
     <string name="video_editor_metric_battery_temperature">Temperature · battery</string>
+    <string name="video_editor_template_panel">Panel</string>
+    <string name="video_editor_template_large">Large</string>
+    <string name="video_editor_kind_arc_left">Left arc</string>
+    <string name="video_editor_kind_arc_right">Right arc</string>
+    <string name="video_editor_kind_bar">Bar</string>
+    <string name="video_editor_kind_text">Number</string>
+    <string name="video_editor_metric_elapsed">Time</string>
+    <string name="video_editor_metric_distance">Distance</string>
 </resources>

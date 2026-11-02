@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.presentation.ride
 
+import ru.sodovaya.volty.domain.video.OverlayPalette
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -125,15 +126,15 @@ internal data class LightHudPalette(
 )
 
 private val DarkLightHudPalette = LightHudPalette(
-    text = Color(0xFFEAF4F8),
-    muted = Color(0xFF8EA6B0),
-    surface = Color(0x66132531),
-    surfaceStrong = Color(0x80162A38),
-    cyan = Color(0xFF27D5F5),
-    green = Color(0xFF25E0B4),
-    battery = Color(0xFF39E681),
-    orange = Color(0xFFFFB45E),
-    pink = Color(0xFFFF719C),
+    text = Color(OverlayPalette.TEXT),
+    muted = Color(OverlayPalette.MUTED),
+    surface = Color(OverlayPalette.SURFACE),
+    surfaceStrong = Color(OverlayPalette.SURFACE_STRONG),
+    cyan = Color(OverlayPalette.CYAN),
+    green = Color(OverlayPalette.GREEN),
+    battery = Color(OverlayPalette.BATTERY),
+    orange = Color(OverlayPalette.ORANGE),
+    pink = Color(OverlayPalette.PINK),
 )
 
 private val BrightLightHudPalette = LightHudPalette(

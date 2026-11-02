@@ -23,6 +23,8 @@ data class VideoOverlayStrings(
     val watt: String = "W",
     val kmh: String = "km/h",
     val demo: String = "DEMO",
+    val km: String = "km",
+    val noLink: String = "NO LINK",
 ) {
     fun label(metric: VideoMetric): String = labels[metric] ?: DEFAULT_LABELS.getValue(metric)
 
@@ -37,6 +39,8 @@ data class VideoOverlayStrings(
         VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.BATTERY_CURRENT -> amp
         VideoMetric.CONTROLLER_POWER, VideoMetric.BATTERY_POWER -> watt
         VideoMetric.VOLTAGE -> volt
+        VideoMetric.ELAPSED -> ""
+        VideoMetric.DISTANCE -> if (system == UnitSystem.IMPERIAL) UnitFormatter.distanceUnit(system) else km
     }
 
     companion object {
@@ -53,6 +57,8 @@ data class VideoOverlayStrings(
             VideoMetric.BATTERY_CURRENT to "Batt current",
             VideoMetric.BATTERY_POWER to "Batt power",
             VideoMetric.BATTERY_TEMPERATURE to "Batt temp",
+            VideoMetric.ELAPSED to "Time",
+            VideoMetric.DISTANCE to "Distance",
         )
     }
 }
@@ -63,27 +69,54 @@ data class VideoOverlayStrings(
  * [MotionReadings.dutyText] exactly as every dashboard does (`~` prefix, `≥100` at the ceiling).
  *
  * The number goes through [roundToInt] and then an Int, never `String.format("%.0f")`: that printed `-0` for
- * -0.3 (an ASCII hyphen over a value that is not negative at all), and the exemplar used a different minus sign.
+ * -0.3 (an ASCII hyphen over a value that is not negative at all). A real negative carries U+2212, as the mock asks,
+ * and so does [videoValueExemplar]. An earlier revision kept an ASCII hyphen on both sides.
  */
 fun videoValueText(metric: VideoMetric, reading: VideoReading?, system: UnitSystem): String {
     val value = reading?.value?.takeIf { it.isFinite() } ?: return NO_VALUE
-    if (metric == VideoMetric.DUTY) {
-        return MotionReadings.dutyText(value.toFloat(), reading.estimated, reading.atCeiling)
+    val text = when (metric) {
+        VideoMetric.DUTY -> MotionReadings.dutyText(value.toFloat(), reading.estimated, reading.atCeiling)
+        VideoMetric.ELAPSED -> return videoElapsedText(value.toLong())
+        VideoMetric.DISTANCE -> tenths(UnitFormatter.speedValue(value.toFloat(), system).toDouble())
+        VideoMetric.VOLTAGE -> estimatedPrefix(reading) + tenths(value)
+        VideoMetric.SPEED -> estimatedPrefix(reading) + UnitFormatter.speedValue(value.toFloat(), system).toDouble().roundToInt()
+        else -> estimatedPrefix(reading) + value.roundToInt()
     }
-    val shown = if (metric == VideoMetric.SPEED) UnitFormatter.speedValue(value.toFloat(), system).toDouble() else value
-    val prefix = if (reading.estimated) "~" else ""
-    return prefix + shown.roundToInt().toString()
+    return text.replace('-', MINUS)
 }
 
-/** The widest plausible value text for [metric], so a card never resizes when 9 becomes 10. */
+private fun estimatedPrefix(reading: VideoReading) = if (reading.estimated) "~" else ""
+
+/** One decimal without `String.format`, and no `-0.0`. */
+private fun tenths(value: Double): String {
+    val scaled = (value * 10).roundToInt()
+    val magnitude = kotlin.math.abs(scaled)
+    return (if (scaled < 0) "-" else "") + "${magnitude / 10}.${magnitude % 10}"
+}
+
+/** `12:48`, and `1:02:48` from the first hour on; recording length is unlimited. */
+fun videoElapsedText(totalSeconds: Long): String {
+    val seconds = totalSeconds.coerceAtLeast(0)
+    val hours = seconds / 3600
+    val minutes = ((seconds % 3600) / 60).toString().padStart(2, '0')
+    val rest = (seconds % 60).toString().padStart(2, '0')
+    return if (hours > 0) "$hours:$minutes:$rest" else "$minutes:$rest"
+}
+
+/** The widest plausible value text for [metric], so a card never changes size when 9 becomes 10. */
 fun videoValueExemplar(metric: VideoMetric): String = when (metric) {
-    VideoMetric.CONTROLLER_POWER, VideoMetric.BATTERY_POWER -> "-999999"
-    VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.BATTERY_CURRENT -> "-9999"
+    VideoMetric.CONTROLLER_POWER, VideoMetric.BATTERY_POWER -> "${MINUS}99999"
+    VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.BATTERY_CURRENT -> "${MINUS}999"
     VideoMetric.DUTY -> "≥100"
-    else -> "~999"
+    VideoMetric.ELAPSED -> "9:59:59"
+    VideoMetric.DISTANCE -> "999.9"
+    VideoMetric.SOC, VideoMetric.SPEED -> "199"
+    VideoMetric.VOLTAGE -> "199.9"
+    else -> "${MINUS}99"
 }
 
 const val NO_VALUE = "—"
+private const val MINUS = '−'
 
 /** Each metric's default label before localization; a stored label equal to one of these is not the user's. */
 private val LEGACY_DEFAULT_LABELS: Map<VideoMetric, Set<String>> = mapOf(
@@ -99,6 +132,8 @@ private val LEGACY_DEFAULT_LABELS: Map<VideoMetric, Set<String>> = mapOf(
     VideoMetric.BATTERY_CURRENT to setOf("I batt"),
     VideoMetric.BATTERY_POWER to setOf("P batt"),
     VideoMetric.BATTERY_TEMPERATURE to setOf("T batt"),
+    VideoMetric.ELAPSED to emptySet(),
+    VideoMetric.DISTANCE to emptySet(),
 )
 
 /**
@@ -112,12 +147,20 @@ fun isAutoOverlayLabel(widget: OverlayWidget): Boolean =
 fun overlayLabel(widget: OverlayWidget, strings: VideoOverlayStrings): String =
     if (isAutoOverlayLabel(widget)) strings.label(widget.metric) else widget.label
 
-/** The icon an [OverlayIcon.AUTO] widget draws for [metric]. */
+/**
+ * The icon an [OverlayIcon.AUTO] widget draws for [metric]. **Retraction:** DUTY's automatic icon used to be
+ * [OverlayIcon.WARNING], a warning sign on every normal ride. Only a fired rule may show one; see [overlayIconShown].
+ */
 fun autoOverlayIcon(metric: VideoMetric): OverlayIcon = when (metric) {
-    VideoMetric.SPEED -> OverlayIcon.GAUGE
-    VideoMetric.DUTY -> OverlayIcon.WARNING
+    VideoMetric.SPEED, VideoMetric.DUTY, VideoMetric.ELAPSED, VideoMetric.DISTANCE -> OverlayIcon.GAUGE
     VideoMetric.SOC, VideoMetric.VOLTAGE -> OverlayIcon.BATTERY
     VideoMetric.BATTERY_POWER, VideoMetric.CONTROLLER_POWER -> OverlayIcon.BOLT
     VideoMetric.BATTERY_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.MOTOR_CURRENT -> OverlayIcon.CURRENT
     else -> OverlayIcon.TEMPERATURE
+}
+
+/** A warning sign means a warning: a stored [OverlayIcon.WARNING] shows only while a rule has fired. */
+fun overlayIconShown(widget: OverlayWidget, reading: VideoReading?): OverlayIcon {
+    val icon = if (widget.icon != OverlayIcon.AUTO) widget.icon else autoOverlayIcon(widget.metric)
+    return if (icon == OverlayIcon.WARNING && !overlayRuleFired(widget, reading)) autoOverlayIcon(widget.metric) else icon
 }

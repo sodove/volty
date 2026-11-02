@@ -78,8 +78,14 @@ internal class VideoCameraController(private val context: Context, private val o
     private val overlayThread = HandlerThread("RideVideoOverlay").apply { start() }
     private val handler = Handler(overlayThread.looper)
     private val timeline = VideoTimeline()
-    private val renderer = VideoOverlayRenderer()
+    private val renderer = VideoOverlayRenderer(context)
+    private val scales = OverlayScaleTracker()
+    private val tripTracker = VideoTripTracker()
+    @Volatile private var recordedSeconds = 0L
+    @Volatile private var overlayRecording = false
     @Volatile var preset: OverlayPreset = OverlayTemplates.hud()
+    /** C3's time and distance: per recording by default, a user setting. */
+    @Volatile var tripScope: OverlayTripScope = OverlayTripScope.RECORDING
     /** Localized words and units; set from the screen, which owns the resources. */
     @Volatile var strings: VideoOverlayStrings = VideoOverlayStrings()
     @Volatile var unitSystem: UnitSystem = UnitSystem.METRIC
@@ -228,13 +234,24 @@ internal class VideoCameraController(private val context: Context, private val o
                         mutableState.update { it.copy(clockMismatch = true) }
                     }
                     val snapshot = synchronized(timeline) { timeline.sample(time) }
-                    val key = overlayDrawKey(preset, snapshot, strings, unitSystem, geometryOf(frame))
+                    val preset = preset
+                    val trip = if (overlayUsesTrip(preset)) {
+                        tripTracker.trip(
+                            tripScope, overlayRecording, recordedSeconds,
+                            RideSessionClock.secondsAt(System.currentTimeMillis()),
+                            snapshot?.readings?.get(VideoMetric.DISTANCE)?.value,
+                        )
+                    } else {
+                        OverlayTrip()
+                    }
+                    val ranges = scales.update(preset, snapshot, unitSystem)
+                    val key = overlayDrawKey(preset, snapshot, strings, unitSystem, geometryOf(frame), trip = trip, scales = ranges)
                     // Touching the canvas costs a software raster plus a full-size upload; skipping it leaves the
                     // previous overlay in place, which is correct whenever the key has not changed.
                     if (!gate.shouldDraw(key)) return@attempt
                     val canvas = frame.overlayCanvas
                     try {
-                        renderer.draw(frame, canvas, preset, snapshot, strings, unitSystem)
+                        renderer.draw(frame, canvas, preset, snapshot, strings, unitSystem, trip, ranges)
                     } catch (error: Exception) {
                         runCatching { renderer.clear(canvas) }
                         throw error
@@ -312,12 +329,17 @@ internal class VideoCameraController(private val context: Context, private val o
 
     private fun onEvent(segment: Segment, event: VideoRecordEvent) {
         when (event) {
-            is VideoRecordEvent.Start -> if (segment === current) mutableState.update {
-                it.copy(phase = if (it.phase == VideoRecordingPhase.STOPPING) VideoRecordingPhase.STOPPING else VideoRecordingPhase.RECORDING)
+            is VideoRecordEvent.Start -> if (segment === current) {
+                overlayRecording = true
+                mutableState.update {
+                    it.copy(phase = if (it.phase == VideoRecordingPhase.STOPPING) VideoRecordingPhase.STOPPING else VideoRecordingPhase.RECORDING)
+                }
             }
             is VideoRecordEvent.Status -> if (segment === current) {
                 val nanos = event.recordingStats.recordedDurationNanos
-                mutableState.update { it.copy(durationSeconds = ledger.totalNanos(nanos) / 1_000_000_000) }
+                val totalSeconds = ledger.totalNanos(nanos) / 1_000_000_000
+                recordedSeconds = totalSeconds
+                mutableState.update { it.copy(durationSeconds = totalSeconds) }
                 if (state.value.phase == VideoRecordingPhase.RECORDING && segmentPolicy.shouldRotate(nanos, rotating)) rotate(segment)
             }
             is VideoRecordEvent.Finalize -> finalizeSegment(segment, event)
@@ -393,6 +415,8 @@ internal class VideoCameraController(private val context: Context, private val o
 
         recording = null
         current = null
+        overlayRecording = false
+        recordedSeconds = 0
         if (outcome == VideoOutputStatus.DISCARD) {
             mutableState.update { it.copy(phase = VideoRecordingPhase.IDLE, saved = it.saved.takeIf { _ -> it.savedParts > 0 },
                 error = "${event.error}: ${event.cause?.message.orEmpty()}") }

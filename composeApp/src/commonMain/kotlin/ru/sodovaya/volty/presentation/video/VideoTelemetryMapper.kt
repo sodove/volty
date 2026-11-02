@@ -104,6 +104,7 @@ fun videoTelemetrySnapshot(
         put(VideoMetric.MOTOR_CURRENT, motion.motorCurrentA.takeIf { it != 0f || motion.hasPower }, motionAgeMillis)
         put(VideoMetric.CONTROLLER_CURRENT, MotionReadings.batteryCurrentA(motion), motionAgeMillis)
         put(VideoMetric.CONTROLLER_POWER, MotionReadings.powerW(motion), motionAgeMillis)
+        put(VideoMetric.DISTANCE, MotionReadings.tripKm(motion), motionAgeMillis)
     } else {
         dutyHold.reset()
     }

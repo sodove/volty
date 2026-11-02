@@ -41,7 +41,7 @@ class RideVideoActivity : ComponentActivity() {
             appPrefs.unitSystem.collect { camera.unitSystem = it }
         }
         lifecycleScope.launch {
-            component.document.collect { camera.preset = it.selected }
+            component.document.collect { camera.preset = it.selected; camera.tripScope = it.tripScope }
         }
         lifecycleScope.launch {
             camera.state.collect { state ->

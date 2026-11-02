@@ -68,6 +68,14 @@ import ru.sodovaya.volty.domain.video.OverlayWidgetKind
 import ru.sodovaya.volty.domain.video.VideoMetric
 import ru.sodovaya.volty.domain.video.validOverlayPreset
 import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.video_editor_kind_arc_left
+import volty.composeapp.generated.resources.video_editor_kind_arc_right
+import volty.composeapp.generated.resources.video_editor_kind_bar
+import volty.composeapp.generated.resources.video_editor_kind_text
+import volty.composeapp.generated.resources.video_editor_metric_distance
+import volty.composeapp.generated.resources.video_editor_metric_elapsed
+import volty.composeapp.generated.resources.video_editor_template_large
+import volty.composeapp.generated.resources.video_editor_template_panel
 import volty.composeapp.generated.resources.video_editor_add_rule
 import volty.composeapp.generated.resources.video_editor_add_widget
 import volty.composeapp.generated.resources.video_editor_appearance
@@ -823,10 +831,12 @@ private fun publish(document: OverlayDocument, onChange: (OverlayDocument) -> Un
 private fun isValidDocument(document: OverlayDocument): Boolean =
     runCatching { OverlayCodec.encode(document) }.isSuccess
 
-private fun builtinName(preset: OverlayPreset): StringResource = when (preset.name) {
+internal fun builtinName(preset: OverlayPreset): StringResource = when (preset.name) {
     "Top Row" -> Res.string.video_editor_template_top_row
     "HUD" -> Res.string.video_editor_template_hud
     "Minimal" -> Res.string.video_editor_template_minimal
+    "Panel" -> Res.string.video_editor_template_panel
+    "Large" -> Res.string.video_editor_template_large
     else -> Res.string.video_editor_template_racing
 }
 
@@ -834,6 +844,10 @@ private fun kindLabel(kind: OverlayWidgetKind): StringResource = when (kind) {
     OverlayWidgetKind.VALUE_CARD -> Res.string.video_editor_kind_value_card
     OverlayWidgetKind.ICON_VALUE -> Res.string.video_editor_kind_icon_value
     OverlayWidgetKind.ARC -> Res.string.video_editor_kind_arc
+    OverlayWidgetKind.ARC_LEFT -> Res.string.video_editor_kind_arc_left
+    OverlayWidgetKind.ARC_RIGHT -> Res.string.video_editor_kind_arc_right
+    OverlayWidgetKind.BAR -> Res.string.video_editor_kind_bar
+    OverlayWidgetKind.TEXT -> Res.string.video_editor_kind_text
 }
 
 private fun comparisonLabel(comparison: OverlayComparison): StringResource = when (comparison) {
@@ -869,6 +883,8 @@ internal fun videoMetricLabel(metric: VideoMetric): String = stringResource(when
     VideoMetric.BATTERY_CURRENT -> Res.string.video_editor_metric_battery_current
     VideoMetric.BATTERY_POWER -> Res.string.video_editor_metric_battery_power
     VideoMetric.BATTERY_TEMPERATURE -> Res.string.video_editor_metric_battery_temperature
+    VideoMetric.ELAPSED -> Res.string.video_editor_metric_elapsed
+    VideoMetric.DISTANCE -> Res.string.video_editor_metric_distance
 })
 
 private fun String.alphaHex(): Int = overlayColorAlpha(this)

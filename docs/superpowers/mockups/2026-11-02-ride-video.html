@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Volty: макеты видео поездки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --hud-bg:#07131E;--hud-text:#EAF4F8;--hud-muted:#8EA6B0;--hud-surface:rgba(19,37,49,.4);--hud-strong:rgba(22,42,56,.72);
+  --cyan:#27D5F5;--green:#25E0B4;--battery:#39E681;--orange:#FFB45E;--pink:#FF719C;--rec:#FF3B4E;
+  --page:#16191c;--page2:#1f2327;--ink:#e6e9ec;--ink2:#a2abb3;--line:#30363c;
+  --mono:ui-monospace,"Roboto Mono","Cascadia Mono",Consolas,monospace;
+}
+:root[data-page="light"]{--page:#eceef0;--page2:#fff;--ink:#1a1e22;--ink2:#555e66;--line:#ccd2d7}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--page);color:var(--ink);font:400 15px/1.5 Inter,"Segoe UI",Roboto,system-ui,sans-serif}
+main{max-width:1312px;margin:0 auto;padding:40px 32px 80px}
+h1{font-size:30px;line-height:1.2;margin:0 0 10px;font-weight:700}
+h2{font-size:22px;margin:64px 0 6px;font-weight:700;padding-top:20px;border-top:1px solid var(--line)}
+h3{font-size:16px;margin:36px 0 12px;font-weight:600}
+p{margin:0 0 10px;max-width:78ch}
+.sub{color:var(--ink2)}
+.grid{display:flex;flex-wrap:wrap;gap:44px 36px;margin-top:24px;align-items:flex-start}
+.shot{width:390px}.shot.w{width:844px}.shot.vid{width:540px}.shot.vp{width:304px}.shot.full{width:100%}
+.cap{display:flex;gap:10px;align-items:baseline;margin-bottom:10px;min-height:28px}
+.code{font:700 13px/1 Inter,sans-serif;background:var(--ink);color:var(--page);padding:6px 8px;border-radius:6px;white-space:nowrap}
+.code.old{background:transparent;color:var(--ink2);box-shadow:inset 0 0 0 1px var(--line)}
+.ttl{font-weight:600}
+.lg{margin-top:12px;font-size:13.5px;line-height:1.45;color:var(--ink2)}
+.lg b{color:var(--ink);font-weight:600}
+#tg{position:fixed;right:18px;top:14px;z-index:9;background:var(--page2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 11px;font:500 13px Inter,sans-serif;cursor:pointer}
+table{border-collapse:collapse;font-size:14px;margin-top:10px}
+th,td{padding:8px 16px 8px 0;border-bottom:1px solid var(--line);text-align:left;font-variant-numeric:tabular-nums}
+th{font-weight:600;color:var(--ink2)}
+ul{margin:8px 0;padding-left:20px;max-width:80ch}li{margin:5px 0}
+.answer{background:var(--page2);border:1px solid var(--line);border-radius:10px;padding:18px 20px;max-width:800px}
+
+/* devices */
+.ph{position:relative;width:390px;height:844px;border-radius:32px;overflow:hidden;background:#000;box-shadow:0 0 0 2px #39424a,0 0 0 7px #0b0e11;color:var(--hud-text);font-family:Inter,"Segoe UI",Roboto,sans-serif;margin:7px 0}
+.ph.l{width:844px;height:390px}
+.vf{position:relative;overflow:hidden;background:#000;border-radius:6px}
+.vf svg.ov,.fr svg.ov,.efr svg.ov{position:absolute;inset:0;width:100%;height:100%}
+.fr{position:absolute;left:0;top:0;width:390px;height:693px;overflow:hidden}
+.ph.l .fr{width:693px;height:390px}
+.sb{position:absolute;left:0;right:0;top:0;height:26px;display:flex;justify-content:space-between;padding:6px 18px;font:600 12px Inter,sans-serif;z-index:5}
+
+/* scene */
+.scn{position:absolute;inset:0;overflow:hidden}
+.scn>i{position:absolute;inset:0;display:block}
+.scn .bd{filter:blur(.7px)}
+.dusk .sky{background:linear-gradient(180deg,#0d1a2c 0,#1c2d48 22%,#54496a 36%,#c67a55 45%,#f2b06e 47.8%,#10131a 48%)}
+.dusk .glow{background:radial-gradient(40% 12% at 50% 47%,rgba(255,196,130,.75),transparent 72%)}
+.dusk .bl{clip-path:polygon(0 0,16% 13%,16% 17%,31% 29%,31% 32%,41% 40%,41% 42%,46% 46%,46% 50%,0 76%);background:repeating-linear-gradient(90deg,rgba(255,206,130,.0) 0 5%,rgba(255,206,130,.22) 5% 5.8%,transparent 5.8% 9%),repeating-linear-gradient(0deg,#0a111c 0 2%,#16202e 2% 3.6%)}
+.dusk .br{clip-path:polygon(100% 0,86% 11%,86% 14%,70% 27%,70% 31%,60% 39%,60% 41%,54% 46%,54% 50%,100% 76%);background:repeating-linear-gradient(90deg,transparent 0 6%,rgba(120,190,255,.20) 6% 7%,transparent 7% 10%),repeating-linear-gradient(0deg,#090f19 0 2.2%,#141c2a 2.2% 3.8%)}
+.dusk .rd{clip-path:polygon(46% 48%,54% 48%,128% 100%,-28% 100%);background:linear-gradient(180deg,#6e5a56 0,#2c2f38 12%,#171b22 45%,#0c0f14 100%)}
+.dusk .wet{clip-path:polygon(46% 48%,54% 48%,80% 100%,20% 100%);background:linear-gradient(180deg,rgba(255,180,120,.55),rgba(255,160,110,.05) 55%,transparent)}
+.dusk .lamps{background:radial-gradient(1.8% 1.1% at 30% 37%,#fff4d6,rgba(255,210,140,.5) 40%,transparent),radial-gradient(1.2% .8% at 37% 41%,#fff0cc,transparent),radial-gradient(.9% .6% at 41.5% 43.7%,#ffe6bc,transparent),radial-gradient(1.8% 1.1% at 72% 35%,#fff4d6,rgba(255,210,140,.5) 40%,transparent),radial-gradient(1.2% .8% at 64% 40.5%,#fff0cc,transparent),radial-gradient(.9% .6% at 59% 43.5%,#ffe6bc,transparent),radial-gradient(.7% .4% at 47.6% 49%,#ff3737,transparent),radial-gradient(.7% .4% at 50.2% 49%,#ff3737,transparent)}
+.dusk .ln{clip-path:polygon(49.85% 48%,50.15% 48%,51.5% 100%,48.5% 100%);background:linear-gradient(180deg,transparent 48%,#b9b2a4 48% 50%,transparent 50% 54%,#b9b2a4 54% 57.5%,transparent 57.5% 63%,#c6c0b2 63% 69%,transparent 69% 77%,#d0cabc 77% 83%,transparent 83%)}
+.day .sky{background:linear-gradient(180deg,#b9dcf2 0,#d8edf8 20%,#f7fbfc 38%,#ffffff 47%,#cfd3cf 48%)}
+.day .glow{background:radial-gradient(34% 22% at 66% 26%,#fff,rgba(255,255,255,.7) 40%,transparent 72%)}
+.day .bl{clip-path:polygon(0 3%,16% 15%,16% 19%,31% 30%,31% 33%,41% 41%,41% 43%,46% 46%,46% 50%,0 76%);background:repeating-linear-gradient(90deg,#d9dfe1 0 7%,#c3cdd2 7% 7.6%,#d9dfe1 7.6% 10%),repeating-linear-gradient(0deg,#e6eaeb 0 2.5%,#cfd8dc 2.5% 3.2%);background-blend-mode:multiply}
+.day .br{clip-path:polygon(100% 2%,86% 13%,86% 17%,70% 29%,70% 32%,60% 40%,60% 42%,54% 46%,54% 50%,100% 76%);background:repeating-linear-gradient(90deg,#eef1f1 0 8%,#d3dbde 8% 8.8%),repeating-linear-gradient(0deg,#f4f5f4 0 3%,#dbe2e4 3% 3.6%);background-blend-mode:multiply}
+.day .rd{clip-path:polygon(46% 48%,54% 48%,128% 100%,-28% 100%);background:linear-gradient(180deg,#f0f0ec 0,#d3d4d0 22%,#bfc0bc 60%,#adaeab 100%)}
+.day .wet{clip-path:polygon(46% 48%,54% 48%,80% 100%,20% 100%);background:linear-gradient(180deg,rgba(255,255,255,.75),rgba(255,255,255,.15) 60%,transparent)}
+.day .lamps{background:radial-gradient(.5% .3% at 47.7% 48.6%,#5b6168,transparent),radial-gradient(.5% .3% at 50.6% 48.6%,#5b6168,transparent)}
+.day .ln{clip-path:polygon(49.85% 48%,50.15% 48%,51.5% 100%,48.5% 100%);background:linear-gradient(180deg,transparent 48%,#fff 48% 50%,transparent 50% 54%,#fff 54% 57.5%,transparent 57.5% 63%,#fff 63% 69%,transparent 69% 77%,#fff 77% 83%,transparent 83%)}
+.scn .grain{opacity:.16;mix-blend-mode:overlay;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .5 0 0 0 0 .5 0 0 0 1 0'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)'/%3E%3C/svg%3E")}
+.dusk .vig{background:radial-gradient(90% 80% at 50% 50%,transparent 55%,rgba(0,0,0,.5))}
+.day .vig{background:radial-gradient(90% 80% at 50% 50%,transparent 70%,rgba(70,80,85,.14))}
+
+/* overlay text */
+svg.ov text{font-family:Inter,"Segoe UI",Roboto,sans-serif;font-variant-numeric:tabular-nums}
+svg.ov .h{paint-order:stroke;stroke:rgba(3,10,15,.72);stroke-linejoin:round}
+
+/* capture chrome */
+.panel{position:absolute;left:0;right:0;bottom:0;height:151px;background:var(--hud-bg);display:flex;flex-direction:column;justify-content:space-between;padding:8px 12px 12px}
+.panel.rec{box-shadow:inset 0 4px 0 var(--rec)}
+.chips{display:flex;gap:6px;align-items:center;justify-content:space-between;height:36px}
+.chip{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 10px;border-radius:16px;background:rgba(62,92,108,.32);font:600 13px/1 Inter,sans-serif;white-space:nowrap;font-variant-numeric:tabular-nums}
+.chip svg{width:16px;height:16px;fill:currentColor;flex:none}
+.chip.ok{color:var(--battery)}.chip.warn{color:#16100a;background:var(--orange)}.chip.bad{color:#23060f;background:var(--pink)}.chip.rec{background:none;padding:0 4px;font:700 26px/1 Inter,sans-serif;gap:9px;color:#fff}
+.dot{width:14px;height:14px;border-radius:50%;background:var(--rec);box-shadow:0 0 0 4px rgba(255,59,78,.28)}
+.row{display:flex;align-items:center;justify-content:space-between}
+.rbtn{width:58px;height:58px;border-radius:29px;background:rgba(62,92,108,.32);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;font:600 10.5px/1.1 Inter,sans-serif;color:var(--hud-text)}
+.rbtn svg{width:22px;height:22px;fill:currentColor}
+.rbtn.g{background:none;opacity:0}
+.shut{width:88px;height:88px;border-radius:50%;border:5px solid #fff;display:flex;align-items:center;justify-content:center;flex:none}
+.shut i{display:block;width:68px;height:68px;border-radius:50%;background:var(--rec)}
+.shut.on{border-color:var(--rec)}.shut.on i{width:34px;height:34px;border-radius:7px}
+.bar{height:92px;border-radius:24px;background:var(--rec);display:flex;align-items:center;justify-content:center;gap:12px;font:700 22px/1 Inter,sans-serif;color:#fff}
+.bar i{width:24px;height:24px;border-radius:50%;background:#fff}
+.bar.on{background:#fff;color:#14080a}.bar.on i{border-radius:5px;background:var(--rec)}
+.sh2{position:absolute;inset:auto 0 0 0;height:330px;background:rgba(10,24,34,.97);border-radius:22px 22px 0 0;padding:14px 16px}
+.dim{position:absolute;inset:0;background:rgba(0,0,0,.52)}
+.bt{height:64px;border-radius:18px;display:flex;align-items:center;justify-content:center;font:700 17px Inter,sans-serif;background:rgba(62,92,108,.36);margin-top:10px}
+.bt.red{background:var(--rec);color:#fff}
+.rail{position:absolute;right:0;top:0;bottom:0;width:151px;background:var(--hud-bg);display:flex;flex-direction:column;align-items:center;justify-content:space-between;padding:12px 8px}
+.rail.rec{box-shadow:inset 4px 0 0 var(--rec)}
+.rail .chip{height:28px;font-size:12px;padding:0 8px}
+
+/* dashboard replica */
+.mapbg{position:absolute;inset:0;background:#07131E}
+.mapbg svg{position:absolute;inset:0;width:100%;height:100%}
+.dcol{position:absolute;inset:0;padding:32px 10px 16px;display:flex;flex-direction:column;gap:4px}
+.cbtn{width:48px;height:48px;display:flex;align-items:center;justify-content:center;flex:none;position:relative}
+.cbtn>span{width:36px;height:36px;border-radius:50%;background:rgba(32,58,72,.62);display:flex;align-items:center;justify-content:center;position:relative}
+.cbtn svg{width:18px;height:18px;fill:rgba(234,244,248,.85)}
+.pill{flex:1;height:36px;border-radius:22px;background:rgba(22,42,56,.72);border:1px solid #5a8c9944;display:flex;align-items:center;justify-content:center;gap:7px;font:600 12px Inter,sans-serif}
+.pill i{width:7px;height:7px;border-radius:50%;background:var(--battery)}
+.g2{display:flex;height:122px;gap:2px}.g2>div{flex:1;position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center}
+.g2 svg{position:absolute;inset:0;width:100%;height:100%}
+.glb{font:700 9px/9px Inter,sans-serif;letter-spacing:1px}
+.gv{font:700 30px/32px var(--mono);color:#EAF4F8}
+.gu{font:600 9px/10px Inter,sans-serif;color:var(--hud-muted)}
+.strip{display:flex;gap:3px}.strip>div{flex:1;padding:2px;min-width:0}
+.sl{font:700 8.5px/11px Inter,sans-serif;white-space:nowrap}
+.sv{font:600 16px/20px var(--mono);color:#EAF4F8}.sv small{font:600 9.5px Inter,sans-serif;color:var(--hud-muted)}
+.strip svg{display:block;width:100%;height:18px}
+.tgr{display:flex;gap:28px;padding:1px 10px}.tgr>div{flex:1}.tgr span{font-size:8.5px;line-height:10px;color:#8EA6B0cc;display:block}.tgr svg{display:block;width:100%;height:20px}
+.temp{text-align:center;font-size:9.5px;line-height:11px;color:var(--hud-muted)}
+.bline{padding:0 5px}.bline .rr{display:flex;justify-content:space-between;font-size:13px;color:var(--hud-muted)}.bline b{color:var(--battery);font-size:18px}
+.side{position:absolute;right:2px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:8px;align-items:center}
+.tonal{width:40px;height:40px;border-radius:50%;background:#3d5766;display:flex;align-items:center;justify-content:center;flex:none}
+.tonal svg{width:24px;height:24px;fill:#dbeaf2}
+.reddot{position:absolute;right:1px;top:1px;width:9px;height:9px;border-radius:50%;background:var(--rec);box-shadow:0 0 0 2px #0f2230}
+.recbig{width:64px;height:64px;display:flex;align-items:center;justify-content:center}
+.recbig span{width:56px;height:56px;border-radius:50%;background:rgba(22,42,56,.86);box-shadow:inset 0 0 0 3px var(--rec);display:flex;align-items:center;justify-content:center}
+.recbig i{width:24px;height:24px;border-radius:50%;background:var(--rec)}
+
+/* editor */
+.etop{position:absolute;left:0;right:0;top:0;height:60px;background:var(--hud-bg);display:flex;align-items:center;padding:0 6px;gap:0}
+.ib{width:48px;height:48px;display:flex;align-items:center;justify-content:center;flex:none}.ib svg{width:24px;height:24px;fill:var(--hud-text)}.ib.off svg{opacity:.32}
+.etop .nm{flex:1;font:600 15px Inter,sans-serif;min-width:0;padding-left:4px}.etop .nm small{display:block;font:500 11px Inter,sans-serif;color:var(--orange)}
+.save{height:44px;padding:0 15px;border-radius:22px;background:var(--cyan);color:#04202a;font:700 14px/44px Inter,sans-serif}
+.estage{position:absolute;left:0;right:0;top:60px;height:472px;background:#040b11}
+.efr{position:absolute;left:62px;top:0;width:266px;height:472px;overflow:hidden}
+.ega{position:absolute;left:7px;top:10px;display:flex;flex-direction:column;gap:6px}
+.ega .ib{background:rgba(62,92,108,.3);border-radius:24px}.ega .ib.on{background:var(--cyan)}.ega .ib.on svg{fill:#04202a}
+.smp{position:absolute;left:6px;top:6px;font:700 10px/1 Inter,sans-serif;padding:5px 7px;border-radius:6px;background:#000a;color:#fff}
+.es{position:absolute;left:0;right:0;bottom:0;height:312px;background:#0b1c28;border-radius:20px 20px 0 0;padding:8px 14px 12px}
+.hd{width:40px;height:4px;border-radius:2px;background:#5a7482;margin:0 auto 6px}
+.eh{display:flex;align-items:center;justify-content:space-between;height:38px;font:700 15px Inter,sans-serif}
+.tabs{display:flex;background:rgba(62,92,108,.25);border-radius:14px;padding:3px;height:48px;margin-bottom:9px}
+.tabs b{flex:1;display:flex;align-items:center;justify-content:center;border-radius:11px;font:600 14px Inter,sans-serif;color:var(--hud-muted)}
+.tabs b.on{background:#27485a;color:#fff}
+.mg{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.mg b{height:56px;border-radius:13px;background:rgba(62,92,108,.25);display:flex;flex-direction:column;align-items:center;justify-content:center;font:600 13px/1.15 Inter,sans-serif;text-align:center}
+.mg b small{font:500 10.5px Inter,sans-serif;color:var(--hud-muted)}
+.mg b.on{background:var(--cyan);color:#04202a}.mg b.on small{color:#04303c}
+.seg{display:flex;gap:6px;margin-bottom:8px}.seg b{flex:1;height:52px;border-radius:13px;background:rgba(62,92,108,.25);display:flex;align-items:center;justify-content:center;font:600 13.5px Inter,sans-serif}.seg b.on{background:var(--cyan);color:#04202a}
+.sw{display:flex;justify-content:space-between}.sw div{width:54px;text-align:center;font:500 10px/1.2 Inter,sans-serif;color:var(--hud-muted)}.sw i{display:block;width:46px;height:46px;border-radius:50%;margin:0 auto 3px}.sw .on i{box-shadow:0 0 0 2px #0b1c28,0 0 0 4px #fff}.sw .on{color:#fff}
+.lbl{font:600 11px Inter,sans-serif;color:var(--hud-muted);margin:0 0 5px}
+.pre{display:flex;gap:7px;margin-bottom:8px}.pre b{flex:1;height:60px;border-radius:13px;background:rgba(62,92,108,.25);display:flex;align-items:center;justify-content:center;font:600 14px Inter,sans-serif}.pre b.on{box-shadow:inset 0 0 0 2px var(--cyan)}
+.wl{display:flex;align-items:center;gap:10px;height:50px;border-top:1px solid #ffffff14;font:600 14px Inter,sans-serif}.wl i{width:10px;height:10px;border-radius:50%}.wl span{margin-left:auto;font:500 12px Inter,sans-serif;color:var(--hud-muted)}
+.drag{position:absolute;left:14px;right:14px;bottom:18px;height:58px;border-radius:16px;background:rgba(62,92,108,.3);display:flex;align-items:center;justify-content:center;font:600 14px Inter,sans-serif;color:var(--cyan)}
+@media (max-width:930px){main{padding:24px 16px 60px}.ph.l{zoom:.42}.shot.w{width:100%}.shot.vid{width:100%}.vf.l{width:100%!important;height:auto!important;aspect-ratio:16/9}}
+</style>
+</head>
+<body>
+<button id="tg" type="button">Светлая страница</button>
+<main id="m"></main>
+<script>
+(function(){
+var ICON={
+cam:'M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z',
+set:'M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58c.18-.14.23-.41.12-.61l-1.92-3.32c-.12-.22-.37-.29-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54c-.04-.24-.24-.41-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58c-.18.14-.23.41-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z',
+bt:'M17.71 7.71L12 2h-1v7.59L6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 11 14.41V22h1l5.71-5.71-4.3-4.29 4.3-4.29zM13 5.83l1.88 1.88L13 9.59V5.83zm1.88 10.46L13 18.17v-3.76l1.88 1.88z',
+chart:'M3.5 18.49l6-6.01 4 4L22 6.92l-1.41-1.41-7.09 7.97-4-4L2 16.99z',
+batt:'M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z',
+grp:'M16 11c1.66 0 2.99-1.34 2.99-3S17.66 5 16 5c-1.66 0-3 1.34-3 3s1.34 3 3 3zm-8 0c1.66 0 2.99-1.34 2.99-3S9.66 5 8 5C6.34 5 5 6.34 5 8s1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V19h14v-2.5c0-2.33-4.67-3.5-7-3.5zm8 0c-.29 0-.62.02-.97.05 1.16.84 1.97 1.97 1.97 3.45V19h6v-2.5c0-2.33-4.67-3.5-7-3.5z',
+nav:'M12 2L4.5 20.29l.71.71L12 18l6.79 3 .71-.71z',
+loc:'M20.94 11c-.46-4.17-3.77-7.48-7.94-7.94V1h-2v2.06C6.83 3.52 3.52 6.83 3.06 11H1v2h2.06c.46 4.17 3.77 7.48 7.94 7.94V23h2v-2.06c4.17-.46 7.48-3.77 7.94-7.94H23v-2h-2.06zM12 19c-3.87 0-7-3.13-7-7s3.13-7 7-7 7 3.13 7 7-3.13 7-7 7z',
+more:'M16.59 8.59L12 13.17 7.41 8.59 6 10l6 6 6-6z',
+undo:'M12.5 8c-2.65 0-5.05.99-6.9 2.6L2 7v9h9l-3.62-3.62c1.39-1.16 3.16-1.88 5.12-1.88 3.54 0 6.55 2.31 7.6 5.5l2.37-.78C21.08 11.03 17.15 8 12.5 8z',
+redo:'M18.4 10.6C16.55 8.99 14.15 8 11.5 8c-4.65 0-8.58 3.03-9.96 7.22L3.9 16c1.05-3.19 4.05-5.5 7.6-5.5 1.95 0 3.73.72 5.12 1.88L13 16h9V7l-3.6 3.6z',
+close:'M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z',
+mic:'M19 11h-1.7c0 .74-.16 1.43-.43 2.05l1.23 1.23c.56-.98.9-2.09.9-3.28zm-4.02.17c0-.06.02-.11.02-.17V5c0-1.66-1.34-3-3-3S9 3.34 9 5v.18l5.98 5.99zM4.27 3L3 4.27l6.01 6.01V11c0 1.66 1.33 3 2.99 3 .22 0 .44-.03.65-.08l1.66 1.66c-.71.33-1.5.52-2.31.52-2.76 0-5.3-2.1-5.3-5.1H5c0 3.41 2.72 6.23 6 6.72V21h2v-3.28c.91-.13 1.77-.45 2.54-.9L19.73 21 21 19.73 4.27 3z',
+tune:'M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z',
+sync:'M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46C19.54 15.03 20 13.57 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74C4.46 8.97 4 10.43 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z',
+back:'M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z',
+warn:'M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z',
+sd:'M18 2h-8L4.02 8 4 20c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-6 6h-2V4h2v4zm3 0h-2V4h2v4zm3 0h-2V4h2v4z',
+add:'M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z',
+del:'M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z',
+share:'M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92 1.61 0 2.92-1.31 2.92-2.92s-1.31-2.92-2.92-2.92z',
+play:'M8 5v14l11-7z'
+};
+function ic(n){return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="'+ICON[n]+'"/></svg>'}
+var C={text:'#EAF4F8',unit:'#C6D5DC',cyan:'#27D5F5',green:'#25E0B4',batt:'#39E681',orange:'#FFB45E',pink:'#FF719C'};
+var OK={sp:'42',du:'61',est:true,v:'96.4',soc:'78',i:'−18',t:'34',m:'41',fs:.525,fd:.61,fb:.78,chip:null};
+var LOST={sp:'—',du:'—',est:false,v:'—',soc:'—',i:'—',t:'—',m:'—',fs:0,fd:0,fb:0,chip:'НЕТ СВЯЗИ'};
+var uid=0;
+function pt(cx,cy,r,a){var d=a*Math.PI/180;return (cx+r*Math.cos(d)).toFixed(1)+' '+(cy+r*Math.sin(d)).toFixed(1)}
+function arc(cx,cy,r,a0,s){return 'M'+pt(cx,cy,r,a0)+' A'+r+' '+r+' 0 '+(Math.abs(s)>180?1:0)+' '+(s>0?1:0)+' '+pt(cx,cy,r,a0+s)}
+function tx(x,y,s,sz,o){o=o||{};var hs=o.nh?'':' class="h" stroke-width="'+(o.hw||Math.max(5,sz*.09))+'"';
+ return '<text x="'+x+'" y="'+y+'" font-size="'+sz+'" font-weight="'+(o.w||700)+'" fill="'+(o.f||C.text)+'" text-anchor="'+(o.a||'start')+'"'+(o.ls?' letter-spacing="'+o.ls+'"':'')+hs+'>'+s+'</text>'}
+function val(v,est,tsz){return (est?'<tspan font-size="'+tsz*.66+'" fill="'+C.orange+'">~</tspan>':'')+v}
+function path(d,w,c){return '<path d="'+d+'" fill="none" stroke="'+c+'" stroke-width="'+w+'" stroke-linecap="round"/>'}
+function gaugeArc(cx,cy,r,a0,s,f,c,w){var o=path(arc(cx,cy,r,a0,s),w+12,'rgba(3,10,15,.62)')+path(arc(cx,cy,r,a0,s),w*.55,'rgba(234,244,248,.42)');
+ if(f>0)o+=path(arc(cx,cy,r,a0,s*f),w,c);return o}
+function disc(cx,cy,r){var id='d'+(++uid);return '<defs><radialGradient id="'+id+'"><stop offset=".5" stop-color="#040c12" stop-opacity=".36"/><stop offset="1" stop-color="#040c12" stop-opacity="0"/></radialGradient></defs><circle cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="url(#'+id+')"/>'}
+function qg(cx,cy,r,left,lb,v,u,f,c,est){var a=left?225:315,s=left?-90:90,dx=left?22:-22,U=v==='—'?'':u;
+ return disc(cx,cy,r*1.12)+gaugeArc(cx,cy,r,a,s,f,c,20)+tx(cx+dx,cy-84,lb,26,{f:c,a:'middle',ls:2,hw:9})+tx(cx+dx,cy+50,val(v,est,150),150,{a:'middle',hw:14})+(U?tx(cx+dx,cy+98,U,32,{f:C.unit,a:'middle',w:600}):'')}
+function fg(cx,cy,r,lb,v,u,f,c,est,max,vs){var o=disc(cx,cy,r*1.1)+gaugeArc(cx,cy,r,135,270,f,c,r>230?30:24),U=v==='—'?'':u;
+ if(max){for(var i=0;i<=max;i+=20){var a=135+270*i/max;o+=tx(+pt(cx,cy,r-58,a).split(' ')[0],+pt(cx,cy,r-58,a).split(' ')[1]+10,i,28,{f:C.unit,a:'middle',w:600})}}
+ return o+tx(cx,cy-vs*.62,lb,26,{f:c,a:'middle',ls:2,hw:9})+tx(cx,cy+vs*.34,val(v,est,vs),vs,{a:'middle',hw:13})+(U?tx(cx,cy+vs*.34+42,U,32,{f:C.unit,a:'middle',w:600}):'')}
+function card(x,y,w,h,lb,v,u,c){var U=v==='—'?'':u;return '<rect x="'+x+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="20" fill="rgba(7,19,30,.68)" stroke="rgba(234,244,248,.14)" stroke-width="2"/>'+tx(x+24,y+44,lb,24,{f:c,ls:1.2,nh:1})+
+ '<text x="'+(x+24)+'" y="'+(y+h-30)+'" fill="'+C.text+'" font-size="64" font-weight="700">'+v+(U?'<tspan font-size="30" font-weight="600" fill="'+C.unit+'" dx="8">'+U+'</tspan>':'')+'</text>'}
+function bat(x,y,w,s){var o='<rect x="'+x+'" y="'+y+'" width="'+w+'" height="20" rx="10" fill="rgba(7,19,30,.72)" stroke="rgba(234,244,248,.3)" stroke-width="2"/>';
+ if(s.fb>0)o+='<rect x="'+(x+3)+'" y="'+(y+3)+'" width="'+((w-6)*s.fb)+'" height="14" rx="7" fill="'+C.batt+'"/>';
+ for(var i=1;i<10;i++)o+='<rect x="'+(x+w*i/10-1)+'" y="'+(y+2)+'" width="2" height="16" fill="rgba(7,19,30,.55)"/>';
+ o+=tx(x,y+82,s.v+(s.v==='—'?'':'<tspan font-size="32" fill="'+C.unit+'" dx="8">В</tspan>'),54)+tx(x+w,y+82,s.soc+(s.soc==='—'?'':'<tspan font-size="32" dx="8">%</tspan>'),60,{f:C.batt,a:'end'});return o}
+function chip(W,y,t,dark,fill){var w=t.length*23+56;return '<rect x="'+(W/2-w/2)+'" y="'+y+'" width="'+w+'" height="66" rx="33" fill="'+(fill||C.pink)+'"/><text x="'+W/2+'" y="'+(y+45)+'" text-anchor="middle" font-size="34" font-weight="800" letter-spacing="1" fill="'+(dark||'#23060f')+'">'+t+'</text>'}
+function scr(W,H,top,bot){var id='g'+(++uid),o='<defs><linearGradient id="'+id+'b" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#040c12" stop-opacity="0"/><stop offset=".55" stop-color="#040c12" stop-opacity=".46"/><stop offset="1" stop-color="#040c12" stop-opacity=".82"/></linearGradient><linearGradient id="'+id+'t" x1="0" y1="1" x2="0" y2="0"><stop offset="0" stop-color="#040c12" stop-opacity="0"/><stop offset=".6" stop-color="#040c12" stop-opacity=".46"/><stop offset="1" stop-color="#040c12" stop-opacity=".78"/></linearGradient></defs>';
+ if(bot)o+='<rect x="0" y="'+(H-bot)+'" width="'+W+'" height="'+bot+'" fill="url(#'+id+'b)"/>';
+ if(top)o+='<rect x="0" y="0" width="'+W+'" height="'+top+'" fill="url(#'+id+'t)"/>';return o}
+var TR='M1690 92 C1760 70 1846 96 1848 160 C1850 214 1790 214 1766 244 C1744 272 1700 300 1650 282 C1594 262 1556 214 1584 164 C1602 130 1640 106 1690 92 Z';
+function track(dx,dy,sc){return '<g transform="translate('+dx+' '+dy+') scale('+sc+')"><rect x="1524" y="54" width="342" height="276" rx="20" fill="rgba(7,19,30,.68)" stroke="rgba(234,244,248,.14)" stroke-width="2"/>'+path(TR,10,'rgba(234,244,248,.55)')+path('M1690 92 C1760 70 1846 96 1848 160 C1850 214 1790 214 1766 244',10,C.cyan)+'<circle cx="1766" cy="244" r="17" fill="#fff" stroke="'+C.cyan+'" stroke-width="7"/></g>'}
+function ovl(p,land,s,extra){s=s||OK;var W=land?1920:1080,H=land?1080:1920,o='';
+ if(p==='min'){o+=scr(W,H,0,430);var y=H-96,x=62;
+  o+=tx(x,y,val(s.sp,false,240),240,{hw:16});o+=(s.sp==='—'?'':tx(x+316,y,'км/ч',48,{f:C.unit,w:600}));
+  var bx=land?640:610,bw=land?440:408;o+=tx(bx,y-104,'ШИМ',28,{f:C.green,ls:2});o+=tx(bx+bw,y-82,val(s.du,s.est,110)+(s.du==='—'?'':'<tspan font-size="46" fill="'+C.unit+'" dx="8">%</tspan>'),110,{a:'end',hw:10});
+  o+='<rect x="'+bx+'" y="'+(y-30)+'" width="'+bw+'" height="30" rx="15" fill="rgba(7,19,30,.74)" stroke="rgba(234,244,248,.32)" stroke-width="2"/>'+(s.fd>0?'<rect x="'+(bx+4)+'" y="'+(y-26)+'" width="'+(bw-8)*s.fd+'" height="22" rx="11" fill="'+C.green+'"/>':'');
+  if(s.chip)o+=chip(W,62,s.chip);
+ }else if(p==='hud'){
+  if(land){o+=scr(W,H,0,600);o+=qg(292,800,226,true,'СКОРОСТЬ',s.sp,'км/ч',s.fs,C.cyan)+qg(1628,800,226,false,'ШИМ',s.du,'%',s.fd,C.green,s.est);
+   o+=card(574,694,250,166,'ТОК БАТ.',s.i,'А',C.batt)+card(838,694,250,166,'КОНТРОЛЛЕР',s.t,'°C',C.orange)+card(1102,694,250,166,'МОТОР',s.m,'°C',C.pink)+bat(574,884,778,s);
+  }else{o+=scr(W,H,620,620);o+=qg(286,310,226,true,'СКОРОСТЬ',s.sp,'км/ч',s.fs,C.cyan)+qg(794,310,226,false,'ШИМ',s.du,'%',s.fd,C.green,s.est);
+   o+=card(54,1484,313,176,'ТОК БАТАРЕИ',s.i,'А',C.batt)+card(383,1484,313,176,'КОНТРОЛЛЕР',s.t,'°C',C.orange)+card(712,1484,314,176,'МОТОР',s.m,'°C',C.pink)+bat(62,1696,956,s);}
+  if(s.chip)o+=chip(W,land?62:586,s.chip);
+ }else{
+  if(land){o+=scr(W,H,340,560);o+=tx(62,112,'12:48',64,{hw:9})+tx(62,160,'ВРЕМЯ',24,{f:C.unit,ls:2})+tx(320,112,'8.4<tspan font-size="30" fill="'+C.unit+'" dx="8">км</tspan>',64,{hw:9})+tx(320,160,'ПУТЬ',24,{f:C.unit,ls:2});
+   o+=track(0,0,1)+fg(370,706,310,'СКОРОСТЬ',s.sp,'км/ч',s.fs,C.cyan,false,80,184)+fg(1636,796,220,'ШИМ',s.du,'%',s.fd,C.green,s.est,0,110);
+   o+=card(730,694,226,166,'ТОК БАТ.',s.i,'А',C.batt)+card(970,694,226,166,'КОНТР.',s.t,'°C',C.orange)+bat(730,884,466,s);
+  }else{o+=scr(W,H,360,1000);o+=tx(62,118,'12:48',64,{hw:9})+tx(62,166,'ВРЕМЯ',24,{f:C.unit,ls:2})+tx(62,268,'8.4<tspan font-size="30" fill="'+C.unit+'" dx="8">км</tspan>',64,{hw:9})+tx(62,316,'ПУТЬ',24,{f:C.unit,ls:2});
+   o+=track(-846,0,1)+fg(352,1198,296,'СКОРОСТЬ',s.sp,'км/ч',s.fs,C.cyan,false,80,184)+fg(826,1240,198,'ШИМ',s.du,'%',s.fd,C.green,s.est,0,100);
+   o+=card(54,1496,313,166,'ТОК БАТАРЕИ',s.i,'А',C.batt)+card(383,1496,313,166,'КОНТРОЛЛЕР',s.t,'°C',C.orange)+card(712,1496,314,166,'МОТОР',s.m,'°C',C.pink)+bat(62,1696,956,s);}
+  if(s.chip)o+=chip(W,land?200:62,s.chip);
+ }
+ return '<svg class="ov" viewBox="0 0 '+W+' '+H+'">'+o+(extra||'')+'</svg>'}
+function scene(k){return '<div class="scn '+k+'"><i class="bd sky"></i><i class="bd glow"></i><i class="bd bl"></i><i class="bd br"></i><i class="bd rd"></i><i class="bd wet"></i><i class="bd lamps"></i><i class="bd ln"></i><i class="grain"></i><i class="vig"></i></div>'}
+function today(land){var W=land?1280:720,H=land?720:1280,y=land?36:24,sz=land?18.7:10.5,xs=land?[120,260,400,560,720,860]:[150,235,320,400,480,560],v=['96 V','78 %','−18 A','34°C','1762 W','61 %'],o='';
+ var w=land?128:74,h=sz*2.4;
+ v.forEach(function(s,i){o+='<rect x="'+(xs[i]-w*.2)+'" y="'+y+'" width="'+w+'" height="'+h+'" rx="6" fill="rgba(60,60,60,.6)"/><circle cx="'+(xs[i])+'" cy="'+(y+h/2)+'" r="'+sz*.34+'" fill="none" stroke="#fff" stroke-width=".9"/><text x="'+(xs[i]+sz*.7)+'" y="'+(y+h*.66)+'" font-size="'+sz+'" fill="#fff" font-family="sans-serif">'+s+'</text>'});
+ var cx=land?1130:610,cy=land?590:1120,r=land?90:68;
+ o+='<path d="'+arc(cx,cy,r,135,270)+'" fill="none" stroke="#FFC107" stroke-opacity=".2" stroke-width="7"/><path d="'+arc(cx,cy,r,135,113)+'" fill="none" stroke="#FFC107" stroke-width="7"/><text x="'+cx+'" y="'+(cy+sz)+'" text-anchor="middle" font-size="'+sz*2.6+'" fill="#FFC107" font-family="sans-serif">42</text><text x="'+cx+'" y="'+(cy+sz*2.2)+'" text-anchor="middle" font-size="'+sz*.9+'" fill="#FFC107" font-family="sans-serif">km/h</text>';
+ return '<svg class="ov" viewBox="0 0 '+W+' '+H+'">'+o+'</svg>'}
+
+function vf(sc,w,h,inner,cl){return '<div class="vf '+(cl||'')+'" style="width:'+w+'px;height:'+h+'px">'+scene(sc)+inner+'</div>'}
+function shot(code,title,body,lg,cl,old){return '<div class="shot '+(cl||'')+'"><div class="cap"><span class="code'+(old?' old':'')+'">'+code+'</span><span class="ttl">'+title+'</span></div>'+body+'<div class="lg">'+lg+'</div></div>'}
+
+/* dashboard */
+function spark(c,seed,h){var p=[],n=26,i;for(i=0;i<n;i++){var y=.52+.3*Math.sin(i*.55+seed)+.14*Math.sin(i*1.7+seed*2);p.push((i*100/(n-1)).toFixed(1)+','+(y*(h||18)).toFixed(1))}
+ return '<svg viewBox="0 0 100 '+(h||18)+'" preserveAspectRatio="none"><polyline points="'+p.join(' ')+'" fill="none" stroke="'+c+'" stroke-width="1.4" vector-effect="non-scaling-stroke"/></svg>'}
+var MAP='<div class="mapbg"><svg viewBox="0 0 390 844" preserveAspectRatio="xMidYMid slice"><g fill="none" stroke="#1b3342" stroke-width="7"><path d="M-20 300 L420 210"/><path d="M60 -10 L190 860"/><path d="M-20 640 L420 520"/><path d="M340 -10 L250 860"/></g><g fill="none" stroke="#132a38" stroke-width="3"><path d="M-20 450 L420 380"/><path d="M-20 170 L420 90"/><path d="M130 -10 L300 860"/><path d="M-20 760 L420 660"/><path d="M0 330 L120 520 L240 470 L420 700"/></g><path d="M126 840 L150 600 L176 420 L214 395" fill="none" stroke="#27D5F5" stroke-width="4" opacity=".75"/><path d="M196 408 l-13 31 13 -7 13 7z" fill="#EAF4F8" stroke="#07131E" stroke-width="2"/></svg></div><div style="position:absolute;inset:0;background:linear-gradient(180deg,rgba(7,19,30,.86) 0,rgba(7,19,30,.28) 28%,rgba(7,19,30,.05) 45%,rgba(7,19,30,.3) 62%,rgba(7,19,30,.9) 85%)"></div>';
+function sb(){return '<div class="sb"><span>12:48</span><span>78 %</span></div>'}
+function cb(i,x){return '<div class="cbtn"><span>'+ic(i)+(x||'')+'</span></div>'}
+function gsvg(left,f,c){var w=184,h=122,d=112,cx=left?d/2:w-d/2,cy=61,a=left?225:315,s=left?-90:90;
+ return '<svg viewBox="0 0 184 122"><path d="'+arc(cx,cy,d/2,a,s)+'" fill="none" stroke="#8EA6B040" stroke-width="1.5" stroke-linecap="round"/><path d="'+arc(cx,cy,d/2,a,s*f)+'" fill="none" stroke="'+c+'" stroke-width="3.3" stroke-linecap="round"/></svg>'}
+function dash(m){
+ var rec=m==='today'?'<div class="tonal">'+ic('cam')+'</div>':(m==='a1'?cb('cam','<i class="reddot"></i>'):'');
+ var side=cb('nav')+cb('loc')+(m==='a2'?'<div class="recbig"><span><i></i></span></div>':'');
+ return '<div class="ph">'+MAP+sb()+'<div class="dcol"><div style="display:flex;align-items:center">'+cb('grp')+'<div class="pill"><i></i>Begode T4<svg width="18" height="18" viewBox="0 0 24 24" fill="#8EA6B0"><path d="'+ICON.more+'"/></svg></div>'+cb('set')+'</div><div class="temp">34°C</div>'+
+ '<div class="tgr"><div><span>max 58km/h</span>'+spark(C.cyan,1,20)+'</div><div><span>max ~74%</span>'+spark(C.green,2.4,20)+'</div></div>'+
+ '<div class="g2"><div>'+gsvg(true,OK.fs,C.cyan)+'<span class="glb" style="color:var(--cyan)">СКОРОСТЬ</span><span class="gv">42</span><span class="gu">км/ч</span></div><div>'+gsvg(false,OK.fd,C.green)+'<span class="glb" style="color:var(--green)">ШИМ</span><span class="gv">~61</span><span class="gu">%</span></div></div>'+
+ '<div style="flex:1"></div><div style="display:flex;align-items:center;padding-bottom:2px">'+cb('chart')+rec+'<div style="flex:1"></div>'+cb('batt')+'</div>'+
+ '<div class="strip"><div><div class="sl" style="color:var(--pink)">МОТОР</div><div class="sv">41<small> °C</small></div>'+spark(C.pink,.4)+'</div><div><div class="sl" style="color:var(--orange)">КОНТРОЛЛЕР</div><div class="sv">34<small> °C</small></div>'+spark(C.orange,3)+'</div><div><div class="sl" style="color:var(--cyan)">ТОК МОТОРА</div><div class="sv">−24<small> А</small></div>'+spark(C.cyan,5)+'</div><div><div class="sl" style="color:var(--battery)">ТОК БАТАРЕИ</div><div class="sv">−18<small> А</small></div>'+spark(C.batt,2)+'</div></div>'+
+ '<div class="bline"><svg width="100%" height="13" viewBox="0 0 360 13"><path d="M0 6.5H360" stroke="#8EA6B059"/><path d="M0 6.5H281" stroke="#39E681" stroke-width="2"/>'+Array.from({length:11},function(_,i){return '<path d="M'+(i*36)+' 2.5v8" stroke="#8EA6B08c"/>'}).join('')+'</svg><div class="rr"><span>96.4 В</span><span>~38 км <b>78%</b></span></div></div></div><div class="side">'+side+'</div></div>'}
+
+/* capture */
+var BT={ok:'<span class="chip ok">'+ic('bt')+'T4 · 0.2 с</span>',bad:'<span class="chip bad">'+ic('bt')+'Нет связи · 0:14</span>',no:'<span class="chip warn">'+ic('bt')+'Колесо не подключено</span>'};
+var SD={ok:'<span class="chip">'+ic('sd')+'38 ГБ · 3 ч 40 мин</span>',low:'<span class="chip warn">'+ic('sd')+'1.2 ГБ · 7 мин</span>'};
+var SDS={ok:'<span class="chip">'+ic('sd')+'3 ч 40 мин</span>',low:'<span class="chip warn">'+ic('sd')+'7 мин</span>'};
+function cap(o){var s=o.s||OK,sc=o.day?'day':'dusk',fr='<div class="fr">'+scene(sc)+ovl(o.p||'hud',false,s)+'</div>',p;
+ if(o.v===2){var top=o.rec?'<div class="chips"><span class="chip rec"><i class="dot"></i>00:12:48</span>'+(BT[o.bt||'ok'])+'</div>':'<div class="chips">'+(BT[o.bt||'ok'])+(SD[o.sd||'ok'])+'</div>';
+  p='<div class="panel'+(o.rec?' rec':'')+'">'+top+(o.rec?'<div class="bar on"><i></i>Стоп</div>':'<div class="bar"><i></i>Начать запись</div>')+'</div>'}
+ else if(o.rec){p='<div class="panel rec"><div class="chips"><span class="chip rec"><i class="dot"></i>00:12:48</span>'+(BT[o.bt||'ok'])+'</div><div class="row" style="justify-content:center;position:relative"><div class="shut on"><i></i></div><div style="position:absolute;right:0;bottom:6px">'+(SDS[o.sd||'ok'])+'</div></div></div>'}
+ else{p='<div class="panel"><div class="chips">'+(BT[o.bt||'ok'])+(o.bt==='no'?'':(SD[o.sd||'ok']))+'</div><div class="row"><div class="rbtn">'+ic('back')+'</div><div class="rbtn">'+ic('sync')+'×1</div><div class="shut"><i></i></div><div class="rbtn">1080<br>30</div><div class="rbtn">'+ic('tune')+'HUD</div></div></div>'}
+ return '<div class="ph">'+fr+p+(o.top||'')+'</div>'}
+function capL(o){var s=o.s||OK,sc=o.day?'day':'dusk',fr='<div class="fr">'+scene(sc)+ovl(o.p||'hud',true,s)+'</div>',r;
+ var bc=o.bt==='bad'?BT.bad.replace('Нет связи · 0:14','Нет · 0:14'):'<span class="chip ok">'+ic('bt')+'T4 · 0.2 с</span>',sdc=o.sd==='low'?'<span class="chip warn">'+ic('sd')+'7 мин</span>':'<span class="chip">'+ic('sd')+'3 ч 40 мин</span>';
+ if(o.v===2){r='<div class="rail'+(o.rec?' rec':'')+'" style="justify-content:flex-start;gap:6px">'+(o.rec?'<span class="chip rec" style="font-size:21px;height:30px"><i class="dot" style="width:11px;height:11px"></i>12:48</span>':'')+bc+sdc+'<div class="bar'+(o.rec?' on':'')+'" style="flex:1;width:100%;flex-direction:column;font-size:19px"><i></i>'+(o.rec?'Стоп':'Запись')+'</div></div>'}
+ else if(o.rec){r='<div class="rail rec"><span class="chip rec" style="font-size:22px"><i class="dot"></i>12:48</span><div class="shut on"><i></i></div><div style="display:flex;flex-direction:column;gap:5px;align-items:center">'+bc+sdc+'</div></div>'}
+ else{r='<div class="rail"><div style="display:flex;gap:6px"><div class="rbtn">'+ic('back')+'</div><div class="rbtn">'+ic('tune')+'HUD</div></div><div class="shut"><i></i></div><div style="display:flex;gap:6px"><div class="rbtn">'+ic('sync')+'×1</div><div class="rbtn">1080<br>30</div></div></div>'}
+ return '<div class="ph l">'+fr+r+'</div>'}
+
+/* editor */
+function etop(dirty){return '<div class="etop"><div class="ib">'+ic('close')+'</div><div class="nm">HUD<small>'+(dirty?'есть изменения':'')+'</small></div><div class="ib">'+ic('undo')+'</div><div class="ib off">'+ic('redo')+'</div><div class="save">Сохранить</div></div>'}
+var SELC={x:54,y:1484,w:313,h:176};
+function sel(r,c){return '<rect x="'+(r.x-10)+'" y="'+(r.y-10)+'" width="'+(r.w+20)+'" height="'+(r.h+20)+'" rx="28" fill="rgba(39,213,245,.12)" stroke="'+(c||C.cyan)+'" stroke-width="10"/>'}
+function stage(extra,scn){return '<div class="estage"><div class="ega"><div class="ib on" title="Вертикаль"><svg viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/></svg></div><div class="ib" title="Горизонталь"><svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="10" rx="2"/></svg></div></div><div class="efr">'+scene(scn||'dusk')+ovl('hud',false,OK,extra)+'<span class="smp">ОБРАЗЕЦ</span></div></div>'}
+function ed1(){return '<div class="ph">'+etop(false)+stage('')+'<div class="es"><div class="hd"></div><div class="lbl" style="margin-top:6px">Пресет</div><div class="pre"><b>Минимум</b><b class="on">HUD</b><b>Гонка</b></div><div class="eh" style="height:30px;font-size:13px"><span>Виджеты</span><span style="color:var(--cyan);display:flex;align-items:center;gap:4px"><svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="'+ICON.add+'"/></svg>Добавить</span></div><div class="wl"><i style="background:var(--cyan)"></i>Скорость<span>дуга · сверху слева</span></div><div class="wl"><i style="background:var(--green)"></i>ШИМ<span>дуга · сверху справа</span></div><div class="wl"><i style="background:var(--battery)"></i>Ток батареи<span>карточка · снизу</span></div></div></div>'}
+function eh(){return '<div class="eh"><span style="color:var(--battery)">Ток батареи</span><div class="ib">'+ic('del')+'</div></div>'}
+function ed2(){return '<div class="ph">'+etop(true)+stage(sel(SELC))+'<div class="es"><div class="hd"></div>'+eh()+'<div class="tabs"><b class="on">Данные</b><b>Вид</b></div><div class="mg"><b>Скорость</b><b>ШИМ</b><b>Заряд</b><b class="on">Ток<small>батарея</small></b><b>Ток<small>мотор</small></b><b>Напряжение</b><b>Темп.<small>контроллер</small></b><b>Темп.<small>мотор</small></b><b>Мощность</b></div></div></div>'}
+function ed3(){return '<div class="ph">'+etop(true)+stage(sel(SELC))+'<div class="es"><div class="hd"></div>'+eh()+'<div class="tabs"><b>Данные</b><b class="on">Вид</b></div><div class="seg"><b>S</b><b class="on">M</b><b>L</b><b>XL</b></div><div class="seg"><b class="on">Карточка</b><b>Дуга</b><b>Полоса</b><b>График</b></div><div class="sw">'+[['Голубой',C.cyan],['Бирюза',C.green],['Зелёный',C.batt,1],['Оранж.',C.orange],['Розовый',C.pink],['Белый',C.text]].map(function(a){return '<div'+(a[2]?' class="on"':'')+'><i style="background:'+a[1]+'"></i>'+a[0]+'</div>'}).join('')+'</div></div></div>'}
+function ed4(){var g='';
+ [360,720].forEach(function(x){g+='<path d="M'+x+' 0V1920" stroke="#fff" stroke-opacity=".16" stroke-width="3" stroke-dasharray="20 20"/>'});[640,1280].forEach(function(y){g+='<path d="M0 '+y+'H1080" stroke="#fff" stroke-opacity=".16" stroke-width="3" stroke-dasharray="20 20"/>'});
+ g+='<rect x="54" y="54" width="972" height="1812" fill="none" stroke="#fff" stroke-opacity=".3" stroke-width="3"/>';
+ var r={x:383,y:1084,w:313,h:176};
+ g+='<path d="M540 0V1920" stroke="'+C.pink+'" stroke-width="7"/><path d="M0 1280H1080" stroke="'+C.pink+'" stroke-width="7"/>';
+ g+='<rect x="54" y="1484" width="313" height="176" rx="20" fill="none" stroke="#fff" stroke-opacity=".6" stroke-width="5" stroke-dasharray="16 14"/>';
+ g+='<g>'+'<rect x="'+r.x+'" y="'+r.y+'" width="'+r.w+'" height="'+r.h+'" rx="20" fill="#0a1a26"/>'+card(r.x,r.y,r.w,r.h,'ТОК БАТАРЕИ','−18','А',C.batt)+'</g>'+sel(r);
+ return '<div class="ph">'+etop(true)+stage(g)+'<div class="es"><div class="hd"></div><div class="eh"><span>Центр, нижняя треть</span><span style="color:var(--pink);font-size:13px">примагничено</span></div><div class="lg" style="margin:0 0 9px;color:var(--hud-muted);font-size:13px">Виджет идёт на 48 dp выше пальца, его не закрывает перчатка. Стрелки: точная доводка после отпускания.</div><div class="seg">'+['0','180','90','270'].map(function(d){return '<b><svg width="28" height="28" viewBox="0 0 24 24" fill="#EAF4F8" style="transform:rotate('+d+'deg)"><path d="'+ICON.more+'"/></svg></b>'}).join('')+'</div><div class="seg"><b>Вернуть на место</b></div></div></div>'}
+
+var h='';
+h+='<h1>Видео поездки: макеты на утверждение</h1><p class="sub">Шаг 4 плана <code>2026-11-02-ride-video-fixes.md</code>. Телеметрия вшивается в кадр при записи, райдер видит экран. Ответ одной строкой, например: «A1, B2, C1, D ок». Коды стоят над каждым экраном.</p><p class="sub">Значения для всех экранов: Begode T4, 42 км/ч, ШИМ ~61 %, 96.4 В, 78 %, −18 А, контроллер 34 °C. Мотор 41 °C, «ток мотора» −24 А, 12:48 и 8.4 км дописаны для заполнения. Запас хода на дашборде (~38 км) тоже условный. Шрифт цифр на дашборде: системный моноширинный, как в коде. Дорога нарисована CSS, это не фото.</p>';
+
+h+='<h2>A. Кнопка записи на дашборде</h2><p class="sub">Сейчас рядом стоят чужой Material-элемент на 40 dp и кружки HUD на 36 dp в слоте 48 dp. Отсюда разный цвет, размер и шаг.</p><div class="grid">';
+h+=shot('Сейчас','Для сравнения',dash('today'),'Реконструкция по <code>RideVideoButton.android.kt</code>, снимок не использовался. Цвет тональной кнопки зависит от темы.','',1);
+h+=shot('A1','Кружок в нижнем ряду',dash('a1'),'<b>Меняется:</b> кнопка становится <code>LightCircleButton</code> с красной точкой и шагом соседей. <b>Почему:</b> минимальная правка, но цель остаётся 48 dp, в перчатке это мало.');
+h+=shot('A2','Большая кнопка в правой колонке',dash('a2'),'<b>Меняется:</b> круг 56 dp в слоте 64 dp под навигацией, красное кольцо вместо значка видеокамеры. <b>Почему:</b> колонка у края и под большим пальцем, нижний ряд разгружается.');
+h+='</div><p class="lg" style="max-width:78ch">На Classic кнопка стоит в ряду со ссылками на Nearby и графики. Принцип тот же, отдельный экран не нарисован.</p>';
+
+h+='<h2>B. Экран записи</h2><p class="sub"><b>Правило экрана:</b> всё на кадре попадёт в файл, всё на тёмной панели не попадёт. Кадр 9:16 показан целиком, без обрезки. Шесть экранов ниже относятся к B1, два экрана B2 идут отдельным блоком.</p><div class="grid">';
+h+=shot('B1 · ожидание','Круглая кнопка',cap({}),'<b>Меняется:</b> кнопка 88 dp вместо ~40 dp, цели 58 dp, статус связи и места. <b>Почему:</b> перчатка и взгляд на долю секунды; настройки больше не уезжают в прокрутку.');
+h+=shot('B1 · запись','Лишнее убрано',cap({rec:1}),'<b>Меняется:</b> REC и время крупно, красная полоса панели, остальные кнопки скрыты. <b>Почему:</b> случайно нажать можно только стоп, а индикации записи сейчас нет.');
+h+=shot('B1 · нет колеса','До старта',cap({s:LOST,bt:'no',top:''}),'<b>Меняется:</b> оранжевый статус и прочерки до старта, кнопка остаётся рабочей. <b>Почему:</b> сейчас запись без колеса стартует молча, а запретить её нельзя: видео всё равно нужно.');
+h+=shot('B1 · связь пропала','Во время записи',cap({rec:1,s:LOST,bt:'bad'}),'<b>Меняется:</b> значения становятся «—», в файл вшивается «НЕТ СВЯЗИ», на панели счётчик без связи. <b>Почему:</b> ролик сам объясняет провал, ноль не выдумывается.');
+h+=shot('B1 · мало места','Оранжевое предупреждение',cap({rec:1,sd:'low',day:1}),'<b>Меняется:</b> чип становится оранжевым при остатке меньше 10 минут (порог обсуждается). <b>Почему:</b> сегодня о нехватке места узнают только по ошибке в конце.');
+h+=shot('B1 · Назад','Защита от случайного выхода',cap({rec:1,top:'<div class="dim"></div><div class="sh2"><div style="font:700 20px Inter,sans-serif">Запись идёт</div><div style="color:var(--hud-muted);font-size:14px;margin-top:4px">Системная «Назад» не останавливает запись без подтверждения.</div><div class="bt">Продолжить запись</div><div class="bt red">Остановить и сохранить</div></div>'}),'<b>Меняется:</b> лист с двумя целями по 64 dp. <b>Почему:</b> сейчас одно нажатие «Назад» завершает запись.');
+h+=shot('B2 · ожидание','Вся полоса как кнопка',cap({v:2}),'<b>Меняется:</b> цель 366×92 dp, попасть можно не глядя. Камера, качество и пресет уходят в настройки. <b>Цена:</b> меняем настройки на шаг дольше.');
+h+=shot('B2 · запись','Белая полоса «Стоп»',cap({v:2,rec:1}),'<b>Меняется:</b> цвет полосы меняется с красного на белый, чтобы состояние читалось боковым зрением. <b>Риск:</b> большая цель легче задевается, решается удержанием (вопрос ниже).');
+h+='</div><h3>Горизонталь</h3><div class="grid">';
+h+=shot('B1-Г · ожидание','Панель становится рейкой справа',capL({}),'<b>Меняется:</b> появляется раскладка 16:9, рейка на месте нижней панели, те же цели. <b>Почему:</b> сейчас верхняя и нижняя панели съедают высоту кадра. При перевороте на 180° рейка уходит к другому краю.','w');
+h+=shot('B1-Г · запись, связь пропала','Прочерки и «НЕТ СВЯЗИ»',capL({rec:1,s:LOST,bt:'bad'}),'<b>Меняется:</b> логика как в портрете. Значения, подписи и чип перестроены под широкий кадр.','w');
+h+=shot('B2-Г · запись','Рейка как кнопка',capL({v:2,rec:1}),'<b>Меняется:</b> вся нижняя часть рейки это стоп. <b>Почему:</b> при креплении на руле рука подходит сбоку, цель 135×230 dp.','w');
+h+='</div>';
+
+h+='<h2>C. Система оверлея</h2><p class="sub">Единица <code>u = короткая сторона / 1080</code>. Значение 64u, крупная цифра 150u и больше, подпись 24u. Аудит предлагал 44u и 16u, но подпись тогда выходит около 5–6 dp на экране телефона, поэтому размеры подняты. Рамки ниже показаны с одной короткой стороной (304 px), поэтому цифры в горизонтали и портрете одного размера: это и есть масштаб от короткой стороны.</p>';
+function cset(code,name,p,lg){h+='<h3>'+code+'. '+name+'</h3><div class="grid">'+
+ shot(code+' · 1080p','Яркий кадр, 1920×1080',vf('day',540,304,ovl(p,true),'l'),lg,'vid')+
+ shot(code+' · 720p','Яркий, 720×1280',vf('day',304,540,ovl(p,false)),'Та же разметка, значение в файле 43 px вместо 64.','vp')+
+ shot(code+' · тёмный','Тёмный, 1080×1920',vf('dusk',304,540,ovl(p,false)),'Проверка в обратную сторону: подложки не глушат кадр.','vp')+'</div>'}
+cset('C1','Минимум','min','<b>Состав:</b> скорость и ШИМ, полоса вместо дуги. <b>Почему:</b> нижний левый угол и почти весь кадр свободен.');
+cset('C2','HUD','hud','<b>Состав:</b> дуги Volty, три карточки, заряд. <b>Почему:</b> ролик узнаётся как Volty; значков нет, у каждого числа русская подпись.');
+cset('C3','Гонка','race','<b>Состав:</b> большие шкалы, время, путь, мини-трек. <b>Честно:</b> трек из GPS-точек без тайлов карты, это отдельная работа и появится позже остального.');
+h+='<h3>Доказательство масштаба</h3><div class="grid">';
+h+=shot('Сейчас · 720p','Портрет, 720×1280',vf('day',304,540,today(false)),'Реконструкция по коду, не снимок: шрифт 10.5 px, дуга без тени.','vp',1);
+h+=shot('Сейчас · 1080p','Горизонталь, 1920×1080',vf('day',540,304,today(true)),'Те же значения: ширина чуть лучше, но без подписей и на английском.','vid',1);
+h+='</div><table><tr><th>Кадр</th><th>Значение сейчас, px</th><th>Значение новое (64u), px</th><th>Подпись новая (24u), px</th><th>Значение, % короткой стороны: сейчас / новое</th></tr><tr><td>720p портрет</td><td>10.5</td><td>43</td><td>16</td><td>1.5 / 5.9</td></tr><tr><td>720p горизонталь</td><td>18.7</td><td>43</td><td>16</td><td>2.6 / 5.9</td></tr><tr><td>1080p портрет</td><td>15.75</td><td>64</td><td>24</td><td>1.5 / 5.9</td></tr><tr><td>1080p горизонталь</td><td>28</td><td>64</td><td>24</td><td>2.6 / 5.9</td></tr><tr><td>4K горизонталь</td><td>56</td><td>128</td><td>48</td><td>2.6 / 5.9</td></tr></table>';
+var crop='<svg class="ov" viewBox="44 1474 992 400" style="position:absolute;inset:0;width:100%;height:100%">'+ovl('hud',false).replace(/^<svg[^>]*>/,'').replace(/<\/svg>$/,'')+'</svg>';
+h+='<h3>Вырез 1:1 из файла 720×1280</h3><div class="grid">'+shot('C · 1:1','Нижний блок HUD, пиксель в пиксель',vf('day',661,267,crop,'l'),'Один пиксель файла равен одному CSS-пикселю страницы при масштабе 100 %. На телефоне ролик будет мельче, на мониторе примерно так.','w')+'</div>';
+h+='<h3>Состояния значений</h3><div class="grid"><div class="shot full"><div class="vf l" style="width:100%;max-width:1200px;height:200px">'+scene('day')+'<svg class="ov" viewBox="0 0 2400 400" style="position:absolute;inset:0;width:100%;height:100%"><rect width="2400" height="400" fill="rgba(4,12,18,.28)"/>'+
+ card(40,100,330,190,'ШИМ замерен','61','%',C.green)+card(400,100,330,190,'ШИМ расчётный','<tspan fill="'+C.orange+'">~</tspan>61','%',C.green)+card(760,100,330,190,'ШИМ потолок','≥100','%',C.green)+card(1120,100,330,190,'Нет значения','—','',C.batt)+chip(1650,160,'НЕТ СВЯЗИ')+chip(1980,160,'ТЕМП. 85 °C','#2a1700',C.orange)+chip(2250,160,'ДЕМО','#061a22',C.cyan)+'</svg></div><div class="lg"><b>Правило:</b> «~» только у расчётного ШИМ, «≥100» у потолка, «—» без единицы. Минус всегда U+2212, «−0» не печатается. Предупреждающий значок появляется только при сработавшем правиле, постоянного треугольника у ШИМ больше нет. ДЕМО: чип вместо голого жёлтого текста.</div></div></div>';
+
+h+='<h2>D. Редактор</h2><p class="sub">Один экран: кадр сверху, лист снизу. Кадр ужат до 266×472 dp, чтобы лист не закрывал виджеты. Камера не отключается, при её отсутствии стоит сохранённый кадр; значения всегда подписаны «ОБРАЗЕЦ», чип в файл не попадает.</p><div class="grid">';
+h+=shot('D · обзор','Ничего не выбрано',ed1(),'<b>Меняется:</b> вместо формы на 20 полей: пресеты и короткий список, названный по метрике. <b>Почему:</b> «Виджет 3» ничего не говорит, а предпросмотра сейчас нет. Смена пресета отменяется кнопкой отмены.');
+h+=shot('D · данные','Нажатие по виджету',ed2(),'<b>Меняется:</b> выбор нажатием на кадре, метрика плиткой 56 dp. Подпись и единица ставятся сами. <b>Почему:</b> «Скорость» над зарядом становится невозможной, мили берутся из настроек.');
+h+=shot('D · вид','Размер, стиль, цвет',ed3(),'<b>Меняется:</b> шесть цветов Volty по названиям, круги 46 dp в цели 54 dp, вместо <code>#AARRGGBB</code>. Размер S–XL вместо px. <b>Почему:</b> шестнадцатеричный ввод и единицы «sp» здесь неверны.');
+h+=shot('D · перетаскивание','Магнитные направляющие',ed4(),'<b>Меняется:</b> сетка из девяти зон, поля 5 %, розовые линии при примагничивании. Хранится как якорь и смещение. <b>Почему:</b> раскладка не ломается при смене разрешения, сейчас перетаскивания нет совсем.');
+h+='</div>';
+
+h+='<h2>Что нельзя показать статичным макетом</h2><ul><li>Вибрацию, кнопку громкости и звук старта и стопа. Они планируются, но здесь их не видно.</li><li>Плавность: сглаживание дуг, частоту смены цифр, нагрев и выпадение кадров. Цифр по этому нет, шаг 3 плана ещё не выполнен.</li><li>Читаемость на солнце и в реальном ролике. Яркий кадр тут нарисован, настоящее видео с дрожанием и бликами может оказаться хуже.</li><li>Шрифт. Inter здесь заместитель, если Google Fonts недоступен, браузер подставит системный. Для приложения нужен встроенный шрифт с кириллицей и табличными цифрами.</li><li>Реальные углы и обрезку камеры. Также не нарисованы редактор в горизонтали, экран «сохранено» с Открыть и Поделиться, сценарий запрета камеры и экран Classic.</li><li>Поведение ШИМ на Begode. «~61» показан как образец пометки; будет ли значение мигать, проверяется на колесе.</li></ul>';
+h+='<h2>Нужно решение</h2><div class="answer"><ol style="margin:0;padding-left:20px"><li>A1 или A2.</li><li>B1 или B2. Рекомендую B1: меньше риск случайного стопа и настройки под рукой.</li><li>Стоп: одно нажатие или удержание 0.6 с. Рекомендую одно нажатие в B1, удержание только если выбран B2.</li><li>Какой из C1, C2, C3 будет пресетом по умолчанию. Рекомендую C2. C3 с мини-треком выйдет позже остальных.</li><li>Показывать ли время и путь в C3 как значения поездки или записи. В макете это время записи.</li><li>Порог предупреждения о месте: 10 минут устраивает?</li></ol></div>';
+document.getElementById('m').innerHTML=h;
+var b=document.getElementById('tg');b.onclick=function(){var r=document.documentElement,l=r.getAttribute('data-page')==='light';if(l){r.removeAttribute('data-page');b.textContent='Светлая страница'}else{r.setAttribute('data-page','light');b.textContent='Тёмная страница'}};
+})();
+</script>
+</body>
+</html>

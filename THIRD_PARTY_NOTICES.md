@@ -54,3 +54,10 @@ additional notices beside their source/build documentation. These declarations
 and the source bundle do not by themselves establish a legal conclusion about all
 combined-application dependencies; the scoped evidence and unresolved items remain
 explicit in `docs/third-party/vescape-history.md`.
+
+## Roboto
+
+The ride-video overlay burns text in with Roboto Medium and Bold
+(`composeApp/src/androidMain/assets/fonts/`), copied unmodified from the Android
+platform's `data/fonts`. Copyright 2011 Google Inc., licensed under the Apache License,
+Version 2.0; the full text is `third-party/credits/licenses/Roboto-Apache.txt`.

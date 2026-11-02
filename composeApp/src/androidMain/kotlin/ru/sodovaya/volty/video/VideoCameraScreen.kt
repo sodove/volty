@@ -64,6 +64,8 @@ internal fun VideoCameraScreen(
             VideoMetric.BATTERY_CURRENT to stringResource(Res.string.video_label_battery_current),
             VideoMetric.BATTERY_POWER to stringResource(Res.string.video_label_battery_power),
             VideoMetric.BATTERY_TEMPERATURE to stringResource(Res.string.video_label_battery_temperature),
+            VideoMetric.ELAPSED to stringResource(Res.string.video_label_elapsed),
+            VideoMetric.DISTANCE to stringResource(Res.string.video_label_distance),
         ),
         percent = stringResource(Res.string.unit_percent),
         celsius = stringResource(Res.string.unit_celsius),
@@ -72,6 +74,8 @@ internal fun VideoCameraScreen(
         watt = stringResource(Res.string.history_unit_watt),
         kmh = stringResource(Res.string.unit_kmh),
         demo = stringResource(Res.string.video_demo),
+        km = stringResource(Res.string.video_unit_km),
+        noLink = stringResource(Res.string.video_chip_no_link),
     )
     SideEffect { camera.strings = overlayStrings }
     val owner = LocalLifecycleOwner.current

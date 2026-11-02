@@ -4,8 +4,8 @@
     <string name="video_editor_templates">Шаблоны</string>
     <string name="video_editor_template_top_row">Верхний ряд</string>
     <string name="video_editor_template_hud">HUD</string>
-    <string name="video_editor_template_minimal">Минимализм</string>
-    <string name="video_editor_template_racing">Гонки</string>
+    <string name="video_editor_template_minimal">Минимум</string>
+    <string name="video_editor_template_racing">Гонка</string>
     <string name="video_editor_saved_templates">Сохранённые шаблоны</string>
     <string name="video_editor_no_saved_templates">Сохранённых шаблонов пока нет</string>
     <string name="video_editor_template_name">Название шаблона</string>
@@ -74,4 +74,12 @@
     <string name="video_editor_metric_battery_current">Ток · батарея</string>
     <string name="video_editor_metric_battery_power">Мощность · батарея</string>
     <string name="video_editor_metric_battery_temperature">Температура · батарея</string>
+    <string name="video_editor_template_panel">Панель</string>
+    <string name="video_editor_template_large">Крупно</string>
+    <string name="video_editor_kind_arc_left">Дуга слева</string>
+    <string name="video_editor_kind_arc_right">Дуга справа</string>
+    <string name="video_editor_kind_bar">Полоса</string>
+    <string name="video_editor_kind_text">Число</string>
+    <string name="video_editor_metric_elapsed">Время</string>
+    <string name="video_editor_metric_distance">Путь</string>
 </resources>

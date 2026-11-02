@@ -15,8 +15,18 @@ data class OverlayGeometry(
     val cropBottom: Int,
 )
 
-/** What one widget will look like: the rendered text, the colours the rules picked, and the arc's quantized sweep. */
-data class OverlayWidgetFacet(val text: String, val foreground: String, val background: String, val arcStep: Int?)
+/**
+ * What one widget will look like: the rendered text, the colours the rules picked, and the quantized sweep of its dial
+ * or bar. [scaleMax] is there because a dial that widens redraws its numbers even if the fraction happens to match.
+ */
+data class OverlayWidgetFacet(
+    val text: String,
+    val foreground: String,
+    val background: String,
+    val arcStep: Int?,
+    val secondaryText: String? = null,
+    val scaleMax: Float? = null,
+)
 
 /**
  * Everything that decides what the overlay bitmap looks like. Two frames with equal keys draw identical overlays,
@@ -35,6 +45,7 @@ data class OverlayDrawKey(
     val system: UnitSystem,
     val geometry: OverlayGeometry,
     val clockText: String? = null,
+    val noLink: Boolean = false,
 )
 
 /** Arc sweep resolution: half a degree of a 270 degree dial is finer than the eye or the encoder can tell. */
@@ -47,21 +58,29 @@ fun overlayDrawKey(
     system: UnitSystem,
     geometry: OverlayGeometry,
     clockText: String? = null,
+    trip: OverlayTrip = OverlayTrip(),
+    scales: Map<VideoMetric, Float> = emptyMap(),
 ): OverlayDrawKey {
     val facets = preset.widgets.map { widget ->
-        val reading = snapshot?.readings?.get(widget.metric)
+        val reading = overlayReading(widget.metric, snapshot, trip)
         val style = overlayStyle(widget, reading)
-        val value = reading?.value?.takeIf { it.isFinite() }
-        val arcStep = if (widget.kind == OverlayWidgetKind.ARC && value != null) {
-            val span = (widget.arc.max - widget.arc.min).toDouble()
-            (((value - widget.arc.min) / span).coerceIn(0.0, 1.0) * ARC_STEPS).roundToInt()
-        } else {
-            null
-        }
-        OverlayWidgetFacet(videoValueText(widget.metric, reading, system), style.foreground, style.background, arcStep)
+        val swept = widget.kind in SWEPT_KINDS
+        val arcStep = if (swept) overlayFraction(widget, reading, system, scales)?.let { (it * ARC_STEPS).roundToInt() } else null
+        OverlayWidgetFacet(
+            text = videoValueText(widget.metric, reading, system),
+            foreground = style.foreground,
+            background = style.background,
+            arcStep = arcStep,
+            secondaryText = widget.bar.secondary?.let { videoValueText(it, overlayReading(it, snapshot, trip), system) },
+            scaleMax = if (swept && widget.arc.autoScale) overlayScaleMax(widget, scales) else null,
+        )
     }
-    return OverlayDrawKey(preset, facets, snapshot?.demo == true, strings, system, geometry, clockText)
+    return OverlayDrawKey(preset, facets, snapshot?.demo == true, strings, system, geometry, clockText, overlayNoLink(snapshot))
 }
+
+private val SWEPT_KINDS = setOf(
+    OverlayWidgetKind.ARC, OverlayWidgetKind.ARC_LEFT, OverlayWidgetKind.ARC_RIGHT, OverlayWidgetKind.BAR,
+)
 
 /**
  * Remembers the key of the last overlay drawn into the current overlay surface. [shouldDraw] is false for an

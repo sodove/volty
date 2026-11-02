@@ -2,17 +2,21 @@
     <!-- Слова, вшиваемые в видео поездки. Короткие: делят карточку со значением. -->
     <string name="video_label_speed">Скорость</string>
     <string name="video_label_duty">ШИМ</string>
-    <string name="video_label_esc_temperature">T контр.</string>
-    <string name="video_label_motor_temperature">T мотора</string>
-    <string name="video_label_motor_current">I мотора</string>
-    <string name="video_label_controller_current">I контр.</string>
-    <string name="video_label_controller_power">P контр.</string>
+    <string name="video_label_esc_temperature">Контроллер</string>
+    <string name="video_label_motor_temperature">Мотор</string>
+    <string name="video_label_motor_current">Ток мотора</string>
+    <string name="video_label_controller_current">Ток контр.</string>
+    <string name="video_label_controller_power">Мощн. контр.</string>
     <string name="video_label_soc">Заряд</string>
     <string name="video_label_voltage">Напряжение</string>
-    <string name="video_label_battery_current">I бат.</string>
-    <string name="video_label_battery_power">P бат.</string>
-    <string name="video_label_battery_temperature">T бат.</string>
+    <string name="video_label_battery_current">Ток батареи</string>
+    <string name="video_label_battery_power">Мощн. батареи</string>
+    <string name="video_label_battery_temperature">Темп. батареи</string>
+    <string name="video_label_elapsed">Время</string>
+    <string name="video_label_distance">Путь</string>
     <string name="video_demo">ДЕМО</string>
+    <string name="video_unit_km">км</string>
+    <string name="video_chip_no_link">НЕТ СВЯЗИ</string>
 
     <string name="video_stop_confirm_title">Остановить запись?</string>
     <string name="video_stop_confirm_text">Снятое видео будет сохранено.</string>

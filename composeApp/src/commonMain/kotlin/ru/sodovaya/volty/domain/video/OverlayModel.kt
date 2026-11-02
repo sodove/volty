@@ -16,6 +16,12 @@ enum class VideoMetric(val unit: String) {
     BATTERY_CURRENT("A"),
     BATTERY_POWER("W"),
     BATTERY_TEMPERATURE("°C"),
+
+    /** Recording or ride time; never in a snapshot, see [OverlayTrip]. */
+    ELAPSED(""),
+
+    /** Distance in km. A snapshot carries the controller's connection-session counter; see [OverlayTrip]. */
+    DISTANCE("km"),
 }
 
 @Serializable
@@ -23,6 +29,16 @@ enum class OverlayWidgetKind {
     VALUE_CARD,
     ICON_VALUE,
     ARC,
+
+    /** The dashboard's quarter dial on the left of an [OverlayBox]: filled from the top, downwards. */
+    ARC_LEFT,
+
+    /** The same on the right. */
+    ARC_RIGHT,
+    BAR,
+
+    /** A bare number on the frame, for a hero speed or a time. */
+    TEXT,
 }
 
 @Serializable
@@ -44,6 +60,8 @@ data class OverlayStyle(
     val cornerRadius: Float = 10f,
     val padding: Float = 12f,
     val shadow: Boolean = true,
+    /** The label, dial and bar colour. Null falls back to [foreground]. A fired rule overrides it. */
+    val accent: String? = null,
 )
 
 @Serializable
@@ -72,7 +90,64 @@ data class OverlayArc(
     val min: Float = 0f,
     val max: Float = 100f,
     val thickness: Float = 9f,
+    /** Numbers around the dial. */
+    val ticks: Boolean = false,
+    /** Take the range from what the vehicle reports ([OverlayScaleTracker]), not from [max]. */
+    val autoScale: Boolean = false,
 )
+
+@Serializable
+data class OverlayBar(
+    val height: Float = 30f,
+    /** Separators across the bar; 0 draws none. */
+    val segments: Int = 0,
+    /** True puts the numbers under the bar, false above it. */
+    val valueBelow: Boolean = false,
+    /** A second number under the bar, on the other edge. */
+    val secondary: VideoMetric? = null,
+)
+
+/** One of nine points of a frame. Keeping an anchor rather than a position is what survives a change of aspect. */
+@Serializable
+enum class OverlayAnchor(val horizontal: Int, val vertical: Int) {
+    TOP_START(-1, -1),
+    TOP_CENTER(0, -1),
+    TOP_END(1, -1),
+    CENTER_START(-1, 0),
+    CENTER(0, 0),
+    CENTER_END(1, 0),
+    BOTTOM_START(-1, 1),
+    BOTTOM_CENTER(0, 1),
+    BOTTOM_END(1, 1),
+}
+
+/**
+ * A widget's place, all lengths in `u`: one u is the frame's short edge / 1080, so a preset is physically the same
+ * size in portrait, landscape, 720p and 4K. [dx] and [dy] run inwards from the anchored edge; on a centre anchor they
+ * are a signed offset from the centre.
+ */
+@Serializable
+data class OverlayBox(
+    val anchor: OverlayAnchor,
+    val dx: Float,
+    val dy: Float,
+    val width: Float,
+    val height: Float,
+    val valueSize: Float = 64f,
+    val unitSize: Float = 30f,
+    val labelSize: Float = 24f,
+)
+
+/** Null on one side hides the widget in that orientation. */
+@Serializable
+data class OverlayPlacement(val portrait: OverlayBox?, val landscape: OverlayBox?)
+
+/** The frame-wide part of a layout, in u: gradient scrims at both edges and where the state chip sits. */
+@Serializable
+data class OverlayFrameSpec(val scrimTop: Float = 0f, val scrimBottom: Float = 0f, val chipY: Float = 62f)
+
+@Serializable
+data class OverlayPresetLayout(val portrait: OverlayFrameSpec, val landscape: OverlayFrameSpec)
 
 /**
  * [label] empty means "follow the metric" (the localized word from [VideoOverlayStrings]); text the rider typed is
@@ -94,6 +169,9 @@ data class OverlayWidget(
     val style: OverlayStyle = OverlayStyle(),
     val rules: List<OverlayRule> = emptyList(),
     val arc: OverlayArc = OverlayArc(),
+    /** Null keeps the older auto-flowing row (cards) or percent position (arcs): how saved presets are drawn. */
+    val placement: OverlayPlacement? = null,
+    val bar: OverlayBar = OverlayBar(),
 )
 
 @Serializable
@@ -102,13 +180,19 @@ data class OverlayPreset(
     val name: String,
     val widgets: List<OverlayWidget>,
     val centerCards: Boolean = true,
+    val layout: OverlayPresetLayout? = null,
 )
+
+/** What the [VideoMetric.ELAPSED] and [VideoMetric.DISTANCE] widgets count. */
+@Serializable
+enum class OverlayTripScope { RECORDING, RIDE }
 
 @Serializable
 data class OverlayDocument(
     val version: Int = 1,
     val selected: OverlayPreset = OverlayTemplates.hud(),
     val saved: List<OverlayPreset> = emptyList(),
+    val tripScope: OverlayTripScope = OverlayTripScope.RECORDING,
 )
 
 @Serializable
