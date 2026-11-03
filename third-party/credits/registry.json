@@ -88,6 +88,18 @@
         "CC-BY-4.0"
       ],
       "noticePath": "third-party/credits/notices/OpenFreeMap.txt"
+    },
+    {
+      "id": "manual:roboto",
+      "name": "Roboto",
+      "authors": [
+        "Christian Robertson",
+        "Google"
+      ],
+      "website": "https://android.googlesource.com/platform/external/roboto-fonts/",
+      "licenseIds": [
+        "Roboto-Apache"
+      ]
     }
   ],
   "licenses": {
@@ -134,6 +146,14 @@
     "JAIN-SIP-Spec": {
       "name": "JAIN SIP Specification License",
       "path": "third-party/credits/licenses/JAIN-SIP-Spec.txt"
+    },
+    "FontAwesome-OFL": {
+      "name": "SIL OFL-1.1 (fonts), CC BY 4.0 (icons)",
+      "path": "third-party/credits/licenses/FontAwesome-Free.txt"
+    },
+    "Roboto-Apache": {
+      "name": "Apache-2.0",
+      "path": "third-party/credits/licenses/Roboto-Apache.txt"
     }
   },
   "licenseOverrides": {

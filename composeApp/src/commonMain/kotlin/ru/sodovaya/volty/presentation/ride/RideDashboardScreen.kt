@@ -361,7 +361,10 @@ fun RideDashboardScreen(
                 horizontalArrangement = Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                ru.sodovaya.volty.presentation.video.RideVideoButton()
+                ru.sodovaya.volty.presentation.video.RideVideoButton(
+                    fill = MaterialTheme.colorScheme.surfaceVariant,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 Spacer(Modifier.width(8.dp))
                 NearbyLinkButton(onClick = onOpenNearby)
                 Spacer(Modifier.width(8.dp))

@@ -28,9 +28,10 @@ fun videoTelemetrySnapshot(
     connection: ConnectionState,
     receivedAtMillis: Long,
     nowEpochMillis: Long,
+    dutyHold: VideoDutyHold = VideoDutyHold(),
 ): VideoSnapshot? {
-    if (vehicle == null || connection !is ConnectionState.Connected) return null
-    if (connection.vehicle?.id?.let { it != vehicle.id } == true) return null
+    if (vehicle == null || connection !is ConnectionState.Connected) { dutyHold.reset(); return null }
+    if (connection.vehicle?.id?.let { it != vehicle.id } == true) { dutyHold.reset(); return null }
 
     val motion = data.motion
     val battery = data.aggregate
@@ -56,6 +57,7 @@ fun videoTelemetrySnapshot(
         sourceAgeMillis: Long?,
         estimated: Boolean = false,
         atCeiling: Boolean = false,
+        expiryOverrideMillis: Long? = null,
     ) {
         val finite = value?.takeIf { it.isFinite() }?.toDouble()
         readings[metric] = VideoReading(
@@ -63,25 +65,36 @@ fun videoTelemetrySnapshot(
             estimated = finite != null && estimated,
             atCeiling = finite != null && estimated && atCeiling,
         )
-        if (finite != null && sourceAgeMillis != null) {
-            expiries[metric] = expiryAtMillis(receivedAtMillis, sourceAgeMillis)
+        if (finite != null) {
+            val expiry = expiryOverrideMillis
+                ?: sourceAgeMillis?.let { expiryAtMillis(receivedAtMillis, it) }
+            if (expiry != null) expiries[metric] = expiry
         }
     }
 
     if (motionAvailable) {
         put(VideoMetric.SPEED, MotionReadings.speedKmh(motion), motionAgeMillis)
 
-        // dutyFresh means this frame decoded the duty itself. MotionReadings
-        // pairs the evidence flag with the value but intentionally leaves that
-        // temporal fact to this frame-time adapter.
-        val isDutyFresh = motion.dutyFresh
-        val isEstimatedDuty = isDutyFresh && motion.hasDuty && motion.dutySource == DutySource.ESTIMATED
+        // dutyFresh means this snapshot's own frame decoded the duty - a fact about evidence, not about whether
+        // the number is still true. The hold keeps a measured duty on screen between a Begode's 0x07 frames,
+        // bounded in time (see VideoDutyHold; an earlier revision blanked it on every non-0x07 snapshot).
+        val dutyValue = MotionReadings.dutyPercent(motion)?.takeIf { it.isFinite() }?.toDouble()
+        val isEstimatedDuty = dutyValue != null && motion.dutySource == DutySource.ESTIMATED
+        val duty = dutyHold.resolve(
+            vehicleId = vehicle.id,
+            hasDuty = motion.hasDuty,
+            fresh = motion.dutyFresh,
+            reading = VideoReading(dutyValue, isEstimatedDuty, isEstimatedDuty && motion.dutyAtCeiling),
+            receivedAtMillis = receivedAtMillis,
+            sourceExpiryMillis = motionAgeMillis?.let { expiryAtMillis(receivedAtMillis, it) },
+        )
         put(
             VideoMetric.DUTY,
-            MotionReadings.dutyPercent(motion).takeIf { isDutyFresh },
-            sourceAgeMillis = motionAgeMillis.takeIf { isDutyFresh },
-            estimated = isEstimatedDuty,
-            atCeiling = isEstimatedDuty && motion.dutyAtCeiling,
+            duty.reading.value?.toFloat(),
+            sourceAgeMillis = null,
+            estimated = duty.reading.estimated,
+            atCeiling = duty.reading.atCeiling,
+            expiryOverrideMillis = duty.expiresAtMillis,
         )
 
         put(VideoMetric.ESC_TEMPERATURE, MotionReadings.escTempC(motion), motionAgeMillis)
@@ -91,6 +104,9 @@ fun videoTelemetrySnapshot(
         put(VideoMetric.MOTOR_CURRENT, motion.motorCurrentA.takeIf { it != 0f || motion.hasPower }, motionAgeMillis)
         put(VideoMetric.CONTROLLER_CURRENT, MotionReadings.batteryCurrentA(motion), motionAgeMillis)
         put(VideoMetric.CONTROLLER_POWER, MotionReadings.powerW(motion), motionAgeMillis)
+        put(VideoMetric.DISTANCE, MotionReadings.tripKm(motion), motionAgeMillis)
+    } else {
+        dutyHold.reset()
     }
 
     if (batteryAvailable) {

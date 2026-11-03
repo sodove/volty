@@ -4,6 +4,7 @@ import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.os.Bundle
 import android.os.SystemClock
+import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -17,13 +18,17 @@ import org.koin.android.ext.android.inject
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.video.*
 import ru.sodovaya.volty.presentation.common.VoltyTheme
+import ru.sodovaya.volty.presentation.video.VideoDutyHold
 import ru.sodovaya.volty.presentation.video.VideoOverlayComponent
 import ru.sodovaya.volty.presentation.video.videoTelemetrySnapshot
 
 class RideVideoActivity : ComponentActivity() {
     private val repository: BmsRepository by inject()
     private val appVisibility: ru.sodovaya.volty.data.radio.AppVisibility by inject()
+    private val appPrefs: ru.sodovaya.volty.data.prefs.AppPrefs by inject()
     private lateinit var camera: VideoCameraController
+    private val linkMonitor = VideoLinkMonitor()
+    private var editingOverlay = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,8 +39,12 @@ class RideVideoActivity : ComponentActivity() {
             store.edit().putString("document", OverlayCodec.encode(document)).apply()
         }
         camera = VideoCameraController(this, this)
+        camera.setSegmentMinutes(store.getInt(SEGMENT_MINUTES_KEY, VideoSegmentPolicy.DEFAULT_SEGMENT_MINUTES))
         lifecycleScope.launch {
-            component.document.collect { camera.preset = it.selected }
+            appPrefs.unitSystem.collect { camera.unitSystem = it }
+        }
+        lifecycleScope.launch {
+            component.document.collect { camera.preset = it.selected; camera.tripScope = it.tripScope }
         }
         lifecycleScope.launch {
             camera.state.collect { state ->
@@ -46,15 +55,36 @@ class RideVideoActivity : ComponentActivity() {
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
                 repository.onAppResumed()
+                val dutyHold = VideoDutyHold()
                 combine(repository.activeVehicleData, repository.activeVehicle, repository.connectionState) { data, vehicle, connection ->
-                    videoTelemetrySnapshot(data, vehicle, connection, SystemClock.elapsedRealtime(), System.currentTimeMillis())
-                }.collect(camera::offer)
+                    videoTelemetrySnapshot(data, vehicle, connection, SystemClock.elapsedRealtime(), System.currentTimeMillis(), dutyHold)
+                }.collect { snapshot ->
+                    linkMonitor.onSample(snapshot)
+                    camera.offer(snapshot)
+                }
             }
         }
         setContent {
             VoltyTheme {
-                VideoCameraScreen(camera, component, onClose = { camera.closeWhenFinalized { finish() } })
+                VideoCameraScreen(camera, component, linkMonitor, repository.activeVehicle,
+                    onClose = { camera.closeWhenFinalized { finish() } },
+                    onEditing = { editingOverlay = it },
+                    onSegmentMinutes = { minutes ->
+                        camera.setSegmentMinutes(minutes)
+                        store.edit().putInt(SEGMENT_MINUTES_KEY, camera.state.value.segmentMinutes).apply()
+                    })
             }
+        }
+    }
+
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
+        val volumeKey = keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        if (!volumeKey || !::camera.isInitialized) return super.onKeyDown(keyCode, event)
+        val state = camera.state.value
+        return when (videoVolumeKey(state.phase, state.ready, editingOverlay, event.repeatCount)) {
+            VideoVolumeKey.PASS -> super.onKeyDown(keyCode, event)
+            VideoVolumeKey.CONSUME -> true
+            VideoVolumeKey.SHUTTER -> { camera.shutter(); true }
         }
     }
 
@@ -75,5 +105,9 @@ class RideVideoActivity : ComponentActivity() {
     override fun onDestroy() {
         if (::camera.isInitialized) camera.dispose()
         super.onDestroy()
+    }
+
+    private companion object {
+        const val SEGMENT_MINUTES_KEY = "segment_minutes"
     }
 }

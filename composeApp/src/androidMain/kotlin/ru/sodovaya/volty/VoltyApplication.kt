@@ -48,6 +48,8 @@ class VoltyApplication : Application() {
         val alertEngine = koin.get<AlertEngine>()
         koin.get<OfflineMapPackManager>()
         alertEngine.start(appScope)
+        // A crash mid-recording leaves a hidden IS_PENDING row; no recording of this process can be active yet.
+        appScope.launch(Dispatchers.IO) { ru.sodovaya.volty.video.PendingVideoSweeper.run(applicationContext) }
         appScope.launch {
             try { koin.get<ru.sodovaya.volty.presentation.history.HistoryPreviewImageLoader>().reconcileDeletedRides() }
             catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }

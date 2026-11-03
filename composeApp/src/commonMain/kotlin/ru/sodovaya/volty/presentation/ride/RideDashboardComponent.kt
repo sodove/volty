@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.presentation.ride
 
+import ru.sodovaya.volty.domain.video.RideSessionClock
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
@@ -390,6 +391,10 @@ class DefaultRideDashboardComponent(
         } else {
             null
         }
+        set(value) {
+            field = value
+            RideSessionClock.startedAtEpochMillis = value?.toEpochMilliseconds()
+        }
 
     /**
      * Consumption **integrated** from the motion stream's power over the
@@ -765,7 +770,14 @@ class DefaultRideDashboardComponent(
     override val state: StateFlow<RideDashboardComponent.State> = _state.asStateFlow()
 
     init {
-        lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
+        lifecycle.doOnDestroy {
+            scope.coroutineContext[Job]?.cancel()
+            // Leave the shared clock alone if another dashboard has written it since.
+            val own = sessionStartedAt?.toEpochMilliseconds()
+            if (own != null && RideSessionClock.startedAtEpochMillis == own) RideSessionClock.startedAtEpochMillis = null
+        }
+        // The initial value above bypasses the setter; the camera screen reads this for its ride time.
+        RideSessionClock.startedAtEpochMillis = sessionStartedAt?.toEpochMilliseconds()
 
         scope.launch {
             bmsRepository.activeMotion.collect { motion ->

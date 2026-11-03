@@ -19,6 +19,22 @@ fun overlayStyle(widget: OverlayWidget, reading: VideoReading?): OverlayStyle {
     return result
 }
 
+/** True while at least one of [widget]'s rules matches a known value. Unknown never fires a rule. */
+fun overlayRuleFired(widget: OverlayWidget, reading: VideoReading?): Boolean {
+    val value = reading?.value?.takeIf(Double::isFinite) ?: return false
+    return widget.rules.any { it.threshold.isFinite() && ruleMatches(value, it) }
+}
+
+/**
+ * The one widget worth a chip of its own: the first whose every rule has fired, so only a top threshold (duty 85,
+ * temperature 80, charge 15) speaks up. The lower tiers already recolour their value, and a chip on each would talk
+ * over the whole ride.
+ */
+fun overlayWarning(preset: OverlayPreset, snapshot: VideoSnapshot?): OverlayWidget? = preset.widgets.firstOrNull { widget ->
+    val value = snapshot?.readings?.get(widget.metric)?.value?.takeIf(Double::isFinite)
+    value != null && widget.rules.isNotEmpty() && widget.rules.all { it.threshold.isFinite() && ruleMatches(value, it) }
+}
+
 private fun ruleMatches(value: Double, rule: OverlayRule): Boolean = when (rule.comparison) {
     OverlayComparison.GT -> value > rule.threshold
     OverlayComparison.GTE -> value >= rule.threshold
@@ -33,13 +49,18 @@ fun validOverlayPreset(preset: OverlayPreset): Boolean {
     if (!preset.id.isBoundedText(MAX_ID_LENGTH) || !preset.name.isBoundedText(MAX_NAME_LENGTH)) return false
     if (preset.widgets.isEmpty() || preset.widgets.size > MAX_WIDGETS) return false
     if (preset.widgets.map(OverlayWidget::id).toSet().size != preset.widgets.size) return false
+    if (preset.layout?.let { isValidFrameSpec(it.portrait) && isValidFrameSpec(it.landscape) } == false) return false
 
     return preset.widgets.all { widget ->
         widget.id.isBoundedText(MAX_ID_LENGTH) &&
             widget.label.length <= MAX_LABEL_LENGTH &&
             widget.unit.length <= MAX_UNIT_LENGTH &&
+            // An unknown name is not an error (a newer TS list, say): it falls back to the metric's icon.
+            (widget.iconName?.length ?: 0) <= MAX_ID_LENGTH &&
             isValidStyle(widget.style) &&
             isValidArc(widget.arc) &&
+            isValidBar(widget.bar) &&
+            (widget.placement?.let { isValidBox(it.portrait) && isValidBox(it.landscape) } != false) &&
             widget.rules.size <= MAX_RULES_PER_WIDGET &&
             widget.rules.all(::isValidRule)
     }
@@ -50,7 +71,21 @@ private fun isValidStyle(style: OverlayStyle): Boolean =
         isOverlayColor(style.foreground) &&
         style.fontSize.isFinite() && style.fontSize in MIN_FONT_SIZE..MAX_FONT_SIZE &&
         style.cornerRadius.isFinite() && style.cornerRadius in 0f..MAX_CORNER_RADIUS &&
-        style.padding.isFinite() && style.padding in 0f..MAX_PADDING
+        style.padding.isFinite() && style.padding in 0f..MAX_PADDING &&
+        (style.accent == null || isOverlayColor(style.accent))
+
+private fun isValidBar(bar: OverlayBar): Boolean =
+    bar.height.isFinite() && bar.height in 1f..MAX_BAR_HEIGHT && bar.segments in 0..MAX_BAR_SEGMENTS
+
+/** A hidden side is valid. Lengths are bounded so a hand-edited document cannot ask for a frame-sized glyph. */
+private fun isValidBox(box: OverlayBox?): Boolean = box == null || (
+    listOf(box.dx, box.dy).all { it.isFinite() && it in -MAX_BOX_LENGTH..MAX_BOX_LENGTH } &&
+        listOf(box.width, box.height).all { it.isFinite() && it in 1f..MAX_BOX_LENGTH } &&
+        listOf(box.valueSize, box.unitSize, box.labelSize).all { it.isFinite() && it in 0f..MAX_BOX_TEXT }
+    )
+
+private fun isValidFrameSpec(spec: OverlayFrameSpec): Boolean =
+    listOf(spec.scrimTop, spec.scrimBottom, spec.chipY).all { it.isFinite() && it in 0f..MAX_BOX_LENGTH }
 
 private fun isValidArc(arc: OverlayArc): Boolean =
     arc.x.isFinite() && arc.x in 0f..100f &&
@@ -74,7 +109,8 @@ private fun isOverlayColor(color: String): Boolean {
 }
 
 object OverlayCodec {
-    private const val MAX_DOCUMENT_CHARS = 64 * 1024
+    /** Raised from 64 K: placements made a full preset about 10 K, and 32 saved ones must still fit. */
+    private const val MAX_DOCUMENT_CHARS = 512 * 1024
     private const val MAX_SAVED_PRESETS = 32
     private val json = Json {
         encodeDefaults = true
@@ -92,7 +128,8 @@ object OverlayCodec {
         if (text.length > MAX_DOCUMENT_CHARS) return OverlayDocument()
         val document = runCatching { json.decodeFromString<OverlayDocument>(text) }.getOrNull()
             ?: return OverlayDocument()
-        return document.takeIf(::isValidDocument) ?: OverlayDocument()
+        val valid = document.takeIf(::isValidDocument) ?: return OverlayDocument()
+        return valid.copy(selected = OverlayLegacyTemplates.upgraded(valid.selected), saved = valid.saved.map(OverlayLegacyTemplates::upgraded))
     }
 
     private fun isValidDocument(document: OverlayDocument): Boolean =
@@ -119,5 +156,9 @@ private const val MAX_ARC_VALUE = 100_000f
 private const val MIN_ARC_THICKNESS = 1f
 private const val MAX_ARC_THICKNESS = 50f
 private const val MAX_RULE_THRESHOLD = 1_000_000_000.0
+private const val MAX_BOX_LENGTH = 4_000f
+private const val MAX_BOX_TEXT = 400f
+private const val MAX_BAR_HEIGHT = 200f
+private const val MAX_BAR_SEGMENTS = 50
 
 fun canEditVideoOverlay(phase: VideoRecordingPhase): Boolean = phase == VideoRecordingPhase.IDLE

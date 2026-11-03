@@ -20,6 +20,7 @@ project receives special placement.
 | Google Android SDK terms | `android-sdk-license` element of https://dl.google.com/android/repository/repository2-3.xml; POM terms reference https://developer.android.com/studio/terms.html |
 | JAIN SIP | https://github.com/usnistgov/jsip/blob/master/LICENSE and `licenses/JSIP Spec License.pdf` (text extracted with pypdf); API Sun/BEA copyright and NIST implementation terms are separate |
 | WebRTC | Native source pinned in `notices/WebRTC.txt`; wrapper MIT text from https://github.com/webrtc-sdk/android/blob/main/LICENSE; both terms included |
+| Font Awesome Free | `LICENSE.txt` of npm `@fortawesome/fontawesome-free` 6.7.2 (fonts SIL OFL 1.1, icons CC BY 4.0, code MIT), from telemetry-studio's `node_modules`; `fa-solid-900.ttf` SHA-256 d2f0593540b0e33ba6de255a54f272d466e31144806956bea8cfdbf7edffc9bd |
 | CameraX / libyuv | CameraX 1.5.3 camera-core POM declares Apache-2.0 plus libyuv BSD; the libyuv text is from https://chromium.googlesource.com/libyuv/libyuv/+/refs/heads/main/LICENSE (retrieved 2026-10-31). Its README.chromium identifies BSD-3-Clause. The complete text is preserved in `licenses/libyuv-BSD.txt`. |
 
 Other modules use AboutLibraries/POM license declarations and provided SPDX texts.

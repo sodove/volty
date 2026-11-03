@@ -1,0 +1,33 @@
+<resources>
+    <!-- Words burned into the ride video. Short on purpose: they share a card with the value. -->
+    <string name="video_label_speed">Speed</string>
+    <string name="video_label_duty">Duty</string>
+    <string name="video_label_esc_temperature">Controller</string>
+    <string name="video_label_motor_temperature">Motor</string>
+    <string name="video_label_motor_current">Motor current</string>
+    <string name="video_label_controller_current">ESC current</string>
+    <string name="video_label_controller_power">ESC power</string>
+    <string name="video_label_soc">Charge</string>
+    <string name="video_label_voltage">Voltage</string>
+    <string name="video_label_battery_current">Battery current</string>
+    <string name="video_label_battery_power">Battery power</string>
+    <string name="video_label_battery_temperature">Battery temp</string>
+    <string name="video_label_elapsed">Time</string>
+    <string name="video_label_distance">Distance</string>
+    <string name="video_demo">DEMO</string>
+    <string name="video_unit_km">km</string>
+    <string name="video_chip_no_link">NO LINK</string>
+
+    <string name="video_stop_confirm_title">Recording</string>
+    <string name="video_stop_confirm_text">The video stops only if you confirm. What was recorded is saved.</string>
+    <string name="video_stop_confirm_stop">Stop and save</string>
+    <string name="video_stop_confirm_continue">Keep recording</string>
+
+    <string name="video_overlay_failed">The telemetry overlay failed on some frames. They were recorded without it.</string>
+    <string name="video_clock_mismatch">The frame clock of this camera disagrees with the system clock. Readings are matched approximately, so a small shift is possible.</string>
+
+    <string name="video_segments">Split into parts</string>
+    <string name="video_segments_off">Off</string>
+    <string name="video_segments_minutes">%1$d min</string>
+    <string name="video_saved_parts">%1$d parts saved to Movies/Volty</string>
+</resources>

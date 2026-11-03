@@ -17,5 +17,23 @@
     <string name="video_error">Запись недоступна или прервана</string>
     <string name="video_retry">Повторить подключение камеры</string>
     <string name="video_foreground_hint">При выходе с этого экрана запись завершится.</string>
-    <string name="video_no_telemetry">Неизвестные значения отображаются как —</string>
+    <string name="video_sheet_quality">Качество видео</string>
+    <string name="video_sheet_overlay">Телеметрия на видео</string>
+    <string name="video_overlay_customize">Настроить</string>
+    <string name="video_trip_scope_title">Время и путь</string>
+    <string name="video_trip_scope_recording">За запись</string>
+    <string name="video_trip_scope_ride">За поездку</string>
+    <string name="video_link_none">Транспорт не подключён</string>
+    <string name="video_link_waiting">Данных пока нет</string>
+    <string name="video_link_live">%1$s · %2$s с</string>
+    <string name="video_link_lost">Нет связи · %1$s</string>
+    <string name="video_link_none_short">Не подключён</string>
+    <string name="video_link_waiting_short">Нет данных</string>
+    <string name="video_link_live_short">%1$s с</string>
+    <string name="video_link_lost_short">Нет · %1$s</string>
+    <string name="video_storage_gb">%1$s ГБ</string>
+    <string name="video_storage_mb">%1$s МБ</string>
+    <string name="video_storage_hours">%1$d ч %2$d мин</string>
+    <string name="video_storage_minutes">%1$d мин</string>
+    <string name="video_stopped_storage">Запись остановлена: места оставалось меньше чем на минуту. Видео сохранено.</string>
 </resources>
