@@ -52,6 +52,12 @@ class VoltyApplication : Application() {
             catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
             catch (failure: Exception) { android.util.Log.w("HistoryPreview", "Preview cleanup deferred", failure) }
         }
+        // Folds stored unknown chains into runs and VACUUMs when worth it; never while recording (HistoryStorageMaintenance).
+        appScope.launch {
+            try { koin.get<ru.sodovaya.volty.data.history.HistoryStorageMaintenance>().run() }
+            catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
+            catch (failure: Exception) { android.util.Log.w("VoltyHistory", "History maintenance deferred", failure) }
+        }
         appScope.launch {
             try { koin.get<ru.sodovaya.volty.domain.history.HistoryMediaRepository>().reconcile() }
             catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }

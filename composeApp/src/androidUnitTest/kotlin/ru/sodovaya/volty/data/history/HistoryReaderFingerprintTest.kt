@@ -270,7 +270,8 @@ class HistoryReaderFingerprintTest {
     /**
      * The real run: `-Dvolty.fingerprintDb=<absolute path of the file to copy> -Dvolty.fingerprintOut=<absolute file>`, optionally
      * `-Dvolty.fingerprintWork=<dir for the working copy>` (an older file is migrated there first), `-Dvolty.fingerprintCompare=<baseline to diff against>`
-     * (with `-Dvolty.fingerprintTolerate=OVERVIEW_ROW_SELECTION,RANGE_CUT_EDGE,BACKDATED_SPLIT`, the set Task 6 measured) and `-Dvolty.fingerprintVerbose=true`;
+     * (with `-Dvolty.fingerprintTolerate=OVERVIEW_ROW_SELECTION,RANGE_CUT_EDGE,BACKDATED_SPLIT`, the set Task 6 measured), `-Dvolty.fingerprintVerbose=true`
+     * and `-Dvolty.fingerprintCompact=true` (Task 11: run HistoryStorageMaintenance on the migrated copy before reading it);
      * skipped without the first two. Run it with `--tests "*HistoryReaderFingerprintTest.realDatabaseFingerprint" --rerun`.
      */
     @Test fun realDatabaseFingerprint() {
@@ -284,7 +285,8 @@ class HistoryReaderFingerprintTest {
         File(out).delete()
         val started = System.currentTimeMillis()
         val work = System.getProperty("volty.fingerprintWork")?.takeIf { it.isNotBlank() }?.let(::File)
-        val result = HistoryReaderFingerprint.run(File(db), File(out), System.getProperty("volty.fingerprintVerbose") == "true", work)
+        val result = HistoryReaderFingerprint.run(File(db), File(out), System.getProperty("volty.fingerprintVerbose") == "true", work,
+            compact = System.getProperty("volty.fingerprintCompact") == "true")
         val written = File(out)
         println("[fingerprint] wall ${System.currentTimeMillis() - started} ms, ${written.length()} bytes, $result")
         assertTrue(written.length() > 0 && written.lastModified() >= started - 1000, "the output was not freshly written")

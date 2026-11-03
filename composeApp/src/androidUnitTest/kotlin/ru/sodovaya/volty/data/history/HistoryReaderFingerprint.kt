@@ -174,7 +174,7 @@ object HistoryReaderFingerprint {
      * printed so a leftover can be found.
      */
     fun run(source: File, out: File, verbose: Boolean = false, workDir: File? = null,
-        chainMembers: ChainMembers = physicalChainMembers): Result {
+        chainMembers: ChainMembers = physicalChainMembers, compact: Boolean = false): Result {
         require(source.isFile) { "No database at the given path" }
         workDir?.mkdirs()
         val copy = if (workDir != null) Files.createTempFile(workDir.toPath(), "volty-fingerprint-", ".db")
@@ -194,6 +194,7 @@ object HistoryReaderFingerprint {
                 Files.copy(wal.toPath(), File(copy.toString() + "-wal").toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
             migrateToCurrent(copy.toFile())
+            if (compact) compactCopy(copy.toFile())
             val executor = Executors.newSingleThreadExecutor { Thread(it, "fingerprint-io").apply { isDaemon = true } }
             try {
                 val dispatcher = executor.asCoroutineDispatcher()
@@ -219,6 +220,32 @@ object HistoryReaderFingerprint {
             VoltyDatabaseProvider(driver).database.transaction { VoltyDatabase.Schema.migrate(driver, version, current) }
             driver.execute(null, "PRAGMA user_version = $current", 0)
             println("[fingerprint] migrated the copy $version -> $current in ${(System.nanoTime() - started) / 1_000_000} ms")
+        } finally { driver.close() }
+    }
+
+    /**
+     * Task 11: runs the app's [HistoryStorageMaintenance] on the working copy (not recording, the copy's volume free space),
+     * and prints sizes and counts only. The fingerprint that follows must equal the one written without it.
+     */
+    private fun compactCopy(file: File) {
+        val driver = JdbcSqliteDriver("jdbc:sqlite:${file.absolutePath}")
+        try {
+            fun long(sql: String) = driver.executeQuery(null, sql, { c -> c.next(); QueryResult.Value(checkNotNull(c.getLong(0))) }, 0).value
+            fun state() = "file=${file.length()} pages=${long("PRAGMA page_count")} free=${long("PRAGMA freelist_count")} " +
+                "autoVacuum=${long("PRAGMA auto_vacuum")} v3Rows=${long("SELECT COUNT(*) FROM HistorySampleV3")} " +
+                "unknownRows=${long("SELECT COUNT(*) FROM HistorySampleV3 WHERE unknownCode IS NOT NULL")} " +
+                "runRows=${long("SELECT COUNT(*) FROM HistorySampleV3 WHERE runCount IS NOT NULL")} " +
+                "members=${long("SELECT COALESCE(SUM(COALESCE(runCount, 1)), 0) FROM HistorySampleV3")}"
+            println("[compaction] before: ${state()}")
+            val started = System.nanoTime()
+            val logged = ArrayList<String>()
+            val outcome = runBlocking {
+                HistoryStorageMaintenance(VoltyDatabaseProvider(driver), { file.absoluteFile.parentFile.usableSpace }, { false },
+                    kotlinx.coroutines.Dispatchers.Unconfined) { message, failure -> logged += "$message ${failure ?: ""}" }.run()
+            }
+            println("[compaction] outcome=$outcome millis=${(System.nanoTime() - started) / 1_000_000} log=$logged")
+            println("[compaction] after: ${state()}")
+            println("[compaction] integrity=${driver.executeQuery(null, "PRAGMA integrity_check", { c -> c.next(); QueryResult.Value(c.getString(0)) }, 0).value}")
         } finally { driver.close() }
     }
 

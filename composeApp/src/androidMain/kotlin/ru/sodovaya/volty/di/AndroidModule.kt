@@ -85,6 +85,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -100,6 +101,21 @@ val androidModule = module {
         ) { message, failure -> if (failure != null) android.util.Log.e("VoltyDb", message, failure) else android.util.Log.i("VoltyDb", message) }
     }
     single { SqlDriverFactory(get(), get()) }
+    // Compact-history Task 11: started by VoltyApplication once the gate is Ready; runs on IO, a ride per transaction.
+    single {
+        val scope = this
+        ru.sodovaya.volty.data.history.HistoryStorageMaintenance(
+            provider = get<ru.sodovaya.volty.data.db.VoltyDatabaseProvider>(),
+            freeBytes = get<AndroidDatabaseOpener>()::freeBytes,
+            isRecording = {
+                ru.sodovaya.volty.diagnostics.historyRecordingInProgress(
+                    scope.get<ru.sodovaya.volty.domain.history.HistoryRecordingRepository>().states.first())
+            },
+            dispatcher = Dispatchers.IO,
+        ) { message, failure ->
+            if (failure != null) android.util.Log.w("VoltyHistory", message, failure) else android.util.Log.i("VoltyHistory", message)
+        }
+    }
     // Inert until native connection startup awaits prepare(); one clock for BLE/GPS/detail.
     single {
         val store = get<ru.sodovaya.volty.data.history.SqlDelightHistoryStore>()

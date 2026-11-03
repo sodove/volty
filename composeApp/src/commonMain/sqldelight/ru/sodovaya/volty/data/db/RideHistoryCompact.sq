@@ -167,3 +167,33 @@ FROM HistorySampleV3 WHERE seriesId = :seriesId AND elapsedMillis >= :fromElapse
 
 seriesOfOtherSourcesV3:
 SELECT * FROM HistorySeriesV3 WHERE rideNo = :rideNo AND sourceId != :sourceId ORDER BY seriesId;
+
+-- Task 11 (background compaction, HistoryStorageMaintenance). No schema change: the work left is derived from the rows.
+
+-- Closed compact rides, oldest key first. A ride still RECORDING belongs to the writer and is never compacted.
+compactionRidesV3:
+SELECT k.rideNo FROM HistoryRideKeyV3 k JOIN HistoryRideV2 r ON r.id = k.rideId WHERE r.status != 'RECORDING' ORDER BY k.rideNo;
+
+-- Re-read inside the ride's transaction: the ride may have been deleted or reopened since the list was taken.
+compactionRideV3:
+SELECT k.rideId, r.status, r.startedEpochMillis, r.startedElapsedMillis, r.clockGeneration
+FROM HistoryRideKeyV3 k JOIN HistoryRideV2 r ON r.id = k.rideId WHERE k.rideNo = :rideNo;
+
+-- The unknown rows of one series in reader order. Walks the series' primary-key range; the filter drops known rows.
+unknownRowsOfSeriesV3:
+SELECT * FROM HistorySampleV3 WHERE seriesId = :seriesId AND unknownCode IS NOT NULL ORDER BY elapsedMillis, sequence;
+
+-- Rows strictly between two primary keys of one series: 0 means the two rows are neighbours in reader order.
+rowsBetweenV3:
+SELECT COUNT(*) FROM HistorySampleV3 WHERE seriesId = :seriesId
+AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed
+AND (elapsedMillis > :fromElapsed OR sequence > :fromSequence)
+AND (elapsedMillis < :toElapsed OR sequence < :toSequence);
+
+-- One stored row, by its full primary key.
+deleteSampleV3:
+DELETE FROM HistorySampleV3 WHERE seriesId = :seriesId AND elapsedMillis = :elapsedMillis AND sequence = :sequence;
+
+-- Gap markers only matter to compaction; the kinds are filtered in Kotlin (HISTORY_GAP_MARKERS), as everywhere else.
+compactionMarkersV3:
+SELECT elapsedMillis, kind, sourceId FROM HistoryMarkerV2 WHERE rideId = :rideId ORDER BY elapsedMillis, sequence;
