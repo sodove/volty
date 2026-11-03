@@ -139,7 +139,8 @@ internal fun splitStoredRunAt(row: HistoryStoredSample, elapsed: Long): Pair<His
  * ## Order
  * A sample whose elapsed falls inside a stored run (`first <= elapsed < end`) is refused: it would sit between members
  * that no longer exist, and `expandForReaders` would emit elapsed going backwards. Production never sends one
- * (`HistoryRecordingProjection` requires per-series order); a conversion that did would fail loudly here.
+ * (`HistoryRecordingProjection` requires per-series order), and 28.sqm does not come through here: it converts by reader
+ * order, where a chain whose sequences fall simply splits.
  */
 internal class HistoryCompactSampleWriter(private val database: VoltyDatabase) {
     private val queries = database.rideHistoryCompactQueries

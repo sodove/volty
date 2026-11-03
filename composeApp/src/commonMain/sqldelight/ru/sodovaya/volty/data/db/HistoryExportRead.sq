@@ -1,9 +1,3 @@
-exportV2Shape:
-SELECT
- (SELECT COUNT(*) FROM HistorySampleV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS sampleCount,
- (SELECT COUNT(*) FROM HistoryGpsV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS gpsCount,
- (SELECT COUNT(*) FROM HistoryMarkerV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed) AS markerCount;
-
 -- Compact (V3) rides. The export streams a ride as the records the encoders read: a known row is one record, a lone
 -- unknown is one, and an unknown RUN is two (its first and its end member), so the count below is the number of records
 -- emitted, not of stored members (Task 7 of the compact-history-storage plan). A run counts when it STARTS in range, and its end member only when the end is in range too.
@@ -21,11 +15,6 @@ SELECT name FROM VehicleRow WHERE id = :vehicleId;
 
 exportSources:
 SELECT * FROM HistorySourceV2 WHERE rideId = :rideId ORDER BY id LIMIT 2049;
-
-exportSamples:
-SELECT * FROM HistorySampleV2 WHERE rideId = :rideId
-AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed
-AND sequence > :afterSequence ORDER BY sequence LIMIT :pageSize;
 
 exportRouteFacts:
 WITH facts AS (

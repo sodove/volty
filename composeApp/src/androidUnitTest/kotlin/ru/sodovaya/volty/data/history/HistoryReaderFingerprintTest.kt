@@ -1,6 +1,5 @@
 package ru.sodovaya.volty.data.history
 
-import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import kotlinx.coroutines.runBlocking
 import org.junit.Assume.assumeTrue
@@ -254,7 +253,7 @@ class HistoryReaderFingerprintTest {
 
     /**
      * The real run: `-Dvolty.fingerprintDb=<absolute path of the file to copy> -Dvolty.fingerprintOut=<absolute file>`, optionally
-     * `-Dvolty.fingerprintWork=<dir for the working copy>`, `-Dvolty.fingerprintCompare=<baseline to diff against>`
+     * `-Dvolty.fingerprintWork=<dir for the working copy>` (an older file is migrated there first), `-Dvolty.fingerprintCompare=<baseline to diff against>`
      * (with `-Dvolty.fingerprintTolerate=OVERVIEW_ROW_SELECTION,RANGE_CUT_EDGE,BACKDATED_SPLIT`, the set Task 6 measured) and `-Dvolty.fingerprintVerbose=true`;
      * skipped without the first two. Run it with `--tests "*HistoryReaderFingerprintTest.realDatabaseFingerprint" --rerun`.
      */
@@ -283,16 +282,19 @@ class HistoryReaderFingerprintTest {
         }
     }
 
-    /**
-     * [compact] picks the layout new rides record in. The tool's own tests pin V2 (false): their logui assertions read
-     * the export; the compact layout is compared to V2 in compactLayoutFingerprintEqualsV2.
-     */
-    private fun buildFixture(file: File, mutation: Mutation, compact: Boolean = false) {
-        val driver = JdbcSqliteDriver("jdbc:sqlite:${file.absolutePath}")
+    /** [v2]: recorded on the `28.db` snapshot into HistorySampleV2, to be converted; otherwise live, on the current schema. */
+    private fun recordingStore(file: File, v2: Boolean, record: suspend (HistoryStore) -> Unit, after: (JdbcSqliteDriver) -> Unit = {}) {
+        val driver = if (v2) HistoryV2Fixture.createAt(28, file) else JdbcSqliteDriver("jdbc:sqlite:${file.absolutePath}")
         try {
-            VoltyDatabase.Schema.create(driver)
-            val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver), recordCompact = compact)
-            runBlocking {
+            if (!v2) VoltyDatabase.Schema.create(driver)
+            val provider = VoltyDatabaseProvider(driver)
+            runBlocking { record(if (v2) V2RecordingStore(provider, driver) else SqlDelightHistoryStore(provider)) }
+            if (v2) HistoryV2Fixture.dropCompactRows(driver)
+            after(driver)
+        } finally { driver.close() }
+    }
+
+    private fun buildFixture(file: File, mutation: Mutation, v2: Boolean = false) = recordingStore(file, v2, { store ->
                 // Ride A: a dead series of 40 UNAVAILABLE rows beside a healthy one, and a short GPS track.
                 val startA = HistoryTick(1_000_000, 5_000, 1)
                 fun a(delta: Long) = HistoryTick(1_000_000 + delta, 5_000 + delta, 1)
@@ -345,31 +347,25 @@ class HistoryReaderFingerprintTest {
                     HistoryBatch("rideC", raw, emptyList(), gaps, "c1"), true).batch
                 store.append(projected)
                 store.finish("rideC", c(80_000), HistoryRideStatus.COMPLETED)
-            }
-            // Buckets are untouched by the planned conversion, so this mutation stays valid against the converted layout.
-            if (mutation == Mutation.BUCKET) driver.execute(null,
-                "UPDATE HistoryBucketV2 SET maximum = maximum + 1 WHERE rideId = 'rideC' AND sourceId = 'pack'", 0)
-        } finally { driver.close() }
-    }
+    }, { driver ->
+        // Buckets are untouched by the conversion, so this mutation holds on both layouts.
+        if (mutation == Mutation.BUCKET) driver.execute(null,
+            "UPDATE HistoryBucketV2 SET maximum = maximum + 1 WHERE rideId = 'rideC' AND sourceId = 'pack'", 0)
+    })
 
-    // ---- Task 6: the fingerprint is the equivalence oracle between the two layouts -------------------------------
+    // ---- Task 9: the fingerprint is the equivalence oracle between a converted ride and a live one -------------------
 
     /**
-     * The same recordings written in V2 and in the compact layout give the same fingerprint. CHAIN_MEMBERS is never
-     * needed (Ruling 2: a run reads back as its count). Every other whole-ride line is equal with no tolerance, except the
-     * `overview` of a series with an UNEVENLY spaced run, whose interior unknown points carry interpolated ticks: there
-     * `n`, `known`, `breaks`, `markers` and `truncated` are asserted equal and only `sha` differs (OVERVIEW_ROW_SELECTION,
-     * see its KDoc). Window lines that differ belong to a window the tool marks as cutting a run (RANGE_CUT_EDGE,
-     * Ruling 4). Ride M's back-dated marker splits an UNEVEN run (Ruling 5): only that series' unknown-edge lines differ,
-     * under BACKDATED_SPLIT, while every number of the ride is identical. The `tool` fixture (300 ms runs) needs no
-     * tolerance at all; the replay needs all three and is asserted to, each one, so none is vacuous.
+     * The same recordings, once stored in V2 and converted by 28.sqm, once recorded live, give the same fingerprint. An
+     * earlier revision (Task 6) compared V2 itself with live compact; V2's readers are gone, and the real database's gate
+     * compares them on the rider's data instead.
      *
-     * `logui` and `gpx` are compared like every other reader, with no exclusion and no tolerance (none of the named
-     * tolerances applies to a CSV: it carries known samples only). An earlier revision excluded `logui` because the export
-     * read `HistorySampleV2` only, so a compact ride exported NO_DATA; Task 7 made the export read compact rides, and the
-     * exclusion went with it.
+     * With no tolerance at all the only lines that differ belong to ride M's back-dated marker (Ruling 5), and the side that
+     * is approximate is the LIVE one: it had to cut a stored run at interpolated members, while a conversion still has every
+     * row and cuts exactly. Every number of the ride is identical. The `tool` fixture has no such marker and must match
+     * byte for byte; the T4 replay and ride I (INTERRUPTED on a run's last tick) must too.
      */
-    @Test fun compactLayoutFingerprintEqualsV2() = withTempDirectory { root ->
+    @Test fun convertedFingerprintEqualsLiveRecording() = withTempDirectory { root ->
         fun fingerprint(name: String, build: (File) -> Unit): Pair<File, HistoryReaderFingerprint.Result> {
             val database = File(root, "$name.db")
             build(database)
@@ -377,49 +373,27 @@ class HistoryReaderFingerprintTest {
             return out to HistoryReaderFingerprint.run(database, out, workDir = root)
         }
         val fixtures = listOf<Pair<String, (File, Boolean) -> Unit>>(
-            "tool" to { f, c -> buildFixture(f, Mutation.NONE, c) },
-            "replay" to { f, c -> buildReplayFixture(f, c) })
+            "tool" to { f, v2 -> buildFixture(f, Mutation.NONE, v2) },
+            "replay" to { f, v2 -> buildReplayFixture(f, v2) })
         for ((name, build) in fixtures) {
-            val (v2, v2Result) = fingerprint("$name-v2") { build(it, false) }
-            val (v3, v3Result) = fingerprint("$name-v3") { build(it, true) }
-            val compactRows = JdbcSqliteDriver("jdbc:sqlite:${File(root, "$name-v3.db").absolutePath}").use { driver ->
-                driver.executeQuery(null, "SELECT COUNT(*), TOTAL(runCount IS NOT NULL), " +
-                    "(SELECT COUNT(*) FROM HistorySampleV2) FROM HistorySampleV3", { c ->
-                    check(c.next().value)
-                    QueryResult.Value(Triple(c.getLong(0)!!, c.getDouble(1)!!.toLong(), c.getLong(2)!!))
-                }, 0).value
-            }
-            assertTrue(compactRows.first > 0 && compactRows.second > 0 && compactRows.third == 0L,
-                "$name: the candidate is compact (rows, runs, V2 rows) = $compactRows")
-            val raw = HistoryReaderFingerprint.compare(v2, v3)
-            val differences = raw
-            val named = setOf(Tolerance.OVERVIEW_ROW_SELECTION, Tolerance.RANGE_CUT_EDGE, Tolerance.BACKDATED_SPLIT)
-            fun remaining(tolerate: Set<Tolerance>) =
-                HistoryReaderFingerprint.compare(v2, v3, tolerate).map { it.location }
-            assertEquals(emptyList(), remaining(named), "$name: only the named tolerances")
-            val backdated = v3.readLines().filter { it.startsWith("# backdatedSplit ") }.map { it.removePrefix("# backdatedSplit ") }
-            for (d in differences) {
-                val reader = d.location.substringAfterLast('|')
-                val window = Regex("""w\d+\.(unknownEdges|overview|stats)""").matches(reader)
-                assertTrue(window || reader == "overview" || d.location.substringBeforeLast('|') in backdated,
-                    "$name: whole-ride ${d.location} differs outside a back-dated split")
-            }
+            val (live, liveResult) = fingerprint("$name-live") { build(it, false) }
+            val (converted, convertedResult) = fingerprint("$name-converted") { build(it, true) }
+            assertTrue(converted.readLines().contains("# userVersion=${VoltyDatabase.Schema.version}"), "$name: the copy was migrated")
+            val differences = HistoryReaderFingerprint.compare(live, converted)
             if (name == "tool") assertEquals(emptyList(), differences, "evenly spaced runs: no tolerance at all")
             else {
-                // Each tolerance is needed: dropping any one leaves differences.
-                for (t in named) assertTrue(remaining(named - t).isNotEmpty(), "$name: $t is reached")
-                assertTrue("rideM|peer/current_a/" in backdated && backdated.none { it.startsWith("rideT|") },
-                    "$name: the split series is marked, a marker that travels with its own batch is not: $backdated")
-                assertTrue("rideM|peer/current_a/|samplesFull" in differences.map { it.location },
-                    "$name: the uneven back-dated split really moves a whole-ride chain edge")
+                assertTrue(differences.isNotEmpty(), "$name: the back-dated split is reached")
+                assertTrue(differences.all { it.location.startsWith("rideM|peer/current_a/|") }, "$name: ${differences.map { it.location }}")
+                assertTrue("rideM|peer/current_a/|samplesFull" in differences.map { it.location })
+                assertEquals(emptyList(), HistoryReaderFingerprint.compare(live, converted, setOf(Tolerance.BACKDATED_SPLIT)).map { it.location })
             }
-            assertEquals(v2Result.unexpectedErrors, v3Result.unexpectedErrors)
-            assertEquals(v2Result.exercise, v3Result.exercise)
-            val lines = v3.readLines()
+            assertEquals(liveResult.unexpectedErrors, convertedResult.unexpectedErrors)
+            assertEquals(liveResult.exercise, convertedResult.exercise)
+            val lines = converted.readLines()
             assertTrue(lines.filter { "|paging|" in it }.all { it.endsWith("|paging|ok") })
-            assertTrue(lines.none { "|ERROR " in it && "|gpx|" !in it }, "$name: no reader failed on the compact layout")
+            assertTrue(lines.none { "|ERROR " in it && "|gpx|" !in it }, "$name: no reader failed on a converted ride")
             if (name == "replay") {
-                val e = v3Result.exercise
+                val e = convertedResult.exercise
                 assertTrue(e.pendingWalk > 0 && e.tailRule > 0, "$name: the walk and the ride-end tail rule ran: $e")
             }
         }
@@ -433,12 +407,7 @@ class HistoryReaderFingerprintTest {
      * gap and the ride a global OVERFLOW.
      * Ride I: left RECORDING and closed by `recoverInterrupted`, whose INTERRUPTED marker lands on a run's last tick.
      */
-    private fun buildReplayFixture(file: File, compact: Boolean) {
-        val driver = JdbcSqliteDriver("jdbc:sqlite:${file.absolutePath}")
-        try {
-            VoltyDatabase.Schema.create(driver)
-            val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver), recordCompact = compact)
-            runBlocking {
+    private fun buildReplayFixture(file: File, v2: Boolean) = recordingStore(file, v2, { store ->
                 suspend fun project(ride: HistoryRide, sources: List<HistorySource>, batches: List<HistoryBatch>) {
                     var projection = HistoryRecordingProjection(ride, sources)
                     batches.forEachIndexed { i, batch ->
@@ -516,9 +485,7 @@ class HistoryReaderFingerprintTest {
                         HistorySample(i(it * 300), temp, null, HistoryUnknownReason.UNAVAILABLE))
                 }, emptyList(), emptyList(), "i0")))
                 assertEquals(1, store.recoverInterrupted())
-            }
-        } finally { driver.close() }
-    }
+    })
 
     private fun withTempDirectory(block: (File) -> Unit) {
         val root = Files.createTempDirectory("volty-fingerprint-test-").toFile()

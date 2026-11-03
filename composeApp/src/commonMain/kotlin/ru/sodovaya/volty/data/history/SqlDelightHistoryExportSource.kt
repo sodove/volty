@@ -16,14 +16,12 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
     private val legacy = SqlDelightLegacyHistoryExportSource(provider, dispatcher, pageSize, isLegacyActive)
     init { require(pageSize in 1..1024) }
     private data class Shape(val sampleCount: Long, val gpsCount: Long, val markerCount: Long)
-    /** [rideNo] is non-null for a compact (V3) ride, which streams from `HistorySampleV3` instead of `HistorySampleV2`. */
     private data class Snapshot(val request: HistoryExportRequest, val metadata: HistoryExportMetadata,
-        val from: Long, val through: Long, val shape: Shape, val rideNo: Long?)
+        val from: Long, val through: Long, val shape: Shape, val rideNo: Long)
 
-    private fun shape(id: String, rideNo: Long?, from: Long, through: Long): Shape =
+    private fun shape(id: String, rideNo: Long, from: Long, through: Long): Shape =
         // exportV3Shape takes its parameters in the order they first appear in the SQL: toElapsed, rideNo, fromElapsed, rideId.
-        if (rideNo == null) queries.exportV2Shape(id, from, through).executeAsOne().let { Shape(it.sampleCount, it.gpsCount, it.markerCount) }
-        else queries.exportV3Shape(through, rideNo, from, id).executeAsOne().let { Shape(it.sampleCount, it.gpsCount, it.markerCount) }
+        queries.exportV3Shape(through, rideNo, from, id).executeAsOne().let { Shape(it.sampleCount, it.gpsCount, it.markerCount) }
 
     override suspend fun open(request: HistoryExportRequest): HistoryExportInput {
         if (request.source.kind == HistoryStorageKind.LEGACY) return openLegacy(request)
@@ -38,7 +36,7 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
                 fail(HistoryExportFailure.INVALID_DATA)
             val from = ride.started.elapsedMillis + (request.range.startEpochMillis - ride.started.epochMillis)
             val through = ride.started.elapsedMillis + (request.range.endEpochMillis - ride.started.epochMillis)
-            val rideNo = compact.rideNoV3(ride.id).executeAsOneOrNull()
+            val rideNo = compact.rideNoV3(ride.id).executeAsOneOrNull() ?: fail(HistoryExportFailure.INVALID_DATA)
             Snapshot(request, HistoryExportMetadata(ride, request.range, sources(ride.id),
                 vehicleName = queries.exportVehicleName(ride.vehicleId).executeAsOneOrNull()), from, through,
                 shape(ride.id, rideNo, from, through), rideNo)
@@ -48,27 +46,11 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
             // transaction is held while encoding or waiting for the file sink.
             val id = snapshot.metadata.ride.id
             var sampleRows = 0L
-            if (request.format != HistoryExportFormat.GPX && snapshot.rideNo != null) {
+            if (request.format != HistoryExportFormat.GPX) {
                 emitCompactSamples(snapshot, snapshot.rideNo) { record ->
                     sampleRows++
                     if (sampleRows > snapshot.shape.sampleCount) fail(HistoryExportFailure.SOURCE_CHANGED)
                     emit(record)
-                }
-            } else if (request.format != HistoryExportFormat.GPX) {
-                var cursor = -1L
-                while (true) {
-                    val page = read { unchanged(snapshot); queries.exportSamples(id, snapshot.from, snapshot.through, cursor, pageSize.toLong()).executeAsList() }
-                    if (page.isEmpty()) break
-                    sampleRows += page.size
-                    if (sampleRows > snapshot.shape.sampleCount) fail(HistoryExportFailure.SOURCE_CHANGED)
-                    for (row in page) {
-                        if (row.sequence <= cursor) fail(HistoryExportFailure.INVALID_DATA)
-                        emit(HistoryExportRecord.Numeric(HistorySample(HistoryTick(row.epochMillis, row.elapsedMillis, row.clockGeneration),
-                            HistorySeriesKey(row.sourceId, row.metricId, cell(row.cellIndex)), row.reading,
-                            row.unknownReason?.let(HistoryUnknownReason::valueOf))))
-                        cursor = row.sequence
-                    }
-                    if (page.size < pageSize) break
                 }
             }
             var gpsRows = 0L; var markerRows = 0L
@@ -124,14 +106,16 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
     }
 
     /**
-     * The sample records of a compact ride in STORAGE ORDER, which for V3 means ascending stored sequence across series.
+     * The sample records of a ride in STORAGE ORDER, which for V3 means ascending stored sequence across series.
      *
      * V2 paged `ORDER BY sequence` over the ride. V3 has no sequence index, so this is a k-way merge of the ride's series,
      * each paged on its primary key `(elapsedMillis, sequence)` at [pageSize] rows (one short transaction per page, as
      * for V2), merged on the stored sequence of the row's first member and then on the series id. Within a series PK order
      * equals sequence order iff its elapsed never decreases in sequence order, which the recorder guarantees for projected
-     * recordings (and Task 9's conversion enforces). A series that breaks it is REFUSED with INVALID_DATA instead of merged:
-     * an earlier revision merged it in PK order and claimed `droppedLate` could only fall; that was unproven (heads would
+     * recordings. Retraction: this said Task 9's conversion enforces it; a conversion cannot reorder what was recorded, it
+     * only keeps such a chain out of a run, so a converted ride holding such a series stops exporting. Measured: no series
+     * of the rider's database does (0 of 26 rides, 1.3 M rows). A series that breaks it is REFUSED with INVALID_DATA instead
+     * of merged: an earlier revision merged it in PK order and claimed `droppedLate` could only fall; that was unproven (heads would
      * not be monotone, so the cross-series permutation differs from both V2 and time order). Cross-series order uses ONLY
      * stored sequences of first members and run ends, never an interpolated interior one (those may coincide with
      * another series').

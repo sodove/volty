@@ -5,9 +5,9 @@ import ru.sodovaya.volty.data.db.VoltyDatabase
 import ru.sodovaya.volty.domain.history.*
 
 /**
- * The `HistoryStore` readers of a compact (V3) ride (compact-history-storage plan, Task 6). [HistoryStoreReader]
- * dispatches here when the ride has a `HistoryRideKeyV3`, and reads V2 otherwise. Every answer is the one V2 gives for
- * the same recording, read through [expandForReaders]: a run reaches a reader as exactly its `count` members.
+ * The `HistoryStore` sample readers (compact-history-storage plan, Task 6), called by [HistoryStoreReader]. Every answer
+ * is the one V2 gave for the same recording, read through [expandForReaders]: a run reaches a reader as exactly its
+ * `count` members.
  *
  * ## A range that cuts a run (Ruling 4)
  * Every reader expands FIRST and clips SECOND: a run that starts before the range or ends after it contributes the
@@ -45,17 +45,15 @@ internal class HistoryCompactReader(database: VoltyDatabase) {
      * row of the same series lies inside a run (the writer refuses one), so nothing is skipped or repeated, and the
      * concatenation of pages equals one whole read at every page size.
      *
-     * ## A run whose stored sequences span fewer than `count - 1` (review I2; LOUD, for Task 9)
-     * The live writer gives every member its own increasing sequence, so it cannot store one. A CONVERSION can: a V2
-     * chain whose rows were committed out of elapsed order keeps first/end sequences closer than its member count. Such
-     * a run must never make a page throw (an earlier revision `check`ed and failed every read of the series, so the
+     * ## A run whose stored sequences span fewer than `count - 1` (review I2)
+     * Neither the live writer nor 28.sqm can store one: both split a chain whose sequences do not advance. A damaged row
+     * still must never make a page throw (an earlier revision `check`ed and failed every read of the series, so the
      * rider would have seen the ride as unreadable). Its member sequences are interpolated the same way and are then
      * non-decreasing, with ties; `(elapsed, sequence)` ties are broken deterministically by ENDING THE PAGE BEFORE a tie
      * group, so the cursor always separates the page from the next member. Only when one group of identical
      * `(elapsed, sequence)` members is larger than the whole page does the page end inside it, and then the rest of that
      * group is SKIPPED (the next page resumes strictly after the pair): duplicates of one unknown tick, the least
-     * information there is to lose. Task 9's conversion must split such chains (sequence rule, ledger note), so this is a
-     * safety net, not a path real data should take.
+     * information there is to lose. This is a safety net, not a path real data takes.
      *
      * Re-reading a RECORDING ride between pages while its open run grows moves the interpolated interior members; the
      * pager then resumes at the first member after the cursor of the longer run, never repeating or going back. V2's
@@ -156,7 +154,6 @@ internal class HistoryCompactReader(database: VoltyDatabase) {
      * SEQUENCE, an approximation chosen because it was cheap there and because V3 has no sequence index to repeat it on.
      * That window could miss an out-of-order row (a source whose late sample was committed early, buried under 200 newer
      * rows of other series). This answer is therefore >= V2's, and equal whenever the true maximum lay in those 200 rows.
-     * The Task 9 fingerprint diff shows every ride equal or lists the rides where V2's window missed.
      */
     fun lastElapsedOfOtherSources(rideNo: Long, origin: HistoryTick, exceptSourceId: String, toElapsed: Long): Long? {
         var best: Long? = null

@@ -460,7 +460,7 @@ tasks.configureEach {
 // Run it with --tests "*HistoryReaderFingerprintTest.realDatabaseFingerprint", or the whole suite runs under that heap.
 tasks.withType<Test>().configureEach {
     val names = listOf("volty.fingerprintDb", "volty.fingerprintOut", "volty.fingerprintVerbose", "volty.fingerprintWork",
-        "volty.fingerprintCompare", "volty.fingerprintTolerate")
+        "volty.fingerprintCompare", "volty.fingerprintTolerate", "volty.migrationDb", "volty.migrationWork")
     if (System.getProperty("volty.fingerprintDb") != null) {
         maxHeapSize = "3g"
         outputs.upToDateWhen { false }

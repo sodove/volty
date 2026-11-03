@@ -12,7 +12,9 @@ import kotlin.test.*
 
 /**
  * Task 7 of the compact-history-storage plan: the export (logui CSV, GPX) and its shape check read a compact (V3) ride.
- * Every test records ONE stream into both layouts and compares what the export produces.
+ *
+ * Retraction: every test recorded one stream into V2 and V3 and compared the exports. 28.sqm dropped V2, so the reference
+ * is [reference]: the samples handed to `append`, in append order, which is the stream V2 paged, encoded the same way.
  *
  * What "storage order" means for V3: the logui encoder measures lateness over the order records arrive in. For V2 that
  * is `ORDER BY sequence` over the ride; V3 has no sequence index, so the source merges the ride's series on their
@@ -29,13 +31,15 @@ class SqlDelightHistoryExportSourceCompactTest {
     private val sources = listOf(HistorySource("pack", HistorySourceKind.BATTERY, "Pack"),
         HistorySource("ctl", HistorySourceKind.CONTROLLER, "Wheel"))
 
-    private class Fixture(val provider: VoltyDatabaseProvider, val store: SqlDelightHistoryStore)
-    private fun fixture(compact: Boolean): Fixture {
+    private class Fixture(val provider: VoltyDatabaseProvider, val store: SqlDelightHistoryStore) {
+        val rows = ArrayList<HistorySample>()
+    }
+    private fun fixture(): Fixture {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { drivers += it }
         driver.execute(null, "PRAGMA foreign_keys=OFF", 0)
         VoltyDatabase.Schema.create(driver)
         val provider = VoltyDatabaseProvider(driver)
-        return Fixture(provider, SqlDelightHistoryStore(provider, recordCompact = compact))
+        return Fixture(provider, SqlDelightHistoryStore(provider))
     }
     @AfterTest fun close() { drivers.forEach { it.close() } }
 
@@ -80,14 +84,15 @@ class SqlDelightHistoryExportSourceCompactTest {
         return Stream(batches, ms)
     }
 
-    private suspend fun record(stream: Stream, compact: Boolean): Fixture {
-        val f = fixture(compact)
+    private suspend fun record(stream: Stream): Fixture {
+        val f = fixture()
         val ride = HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING)
         f.store.begin(ride, sources)
         var projection = HistoryRecordingProjection(ride, sources)
         stream.batches.forEachIndexed { index, batch ->
             val prepared = projection.prepare(batch, index == stream.batches.lastIndex)
             projection = prepared.next
+            f.rows += prepared.batch.samples
             f.store.append(prepared.batch)
         }
         f.store.finish("ride", tick(stream.endMs), HistoryRideStatus.COMPLETED)
@@ -112,14 +117,28 @@ class SqlDelightHistoryExportSourceCompactTest {
         return Exported(text.toString(), counts, records)
     }
 
-    @Test fun loguiBytesEqualBetweenV2AndV3() = runTest {
+    /** What V2 exported: every sample in range in append order, then the route facts, through the same encoder. */
+    private suspend fun reference(f: Fixture, format: HistoryExportFormat, fromMs: Long = 0, toMs: Long? = null): Exported {
+        val input = SqlDelightHistoryExportSource(f.provider).open(request(f, format, fromMs, toMs))
+        val range = input.metadata.range
+        val samples = if (format == HistoryExportFormat.GPX) emptyList() else f.rows
+            .filter { checkNotNull(historyAxisEpochMillis(origin, it.tick)) in range.startEpochMillis..range.endEpochMillis }
+            .map { HistoryExportRecord.Numeric(it) }
+        val records = samples + input.records.toList().filterNot { it is HistoryExportRecord.Numeric }
+        val text = StringBuilder()
+        val counts = StreamingHistoryExportEncoder(zone = { TimeZone.UTC })
+            .write(format, input.metadata, flow { records.forEach { emit(it) } }) { text.append(it) }
+        return Exported(text.toString(), counts, records)
+    }
+
+    @Test fun loguiBytesEqualTheRecordedStream() = runTest {
         val s = stream()
-        val v2 = record(s, compact = false); val v3 = record(s, compact = true)
+        val v3 = record(s)
         val q = v3.provider.database.rideHistoryCompactQueries
         assertEquals(1L, q.maxRideNoV3().executeAsOne())
         assertTrue(q.seriesOfRideV3(1L).executeAsList().flatMap { q.samplesOfSeriesV3(it.seriesId).executeAsList() }
             .any { it.runCount != null && it.runCount!! > 100 }, "the dead series is stored as long runs")
-        val expected = export(v2, HistoryExportFormat.LOGUI)
+        val expected = reference(v3, HistoryExportFormat.LOGUI)
         assertTrue(expected.text.lines().size > 2500, "a real CSV")
         assertTrue("gnss_lat" in expected.text && expected.counts.locations > 700 && expected.counts.samples > 5000)
         for (pageSize in listOf(1, 7, 512, 1024)) {
@@ -136,8 +155,8 @@ class SqlDelightHistoryExportSourceCompactTest {
     @Test fun loguiEqualWithRealLatenessAndDroppedSamples() = runTest {
         // The late series lags 450 ticks (~135 s), beyond the 120 s reorder window: samples are really dropped.
         val s = stream(endMs = 420_000, late = 450)
-        val v2 = record(s, false); val v3 = record(s, true)
-        val expected = export(v2, HistoryExportFormat.LOGUI)
+        val v3 = record(s)
+        val expected = reference(v3, HistoryExportFormat.LOGUI)
         assertTrue(expected.counts.droppedLate > 0, "droppedLate = ${expected.counts.droppedLate}")
         fun known(e: Exported) = e.records.filterIsInstance<HistoryExportRecord.Numeric>().map { it.sample }.filter { it.value != null }
         for (pageSize in listOf(3, 512)) {
@@ -150,7 +169,7 @@ class SqlDelightHistoryExportSourceCompactTest {
 
     @Test fun subRangeExportsAreByteEqualAcrossRunsThatStraddleTheRange() = runTest {
         val s = stream(endMs = 600_000)
-        val v2 = record(s, false); val v3 = record(s, true)
+        val v3 = record(s)
         val q = v3.provider.database.rideHistoryCompactQueries
         val runs = q.seriesOfRideV3(1L).executeAsList().flatMap { q.samplesOfSeriesV3(it.seriesId).executeAsList() }
             .filter { it.runCount != null }
@@ -158,7 +177,7 @@ class SqlDelightHistoryExportSourceCompactTest {
         // inside one run on both sides; start inside a run / end inside one; start inside, end inside a later run; whole.
         val ranges = listOf(100_000L to 200_000L, 0L to 300_000L, 350_000L to 600_000L, 350_000L to 500_000L, 399_000L to 401_000L)
         for ((from, to) in ranges) for (format in listOf(HistoryExportFormat.LOGUI, HistoryExportFormat.GPX)) {
-            val expected = export(v2, format, fromMs = from, toMs = to)
+            val expected = reference(v3, format, fromMs = from, toMs = to)
             val actual = export(v3, format, pageSize = 7, fromMs = from, toMs = to)
             assertEquals(expected.text, actual.text, "$format $from..$to")
             assertEquals(expected.counts, actual.counts, "$format $from..$to")
@@ -169,7 +188,7 @@ class SqlDelightHistoryExportSourceCompactTest {
     }
 
     @Test fun aSeriesWhoseSequenceFallsInKeyOrderIsRefused() = runTest {
-        val f = record(stream(endMs = 20_000), compact = true)
+        val f = record(stream(endMs = 20_000))
         val q = f.provider.database.rideHistoryCompactQueries
         val series = q.seriesOfRideV3(1L).executeAsList().first().seriesId
         // Elapsed rises but the sequence is lower than the row before it: a late sample committed early.
@@ -180,13 +199,10 @@ class SqlDelightHistoryExportSourceCompactTest {
 
     @Test fun gpxEqual() = runTest {
         val s = stream(endMs = 120_000)
-        val v2 = export(record(s, false), HistoryExportFormat.GPX)
-        val v3 = export(record(s, true), HistoryExportFormat.GPX)
-        assertEquals(v2.text, v3.text)
+        val v3 = export(record(s), HistoryExportFormat.GPX)
         assertTrue(v3.text.contains("<trkpt") && v3.counts.locations > 100)
-        // GPX reads no samples at all: not one numeric record is streamed, on either layout.
-        assertTrue(v3.records.none { it is HistoryExportRecord.Numeric } && v2.records.none { it is HistoryExportRecord.Numeric })
-        assertEquals(v2.records, v3.records)
+        // GPX reads no samples at all: not one numeric record is streamed.
+        assertTrue(v3.records.none { it is HistoryExportRecord.Numeric })
     }
 
     @Test fun mergeReproducesSequenceOrder() = runTest {
@@ -200,7 +216,7 @@ class SqlDelightHistoryExportSourceCompactTest {
             HistorySample(tick(10_000 + n * 100L - lag[k]), keys[k], n.toDouble())
         }
         assertNotEquals(samples.sortedBy { it.tick.elapsedMillis }.map { it.value }, samples.map { it.value })
-        val f = fixture(compact = true)
+        val f = fixture()
         f.store.begin(HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING), sources)
         f.store.append(HistoryBatch("ride", samples, emptyList(), emptyList()))
         f.store.finish("ride", tick(60_000), HistoryRideStatus.COMPLETED)
@@ -218,7 +234,7 @@ class SqlDelightHistoryExportSourceCompactTest {
     }
 
     @Test fun shapeCountMatchesEmittedAndACommittedChangeIsCaught() = runTest {
-        val f = record(stream(endMs = 60_000), compact = true)
+        val f = record(stream(endMs = 60_000))
         val q = f.provider.database.rideHistoryCompactQueries
         val series = q.seriesOfRideV3(1L).executeAsList()
         val rows = series.flatMap { q.samplesOfSeriesV3(it.seriesId).executeAsList() }

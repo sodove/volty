@@ -1,18 +1,6 @@
 -- Key metadata only. Admit source-kind metric/index shapes BEFORE dedup and limit.
-recordedKeysForSource:
-SELECT metricId, cellIndex FROM HistorySampleV2
-WHERE rideId = :rideId AND sourceId = :sourceId
-AND ((metricId IN :scalarMetricIds AND cellIndex = -1)
-  OR (metricId IN :indexedMetricIds AND cellIndex BETWEEN 0 AND 2147483647))
-UNION
-SELECT metricId, cellIndex FROM HistoryBucketV2
-WHERE rideId = :rideId AND sourceId = :sourceId
-AND ((metricId IN :scalarMetricIds AND cellIndex = -1)
-  OR (metricId IN :indexedMetricIds AND cellIndex BETWEEN 0 AND 2147483647))
-ORDER BY metricId, cellIndex LIMIT :pageSize;
-
--- The same admission, ORDER BY and LIMIT for a compact (V3) ride: its series table lists every key that holds a row,
--- a run-only series included, exactly as HistorySampleV2 lists an all-unknown series.
+-- The keys of a ride: its series table lists every key that holds a row, a run-only series included, exactly as
+-- HistorySampleV2 (dropped by 28.sqm) listed an all-unknown series.
 recordedKeysForSourceV3:
 SELECT metricId, cellIndex FROM HistorySeriesV3
 WHERE rideNo = :rideNo AND sourceId = :sourceId

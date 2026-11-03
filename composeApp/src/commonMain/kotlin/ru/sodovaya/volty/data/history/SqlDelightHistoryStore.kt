@@ -10,24 +10,19 @@ import ru.sodovaya.volty.domain.history.*
 /**
  * Borrows the application database; mutations commit atomically away from the UI thread.
  *
- * [recordCompact] (compact-history-storage plan, Task 5): when true, [begin] gives every new ride a `HistoryRideKeyV3`
- * and its samples are written to the compact tables only. The writer, deletion and every `HistoryStore` reader
- * (Task 6: samples, stats, recordedKeys, the other-sources probe) dispatch on the ride KEY, not on this flag, so a ride
- * begun compact stays compact whatever the flag says later, and a V2 ride stays V2.
+ * Samples live in the compact tables only (compact-history-storage plan). [begin] gives every ride a `HistoryRideKeyV3`,
+ * and 28.sqm gave one to every ride recorded before them, so a ride without a key does not exist.
  *
- * ON by default since Task 6. An earlier revision kept it off "until Task 6 lands" because the readers read V2 only.
- * Retraction: this KDoc said the export read `HistorySampleV2` only until Task 7, so a compact ride exported NO_DATA.
- * Task 7 made `SqlDelightHistoryExportSource` merge a compact ride's series in stored-sequence order; that is closed.
+ * Retraction: a `recordCompact` flag chose the layout while V2 lived (Tasks 5-8), and writer, deletion and readers
+ * dispatched on the key. 28.sqm dropped `HistorySampleV2`, and the flag and the V2 branches went with it.
  */
 class SqlDelightHistoryStore(
     provider: VoltyDatabaseProvider,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
-    private val recordCompact: Boolean = true,
 ) : HistoryStore {
     private val database = provider.database
     private val rides = database.rideHistoryV2Queries
     private val sourceQueries = database.rideHistorySourceQueries
-    private val sampleQueries = database.rideHistorySampleQueries
     private val gpsQueries = database.rideHistoryGpsQueries
     private val markerQueries = database.rideHistoryMarkerQueries
     private val reader = HistoryStoreReader(database)
@@ -46,7 +41,7 @@ class SqlDelightHistoryStore(
             rides.insertRide(ride.id, ride.vehicleId, ride.started.epochMillis,
                 ride.started.elapsedMillis, ride.started.clockGeneration, ride.status.name)
             sources.forEach { sourceQueries.insertSource(ride.id, it.id, it.kind.name, it.label) }
-            if (recordCompact) compact.begin(ride.id)
+            compact.begin(ride.id)
         }
     }
 
@@ -56,9 +51,9 @@ class SqlDelightHistoryStore(
 
     override suspend fun append(batch: HistoryBatch) = withContext(dispatcher) {
         database.transaction {
-            val rideNo = compact.rideNo(batch.rideId)
-            if (receipts.verifyCommitted(batch, compact = rideNo != null)) return@transaction
+            if (receipts.verifyCommitted(batch)) return@transaction
             val row = checkNotNull(rides.getRide(batch.rideId).executeAsOneOrNull()) { "Ride not found" }
+            val rideNo = checkNotNull(compact.rideNo(batch.rideId)) { "A ride without a compact key" }
             check(row.status == HistoryRideStatus.RECORDING.name) { "Ride is closed" }
             val origin = row.toHistoryRide().started
             val sources = sourceQueries.sourcesForRide(batch.rideId).executeAsList().map { it.id }.toSet()
@@ -71,14 +66,10 @@ class SqlDelightHistoryStore(
                 if (tick.elapsedMillis >= last.elapsedMillis) last = tick
                 return sequence++
             }
-            val session = rideNo?.let { compact.session(batch.rideId, it, origin, batch.markers) }
+            val session = compact.session(batch.rideId, rideNo, origin, batch.markers)
             batch.samples.forEach { sample ->
                 require(sample.key.sourceId in sources) { "Unregistered source" }
-                val t = sample.tick
-                if (session != null) { session.write(sample, admit(t)); return@forEach }
-                sampleQueries.insertSample(batch.rideId, admit(t), sample.key.sourceId,
-                    sample.key.metricId, sample.key.cellIndex?.toLong() ?: -1L, t.epochMillis,
-                    t.elapsedMillis, t.clockGeneration, sample.value, sample.unknown?.name)
+                session.write(sample, admit(sample.tick))
             }
             batch.gps.forEach { fix ->
                 val t = fix.tick
@@ -91,7 +82,7 @@ class SqlDelightHistoryStore(
                 markerQueries.insertMarker(batch.rideId, admit(t), t.epochMillis,
                     t.elapsedMillis, t.clockGeneration, marker.kind.name, marker.sourceId)
                 // A gap marker committed after a run already grew past its tick cuts that run (writer KDoc).
-                rideNo?.let { compact.splitRunsAt(it, origin, marker) }
+                compact.splitRunsAt(rideNo, origin, marker)
             }
             bucketStorage.append(batch, origin, sources)?.let {
                 if (it.elapsedMillis >= last.elapsedMillis) last = it
@@ -159,7 +150,7 @@ class SqlDelightHistoryStore(
         }
     }
     override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistorySample> = withContext(dispatcher) {
-        // A compact page reads a carried run and the rows after it: one snapshot, so a concurrent append cannot land between.
+        // A page reads a carried run and the rows after it: one snapshot, so a concurrent append cannot land between.
         // On Android this begins IMMEDIATE (write lock) and serialises with the recorder's append for one page (ms-scale,
         // no suspension inside, as `stats` and `recordedKeys` already do); review M4 accepted it.
         database.transactionWithResult { reader.samples(rideId, key, range, after, limit) }
@@ -169,7 +160,7 @@ class SqlDelightHistoryStore(
     }
     override suspend fun lastSampleElapsedOfOtherSources(rideId: String, exceptSourceId: String, toElapsed: Long): Long? =
         withContext(dispatcher) {
-            // One snapshot: a compact ride seeks every other series (exact; V2 approximated, see the reader's retraction).
+            // One snapshot: this seeks every other series (exact; V2 approximated, see the reader's retraction).
             database.transactionWithResult { reader.lastSampleElapsedOfOtherSources(rideId, exceptSourceId, toElapsed) }
         }
     override suspend fun markers(rideId: String, range: HistoryRange): List<HistoryMarker> = withContext(dispatcher) {
@@ -194,7 +185,6 @@ class SqlDelightHistoryStore(
                 "Recording is referenced by favorites"
             }
             // Application foreign_keys are OFF. Explicit child deletion must work on that path too.
-            sampleQueries.deleteSamples(rideId)
             compact.delete(rideId)
             gpsQueries.deleteGps(rideId)
             markerQueries.deleteMarkers(rideId)

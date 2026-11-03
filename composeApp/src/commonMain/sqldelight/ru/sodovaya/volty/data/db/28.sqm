@@ -1,0 +1,105 @@
+-- Compact history, step 2 of 2 (plan 2026-10-29-compact-history-storage, Task 9): every V2 ride becomes a compact ride and
+-- HistorySampleV2 goes. See RideHistoryCompact.sq for the target layout.
+--
+-- ATOMICITY. The unit is the WHOLE migration: AndroidSqliteDriver's open helper runs onUpgrade in one transaction, so a
+-- kill anywhere rolls back to version 28 with V2 intact and the next open starts over. Nothing here is incremental and no
+-- ride is ever half converted, so there is no staged state and no reader needs to know about a conversion in progress.
+--
+-- RUNS ARE DETECTED HERE. Retraction: the plan said runs could not be detected in SQL (no window functions before 3.25) and
+-- stored every unknown as a lone row. That would have left 518,192 rows where live recording stores 5,708 on the rider's
+-- database, and broken "a conversion stores what live recording would". LAG only needs "the row before this one", and
+-- that does not need a window function: HistoryConversionRow copies the rows in reader order into a rowid table, so pos - 1
+-- IS the previous row. HistoryConversionHead then lists the rows that do NOT continue the row before them, and the rows
+-- from one head up to the next are one stored row. Each step is a plain seek, so the cost is linear in rows.
+--
+-- THE CONTINUATION RULE is historyRunContinues (HistoryUnknownRun.kt) as the live writer applies it, in the migration's
+-- terms: same series, same unknownCode, same clockDelta, step at most HISTORY_MAX_INTERVAL_MILLIS, skew moved by at most
+-- HISTORY_RUN_SKEW_TOLERANCE_MILLIS, wall time not going backwards (clockBoundary, whose 1 s drift limit is inside the 15 ms
+-- one), no HISTORY_GAP_MARKERS marker in (prev, next]. Plus the live writer's sequence rule: a run's stored sequences advance
+-- by at least 1 per member, so the pager's cursors stay distinct and the runEndSequence CHECK holds. Row order is
+-- (elapsed, sequence), so a step is never negative: an out-of-order V2 chain splits on the sequence rule instead. The
+-- constants are repeated here because SQL cannot read them. HistoryMigrationConversionTest folds the same rows in Kotlin
+-- with the real functions and fails if the two ever disagree.
+--
+-- WHAT IS NOT CONVERTED, on purpose:
+--  - a V2 sample with no HistoryRideV2 row: no reader, export or delete can reach it, and it has no origin to compute a
+--    skew from. It goes with the table. None on the rider's database.
+--  - a V2 sample of a ride that already has a compact key: every reader already ignores it, and converting it would make
+--    it appear. Such a ride is left exactly as it is.
+--  - NaN: V2 cannot hold one. SQLite binds NaN as NULL, so such a row fails V2's own CHECK unless it carries a reason, and
+--    then it is an ordinary unknown. Infinity (none on the rider's database) is copied as it is.
+-- An unknownReason this build cannot map is NOT guessed: the CASE yields NULL and HistoryConversionRow's CHECK aborts the
+-- whole migration, which leaves V2 intact.
+--
+-- ORDER. HistoryConversionRow reads V2 through HistorySampleV2_series_elapsed, series by series, so no temp b-tree sorts
+-- millions of rows. seriesIds are given in that same order, so HistorySampleV3 is filled in primary-key order and its pages
+-- stay full. A ride still RECORDING needs nothing: recoverInterrupted closes it at the next start through the compact path.
+--
+-- A receipt without a fingerprint certified an in-memory retry of a process that no longer exists, by comparing rows that
+-- a run no longer keeps. It goes.
+--
+-- The helper tables are real ones, not TEMP, so they are covered by the same transaction and journal as the rest.
+
+CREATE TABLE HistoryConversionKept (rideId TEXT NOT NULL PRIMARY KEY) WITHOUT ROWID;
+INSERT INTO HistoryConversionKept(rideId) SELECT rideId FROM HistoryRideKeyV3;
+
+INSERT INTO HistoryRideKeyV3(rideId)
+SELECT id FROM HistoryRideV2 WHERE id NOT IN (SELECT rideId FROM HistoryConversionKept) ORDER BY startedEpochMillis, id;
+
+CREATE TABLE HistoryConversionRide (rideNo INTEGER NOT NULL PRIMARY KEY, rideId TEXT NOT NULL, originSkew INTEGER NOT NULL,
+  clockGeneration INTEGER NOT NULL);
+INSERT INTO HistoryConversionRide(rideNo, rideId, originSkew, clockGeneration)
+SELECT k.rideNo, r.id, r.startedEpochMillis - r.startedElapsedMillis, r.clockGeneration
+FROM HistoryRideV2 r JOIN HistoryRideKeyV3 k ON k.rideId = r.id WHERE r.id NOT IN (SELECT rideId FROM HistoryConversionKept);
+
+INSERT INTO HistorySeriesV3(rideNo, sourceId, metricId, cellIndex)
+SELECT DISTINCT h.rideNo, s.sourceId, s.metricId, s.cellIndex
+FROM HistoryConversionRide h CROSS JOIN HistorySampleV2 s ON s.rideId = h.rideId
+ORDER BY h.rideNo, s.sourceId, s.metricId, s.cellIndex;
+
+CREATE TABLE HistoryConversionRow (pos INTEGER NOT NULL PRIMARY KEY, seriesId INTEGER NOT NULL, elapsedMillis INTEGER NOT NULL,
+  sequence INTEGER NOT NULL, epochSkew INTEGER NOT NULL, clockDelta INTEGER NOT NULL, reading REAL, unknownCode INTEGER,
+  CHECK((reading IS NULL) <> (unknownCode IS NULL)));
+INSERT INTO HistoryConversionRow(seriesId, elapsedMillis, sequence, epochSkew, clockDelta, reading, unknownCode)
+SELECT v.seriesId, s.elapsedMillis, s.sequence, s.epochMillis - s.elapsedMillis - h.originSkew, s.clockGeneration - h.clockGeneration,
+  s.reading, CASE s.unknownReason WHEN 'UNAVAILABLE' THEN 1 WHEN 'PARTIAL_SOURCE' THEN 2 WHEN 'INVALID_VALUE' THEN 3 WHEN 'GAP' THEN 4
+    WHEN 'LEGACY' THEN 5 END
+FROM HistoryConversionRide h CROSS JOIN HistorySeriesV3 v ON v.rideNo = h.rideNo
+CROSS JOIN HistorySampleV2 s ON s.rideId = h.rideId AND s.sourceId = v.sourceId AND s.metricId = v.metricId AND s.cellIndex = v.cellIndex
+ORDER BY h.rideNo, v.sourceId, v.metricId, v.cellIndex, s.elapsedMillis, s.sequence;
+
+CREATE TABLE HistoryConversionBreak (seriesId INTEGER NOT NULL, elapsedMillis INTEGER NOT NULL,
+  PRIMARY KEY(seriesId, elapsedMillis)) WITHOUT ROWID;
+INSERT OR IGNORE INTO HistoryConversionBreak(seriesId, elapsedMillis)
+SELECT v.seriesId, m.elapsedMillis
+FROM HistoryConversionRide h CROSS JOIN HistorySeriesV3 v ON v.rideNo = h.rideNo CROSS JOIN HistoryMarkerV2 m ON m.rideId = h.rideId
+WHERE m.kind IN ('BLE_GAP', 'CLOCK_CHANGE', 'OVERFLOW', 'INTERRUPTED', 'CONNECTED') AND (m.sourceId IS NULL OR m.sourceId = v.sourceId);
+
+-- NOT EXISTS and not NOT(a AND b): a known neighbour makes the comparison NULL, and NOT(NULL) would lose the row.
+CREATE TABLE HistoryConversionHead (pos INTEGER NOT NULL PRIMARY KEY);
+INSERT INTO HistoryConversionHead(pos)
+SELECT n.pos FROM HistoryConversionRow n WHERE NOT EXISTS (SELECT 1 FROM HistoryConversionRow p
+  WHERE p.pos = n.pos - 1 AND p.seriesId = n.seriesId AND p.unknownCode = n.unknownCode AND p.clockDelta = n.clockDelta
+    AND n.elapsedMillis - p.elapsedMillis <= 2000 AND n.sequence > p.sequence AND ABS(n.epochSkew - p.epochSkew) <= 15
+    AND n.elapsedMillis + n.epochSkew >= p.elapsedMillis + p.epochSkew
+    AND NOT EXISTS (SELECT 1 FROM HistoryConversionBreak b
+      WHERE b.seriesId = n.seriesId AND b.elapsedMillis > p.elapsedMillis AND b.elapsedMillis <= n.elapsedMillis));
+
+INSERT INTO HistorySampleV3(seriesId, elapsedMillis, sequence, epochSkew, clockDelta, reading, unknownCode,
+  runEndElapsed, runEndSequence, runEndEpochSkew, runCount)
+SELECT f.seriesId, f.elapsedMillis, f.sequence, f.epochSkew, f.clockDelta, f.reading, f.unknownCode,
+  CASE WHEN e.pos > f.pos THEN e.elapsedMillis END, CASE WHEN e.pos > f.pos THEN e.sequence END,
+  CASE WHEN e.pos > f.pos THEN e.epochSkew END, CASE WHEN e.pos > f.pos THEN e.pos - f.pos + 1 END
+FROM HistoryConversionHead h CROSS JOIN HistoryConversionRow f ON f.pos = h.pos
+CROSS JOIN HistoryConversionRow e ON e.pos = COALESCE((SELECT MIN(x.pos) FROM HistoryConversionHead x WHERE x.pos > h.pos),
+  (SELECT MAX(r.pos) FROM HistoryConversionRow r) + 1) - 1;
+
+DELETE FROM HistoryBatchReceiptV2 WHERE fingerprint IS NULL;
+
+DROP TABLE HistoryConversionHead;
+DROP TABLE HistoryConversionBreak;
+DROP TABLE HistoryConversionRow;
+DROP TABLE HistoryConversionRide;
+DROP TABLE HistoryConversionKept;
+DROP INDEX HistorySampleV2_series_elapsed;
+DROP TABLE HistorySampleV2;

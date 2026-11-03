@@ -6,6 +6,7 @@ import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.runBlocking
 import kotlinx.datetime.TimeZone
+import ru.sodovaya.volty.data.db.VoltyDatabase
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.presentation.history.readCardMaxDuty
@@ -21,7 +22,9 @@ import java.util.concurrent.Executors
  * Runs every history reader over every ride of a database FILE and writes a canonical text fingerprint of their
  * answers, so a storage change can be proved against the readers rather than argued (compact-history-storage plan,
  * Task 2). Run on v27 code it writes the baseline; run on the converted code it must write the same text, except for
- * the differences [Tolerance] names.
+ * the differences [Tolerance] names. This code reads only the compact layout, so a file older than the schema is migrated
+ * on its working copy first, in one transaction, as `onUpgrade` does; the reference for a v27 file was written by v28 code
+ * reading V2 (Ruling 7).
  *
  * ## Line format
  * `ride|key|reader|value`. `key` is `-` for ride-level readers, else `source/metric/cell`. Lines starting with `#` are
@@ -39,8 +42,9 @@ import java.util.concurrent.Executors
  * apart and end sample, and those collapse to the very same first/last. `counts` carries known rows and maximal chains,
  * both layout independent. The member count of each chain is the one number a v27 file holds as rows and a v29 file
  * holds as `runCount`; it is the reader `chainMembers`, computed through [ChainMembers] (by default from the rows, i.e.
- * correct on v27). Task 9 supplies the `runCount`-aware implementation; until then it compares with
- * [Tolerance.CHAIN_MEMBERS], which skips that one reader and nothing else.
+ * correct on v27). Retraction: this said Task 9 would supply a `runCount`-aware implementation; Ruling 2 made it needless,
+ * because a run now reads back as exactly `count` samples, so the rows count right on both layouts.
+ * [Tolerance.CHAIN_MEMBERS] skips that one reader and nothing else.
  *
  * ## The one predicted difference: the chart overview
  * [Tolerance.OVERVIEW_ROW_SELECTION] (Task 3's accepted difference). Point selection treats unknown rows and their
@@ -136,7 +140,7 @@ object HistoryReaderFingerprint {
     /**
      * The member count of every unknown chain of a series, in order. The default counts rows, which is right while a
      * chain is stored as its member rows (v27). Over a run-based store the rows are expanded fillers, so the
-     * implementation must read `runCount` instead; that is Task 9's one addition.
+     * implementation would read `runCount`; since Ruling 2 the expansion has the member count, so the default holds there too.
      */
     fun interface ChainMembers {
         suspend fun counts(rideId: String, key: HistorySeriesKey, segments: List<Segment>): List<Int>
@@ -188,6 +192,7 @@ object HistoryReaderFingerprint {
                 println("[fingerprint] WARNING: ${wal.name} exists; copying it so the copy sees the same committed state")
                 Files.copy(wal.toPath(), File(copy.toString() + "-wal").toPath(), StandardCopyOption.REPLACE_EXISTING)
             }
+            migrateToCurrent(copy.toFile())
             val executor = Executors.newSingleThreadExecutor { Thread(it, "fingerprint-io").apply { isDaemon = true } }
             try {
                 val dispatcher = executor.asCoroutineDispatcher()
@@ -200,6 +205,20 @@ object HistoryReaderFingerprint {
             cleanup()
             runCatching { Runtime.getRuntime().removeShutdownHook(hook) }
         }
+    }
+
+    /** The working copy only. Prints the time: this is the same work `onUpgrade` does on a phone. */
+    private fun migrateToCurrent(file: File) {
+        val driver = JdbcSqliteDriver("jdbc:sqlite:${file.absolutePath}")
+        try {
+            val version = driver.executeQuery(null, "PRAGMA user_version", { c -> c.next(); QueryResult.Value(checkNotNull(c.getLong(0))) }, 0).value
+            val current = VoltyDatabase.Schema.version
+            if (version == 0L || version >= current) return
+            val started = System.nanoTime()
+            VoltyDatabaseProvider(driver).database.transaction { VoltyDatabase.Schema.migrate(driver, version, current) }
+            driver.execute(null, "PRAGMA user_version = $current", 0)
+            println("[fingerprint] migrated the copy $version -> $current in ${(System.nanoTime() - started) / 1_000_000} ms")
+        } finally { driver.close() }
     }
 
     private class Emitter(val writer: Appendable, val verbose: Boolean, val scrub: (String) -> String) {
@@ -513,22 +532,19 @@ object HistoryReaderFingerprint {
 
     /**
      * (elapsed, sourceId) of every gap marker of [rideId] committed in a LATER batch than a sample of a series it applies
-     * to that lies at or after its tick. Reads either layout, whichever tables exist.
+     * to that lies at or after its tick. A run counts by its first member only: a sub-step shift needs a stored row past the
+     * marker, and a conversion does not cut runs at interpolated members at all.
      */
     private fun backdatedGapMarkers(driver: JdbcSqliteDriver, rideId: String): List<Pair<Long, String?>> {
-        val compact = driver.executeQuery(null, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'HistorySampleV3'",
-            { c -> c.next(); QueryResult.Value(c.getLong(0) == 1L) }, 0).value
         val kinds = HISTORY_GAP_MARKERS.joinToString(",") { "'${it.name}'" }
         // Stored BEFORE the marker's batch: a sample of the same batch is written knowing the marker, so it never needs a
         // cut. Without a receipt the marker's own sequence is the bound (conservative: it can only mark more series).
         val batchStart = "COALESCE((SELECT b.firstSequence FROM HistoryBatchReceiptV2 b WHERE b.rideId = m.rideId " +
             "AND b.firstSequence <= m.sequence AND b.nextSequence > m.sequence), m.sequence)"
-        val v3 = if (!compact) "" else " OR EXISTS (SELECT 1 FROM HistorySampleV3 s JOIN HistorySeriesV3 r ON r.seriesId = s.seriesId " +
+        val sql = "SELECT m.elapsedMillis, m.sourceId FROM HistoryMarkerV2 m WHERE m.rideId = ? AND m.kind IN ($kinds) AND " +
+            "EXISTS (SELECT 1 FROM HistorySampleV3 s JOIN HistorySeriesV3 r ON r.seriesId = s.seriesId " +
             "JOIN HistoryRideKeyV3 k ON k.rideNo = r.rideNo WHERE k.rideId = m.rideId AND (m.sourceId IS NULL OR r.sourceId = m.sourceId) " +
-            "AND s.elapsedMillis >= m.elapsedMillis AND s.sequence < $batchStart)"
-        val sql = "SELECT m.elapsedMillis, m.sourceId FROM HistoryMarkerV2 m WHERE m.rideId = ? AND m.kind IN ($kinds) AND (" +
-            "EXISTS (SELECT 1 FROM HistorySampleV2 s WHERE s.rideId = m.rideId AND s.sequence < $batchStart " +
-            "AND (m.sourceId IS NULL OR s.sourceId = m.sourceId) AND s.elapsedMillis >= m.elapsedMillis)$v3) ORDER BY m.elapsedMillis, m.sequence"
+            "AND s.elapsedMillis >= m.elapsedMillis AND s.sequence < $batchStart) ORDER BY m.elapsedMillis, m.sequence"
         return driver.executeQuery(null, sql, { c ->
             val result = ArrayList<Pair<Long, String?>>()
             while (c.next().value) result += checkNotNull(c.getLong(0)) to c.getString(1)

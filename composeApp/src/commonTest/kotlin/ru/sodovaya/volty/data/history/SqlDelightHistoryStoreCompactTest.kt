@@ -27,9 +27,9 @@ class SqlDelightHistoryStoreCompactTest {
         skew: Long = 0) = HistorySample(tick(ms, skew), key, null, reason)
     private fun k(ms: Long, value: Double, key: HistorySeriesKey = pack) = HistorySample(tick(ms), key, value)
 
-    private class Fixture(val driver: JdbcSqliteDriver, val provider: VoltyDatabaseProvider, compact: Boolean) {
+    private class Fixture(val driver: JdbcSqliteDriver, val provider: VoltyDatabaseProvider) {
         val db = provider.database
-        val store = SqlDelightHistoryStore(provider, recordCompact = compact)
+        val store = SqlDelightHistoryStore(provider)
         fun count(sql: String): Long = driver.executeQuery(null, sql, { c ->
             check(c.next().value); QueryResult.Value(checkNotNull(c.getLong(0)))
         }, 0).value
@@ -40,11 +40,11 @@ class SqlDelightHistoryStoreCompactTest {
             return q.samplesOfSeriesV3(id).executeAsList()
         }
     }
-    private fun fixture(compact: Boolean = true): Fixture {
+    private fun fixture(): Fixture {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { drivers += it }
         driver.execute(null, "PRAGMA foreign_keys=OFF", 0)
         VoltyDatabase.Schema.create(driver)
-        return Fixture(driver, VoltyDatabaseProvider(driver), compact)
+        return Fixture(driver, VoltyDatabaseProvider(driver))
     }
     private suspend fun Fixture.begin(rideId: String = "ride") =
         store.begin(HistoryRide(rideId, "wheel", origin, null, HistoryRideStatus.RECORDING), sources)
@@ -53,36 +53,15 @@ class SqlDelightHistoryStoreCompactTest {
         store.append(HistoryBatch(rideId, samples, emptyList(), markers, receipt))
     @AfterTest fun close() { drivers.forEach { it.close() } }
 
-    @Test fun newRideGetsKeyAndNoV2Rows() = runTest {
+    @Test fun newRideGetsKey() = runTest {
         val f = fixture(); f.begin()
         f.append((0L until 6L).map { k(it * 300, 60.0 + it) } + (0L until 4L).map { k(it * 300, 10.0 + it, ctl) })
         assertEquals(1L, f.count("SELECT COUNT(*) FROM HistoryRideKeyV3"))
         assertEquals(10L, f.count("SELECT COUNT(*) FROM HistorySampleV3"))
-        assertEquals(0L, f.count("SELECT COUNT(*) FROM HistorySampleV2"))
         assertEquals(2L, f.count("SELECT COUNT(*) FROM HistorySeriesV3"), "one series per key")
         assertEquals(6, f.rows(key = pack).size); assertEquals(4, f.rows(key = ctl).size)
-        // The rest of the ride is still V2: sequence, receipts and last tick advance exactly as before.
+        // The rest of the ride keeps its V2-named tables: sequence, receipts and last tick advance exactly as before.
         assertEquals(10L, f.db.rideHistoryV2Queries.getRide("ride").executeAsOne().nextSequence)
-    }
-
-    @Test fun aRideKeepsTheLayoutItBeganIn() = runTest {
-        // Renamed in Task 6: it was `untilTheReadersLandANewRideStaysV2ByDefault`; the default is compact now, and what
-        // stays true is that the KEY, not the flag, decides: a V2 ride stays V2 for a compact store, and the reverse.
-        val f = fixture(compact = false); f.begin()
-        // A default (compact-recording) store appending to that V2 ride writes V2 rows.
-        SqlDelightHistoryStore(f.provider).append(HistoryBatch("ride", listOf(k(0, 60.0), u(300)), emptyList(), emptyList()))
-        assertEquals(0L, f.count("SELECT COUNT(*) FROM HistoryRideKeyV3"))
-        assertEquals(0L, f.count("SELECT COUNT(*) FROM HistorySampleV3"))
-        assertEquals(2L, f.count("SELECT COUNT(*) FROM HistorySampleV2"))
-        // A ride begun compact stays compact for a store whose flag is off: dispatch is on the key.
-        val g = fixture(); g.begin()
-        SqlDelightHistoryStore(g.provider, recordCompact = false).append(HistoryBatch("ride", listOf(k(0, 1.0)), emptyList(), emptyList()))
-        assertEquals(1L, g.count("SELECT COUNT(*) FROM HistorySampleV3"))
-        assertEquals(0L, g.count("SELECT COUNT(*) FROM HistorySampleV2"))
-        // The flip itself: a store built with defaults begins compact rides.
-        val h = fixture(compact = false)
-        SqlDelightHistoryStore(h.provider).begin(HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING), sources)
-        assertEquals(1L, h.count("SELECT COUNT(*) FROM HistoryRideKeyV3"))
     }
 
     @Test fun deadSeriesBecomesOneRun() = runTest {
@@ -325,7 +304,7 @@ class SqlDelightHistoryStoreCompactTest {
         assertEquals(1, f.rows("three", pack).size)
     }
 
-    // ---- frames -> observations -> projection -> store, recorded twice: V2 and compact ----------------------------
+    // ---- frames -> observations -> projection -> store, against the rows the projection handed over ------------------
 
     private fun t4Observations(repeats: Int): List<TelemetryObservation> {
         val protocol = BegodeProtocol(cellCount = 24)
@@ -335,13 +314,13 @@ class SqlDelightHistoryStoreCompactTest {
         return observations
     }
 
-    @Test fun aT4ReplayStoresTheSameSeriesInBothLayouts() = runTest {
+    @Test fun aT4ReplayStoresWhatThePureModelSays() = runTest {
         val observations = t4Observations(repeats = 200)
         val kinds = observations.map { historySourceKindForTelemetry(it.origin, it.role) }.distinct()
         val replaySources = kinds.map { HistorySource(it.name.lowercase(), it, it.name) }
         val ride = HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING)
-        val v2 = fixture(compact = false); val v3 = fixture()
-        listOf(v2, v3).forEach { it.store.begin(ride, replaySources) }
+        val v3 = fixture()
+        v3.store.begin(ride, replaySources)
         // ~55 ms per observation. The wall/monotonic skew walks 0, 9, 18, 27 (neighbour steps join, the drift from a
         // run's first member does not), jumps back, then 0, -10, +10 (a 20 ms step splits though both are within 15 ms of
         // the first): the two rules an earlier writer revision confused give different runs here.
@@ -354,38 +333,32 @@ class SqlDelightHistoryStoreCompactTest {
         val gapAt = samples[samples.size / 2].tick.elapsedMillis - origin.elapsedMillis + 1
         val gap = HistoryMarker(tick(gapAt), HistoryMarkerKind.BLE_GAP, replaySources.first().id)
         var projection = HistoryRecordingProjection(ride, replaySources)
+        val handed = ArrayList<HistorySample>()
         val chunks = samples.chunked(128)
         chunks.forEachIndexed { i, chunk ->
             val markers = if (chunk.any { it.tick.elapsedMillis >= gap.tick.elapsedMillis } &&
                 chunks.take(i).none { c -> c.any { it.tick.elapsedMillis >= gap.tick.elapsedMillis } }) listOf(gap) else emptyList()
             val prepared = projection.prepare(HistoryBatch("ride", chunk, emptyList(), markers, "r$i"), i == chunks.lastIndex)
             projection = prepared.next
-            v2.store.append(prepared.batch); v3.store.append(prepared.batch)
+            handed += prepared.batch.samples
+            v3.store.append(prepared.batch)
         }
-        val v2Rows = v2.db.rideHistorySampleQueries.samplesForReceipt("ride", 0, Long.MAX_VALUE).executeAsList()
-        assertTrue(v2Rows.size > 1000, "the replay must reach the store, got ${v2Rows.size}")
-        val markers = v2.store.markers("ride", HistoryRange(0, Long.MAX_VALUE))
+        assertTrue(handed.size > 1000, "the replay must reach the store, got ${handed.size}")
+        val markers = v3.store.markers("ride", HistoryRange(0, Long.MAX_VALUE))
         assertEquals(listOf(gap), markers)
         var runs = 0; var v3Count = 0
-        v2Rows.groupBy { HistorySeriesKey(it.sourceId, it.metricId, it.cellIndex.takeIf { c -> c >= 0 }?.toInt()) }
+        handed.withIndex().groupBy { it.value.key }
             .forEach { (key, list) ->
-                val ordered = list.sortedWith(compareBy({ it.elapsedMillis }, { it.sequence }))
-                val full = ordered.map {
-                    HistorySample(HistoryTick(it.epochMillis, it.elapsedMillis, it.clockGeneration), key, it.reading,
-                        it.unknownReason?.let(HistoryUnknownReason::valueOf))
-                }
-                // What the pure model says V2 collapses to, with the store's own sequences instead of indices.
-                val expected = collapseUnknownRuns(full, markers).map { row ->
-                    row.copy(sequence = ordered[row.sequence.toInt()].sequence,
-                        run = row.run?.let { it.copy(sequence = ordered[it.sequence.toInt()].sequence) })
-                }
+                val full = list.sortedBy { it.value.tick.elapsedMillis }.map { it.value }
+                // What the pure model says the rows collapse to.
+                val expected = collapseUnknownRuns(full, markers)
                 val stored = v3.rows(key = key).map { HistoryCompactCodec.decode(it, key, origin) }
                 v3Count += stored.size
                 assertEquals(expected.size, stored.size, "$key")
                 expected.zip(stored).forEach { (e, s) ->
                     assertEquals(e.sample.tick, s.sample.tick, "$key"); assertEquals(e.sample.unknown, s.sample.unknown)
-                    assertEquals(e.sample.value?.toRawBits(), s.sample.value?.toRawBits()); assertEquals(e.sequence, s.sequence)
-                    assertEquals(e.run?.count, s.run?.count, "$key"); assertEquals(e.run?.sequence, s.run?.sequence)
+                    assertEquals(e.sample.value?.toRawBits(), s.sample.value?.toRawBits())
+                    assertEquals(e.run?.count, s.run?.count, "$key")
                     assertEquals(e.run?.tick, s.run?.tick, "$key: the run end, epoch included")
                     if (s.run != null) runs++
                 }
@@ -398,7 +371,6 @@ class SqlDelightHistoryStoreCompactTest {
                 }
             }
         assertTrue(runs > 0, "the replay must produce at least one run")
-        assertTrue(v3Count < v2Rows.size, "compaction happened: $v3Count of ${v2Rows.size}")
-        assertEquals(0L, v3.count("SELECT COUNT(*) FROM HistorySampleV2"))
+        assertTrue(v3Count < handed.size, "compaction happened: $v3Count of ${handed.size}")
     }
 }

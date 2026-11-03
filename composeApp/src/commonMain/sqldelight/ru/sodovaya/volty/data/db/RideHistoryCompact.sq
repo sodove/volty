@@ -1,4 +1,5 @@
--- Compact history tables (plan 2026-10-29-compact-history-storage). Created by 27.sqm; the V2 tables stay until 28.sqm.
+-- Compact history tables (plan 2026-10-29-compact-history-storage). Created by 27.sqm; 28.sqm converted every V2 ride and
+-- dropped HistorySampleV2, so every ride has a HistoryRideKeyV3 row and these tables are the only sample store.
 --
 -- HistoryRideKeyV3   rideNo is a small integer standing for the 36-character rideId, so a series row carries 1-3 bytes
 --                    instead of a UUID.
@@ -9,9 +10,8 @@
 -- Ids are allocated by the writer as MAX+1 (maxRideNoV3, maxSeriesIdV3) and, with no AUTOINCREMENT, a deleted highest id is
 -- REUSED. That is safe only because a ride is deleted in ONE transaction (samples of its series, then the series, then the
 -- key); a delete that left samples behind would hand them to the next ride. Tasks 5/6 must keep that transaction.
--- Task 8 must decide what to do with V2 samples whose HistoryRideV2 row is missing (no origin to compute skew from).
+-- V2 samples whose HistoryRideV2 row was missing were not converted (28.sqm says why).
 -- Known-row epochSkew is 0 only while wall and monotonic clocks agree; NTP slew or a clock step makes later rows 1-5 bytes.
--- Unmeasured on real data: Task 9 should record the distribution.
 --
 -- Per-sample epoch and clock generation, decided here (Task 4):
 --   epochSkew  = (sample.epochMillis - sample.elapsedMillis) - (ride.started.epochMillis - ride.started.elapsedMillis)

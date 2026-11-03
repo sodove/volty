@@ -12,12 +12,11 @@ class HistoryRecordedKeysTest {
     private val tick = HistoryTick(10000, 100, 1)
     private data class Fixture(val driver: JdbcSqliteDriver, val database: VoltyDatabase,
         val store: SqlDelightHistoryStore, val reader: SqlDelightHistoryReadRepository)
-    /** New rides record compact by default (Task 6); [compact] = false pins a V2 ride. */
-    private fun fixture(compact: Boolean = true): Fixture {
+    private fun fixture(): Fixture {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY); drivers += driver
         VoltyDatabase.Schema.create(driver)
         val provider = VoltyDatabaseProvider(driver)
-        return Fixture(driver, provider.database, SqlDelightHistoryStore(provider, recordCompact = compact),
+        return Fixture(driver, provider.database, SqlDelightHistoryStore(provider),
             SqlDelightHistoryReadRepository(provider))
     }
     @AfterTest fun close() { drivers.forEach { it.close() } }
@@ -28,22 +27,16 @@ class HistoryRecordedKeysTest {
     private fun point(key: HistorySeriesKey) = HistorySample(tick, key, null, HistoryUnknownReason.UNAVAILABLE)
 
     @Test fun realSparseCellsRemainSourceQualifiedWithoutReadingNumericTraces() = runTest {
-        for (compact in listOf(false, true)) sparseCells(compact)
-    }
-
-    private suspend fun sparseCells(compact: Boolean) {
-        val f = fixture(compact)
+        val f = fixture()
         f.begin(HistorySource("a", HistorySourceKind.BATTERY, "Same label"), HistorySource("b", HistorySourceKind.BATTERY, "Same label"))
         val a = listOf(key("a", "cell_v", 0), key("a", "cell_v", 2), key("a", "current_a"))
         val b = key("b", "cell_v", 0)
         f.store.append(HistoryBatch("ride", (a + b).map(::point), emptyList(), emptyList()))
         // Deliberately incoherent stored index: do not let a Long→Int conversion
         // invent a negative/different physical cell in the metadata picker.
-        // A compact ride lists keys from its series table, so the incoherent index goes there (Task 6).
-        if (compact) f.database.rideHistoryCompactQueries.insertSeriesV3(99, checkNotNull(
+        // A ride lists keys from its series table, so the incoherent index goes there (Task 6).
+        f.database.rideHistoryCompactQueries.insertSeriesV3(99, checkNotNull(
             f.database.rideHistoryCompactQueries.rideNoV3("ride").executeAsOneOrNull()), "a", "cell_v", 2147483648L)
-        else f.database.rideHistorySampleQueries.insertSample("ride", 99, "a", "cell_v", 2147483648L,
-            tick.epochMillis, tick.elapsedMillis, tick.clockGeneration, null, "UNAVAILABLE")
         val observed = object : HistoryStore by f.store {
             override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistorySample> = error("No numeric trace read allowed")
             override suspend fun buckets(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistoryBucket> = error("No numeric bucket read allowed")
@@ -98,11 +91,10 @@ class HistoryRecordedKeysTest {
     }
 
     @Test fun missingParentsAndInvalidBudgetsCannotInventSeriesOrPerformStorageReads() = runTest {
-        // Pinned to V2: it counts the orphaned V2 sample row directly.
-        val f = fixture(compact = false); f.begin(HistorySource("a", HistorySourceKind.BATTERY, "A"))
+        val f = fixture(); f.begin(HistorySource("a", HistorySourceKind.BATTERY, "A"))
         f.store.append(HistoryBatch("ride", listOf(point(key("a", "voltage_v"))), emptyList(), emptyList()))
         f.driver.execute(null, "DELETE FROM HistoryRideV2 WHERE id = 'ride'", 0)
-        assertEquals(1, f.database.rideHistorySampleQueries.samplesForReceipt("ride", 0, Long.MAX_VALUE).executeAsList().size)
+        assertEquals(1L, f.database.rideHistoryCompactQueries.maxSeriesIdV3().executeAsOne(), "the series is orphaned, not gone")
         assertEquals(1, f.database.rideHistorySourceQueries.sourcesForRide("ride").executeAsList().size)
         assertEquals(HistoryRecordedKeys(emptyList(), false), f.reader.recordedKeys("ride", "a"))
         assertEquals(HistoryRecordedKeys(emptyList(), false), f.store.recordedKeys("ride", "a"))
