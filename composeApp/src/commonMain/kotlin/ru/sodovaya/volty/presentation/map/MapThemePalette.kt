@@ -58,10 +58,10 @@ fun mapThemePalette(tones: VoltyTonalColors, dark: Boolean): MapThemePalette {
         // outshone the roads they branch from. Owner feedback from the emulator, 2026-11-02.
         // The first review proposed 34/46/14 (minor/major/casing); that put the minor fill above
         // the casing and was set aside in favour of upstream's relations.
-        road = subdued(tones.neutralVariant(if (dark) 16 else 100)),
-        roadMajor = subdued(tones.neutralVariant(if (dark) 25 else 94), 5.0),
+        road = subdued(tones.neutralVariant(if (dark) 20 else 100)),
+        roadMajor = subdued(tones.neutralVariant(if (dark) 30 else 94), 5.0),
         roadMotorway = subdued(tones.neutralVariant(if (dark) 16 else 85), 5.0),
-        roadOutline = subdued(tones.neutralVariant(if (dark) 33 else 75)),
+        roadOutline = subdued(tones.neutralVariant(if (dark) 36 else 75)),
         path = subdued(tones.neutralVariant(if (dark) 12 else 77)),
         text = subdued(tones.neutral(if (dark) 85 else 20)),
         textMuted = subdued(tones.neutralVariant(if (dark) 65 else 38)),
