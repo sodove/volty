@@ -314,7 +314,7 @@ class Worker:
         spec.parent.mkdir(parents=True, exist_ok=True)
         spec.write_text(json.dumps({"regions": entries}, ensure_ascii=False), encoding="utf-8")
         # Build beside the spec and publish only if it fits: an oversized catalog
-        # would make every client that still has the 4 MiB limit fail to refresh.
+        # would make every client above the limit fail to refresh (16 MiB = the 0.7.60+ client cap).
         built = self.config.staging_root / ("out-" + output_name)
         built.unlink(missing_ok=True)
         output = self.config.public_root / output_name

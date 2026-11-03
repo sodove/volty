@@ -228,7 +228,7 @@ class WorkerTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = self._compact_fixture(root, None)
-            self.assertEqual(4 * 1024 * 1024, config.max_catalog_bytes)
+            self.assertEqual(16 * 1024 * 1024, config.max_catalog_bytes)
             published = root / "public" / "catalog.json"
             published.write_text("previous", encoding="utf-8")
 

@@ -237,10 +237,9 @@ class PackageServiceTest(unittest.TestCase):
             'onDemand': {'enabled': True},
         }
 
-    def test_catalog_limit_stays_four_mebibytes_until_old_clients_are_gone(self):
-        # 0.7.59 clients reject catalogs above 4 MiB; raise via VOLTY_OFFLINE_MAX_CATALOG_BYTES only after
-        # an app with the 16 MiB client limit has shipped.
-        self.assertEqual(4 * 1024 ** 2, self.config.max_catalog_bytes)
+    def test_catalog_limit_matches_the_sixteen_mebibyte_client_limit(self):
+        # Raised from 4 MiB once riders were on 0.7.60+, whose client accepts 16 MiB.
+        self.assertEqual(16 * 1024 ** 2, self.config.max_catalog_bytes)
 
     def test_compact_catalog_is_served_while_the_index_still_resolves_empty_cells(self):
         manager = self.manager()
