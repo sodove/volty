@@ -159,8 +159,11 @@ fun autoOverlayIcon(metric: VideoMetric): OverlayIcon = when (metric) {
     else -> OverlayIcon.TEMPERATURE
 }
 
-/** A warning sign means a warning: a stored [OverlayIcon.WARNING] shows only while a rule has fired. */
-fun overlayIconShown(widget: OverlayWidget, reading: VideoReading?): OverlayIcon {
-    val icon = if (widget.icon != OverlayIcon.AUTO) widget.icon else autoOverlayIcon(widget.metric)
-    return if (icon == OverlayIcon.WARNING && !overlayRuleFired(widget, reading)) autoOverlayIcon(widget.metric) else icon
+/**
+ * The FA name drawn right now. A warning sign means a warning: a chosen [OverlayIcons.WARNING] shows only while a rule
+ * has fired, otherwise the metric's own icon. It is never AUTO and never a blank circle.
+ */
+fun overlayIconShown(widget: OverlayWidget, reading: VideoReading?): String {
+    val icon = overlayIconChosen(widget)
+    return if (icon == OverlayIcons.WARNING && !overlayRuleFired(widget, reading)) autoOverlayIconName(widget.metric) else icon
 }

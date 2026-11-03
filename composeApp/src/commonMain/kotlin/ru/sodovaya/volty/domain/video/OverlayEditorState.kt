@@ -181,7 +181,7 @@ private fun isDial(kind: OverlayWidgetKind) =
 /** A time or a distance has no scale, so a dial or a bar of one would be a drawing of nothing. */
 fun overlayKindAllowed(kind: OverlayWidgetKind, metric: VideoMetric): Boolean {
     val trip = metric == VideoMetric.ELAPSED || metric == VideoMetric.DISTANCE
-    return !trip || kind == OverlayWidgetKind.VALUE_CARD || kind == OverlayWidgetKind.TEXT
+    return !trip || kind == OverlayWidgetKind.VALUE_CARD || kind == OverlayWidgetKind.ICON_VALUE || kind == OverlayWidgetKind.TEXT
 }
 
 /** The accent a metric wears in the built-in presets. */
@@ -206,7 +206,9 @@ private fun arcFor(metric: VideoMetric, thickness: Float): OverlayArc = OverlayA
 private data class KindShape(val width: Float, val height: Float, val value: Float, val unit: Float, val label: Float)
 
 private fun shapeOf(kind: OverlayWidgetKind): KindShape = when (kind) {
-    OverlayWidgetKind.VALUE_CARD, OverlayWidgetKind.ICON_VALUE -> KindShape(313f, 166f, 64f, 30f, 24f)
+    OverlayWidgetKind.VALUE_CARD -> KindShape(313f, 166f, 64f, 30f, 24f)
+    // A chip is one line, icon and number: telemetry-studio's icon_value height at a 64u number.
+    OverlayWidgetKind.ICON_VALUE -> KindShape(320f, 121f, 64f, 51f, 0f)
     OverlayWidgetKind.ARC -> KindShape(400f, 400f, 110f, 32f, 26f)
     OverlayWidgetKind.ARC_LEFT, OverlayWidgetKind.ARC_RIGHT -> KindShape(452f, 452f, 150f, 32f, 26f)
     OverlayWidgetKind.BAR -> KindShape(408f, 170f, 110f, 46f, 28f)
@@ -278,6 +280,9 @@ sealed interface OverlayEditorAction {
     data class SetSize(val size: OverlayWidgetSize) : OverlayEditorAction
     data class SetKind(val kind: OverlayWidgetKind) : OverlayEditorAction
     data class SetAccent(val color: String) : OverlayEditorAction
+
+    /** An [OverlayIcons] name, or null for the metric's own icon. An unknown name is ignored. */
+    data class SetIcon(val name: String?) : OverlayEditorAction
     data class AddWidget(val id: String, val metric: VideoMetric) : OverlayEditorAction
     data object DeleteWidget : OverlayEditorAction
     data object Undo : OverlayEditorAction
@@ -328,6 +333,9 @@ private class OverlayEditorReducer(private val state: OverlayEditorState, privat
         is OverlayEditorAction.SetSize -> editPlaced { resized(it, action.size) }
         is OverlayEditorAction.SetKind -> editPlaced { rekinded(it, action.kind) }
         is OverlayEditorAction.SetAccent -> edit { it.copy(style = it.style.copy(accent = action.color)) }
+        is OverlayEditorAction.SetIcon ->
+            if (action.name != null && OverlayIcons.byName(action.name) == null) state
+            else edit { it.copy(iconName = action.name, icon = OverlayIcon.AUTO) }
         is OverlayEditorAction.AddWidget -> addWidget(action)
         OverlayEditorAction.DeleteWidget -> deleteWidget()
         OverlayEditorAction.Undo -> step(state.undo, state.redo) { rest, back -> state.copy(undo = rest, redo = back) }

@@ -1,0 +1,13 @@
+Font Awesome Free 6.7.2 by Fonticons, Inc. (https://fontawesome.com)
+
+The ride-video overlay draws its icons from fa-solid-900.ttf, copied unmodified from
+the npm package @fortawesome/fontawesome-free 6.7.2 (webfonts/fa-solid-900.ttf,
+SHA-256 d2f0593540b0e33ba6de255a54f272d466e31144806956bea8cfdbf7edffc9bd), the same
+font and version telemetry-studio uses.
+
+Font: Copyright (c) 2024 Fonticons, Inc., with Reserved Font Name "Font Awesome",
+licensed under the SIL Open Font License 1.1.
+Icons: Font Awesome Free icons by Fonticons, Inc., licensed under the Creative
+Commons Attribution 4.0 International License (CC BY 4.0),
+https://creativecommons.org/licenses/by/4.0/ . The icons are drawn as glyphs of the
+unmodified font; no icon was altered.

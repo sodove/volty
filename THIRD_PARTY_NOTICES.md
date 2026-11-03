@@ -61,3 +61,15 @@ The ride-video overlay burns text in with Roboto Medium and Bold
 (`composeApp/src/androidMain/assets/fonts/`), copied unmodified from the Android
 platform's `data/fonts`. Copyright 2011 Google Inc., licensed under the Apache License,
 Version 2.0; the full text is `third-party/credits/licenses/Roboto-Apache.txt`.
+
+## Font Awesome Free
+
+The ride-video overlay and its editor draw icons from Font Awesome Free 6.7.2 Solid
+(`composeApp/src/androidMain/assets/fonts/fa-solid-900.ttf`), copied unmodified from the npm
+package `@fortawesome/fontawesome-free` 6.7.2, SHA-256
+`d2f0593540b0e33ba6de255a54f272d466e31144806956bea8cfdbf7edffc9bd`, the font telemetry-studio
+uses, so its templates' icon names map one to one. Copyright (c) 2024 Fonticons, Inc.
+(https://fontawesome.com). The font is licensed under the SIL Open Font License 1.1 (Reserved
+Font Name "Font Awesome"); the icons are licensed under CC BY 4.0
+(https://creativecommons.org/licenses/by/4.0/). The package's full license text is
+`third-party/credits/licenses/FontAwesome-Free.txt`.

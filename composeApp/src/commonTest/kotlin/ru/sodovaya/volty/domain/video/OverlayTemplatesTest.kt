@@ -103,16 +103,18 @@ class OverlayTemplatesTest {
 
     @Test
     fun noPresetCarriesASpeedRule() {
-        // Studio turns a card yellow at 40 km/h: meaningless across a bicycle and a wheel.
-        OverlayTemplates.all().flatMap { it.widgets }.filter { it.metric == VideoMetric.SPEED }.forEach {
+        // Studio turns a card yellow at 40 km/h: meaningless across a bicycle and a wheel. The one exception is the
+        // owner's own dashboard (meow_icons), reproduced by the owner's ruling of 2026-11-03 with the thresholds its
+        // JSON carries; it is his wheel's, chosen by him, not a default.
+        OverlayTemplates.all().filterNot { it.id.startsWith("ts-meow") }.flatMap { it.widgets }.filter { it.metric == VideoMetric.SPEED }.forEach {
             assertTrue(it.rules.isEmpty(), it.id)
         }
     }
 
     @Test
-    fun theBuiltInsAreSixDistinctValidPresets() {
+    fun theBuiltInsAreEightDistinctValidPresets() {
         val all = OverlayTemplates.all()
-        assertEquals(6, all.map { it.id }.toSet().size)
+        assertEquals(8, all.map { it.id }.toSet().size)
         assertTrue(all.all(::validOverlayPreset))
         assertEquals("hud", all[1].id)
         assertNull(OverlayTemplates.byId("nope"))

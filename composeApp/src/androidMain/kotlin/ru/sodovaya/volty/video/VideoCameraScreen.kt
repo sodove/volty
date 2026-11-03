@@ -10,9 +10,11 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.view.PreviewView
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
@@ -37,6 +39,10 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import java.util.UUID
 import ru.sodovaya.volty.domain.model.Vehicle
 import org.jetbrains.compose.resources.stringResource
@@ -188,7 +194,7 @@ internal fun VideoCameraScreen(
         canSwitch = idle && state.canSwitch,
         elapsedSeconds = state.durationSeconds,
         chips = videoChips(linkMonitor.status(now), vehicleName, storage),
-        presetName = overlayPresetName(document.selected, document.saved),
+        presetName = videoPresetButtonLabel(overlayPresetName(document.selected, document.saved)),
         resolution = videoQualityText(state.quality).removeSuffix("p"),
         frameRate = state.frameRate,
     )
@@ -226,93 +232,130 @@ internal fun VideoCameraScreen(
         stoppedForStorage = state.stoppedForStorage,
     )).map { noticeText(it, state.savedParts) }
 
-    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding()) {
-        val landscape = videoCaptureIsLandscape(maxWidth.value, maxHeight.value)
-        // One tree for both orientations: moving the PreviewView to another parent would rebind the camera.
-        Box(
-            Modifier.fillMaxSize().padding(end = if (landscape) VideoChromeSize else 0.dp, bottom = if (landscape) 0.dp else VideoChromeSize),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (allowed) {
-                AndroidView(factory = { viewContext ->
-                    PreviewView(viewContext).apply {
-                        implementationMode = PreviewView.ImplementationMode.COMPATIBLE
-                        scaleType = PreviewView.ScaleType.FIT_CENTER
-                        previewView = this
-                        camera.attach(this)
+    // The camera area is the scheme's lowest surface, so the letterbox round a 9:16 frame is the app's own ground
+    // in light and dark alike, and the frame itself stays full-bleed inside it.
+    BoxWithConstraints(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerLowest)) {
+        // In portrait the panel's colour runs on under the gesture bar, as in mock B1: a black strip below the panel read
+        // as a seam (visual check 2026-11-03). Nothing is placed there; it is paint only.
+        if (!videoCaptureIsLandscape(maxWidth.value, maxHeight.value)) {
+            Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().windowInsetsBottomHeight(WindowInsets.navigationBars).background(MaterialTheme.colorScheme.surfaceContainer))
+        }
+        BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
+            val landscape = videoCaptureIsLandscape(maxWidth.value, maxHeight.value)
+            // One tree for both orientations: moving the PreviewView to another parent would rebind the camera.
+            Box(
+                Modifier.fillMaxSize().padding(end = if (landscape) VideoChromeSize else 0.dp, bottom = if (landscape) 0.dp else VideoChromeSize),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (allowed) {
+                    // PreviewView paints its own black round a fitted frame; it takes the scheme's ground instead, so the
+                    // letterbox is the app's in a light theme too (emulator check 2026-11-03).
+                    val letterbox = MaterialTheme.colorScheme.surfaceContainerLowest.toArgb()
+                    AndroidView(factory = { viewContext ->
+                        PreviewView(viewContext).apply {
+                            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                            scaleType = PreviewView.ScaleType.FIT_CENTER
+                            previewView = this
+                            camera.attach(this)
+                        }
+                    }, update = { it.setBackgroundColor(letterbox) }, modifier = Modifier.fillMaxSize())
+                    PreviewOverlay(camera, videoPreviewDisplayedAspect(state.previewAspect, landscape), Modifier.align(Alignment.Center))
+                } else {
+                    Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text(stringResource(Res.string.video_permissions), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                        Button(onClick = { permissionRequest.launch(permissions) }) { Text(stringResource(Res.string.video_allow)) }
+                        if (requested) TextButton(onClick = {
+                            context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
+                        }) { Text(stringResource(Res.string.video_app_settings)) }
                     }
-                }, modifier = Modifier.fillMaxSize())
-            } else {
-                Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(stringResource(Res.string.video_permissions), color = Color.White)
-                    Button(onClick = { permissionRequest.launch(permissions) }) { Text(stringResource(Res.string.video_allow)) }
-                    if (requested) TextButton(onClick = {
-                        context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
-                    }) { Text(stringResource(Res.string.video_app_settings)) }
                 }
+                VideoNotices(
+                    notices,
+                    showRetry = state.cameraFailed && idle && allowed,
+                    onRetry = { previewView?.let(camera::attach) },
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
             }
-            VideoNotices(
-                notices,
-                showRetry = state.cameraFailed && idle && allowed,
-                onRetry = { previewView?.let(camera::attach) },
-                modifier = Modifier.align(Alignment.BottomCenter),
-            )
-        }
-        if (landscape) {
-            VideoCaptureRail(chromeState, actions, Modifier.align(Alignment.CenterEnd))
-        } else {
-            VideoCapturePanel(chromeState, actions, Modifier.align(Alignment.BottomCenter))
-        }
-        when (sheet) {
-            VideoSheetKind.QUALITY -> VideoQualitySheet(
-                state, audio,
-                onQuality = camera::setQuality,
-                onAudio = { enabled ->
-                    if (!enabled) audio = false else if (granted(Manifest.permission.RECORD_AUDIO)) audio = true
-                    else audioRequest.launch(Manifest.permission.RECORD_AUDIO)
-                },
-                onSegments = onSegmentMinutes,
-                onDismiss = { sheet = VideoSheetKind.NONE },
-            )
-            VideoSheetKind.OVERLAY -> VideoOverlaySheet(
-                document,
-                onPreset = { preset ->
-                    if (overlayPresetSwitchLosesEdits(document) && preset != document.selected) pendingPreset = preset
-                    else component.change(document.copy(selected = preset))
-                },
-                onTripScope = { component.change(document.copy(tripScope = it)) },
-                onCustomize = ::openEditor,
-                onDismiss = { sheet = VideoSheetKind.NONE },
-            )
-            VideoSheetKind.NONE -> Unit
-        }
-        pendingPreset?.let { preset ->
-            val copyName = stringResource(Res.string.video_editor_copy_name, overlayPresetName(document.selected, document.saved))
-            val canKeep = document.saved.size < OVERLAY_MAX_SAVED
-            VideoDecisionSheet(
-                title = stringResource(Res.string.video_editor_lose_title),
-                text = stringResource(Res.string.video_editor_lose_text),
-                primary = stringResource(Res.string.video_editor_lose_save).takeIf { canKeep },
-                onPrimary = {
-                    val kept = overlayKeepAsCopy(document, UUID.randomUUID().toString(), copyName)
-                    if (kept != null && component.change(kept.copy(selected = preset))) pendingPreset = null
-                },
-                destructive = stringResource(Res.string.video_editor_lose_discard),
-                onDestructive = { component.change(document.copy(selected = preset)); pendingPreset = null },
-                neutral = stringResource(Res.string.video_editor_lose_keep),
-                onNeutral = { pendingPreset = null },
-            )
-        }
-        if (confirmStop && state.phase != VideoRecordingPhase.IDLE) {
-            VideoBackConfirm(
-                onContinue = { confirmStop = false },
-                onStop = { confirmStop = false; camera.stop() },
-            )
+            if (landscape) {
+                VideoCaptureRail(chromeState, actions, Modifier.align(Alignment.CenterEnd))
+            } else {
+                VideoCapturePanel(chromeState, actions, Modifier.align(Alignment.BottomCenter))
+            }
+            when (sheet) {
+                VideoSheetKind.QUALITY -> VideoQualitySheet(
+                    state, audio,
+                    onQuality = camera::setQuality,
+                    onAudio = { enabled ->
+                        if (!enabled) audio = false else if (granted(Manifest.permission.RECORD_AUDIO)) audio = true
+                        else audioRequest.launch(Manifest.permission.RECORD_AUDIO)
+                    },
+                    onSegments = onSegmentMinutes,
+                    onDismiss = { sheet = VideoSheetKind.NONE },
+                )
+                VideoSheetKind.OVERLAY -> VideoOverlaySheet(
+                    document,
+                    onPreset = { preset ->
+                        if (overlayPresetSwitchLosesEdits(document) && preset != document.selected) pendingPreset = preset
+                        else component.change(document.copy(selected = preset))
+                    },
+                    onTripScope = { component.change(document.copy(tripScope = it)) },
+                    onCustomize = ::openEditor,
+                    onDismiss = { sheet = VideoSheetKind.NONE },
+                )
+                VideoSheetKind.NONE -> Unit
+            }
+            pendingPreset?.let { preset ->
+                val copyName = stringResource(Res.string.video_editor_copy_name, overlayPresetName(document.selected, document.saved))
+                val canKeep = document.saved.size < OVERLAY_MAX_SAVED
+                VideoDecisionSheet(
+                    title = stringResource(Res.string.video_editor_lose_title),
+                    text = stringResource(Res.string.video_editor_lose_text),
+                    primary = stringResource(Res.string.video_editor_lose_save).takeIf { canKeep },
+                    onPrimary = {
+                        val kept = overlayKeepAsCopy(document, UUID.randomUUID().toString(), copyName)
+                        if (kept != null && component.change(kept.copy(selected = preset))) pendingPreset = null
+                    },
+                    destructive = stringResource(Res.string.video_editor_lose_discard),
+                    onDestructive = { component.change(document.copy(selected = preset)); pendingPreset = null },
+                    neutral = stringResource(Res.string.video_editor_lose_keep),
+                    onNeutral = { pendingPreset = null },
+                )
+            }
+            if (confirmStop && state.phase != VideoRecordingPhase.IDLE) {
+                VideoBackConfirm(
+                    onContinue = { confirmStop = false },
+                    onStop = { confirmStop = false; camera.stop() },
+                )
+            }
         }
     }
 }
 
 private enum class VideoSheetKind { NONE, QUALITY, OVERLAY }
+
+/**
+ * The preview's overlay, in the view tree over the PreviewView and fitted to the displayed frame as FIT_CENTER fits
+ * the picture. It is the same scene builder and drawer the file's GL effect uses, so what is on the frame is what is
+ * burned in; only the chrome around the frame stays out of the file. See `VideoCameraController.previewInput`.
+ */
+@Composable
+private fun PreviewOverlay(camera: VideoCameraController, aspect: Float, modifier: Modifier) {
+    val context = LocalContext.current
+    val drawer = remember { OverlayCanvasDrawer(OverlayFonts(context)) }
+    val now by produceState(SystemClock.elapsedRealtime()) {
+        while (true) {
+            value = SystemClock.elapsedRealtime()
+            delay(VIDEO_PREVIEW_OVERLAY_MILLIS)
+        }
+    }
+    // Clipped: the scrim is drawn wider than its frame (OverlayCanvasDrawer), harmless on a camera surface but it
+    // spilled across the letterbox in the view tree (emulator check 2026-11-03).
+    Canvas(modifier.aspectRatio(aspect).fillMaxSize().clipToBounds()) {
+        val input = camera.previewInput(size.width.toInt(), size.height.toInt(), now) ?: return@Canvas
+        val scene = buildOverlayScene(input, drawer)
+        drawIntoCanvas { drawer.draw(it.nativeCanvas, scene) }
+    }
+}
 
 private const val STATUS_REFRESH_MILLIS = 500L
 private const val STORAGE_REFRESH_MILLIS = 5_000L
@@ -349,6 +392,12 @@ private fun videoChips(link: VideoLinkStatus, vehicleName: String, storage: Vide
         is VideoLinkStatus.Live -> stringResource(Res.string.video_link_live, vehicleName, videoAgeSeconds(link.ageMillis)) to ChipTone.GOOD
         is VideoLinkStatus.Lost -> stringResource(Res.string.video_link_lost, videoElapsedText(link.sinceMillis / 1000)) to ChipTone.BAD
     }
+    val linkShort = when (link) {
+        VideoLinkStatus.NoVehicle -> stringResource(Res.string.video_link_none_short)
+        VideoLinkStatus.Waiting -> stringResource(Res.string.video_link_waiting_short)
+        is VideoLinkStatus.Live -> stringResource(Res.string.video_link_live_short, videoAgeSeconds(link.ageMillis))
+        is VideoLinkStatus.Lost -> stringResource(Res.string.video_link_lost_short, videoElapsedText(link.sinceMillis / 1000))
+    }
     val time = storage?.let {
         val hours = it.minutesLeft / 60
         if (hours > 0) stringResource(Res.string.video_storage_hours, hours.toInt(), (it.minutesLeft % 60).toInt())
@@ -358,7 +407,7 @@ private fun videoChips(link: VideoLinkStatus, vehicleName: String, storage: Vide
         val value = videoStorageSize(it.freeBytes)
         stringResource(if (value.gigabytes) Res.string.video_storage_gb else Res.string.video_storage_mb, value.text)
     }
-    return VideoChips(linkText, linkTone, if (size != null && time != null) "$size · $time" else null, time, storage?.low == true)
+    return VideoChips(linkText, videoRailLinkText(linkText, linkShort), linkTone, if (size != null && time != null) "$size · $time" else null, time, storage?.low == true)
 }
 
 @Composable

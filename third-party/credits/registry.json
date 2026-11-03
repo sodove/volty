@@ -146,6 +146,10 @@
       "name": "JAIN SIP Specification License",
       "path": "third-party/credits/licenses/JAIN-SIP-Spec.txt"
     },
+    "FontAwesome-OFL": {
+      "name": "SIL OFL-1.1 (fonts), CC BY 4.0 (icons)",
+      "path": "third-party/credits/licenses/FontAwesome-Free.txt"
+    },
     "Roboto-Apache": {
       "name": "Apache-2.0",
       "path": "third-party/credits/licenses/Roboto-Apache.txt"

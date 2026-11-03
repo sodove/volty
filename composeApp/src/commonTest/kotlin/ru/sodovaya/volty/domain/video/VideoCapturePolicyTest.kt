@@ -15,6 +15,45 @@ class VideoCapturePolicyTest {
     // --- layout ---
 
     @Test
+    fun thePreviewOverlayIsFittedToTheDisplayedFrame() {
+        // The emulator's 1280x720 sensor crop, turned 90° for a portrait display: a 9:16 box.
+        assertEquals(720f / 1280f, videoPreviewAspect(1280, 720, 90)!!, 1e-6f)
+        assertEquals(1280f / 720f, videoPreviewAspect(1280, 720, 0)!!, 1e-6f)
+        assertEquals(720f / 1280f, videoPreviewAspect(1280, 720, -270)!!, 1e-6f)
+        assertNull(videoPreviewAspect(0, 720, 90), "no crop yet")
+        // Until the camera reports, the requested 16:9 upright; a report from the other orientation is turned.
+        assertEquals(9f / 16f, videoPreviewDisplayedAspect(null, landscape = false), 1e-6f)
+        assertEquals(16f / 9f, videoPreviewDisplayedAspect(null, landscape = true), 1e-6f)
+        assertEquals(16f / 9f, videoPreviewDisplayedAspect(9f / 16f, landscape = true), 1e-6f)
+        assertEquals(3f / 4f, videoPreviewDisplayedAspect(3f / 4f, landscape = false), 1e-6f)
+        assertEquals(9f / 16f, videoPreviewDisplayedAspect(Float.NaN, landscape = false), 1e-6f)
+        // The preview overlay never repaints faster than the file's own overlay.
+        assertEquals(1000L / MAX_RECORDED_REPAINT_HZ, VIDEO_PREVIEW_OVERLAY_MILLIS)
+    }
+
+    @Test
+    fun theRailKeepsAShortLinkTextAndShortensALongOne() {
+        assertEquals("T4 · 0.2 с", videoRailLinkText("T4 · 0.2 с", "0.2 с"))
+        assertEquals("0.2 с", videoRailLinkText("Demo wheel · 0.2 с", "0.2 с"))
+        // Exactly at the limit stays whole; one more character switches to the short form.
+        assertEquals("123456789012", videoRailLinkText("123456789012", "s"))
+        assertEquals("s", videoRailLinkText("1234567890123", "s"))
+    }
+
+    @Test
+    fun theOverlayButtonCaptionFitsTheCircle() {
+        assertEquals("HUD", videoPresetButtonLabel("HUD"))
+        assertEquals("Минимум", videoPresetButtonLabel("Минимум"))
+        assertEquals("Верхний", videoPresetButtonLabel("Верхний ряд"))
+        assertEquals("Мой", videoPresetButtonLabel("Мой пресет для зимы"))
+        assertEquals("Длинно…", videoPresetButtonLabel("Длинноеназвание"))
+        assertEquals("HUD", videoPresetButtonLabel("  HUD  "))
+        for (name in listOf("Верхний ряд", "Длинноеназвание", "Копия: HUD с картой")) {
+            assertTrue(videoPresetButtonLabel(name).length <= VIDEO_PRESET_BUTTON_CHARS, name)
+        }
+    }
+
+    @Test
     fun theRailAppearsOnlyInAWiderThanTallWindow() {
         assertTrue(videoCaptureIsLandscape(844f, 390f))
         assertFalse(videoCaptureIsLandscape(390f, 844f))

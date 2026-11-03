@@ -55,6 +55,8 @@ fun validOverlayPreset(preset: OverlayPreset): Boolean {
         widget.id.isBoundedText(MAX_ID_LENGTH) &&
             widget.label.length <= MAX_LABEL_LENGTH &&
             widget.unit.length <= MAX_UNIT_LENGTH &&
+            // An unknown name is not an error (a newer TS list, say): it falls back to the metric's icon.
+            (widget.iconName?.length ?: 0) <= MAX_ID_LENGTH &&
             isValidStyle(widget.style) &&
             isValidArc(widget.arc) &&
             isValidBar(widget.bar) &&

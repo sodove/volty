@@ -74,6 +74,8 @@ internal data class VideoCameraState(
     val cameraFailed: Boolean = false,
     /** How the last recording ended; null until one has. */
     val stopOutcome: VideoStopOutcome? = null,
+    /** The preview frame's width / height as displayed, once it streams; the view-tree overlay is fitted to it. */
+    val previewAspect: Float? = null,
     /** The app stopped the last recording itself, to keep a minute of storage in hand. */
     val stoppedForStorage: Boolean = false,
 )
@@ -90,14 +92,15 @@ internal class VideoCameraController(private val context: Context, private val o
     private var current: Segment? = null
     private var effects: List<OverlayEffect> = emptyList()
     private var view: PreviewView? = null
-    // Two effects, two threads: the file's overlay must never wait behind the preview's.
+    // The file's overlay has its own GL thread. The preview's is drawn in the view tree (see [previewInput]).
     private val overlayThread = HandlerThread("RideVideoOverlay").apply { start() }
     private val handler = Handler(overlayThread.looper)
-    private val previewThread = HandlerThread("RideVideoPreviewOverlay").apply { start() }
-    private val previewHandler = Handler(previewThread.looper)
     private val timeline = VideoTimeline()
     private val videoRenderer = VideoOverlayRenderer(context)
-    private val previewRenderer = VideoOverlayRenderer(context)
+    // The preview overlay's own trackers, main thread only: they must not share state with the GL thread's.
+    private val previewScales = OverlayScaleTracker()
+    private val previewTrips = VideoTripTracker()
+    private val previewDials = ru.sodovaya.volty.presentation.video.VideoDialSmoother()
     private var storageStopRequested = false
     /** True while the editor takes a still, so the frame it gets has no old overlay burned into it. */
     @Volatile var overlayHidden = false
@@ -147,6 +150,12 @@ internal class VideoCameraController(private val context: Context, private val o
 
     fun attach(previewView: PreviewView) {
         view = previewView
+        previewView.previewStreamState.observe(owner) { stream ->
+            if (stream != PreviewView.StreamState.STREAMING) return@observe
+            val info = preview?.resolutionInfo ?: return@observe
+            val aspect = videoPreviewAspect(info.cropRect.width(), info.cropRect.height(), info.rotationDegrees)
+            if (aspect != state.value.previewAspect) mutableState.update { it.copy(previewAspect = aspect) }
+        }
         startSensors()
         val future = ProcessCameraProvider.getInstance(context)
         future.addListener({
@@ -327,10 +336,7 @@ internal class VideoCameraController(private val context: Context, private val o
             val videoEffect = OverlayEffect(CameraEffect.VIDEO_CAPTURE, 0, handler, onError)
             val videoPipeline = OverlayPipeline(recorded = true, renderer = videoRenderer, realtime = realtime)
             videoEffect.setOnDrawListener(videoPipeline::onDraw)
-            val previewEffect = OverlayEffect(CameraEffect.PREVIEW, 0, previewHandler, onError)
-            val previewPipeline = OverlayPipeline(recorded = false, renderer = previewRenderer, realtime = realtime)
-            previewEffect.setOnDrawListener(previewPipeline::onDraw)
-            effects = listOf(videoEffect, previewEffect)
+            effects = listOf(videoEffect)
             val display = displayRotation()
             val nextPreview = Preview.Builder().setTargetRotation(display)
                 .setTargetAspectRatio(AspectRatio.RATIO_16_9).build().also {
@@ -343,10 +349,39 @@ internal class VideoCameraController(private val context: Context, private val o
             capture = nextCapture
             // Preview uses FIT_CENTER, so the whole encoded composition is visible in either aspect ratio.
             cameraProvider.bindToLifecycle(owner, selector, UseCaseGroup.Builder()
-                .addUseCase(nextPreview).addUseCase(nextCapture).addEffect(videoEffect).addEffect(previewEffect).build())
+                .addUseCase(nextPreview).addUseCase(nextCapture).addEffect(videoEffect).build())
             mutableState.update { it.copy(ready = true, cameraFailed = false, qualities = qualities, quality = quality,
                 canSwitch = cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) && cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) }
         } catch (error: Exception) { failed(error) }
+    }
+
+    /**
+     * The preview's overlay input, for the view tree to draw over the PreviewView with the same scene builder and
+     * drawer as the file; null while the overlay is off for the editor's still. Main thread only.
+     *
+     * **Retraction (I5, 2026-11-03):** the preview used to get its own CameraX `OverlayEffect`. On a cold process that
+     * effect's input stream never reached its GL thread: the camera kept producing frames (dumpsys media.camera) and
+     * the file still recorded, but the preview stayed blank until the screen was reopened about a minute later. It
+     * reproduced 6 of 6 times on the emulator at the base commit and on this branch, and 0 of 3 with only the preview
+     * effect removed. Drawing the preview's overlay in the view tree removes that pipeline, its second GL raster per
+     * frame, and the rotation mismatch I5 had to solve: the view tree is in the display's orientation already.
+     */
+    fun previewInput(width: Int, height: Int, nowMillis: Long): OverlaySceneInput? {
+        if (overlayHidden || width <= 0 || height <= 0) return null
+        val snapshot = synchronized(timeline) { timeline.sample(nowMillis) }
+        val preset = preset
+        val trip = if (overlayUsesTrip(preset)) {
+            previewTrips.trip(
+                tripScope, overlayRecording, recordedSeconds,
+                RideSessionClock.secondsAt(System.currentTimeMillis()),
+                snapshot?.readings?.get(VideoMetric.DISTANCE)?.value,
+            )
+        } else {
+            OverlayTrip()
+        }
+        val ranges = previewScales.update(preset, snapshot, unitSystem)
+        val smoothed = previewDials.advance(snapshot, nowMillis)
+        return OverlaySceneInput(preset, snapshot, strings, unitSystem, width, height, trip, ranges, smoothed)
     }
 
     /** The one thing the on-screen shutter and the volume keys both press. Only ever called from a press. */
@@ -558,7 +593,6 @@ internal class VideoCameraController(private val context: Context, private val o
         // close queues GL resource disposal onto the supplied handler before quitSafely.
         effects.forEach { it.close() }; effects = emptyList()
         overlayThread.quitSafely()
-        previewThread.quitSafely()
     }
 
     private companion object {

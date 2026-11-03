@@ -10,10 +10,9 @@ import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
-import androidx.core.graphics.PathParser
 import ru.sodovaya.volty.domain.video.OverlayArcOp
 import ru.sodovaya.volty.domain.video.OverlayDiscOp
-import ru.sodovaya.volty.domain.video.OverlayIcon
+import ru.sodovaya.volty.domain.video.OverlayIcons
 import ru.sodovaya.volty.domain.video.OverlayIconOp
 import ru.sodovaya.volty.domain.video.OverlayOp
 import ru.sodovaya.volty.domain.video.OverlayPalette
@@ -33,6 +32,13 @@ internal class OverlayFonts(context: Context) {
     val bold: Typeface = load(context, "fonts/Roboto-Bold.ttf", Typeface.DEFAULT_BOLD)
     val medium: Typeface = load(context, "fonts/Roboto-Medium.ttf", Typeface.DEFAULT)
 
+    /** Font Awesome Free 6.7.2 Solid, the glyphs telemetry-studio draws its icons from (OFL 1.1). Null: no icons. */
+    val icons: Typeface? = runCatching { Typeface.createFromAsset(context.assets, ICON_FONT) }.getOrNull()
+
+    companion object {
+        const val ICON_FONT = "fonts/fa-solid-900.ttf"
+    }
+
     private fun load(context: Context, path: String, fallback: Typeface): Typeface =
         runCatching { Typeface.createFromAsset(context.assets, path) }.getOrDefault(fallback)
 }
@@ -51,9 +57,8 @@ internal class OverlayCanvasDrawer(private val fonts: OverlayFonts) : OverlayTex
     }
     private val text = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG).apply { textAlign = Paint.Align.LEFT }
     private val rect = RectF()
-    private val iconPaths = HashMap<OverlayIcon, Path>()
-    private val iconMatrix = android.graphics.Matrix()
-    private val iconScratch = Path()
+    private val glyph = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.LEFT }
+    private val glyphBounds = android.graphics.Rect()
 
     override fun width(text: String, size: Float, bold: Boolean): Float {
         this.text.letterSpacing = 0f
@@ -153,25 +158,23 @@ internal class OverlayCanvasDrawer(private val fonts: OverlayFonts) : OverlayTex
         return this@OverlayCanvasDrawer.text.measureText(text)
     }
 
+    /** One glyph, centred on its ink in the op's square: FA glyphs differ in width, so the box, not the advance, aligns. */
     private fun icon(canvas: Canvas, op: OverlayIconOp) {
-        val path = iconPaths.getOrPut(op.icon) { PathParser.createPathFromPathData(ICON_PATHS.getValue(op.icon)) }
-        iconMatrix.setScale(op.size / 24f, op.size / 24f)
-        iconMatrix.postTranslate(op.x, op.y)
-        path.transform(iconMatrix, iconScratch)
-        fill.color = op.color
-        canvas.drawPath(iconScratch, fill)
+        val face = fonts.icons ?: return
+        val info = OverlayIcons.byName(op.icon) ?: return
+        val text = info.codepoint.toString()
+        glyph.typeface = face
+        glyph.textSize = op.size * ICON_EM
+        glyph.color = op.color
+        glyph.getTextBounds(text, 0, text.length, glyphBounds)
+        if (glyphBounds.isEmpty) return
+        val x = op.x + (op.size - glyphBounds.width()) / 2f - glyphBounds.left
+        val y = op.y + (op.size - glyphBounds.height()) / 2f - glyphBounds.top
+        canvas.drawText(text, x, y, glyph)
     }
 
     private companion object {
-        /** Material Icons, 24-unit solid paths. The hand-stroked sketches they replace went to 0.9 px in 720p. */
-        val ICON_PATHS: Map<OverlayIcon, String> = mapOf(
-            OverlayIcon.AUTO to "M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z",
-            OverlayIcon.BATTERY to "M15.67 4H14V2h-4v2H8.33C7.6 4 7 4.6 7 5.33v15.33C7 21.4 7.6 22 8.33 22h7.33c.74 0 1.34-.6 1.34-1.33V5.33C17 4.6 16.4 4 15.67 4z",
-            OverlayIcon.BOLT to "M7 2v11h3v9l7-12h-4l4-8z",
-            OverlayIcon.TEMPERATURE to "M15 13V5c0-1.66-1.34-3-3-3S9 3.34 9 5v8c-1.21.91-2 2.37-2 4 0 2.76 2.24 5 5 5s5-2.24 5-5c0-1.63-.79-3.09-2-4zm-4-8c0-.55.45-1 1-1s1 .45 1 1h-1v1h1v2h-1v1h1v2h-2V5z",
-            OverlayIcon.GAUGE to "M20.38 8.57l-1.23 1.85a8 8 0 0 1-.22 7.58H5.07A8 8 0 0 1 15.58 6.85l1.85-1.23A10 10 0 0 0 3.35 19a2 2 0 0 0 1.72 1h13.85a2 2 0 0 0 1.74-1 10 10 0 0 0-.27-10.44zm-9.79 6.84a2 2 0 0 0 2.83 0l5.66-8.49-8.49 5.66a2 2 0 0 0 0 2.83z",
-            OverlayIcon.WARNING to "M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z",
-            OverlayIcon.CURRENT to "M3 12c2-6 4-6 6 0s4 6 6 0 4-6 6 0h-2c-1-3-2-3-3 0-2 7-5 7-7 0-1-3-2-3-3 0H3z",
-        )
+        /** The glyph's em is the op's size, as TS sizes its icon font; the ink is then centred in that square. */
+        const val ICON_EM = 1.0f
     }
 }

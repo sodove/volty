@@ -31,7 +31,7 @@ class OverlayModelTest {
     @Test
     fun templatesIncludeAllStartingLayoutsAndHudIsTheDefault() {
         assertEquals(
-            setOf("Top Row", "HUD", "Minimal", "Racing", "Panel", "Large"),
+            setOf("Top Row", "HUD", "Minimal", "Racing", "Icon chips", "Icon chips + trip", "Panel", "Large"),
             OverlayTemplates.all().map { it.name }.toSet(),
         )
         assertEquals(OverlayTemplates.hud(), OverlayDocument().selected)

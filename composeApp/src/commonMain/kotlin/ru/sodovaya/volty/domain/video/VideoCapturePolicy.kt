@@ -6,6 +6,35 @@ import kotlin.math.roundToLong
 /** The rail replaces the panel as soon as the window is wider than tall; a square window keeps the panel. */
 fun videoCaptureIsLandscape(width: Float, height: Float): Boolean = width > height
 
+/**
+ * The displayed preview frame's width / height: the camera's crop turned by the rotation the display needs. The
+ * view-tree overlay is fitted to exactly this box, as PreviewView's FIT_CENTER fits the picture. Null for a crop
+ * with no area (not yet known), in which case [videoPreviewFallbackAspect] stands in.
+ */
+fun videoPreviewAspect(cropWidth: Int, cropHeight: Int, rotationDegrees: Int): Float? {
+    if (cropWidth <= 0 || cropHeight <= 0) return null
+    val turned = ((rotationDegrees % 360) + 360) % 180 != 0
+    return if (turned) cropHeight.toFloat() / cropWidth else cropWidth.toFloat() / cropHeight
+}
+
+/** The 16:9 the preview is asked for, upright for the display, until the camera reports its real crop. */
+fun videoPreviewFallbackAspect(landscape: Boolean): Float = if (landscape) 16f / 9f else 9f / 16f
+
+/**
+ * The box the preview overlay is drawn in. The preview follows the display's rotation, so a reported aspect measured
+ * in the other orientation is turned rather than trusted; nothing reported yet is the requested 16:9.
+ */
+fun videoPreviewDisplayedAspect(reported: Float?, landscape: Boolean): Float {
+    val aspect = reported?.takeIf { it.isFinite() && it > 0f } ?: return videoPreviewFallbackAspect(landscape)
+    return if ((aspect > 1f) != landscape && aspect != 1f) 1f / aspect else aspect
+}
+
+/**
+ * How often the view-tree preview overlay is rebuilt: the file's own repaint cap ([MAX_RECORDED_REPAINT_HZ]), so the
+ * preview never promises a smoother overlay than the file gets.
+ */
+const val VIDEO_PREVIEW_OVERLAY_MILLIS = 1000L / 15L
+
 // --- the shutter -------------------------------------------------------------------------------------------------
 
 enum class VideoShutterAction { START, STOP, NONE }
@@ -232,6 +261,35 @@ class VideoLinkMonitor(private val freshMillis: Long = 2_000L) {
         val age = (nowMillis - last).coerceAtLeast(0)
         return if (connected && age <= freshMillis) VideoLinkStatus.Live(age) else VideoLinkStatus.Lost(age)
     }
+}
+
+/**
+ * Characters the landscape rail's link chip can show whole at 13 sp in its 135 dp: the mock's «T4 · 0.2 с» fits,
+ * «Demo wheel · 0.2 с» does not and was cut to «Demo wheel …» on a 5.6" emulator, losing the very number the chip
+ * is there for (visual check 2026-11-03).
+ */
+const val VIDEO_RAIL_CHIP_CHARS = 12
+
+/**
+ * The rail's link text: the panel's own text when it fits, otherwise the short form, which keeps the age or the
+ * lost-for time and drops the vehicle's name. The number is what the rider glances for; the name is on the dashboard.
+ */
+fun videoRailLinkText(full: String, short: String): String = if (full.length <= VIDEO_RAIL_CHIP_CHARS) full else short
+
+/** Characters that fit under the icon in the 58 dp overlay button. */
+const val VIDEO_PRESET_BUTTON_CHARS = 7
+
+/**
+ * The overlay button's caption. «Верхний ряд» was clipped to «Верхний» mid-glyph at the circle's edge (visual check
+ * 2026-11-03). A long name gives its first word when that fits, otherwise its start and an ellipsis; a short one is
+ * left alone, so «HUD» reads exactly as in mock B1.
+ */
+fun videoPresetButtonLabel(name: String): String {
+    val trimmed = name.trim()
+    if (trimmed.length <= VIDEO_PRESET_BUTTON_CHARS) return trimmed
+    val first = trimmed.substringBefore(' ')
+    if (first.length <= VIDEO_PRESET_BUTTON_CHARS) return first
+    return trimmed.take(VIDEO_PRESET_BUTTON_CHARS - 1) + "…"
 }
 
 /** `0.2`, the seconds of a live link's age. */

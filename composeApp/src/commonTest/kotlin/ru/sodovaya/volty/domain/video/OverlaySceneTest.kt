@@ -293,10 +293,80 @@ class OverlaySceneTest {
             id = "d", metric = VideoMetric.DUTY, kind = OverlayWidgetKind.ICON_VALUE, icon = OverlayIcon.WARNING,
             rules = listOf(OverlayRule(OverlayComparison.GTE, 80.0, foreground = "#FFFF0000")),
         )
-        assertEquals(OverlayIcon.GAUGE, overlayIconShown(duty, VideoReading(10.0)))
-        assertEquals(OverlayIcon.GAUGE, overlayIconShown(duty, null))
-        assertEquals(OverlayIcon.WARNING, overlayIconShown(duty, VideoReading(90.0)))
-        assertEquals(OverlayIcon.GAUGE, autoOverlayIcon(VideoMetric.DUTY))
+        assertEquals("gauge-simple", overlayIconShown(duty, VideoReading(10.0)))
+        assertEquals("gauge-simple", overlayIconShown(duty, null))
+        assertEquals(OverlayIcons.WARNING, overlayIconShown(duty, VideoReading(90.0)))
+        // The same by FA name, as a TS template stores it.
+        val named = duty.copy(icon = OverlayIcon.AUTO, iconName = OverlayIcons.WARNING)
+        assertEquals("gauge-simple", overlayIconShown(named, VideoReading(10.0)))
+        assertEquals(OverlayIcons.WARNING, overlayIconShown(named, VideoReading(90.0)))
+    }
+
+    // --- icon chips (telemetry-studio's icon_value) ---
+
+    @Test
+    fun aChipDrawsItsIconAndNumberAndNoWord() {
+        val chip = OverlayWidget(id = "v", metric = VideoMetric.VOLTAGE, kind = OverlayWidgetKind.ICON_VALUE, iconName = "car-battery")
+        val scene = scene(OverlayPreset("p", "P", listOf(chip)), full, 1920, 1080)
+        val icon = scene.ops.filterIsInstance<OverlayIconOp>().single()
+        assertEquals("car-battery", icon.icon)
+        assertTrue(scene.has("96.4"))
+        assertFalse(scene.allRuns().any { it.text.equals("VOLTAGE", ignoreCase = true) || it.text == "U batt" }, "a chip carries no label")
+        // The icon sits left of the number, inside the chip.
+        val bounds = scene.widgets.single()
+        assertTrue(icon.x >= bounds.left && icon.x + icon.size <= bounds.right)
+        val number = scene.texts().first { op -> op.runs.any { it.text == "96.4" } }
+        assertTrue(icon.x + icon.size <= number.x)
+    }
+
+    @Test
+    fun aLabelledCardDrawsNoIconAndAChipWithoutDataSaysDashWithNoUnit() {
+        val card = OverlayWidget(id = "c", metric = VideoMetric.SOC, kind = OverlayWidgetKind.VALUE_CARD, icon = OverlayIcon.BATTERY)
+        assertTrue(scene(OverlayPreset("p", "P", listOf(card)), full, 1920, 1080).ops.none { it is OverlayIconOp })
+
+        val chip = OverlayWidget(id = "v", metric = VideoMetric.VOLTAGE, kind = OverlayWidgetKind.ICON_VALUE)
+        val empty = scene(OverlayPreset("p", "P", listOf(chip)), live(VideoMetric.SPEED to VideoReading(10.0)), 1920, 1080)
+        assertTrue(empty.has("—"))
+        assertFalse(empty.has("0"), "no invented zero")
+        assertFalse(empty.has("V"), "a dash carries no unit")
+        assertEquals("car-battery", empty.ops.filterIsInstance<OverlayIconOp>().single().icon, "AUTO is the metric's icon, never a circle")
+    }
+
+    @Test
+    fun aDialsFiredRuleBackgroundPaintsTheArcAsTelemetryStudioDoes() {
+        val meow = OverlayTemplates.meowIcons()
+        val arcOf = { speed: Double ->
+            scene(meow, live(VideoMetric.SPEED to VideoReading(speed)), 1920, 1080).ops.filterIsInstance<OverlayArcOp>()
+                .maxBy { it.strokeWidth.let { w -> if (it.sweepDegrees < 270f) w else 0f } }.color
+        }
+        assertEquals(overlayColorArgb("#FFFFFFFF"), arcOf(30.0))
+        assertEquals(overlayColorArgb("#8CFEB820"), arcOf(50.0))
+        assertEquals(overlayColorArgb("#8CFF4D4D"), arcOf(70.0))
+        val speedText = scene(meow, live(VideoMetric.SPEED to VideoReading(70.0)), 1920, 1080).run("70")
+        assertEquals(overlayColorArgb("#FFFFFFFF"), speedText.color, "the number stays white, as in TS")
+    }
+
+    @Test
+    fun meowIconsReproducesTheOwnersChipRowAndArc() {
+        val scene = scene(OverlayTemplates.meowIcons(), live(
+            VideoMetric.VOLTAGE to VideoReading(96.4), VideoMetric.SOC to VideoReading(12.0),
+            VideoMetric.ESC_TEMPERATURE to VideoReading(34.0), VideoMetric.CONTROLLER_POWER to VideoReading(1762.0),
+            VideoMetric.BATTERY_CURRENT to VideoReading(18.0), VideoMetric.DUTY to VideoReading(40.0),
+            VideoMetric.SPEED to VideoReading(42.0),
+        ), 1920, 1080)
+        assertEquals(
+            listOf("car-battery", "battery-full", "fire", "bolt", "gauge", "gauge-simple"),
+            scene.ops.filterIsInstance<OverlayIconOp>().map { it.icon },
+            "TS's order and icons; the duty triangle is earned, so at 40 % it is the metric's own",
+        )
+        // SOC under 15: the chip turns TS's red.
+        assertTrue(scene.ops.filterIsInstance<OverlayRectOp>().any { it.fill == overlayColorArgb("#80FF0000") })
+        // The chips form the top rows, the arc sits in the lower half.
+        val chips = scene.widgets.filter { it.id != "speed-arc" }
+        val arc = scene.widgets.single { it.id == "speed-arc" }
+        assertTrue(chips.all { it.bottom < arc.top })
+        assertTrue(arc.top > 1080 * 0.3f)
+        assertFalse(scene.has("SPEED") || scene.has("СКОРОСТЬ"), "TS's dial has no word")
     }
 
     // --- saved presets, drawn by the older flow rules ---

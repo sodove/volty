@@ -27,6 +27,10 @@
     <string name="video_link_waiting">No data yet</string>
     <string name="video_link_live">%1$s · %2$s s</string>
     <string name="video_link_lost">No link · %1$s</string>
+    <string name="video_link_none_short">No vehicle</string>
+    <string name="video_link_waiting_short">No data</string>
+    <string name="video_link_live_short">%1$s s</string>
+    <string name="video_link_lost_short">None · %1$s</string>
     <string name="video_storage_gb">%1$s GB</string>
     <string name="video_storage_mb">%1$s MB</string>
     <string name="video_storage_hours">%1$d h %2$d min</string>

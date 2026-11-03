@@ -45,7 +45,8 @@ data class OverlayTextOp(
     val trackingEm: Float = 0f,
 ) : OverlayOp
 
-data class OverlayIconOp(val icon: OverlayIcon, val x: Float, val y: Float, val size: Float, val color: Int) : OverlayOp
+/** A Font Awesome glyph ([OverlayIcons] name), its em box at ([x], [y]) with side [size]. */
+data class OverlayIconOp(val icon: String, val x: Float, val y: Float, val size: Float, val color: Int) : OverlayOp
 
 data class OverlayWidgetBounds(
     val id: String,
@@ -137,6 +138,15 @@ private const val FLOW_CARD_HEIGHT = 148f
 private const val FLOW_SHRINK = 0.85f
 private const val FLOW_SHRINK_STEPS = 10
 private const val CARD_PADDING = 24f
+
+// An icon chip, in fractions of its number's size: telemetry-studio's iconValue.ts proportions (icon 1.2 × 0.9 of the
+// font, gap 0.3, 20 / 12 px padding at 35 px), the unit a little smaller as everywhere else in Volty.
+private const val CHIP_ICON = 1.08f
+private const val CHIP_ICON_GAP = 0.3f
+private const val CHIP_PAD_H = 0.57f
+private const val ICON_CHIP_HEIGHT = 1.89f
+private const val CHIP_UNIT = 0.8f
+private const val CHIP_UNIT_GAP = 0.25f
 private const val MIN_FIT = 0.5f
 private const val CHIP_HEIGHT = 66f
 private const val CHIP_FONT = 34f
@@ -258,12 +268,15 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
             val value = widget.flowValue(scale)
             val f = value / 64f
             val unit = input.strings.unit(widget.metric, input.system)
-            val valueWidth = measure.width(videoValueExemplar(widget.metric), value, true) +
-                (if (unit.isEmpty()) 0f else 8f * f + measure.width(unit, value * 0.47f, false))
-            val labelWidth = measure.width(label(widget), value * 0.375f, true) * (1 + LABEL_TRACKING)
-            val iconWidth = if (widget.kind == OverlayWidgetKind.ICON_VALUE) value + 8f * f else 0f
-            val w = (maxOf(valueWidth + iconWidth, labelWidth) + CARD_PADDING * 2 * f).coerceAtMost(available)
-            val h = FLOW_CARD_HEIGHT * f
+            val (w, h) = if (widget.kind == OverlayWidgetKind.ICON_VALUE) {
+                val content = iconChipContentWidth(widget.metric, unit, value)
+                (content + CHIP_PAD_H * 2 * value).coerceAtMost(available) to ICON_CHIP_HEIGHT * value
+            } else {
+                val valueWidth = measure.width(videoValueExemplar(widget.metric), value, true) +
+                    (if (unit.isEmpty()) 0f else 8f * f + measure.width(unit, value * 0.47f, false))
+                val labelWidth = if (widget.style.showLabel) measure.width(label(widget), value * 0.375f, true) * (1 + LABEL_TRACKING) else 0f
+                (maxOf(valueWidth, labelWidth) + CARD_PADDING * 2 * f).coerceAtMost(available) to FLOW_CARD_HEIGHT * f
+            }
             if (rows.isEmpty() || used + gap + w > available) {
                 rows += mutableListOf<Triple<OverlayWidget, Float, Float>>()
                 used = 0f
@@ -281,8 +294,14 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
         return if (isAutoOverlayLabel(widget)) text.uppercase() else text
     }
 
+    /** Icon, gap, the widest value and its unit: what a chip must hold so its width never twitches with the number. */
+    private fun iconChipContentWidth(metric: VideoMetric, unit: String, value: Float): Float =
+        (CHIP_ICON + CHIP_ICON_GAP) * value + measure.width(videoValueExemplar(metric), value, true) +
+            (if (unit.isEmpty()) 0f else CHIP_UNIT_GAP * value + measure.width(unit, value * CHIP_UNIT, false))
+
     private fun draw(widget: OverlayWidget, box: PixelBox) = when (widget.kind) {
-        OverlayWidgetKind.VALUE_CARD, OverlayWidgetKind.ICON_VALUE -> card(widget, box)
+        OverlayWidgetKind.VALUE_CARD -> card(widget, box)
+        OverlayWidgetKind.ICON_VALUE -> iconChip(widget, box)
         OverlayWidgetKind.ARC -> fullDial(widget, box)
         OverlayWidgetKind.ARC_LEFT -> quarterDial(widget, box, left = true)
         OverlayWidgetKind.ARC_RIGHT -> quarterDial(widget, box, left = false)
@@ -296,7 +315,17 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
         private val fired = overlayRuleFired(widget, reading)
         val foreground = overlayColorArgb(style.foreground)
         val background = overlayColorArgb(style.background)
-        val accent = overlayColorArgb(if (fired) style.foreground else widget.style.accent ?: style.foreground)
+
+        // A dial paints no card, so a fired rule's background would vanish; telemetry-studio paints the arc in it
+        // instead (its arcIndicator.ts). A rule with only a foreground keeps the older behaviour.
+        private val ruleBackground = fired && widget.isArc() && style.background != widget.style.background
+        val accent = overlayColorArgb(
+            when {
+                ruleBackground -> style.background
+                fired -> style.foreground
+                else -> widget.style.accent ?: style.foreground
+            },
+        )
         val unit = if (widget.style.accent != null) UNIT_COLOR else foreground
     }
 
@@ -332,26 +361,48 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
         )
         val padding = CARD_PADDING * f
         val inner = box.width - padding * 2
-        val label = label(widget)
-        val labelSize = fitLabel(label, box.label, inner)
-        ops += OverlayTextOp(
-            listOf(OverlayRun(label, labelSize, look.accent)),
-            box.left + padding, box.top + box.label * 1.83f, trackingEm = LABEL_TRACKING,
-        )
-        val iconed = widget.kind == OverlayWidgetKind.ICON_VALUE
-        val iconSpace = if (iconed) box.value * 0.8f + 8f * f else 0f
-        val unit = input.strings.unit(widget.metric, input.system)
-        val scale = fit(widget.metric, unit, box.value, box.unit, inner - iconSpace, 8f * f)
-        val baseline = box.bottom - 30f * f
-        if (iconed) {
-            val size = box.value * 0.8f
-            ops += OverlayIconOp(overlayIconShown(widget, reading), box.left + padding, baseline - size * 0.9f, size, look.accent)
+        if (widget.style.showLabel) {
+            val label = label(widget)
+            val labelSize = fitLabel(label, box.label, inner)
+            ops += OverlayTextOp(
+                listOf(OverlayRun(label, labelSize, look.accent)),
+                box.left + padding, box.top + box.label * 1.83f, trackingEm = LABEL_TRACKING,
+            )
         }
+        val unit = input.strings.unit(widget.metric, input.system)
+        val scale = fit(widget.metric, unit, box.value, box.unit, inner, 8f * f)
+        val baseline = if (widget.style.showLabel) box.bottom - 30f * f else box.cy + box.value * scale * 0.36f
         val text = videoValueText(widget.metric, reading, input.system)
         ops += OverlayTextOp(
             valueRuns(text, unit, box.value * scale, box.unit * scale, look.foreground, look.unit, 8f * f),
-            box.left + padding + iconSpace, baseline,
+            box.left + padding, baseline,
         )
+    }
+
+    /**
+     * telemetry-studio's `icon_value`: one rounded, translucent chip, the icon and the number on a shared baseline and
+     * centred as a block, no word and no outline (its iconValue.ts). The number keeps Volty's honesty: `—` without a
+     * unit when there is no value, never a made-up 0.
+     */
+    private fun iconChip(widget: OverlayWidget, box: PixelBox) {
+        val reading = widget.reading()
+        val look = Look(widget, reading)
+        val radius = (widget.style.cornerRadius * box.value / 64f).coerceAtMost(box.height / 2)
+        ops += OverlayRectOp(box.left, box.top, box.right, box.bottom, radius, fill = look.background)
+        val unit = input.strings.unit(widget.metric, input.system)
+        val text = videoValueText(widget.metric, reading, input.system)
+        val shownUnit = if (text == NO_VALUE) "" else unit
+        val available = box.width - CHIP_PAD_H * 2 * box.value
+        val scale = iconChipContentWidth(widget.metric, unit, box.value).let { if (it <= available || it <= 0f) 1f else (available / it).coerceAtLeast(MIN_FIT) }
+        val v = box.value * scale
+        val runs = valueRuns(text, shownUnit, v, v * CHIP_UNIT, look.foreground, look.foreground, CHIP_UNIT_GAP * v)
+        val textWidth = runs.sumOf { (it.gapBefore + measure.width(it.text, it.size, it.bold)).toDouble() }.toFloat()
+        val iconSize = CHIP_ICON * v
+        val content = iconSize + CHIP_ICON_GAP * v + textWidth
+        val left = box.cx - content / 2
+        val baseline = box.cy + v * 0.36f
+        ops += OverlayIconOp(overlayIconShown(widget, reading), left, box.cy - iconSize / 2, iconSize, look.accent)
+        ops += OverlayTextOp(runs, left + iconSize + CHIP_ICON_GAP * v, baseline)
     }
 
     private fun fitLabel(text: String, size: Float, available: Float): Float {
@@ -401,7 +452,9 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
         val text = videoValueText(widget.metric, reading, input.system)
         val scale = fit(widget.metric, "", vs, 0f, radius * 1.3f, 0f)
         val k = vs / 184f
-        ops += OverlayTextOp(listOf(OverlayRun(label(widget), box.label, look.accent)), box.cx, box.cy - vs * 0.62f, OverlayTextAlign.CENTER, box.label * 0.35f, LABEL_TRACKING)
+        if (widget.style.showLabel) {
+            ops += OverlayTextOp(listOf(OverlayRun(label(widget), box.label, look.accent)), box.cx, box.cy - vs * 0.62f, OverlayTextAlign.CENTER, box.label * 0.35f, LABEL_TRACKING)
+        }
         ops += OverlayTextOp(valueRuns(text, "", vs * scale, 0f, look.foreground, look.unit, 0f), box.cx, box.cy + vs * 0.34f, OverlayTextAlign.CENTER, 13f * k)
         if (text != NO_VALUE && unit.isNotEmpty()) {
             ops += OverlayTextOp(listOf(OverlayRun(unit, box.unit, UNIT_COLOR, bold = false)), box.cx, box.cy + vs * 0.34f + box.unit * 1.3f, OverlayTextAlign.CENTER, 5f * frame.scaledUnit)

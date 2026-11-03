@@ -26,7 +26,13 @@ enum class VideoMetric(val unit: String) {
 
 @Serializable
 enum class OverlayWidgetKind {
+    /** A labelled card: the word above, the number below. */
     VALUE_CARD,
+
+    /**
+     * A chip: icon and number on one line, no word, as telemetry-studio's `icon_value` draws. **Retraction:** it used
+     * to be a labelled card with an icon squeezed in, and the editor folded it into "card", so no chip could be made.
+     */
     ICON_VALUE,
     ARC,
 
@@ -62,6 +68,8 @@ data class OverlayStyle(
     val shadow: Boolean = true,
     /** The label, dial and bar colour. Null falls back to [foreground]. A fired rule overrides it. */
     val accent: String? = null,
+    /** False leaves a card or dial without its word, as telemetry-studio's dials draw. Icon chips never have one. */
+    val showLabel: Boolean = true,
 )
 
 @Serializable
@@ -177,6 +185,11 @@ data class OverlayWidget(
     val placement: OverlayPlacement? = null,
     val bar: OverlayBar = OverlayBar(),
     val size: OverlayWidgetSize = OverlayWidgetSize.M,
+    /**
+     * The icon by Font Awesome name ([OverlayIcons]), as telemetry-studio stores it. Null follows [icon], the older
+     * enum kept so saved documents decode, and AUTO there means the metric's own icon ([overlayIconChosen]).
+     */
+    val iconName: String? = null,
 )
 
 @Serializable

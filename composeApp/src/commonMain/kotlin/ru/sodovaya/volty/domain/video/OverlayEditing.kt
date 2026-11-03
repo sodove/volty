@@ -9,6 +9,22 @@ fun overlayColorWithAlpha(color: String, alpha: Int): String {
     return "#${alpha.coerceIn(0, 255).toString(16).padStart(2, '0')}$rgb".uppercase()
 }
 
+/** A metric tile's two lines: the name, and the source it is read from in small type (mock D: «Ток» over «батарея»). */
+data class OverlayMetricTileText(val title: String, val source: String?)
+
+/**
+ * Splits an editor metric name at its « · » source separator. **Retraction:** the tile used to print the whole string
+ * on one or two wrapped lines, «Ток батареи · контроллер», where the mock has a title and a muted source line.
+ */
+fun overlayMetricTileText(name: String): OverlayMetricTileText {
+    val at = name.indexOf(TILE_SOURCE_SEPARATOR)
+    if (at < 0) return OverlayMetricTileText(name, null)
+    val source = name.substring(at + TILE_SOURCE_SEPARATOR.length).trim()
+    return OverlayMetricTileText(name.substring(0, at).trim(), source.ifEmpty { null })
+}
+
+private const val TILE_SOURCE_SEPARATOR = " · "
+
 /** Numeric model echoes ("1" -> "1.0") must not replace the user's unfinished text. */
 data class OverlayTextDraft(
     val text: String,
@@ -38,10 +54,12 @@ fun overlayWidgetWithMetric(widget: OverlayWidget, metric: VideoMetric): Overlay
     } else {
         widget.icon
     }
+    val iconName = widget.iconName?.takeIf { it != autoOverlayIconName(widget.metric) }
     return widget.copy(
         metric = metric,
         label = if (isAutoOverlayLabel(widget)) "" else widget.label,
         icon = icon,
+        iconName = iconName,
         unit = metric.unit,
     )
 }

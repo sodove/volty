@@ -24,7 +24,8 @@ object OverlayTemplates {
     private const val LANDSCAPE_W = 1920f
     private const val LANDSCAPE_H = 1080f
 
-    fun all(): List<OverlayPreset> = listOf(minimal(), hud(), racing(), topRow(), panel(), large())
+    /** C1 to C3 first, then telemetry-studio's: the owner's own «meow_icons» leads them. HUD stays the default. */
+    fun all(): List<OverlayPreset> = listOf(minimal(), hud(), racing(), meowIcons(), meowIconsTrip(), topRow(), panel(), large())
 
     fun byId(id: String): OverlayPreset? = all().firstOrNull { it.id == id }
 
@@ -165,6 +166,80 @@ object OverlayTemplates {
             ),
         ),
     )
+
+    /**
+     * The owner's telemetry-studio dashboard `meow_icons` (its exported JSON, 2026-11-03): a centred row of translucent
+     * icon chips and a white speed arc at the bottom centre. Mapped widget for widget:
+     * - fields by TS's own Volty parser (`server/src/parsers/volty.ts`): `temperature` is the ESC's, `current` the
+     *   battery's, `power` the controller's, `pwm` the duty, read through Volty's honest sources (`—`, never 0);
+     * - icons by the same Font Awesome names; the order is the JSON's, which is TS's row order (it ignores x for rows);
+     * - sizes: TS's 35 px chips and 400 px arc keep their ratio at 1.31 times TS's 1080p size, the largest at which
+     *   the six chips still make TS's single row in a 16:9 frame (Volty sizes a chip for its widest value, so that its
+     *   width never twitches; TS sizes it for three digits). Portrait wraps them into two rows, as TS does;
+     * - conditions as in the JSON: SOC under 30 / 15 and temperature from 60 / 80 turn the chip orange / red at 50 %,
+     *   speed from 45 / 65 turns the arc amber / red as TS paints it.
+     *
+     * One deliberate difference: TS shows the warning triangle on the duty chip permanently. Here the triangle is
+     * earned (the approved rule: a warning sign only while a rule fires), so the duty chip carries Volty's duty
+     * thresholds, 70 / 85, and shows the triangle and the orange / red chip only above them.
+     */
+    fun meowIcons(): OverlayPreset = OverlayPreset(
+        id = "ts-meow-icons",
+        name = "Icon chips",
+        widgets = meowChips() + meowArc(),
+    )
+
+    /** `meow_icons_trip`: the same, plus a distance chip with TS's compass (its `trip_vesc_abs`, here the trip scope). */
+    fun meowIconsTrip(): OverlayPreset = OverlayPreset(
+        id = "ts-meow-icons-trip",
+        name = "Icon chips + trip",
+        widgets = meowChips() + meowArc() + meowChip("distance", VideoMetric.DISTANCE, "compass"),
+    )
+
+    private fun meowChips() = listOf(
+        meowChip("voltage", VideoMetric.VOLTAGE, "car-battery"),
+        meowChip("soc", VideoMetric.SOC, "battery-full", meowRules(OverlayComparison.LT, 30.0, 15.0)),
+        meowChip("temperature", VideoMetric.ESC_TEMPERATURE, "fire", meowRules(OverlayComparison.GTE, 60.0, 80.0)),
+        meowChip("power", VideoMetric.CONTROLLER_POWER, "bolt"),
+        meowChip("current", VideoMetric.BATTERY_CURRENT, "gauge"),
+        meowChip("duty", VideoMetric.DUTY, OverlayIcons.WARNING, meowRules(OverlayComparison.GTE, 70.0, 85.0)),
+    )
+
+    private fun meowChip(id: String, metric: VideoMetric, icon: String, rules: List<OverlayRule> = emptyList()) = OverlayWidget(
+        id = id,
+        metric = metric,
+        kind = OverlayWidgetKind.ICON_VALUE,
+        iconName = icon,
+        style = OverlayStyle(background = MEOW_CHIP, foreground = MEOW_WHITE, fontSize = MEOW_FONT, cornerRadius = 29f, padding = 20f),
+        rules = rules,
+    )
+
+    private fun meowArc() = OverlayWidget(
+        id = "speed-arc",
+        metric = VideoMetric.SPEED,
+        kind = OverlayWidgetKind.ARC,
+        style = OverlayStyle(
+            background = "#00000000", foreground = MEOW_WHITE, fontSize = 48f, cornerRadius = 0f, padding = 0f,
+            accent = MEOW_WHITE, showLabel = false,
+        ),
+        rules = listOf(
+            OverlayRule(OverlayComparison.GTE, threshold = 45.0, foreground = MEOW_WHITE, background = "#8CFEB820"),
+            OverlayRule(OverlayComparison.GTE, threshold = 65.0, foreground = MEOW_WHITE, background = "#8CFF4D4D"),
+        ),
+        // TS: size 400, stroke 20 against 35 px chips; at 1.31 that is a 261u radius and a 26u stroke (legacy units).
+        arc = OverlayArc(x = 50f, y = 90f, radius = 114f, min = 0f, max = 100f, thickness = 11.5f),
+    )
+
+    private fun meowRules(comparison: OverlayComparison, warn: Double, alarm: Double) = listOf(
+        OverlayRule(comparison, threshold = warn, foreground = MEOW_WHITE, background = "#80FFA500"),
+        OverlayRule(comparison, threshold = alarm, foreground = MEOW_WHITE, background = "#80FF0000"),
+    )
+
+    private const val MEOW_CHIP = "#33000000"
+    private const val MEOW_WHITE = "#FFFFFFFF"
+
+    /** A studio font size; times the legacy 64/28 it is 45.7u, TS's 35 px chip number at 1.31. */
+    private const val MEOW_FONT = 20f
 
     /** Studio's `top_row`: six cards flowing from the left edge. */
     private fun topRow(): OverlayPreset = OverlayPreset(

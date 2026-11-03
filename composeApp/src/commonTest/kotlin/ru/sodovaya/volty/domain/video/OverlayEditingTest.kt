@@ -29,4 +29,16 @@ class OverlayEditingTest {
         assertEquals("20.0", external.text)
         assertFalse(external.invalid)
     }
+
+    @Test fun metricTileSplitsTheSourceOntoItsOwnLine() {
+        assertEquals(OverlayMetricTileText("Ток", "батарея"), overlayMetricTileText("Ток · батарея"))
+        assertEquals(OverlayMetricTileText("Ток батареи", "контроллер"), overlayMetricTileText("Ток батареи · контроллер"))
+    }
+
+    @Test fun metricTileWithoutASourceKeepsTheWholeName() {
+        assertEquals(OverlayMetricTileText("Температура мотора", null), overlayMetricTileText("Температура мотора"))
+        // A middle dot without the spaced separator is part of the name, not a source.
+        assertEquals(OverlayMetricTileText("A·B", null), overlayMetricTileText("A·B"))
+        assertEquals(OverlayMetricTileText("Путь", null), overlayMetricTileText("Путь · "))
+    }
 }
