@@ -41,6 +41,20 @@ class DatabaseOpenGateTest {
     private fun TestScope.gateOf(opener: DatabaseOpener) =
         DatabaseOpenGate(opener, StandardTestDispatcher(testScheduler))
 
+    @Test fun everyFailureIsLoggedWithItsCauseChainAndTheNumbers() = runTest {
+        val logged = mutableListOf<Pair<String, Throwable?>>()
+        val opener = FakeOpener(free = 400 * mb)
+        val cause = IllegalStateException("constraint failed")
+        opener.openFailure = RuntimeException("migration 28", cause)
+        val gate = DatabaseOpenGate(opener, StandardTestDispatcher(testScheduler)) { message, failure -> logged += message to failure }
+        gate.start(backgroundScope); runCurrent()
+        val failure = logged.single { it.second != null }
+        assertEquals(cause, failure.second!!.cause, "the whole chain reaches the logger, not just the class name")
+        assertTrue("required=" in failure.first)
+        assertTrue(logged.any { "stored=27 target=29" in it.first })
+        assertTrue(logged.any { "free=" in it.first && "dbBytes=" in it.first })
+    }
+
     @Test fun noticeOnlyForConversionMigration() {
         assertEquals(MigrationNotice(27, 29), migrationNotice(27, 29))
         assertEquals(MigrationNotice(28, 29), migrationNotice(28, 29))

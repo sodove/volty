@@ -2,7 +2,8 @@
 -- HistorySampleV2 goes. See RideHistoryCompact.sq for the target layout.
 --
 -- ATOMICITY. The unit is the WHOLE migration: AndroidSqliteDriver's open helper runs onUpgrade in one transaction, so a
--- kill anywhere rolls back to version 28 with V2 intact and the next open starts over. Nothing here is incremental and no
+-- kill anywhere rolls back to the STORED version (27 on the rider's phone, whose one onUpgrade transaction runs 27.sqm and
+-- this file) with V2 intact, and the next open starts over. Nothing here is incremental and no
 -- ride is ever half converted, so there is no staged state and no reader needs to know about a conversion in progress.
 --
 -- RUNS ARE DETECTED HERE. Retraction: the plan said runs could not be detected in SQL (no window functions before 3.25) and

@@ -24,7 +24,7 @@ import java.util.zip.ZipOutputStream
  * the recording check is repeated, `PRAGMA wal_checkpoint(TRUNCATE)` is tried and its result
  * read, and [snapshotFilesDecision] picks `volty.db` alone or `volty.db` + `volty.db-wal`
  * (zipped). A snapshot is never produced that could miss committed data. `VACUUM INTO` needs
- * SQLite 3.27 and minSdk 26 ships 3.19. Read-only on the database.
+ * SQLite 3.27 and minSdk 26 ships 3.18.2. Read-only on the database.
  *
  * Lock duration: the raw copy runs under the write lock. For a 600 MB file that is seconds.
  * Android's native busy timeout is 2.5 s and the driver does not expose it, so a writer other

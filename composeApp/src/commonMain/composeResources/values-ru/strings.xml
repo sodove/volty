@@ -1703,7 +1703,7 @@
 
     <!-- Database gate: shown while the ride history is converted, or when that cannot happen -->
     <string name="db_gate_updating_title">Обновляем историю поездок…</string>
-    <string name="db_gate_updating_body">Это может занять пару минут. Не закрывайте приложение и не гасите экран.</string>
+    <string name="db_gate_updating_body">Это может занять пару минут. Не закрывайте приложение и не гасите экран. Если приложение закроется, обновление начнётся заново — поездки не пострадают.</string>
     <string name="db_gate_no_space_title">Не хватает свободного места</string>
     <string name="db_gate_no_space_body">Чтобы обновить историю поездок, нужно больше свободного места. Освободите не менее %1$d МБ и повторите. Ваши поездки не изменены.</string>
     <string name="db_gate_error_title">Не удалось открыть историю поездок</string>

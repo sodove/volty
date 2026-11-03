@@ -47,13 +47,13 @@ So the plan's figures are **~0.8 MB** for a new T4 ride with unknown runs, and *
 
 ## Global Constraints
 - **Read-only on every device.** Never write to a Begode's FFE1 (Global Constraint 5). Nothing in this plan sends a BLE byte.
-- **SQLite 3.19 (minSdk 26):**
+- **SQLite 3.18.2 (minSdk 26):**
   - no `DROP COLUMN` and no `RENAME COLUMN`; schema removal is a table rebuild;
   - **no window functions** (3.25): run detection cannot be done in `.sqm` SQL with `LAG`;
   - no `VACUUM INTO` (3.27);
   - no `UPSERT` (3.24).
 
-  Every `.sq`/`.sqm` statement must run on 3.19. Task 4 adds a test that greps the `.sq`/`.sqm` files for `OVER (`, `ON CONFLICT … DO`, `VACUUM INTO`, `DROP COLUMN` and `RENAME COLUMN`.
+  Every `.sq`/`.sqm` statement must run on 3.18.2. Task 4 adds a test that greps the `.sq`/`.sqm` files for `OVER (`, `ON CONFLICT … DO`, `VACUUM INTO`, `DROP COLUMN` and `RENAME COLUMN`.
 - **`N.sqm` migrates `N.db` to `(N+1).db`.** Count before writing one. Commit the regenerated snapshot with the migration.
 - **"Without loss" means exactly this,** and every conversion test asserts it.
   1. Every **known** V2 row reappears once, with the same `(rideId, sequence, sourceId, metricId, cellIndex, epochMillis, elapsedMillis, clockGeneration)`, and its `reading` is bit-equal (`toRawBits`, with SQLite's −0.0 → 0.0 canonicalisation already accepted by `HistoryBatchReceipts.sameReading`).
@@ -96,7 +96,7 @@ So the plan's figures are **~0.8 MB** for a new T4 ride with unknown runs, and *
   3. Share it through the existing FileProvider with `application/vnd.sqlite3`.
   4. Delete older snapshots in that directory first.
 
-  `VACUUM INTO` is not available (SQLite 3.19).
+  `VACUUM INTO` is not available (SQLite 3.18.2).
 - **Read-only on the DB.** The only statements are the checkpoint and a transaction with no writes.
 - Label: «Поделиться базой данных (отладка)» / "Share database (debug)". The secondary line says the file holds GPS tracks: «Файл содержит треки поездок».
 
@@ -298,15 +298,15 @@ Test: `HistoryUnknownRunEquivalenceTest.kt`.
 
 **Files:** `28.sqm` (new; counted: the 28th migration, `28.db` exists after Task 4), `databases/29.db` (generated), `RideHistorySample.sq` (deleted: the V2 table is gone), `RideHistorySeries.sq`, `HistoryExportRead.sq`, `HistoryBatchReceipts.kt`, `HistoryStoreReader.kt`, `SqlDelightHistoryStore.kt`, `SqlDelightHistoryRideDeletion.kt` (V2 branches removed), `HistoryMigrationConversionTest.kt` (androidUnitTest, JDBC file DB).
 
-**Rules for `28.sqm` (pure SQL, SQLite 3.19, runs inside `onUpgrade`'s single transaction):**
+**Rules for `28.sqm` (pure SQL, SQLite 3.18.2, runs inside `onUpgrade`'s single transaction):**
 1. `INSERT INTO HistoryRideKeyV3(rideId) SELECT id FROM HistoryRideV2 WHERE id NOT IN (SELECT rideId FROM HistoryRideKeyV3) ORDER BY startedEpochMillis, id;`
 2. Insert `HistorySeriesV3` with `SELECT DISTINCT` of `(rideNo, sourceId, metricId, cellIndex)` from V2 joined to the key.
 3. `INSERT INTO HistorySampleV3 SELECT …` from V2 joined to the ride (origin for skew/delta), the key and the series:
    - `unknownCode` via `CASE unknownReason … END`;
-   - run columns NULL: every unknown becomes a single row; **runs are not detected in SQL** (no window functions in 3.19);
+   - run columns NULL: every unknown becomes a single row; **runs are not detected in SQL** (no window functions in 3.18.2);
    - an unmapped reason makes `CASE` yield NULL with `reading` NULL, which fails the `CHECK`, so the whole migration aborts rather than inventing a reason.
 4. Delete legacy receipts that cannot be verified anymore: `DELETE FROM HistoryBatchReceiptV2 WHERE fingerprint IS NULL;`. They certify in-memory retries of a process that no longer exists; any ride still `RECORDING` is closed by `recoverInterrupted` on start.
-5. `DROP INDEX HistorySampleV2_series_elapsed; DROP TABLE HistorySampleV2;`. This is a table rebuild in the 3.19 sense: no `DROP COLUMN` is needed.
+5. `DROP INDEX HistorySampleV2_series_elapsed; DROP TABLE HistorySampleV2;`. This is a table rebuild in the 3.18.2 sense: no `DROP COLUMN` is needed.
 
 - The `INSERT … SELECT` must read V2 through `HistorySampleV2_series_elapsed` so that **no temp B-tree sort** is needed: the order is already `(ride, source, metric, cell, elapsed, sequence)`, and the series ids are assigned in that same order in step 2. On a phone, a global sort of millions of rows would spill hundreds of MB to temp. A test asserts the `EXPLAIN QUERY PLAN` has no `USE TEMP B-TREE`.
 - Transaction semantics: `AndroidSqliteDriver`'s open helper runs `onUpgrade` in one transaction. A kill mid-way rolls back to v27/v28 on the next open, and the migration re-runs from scratch. That is safe and idempotent, but not incremental. Free space needed: the new rows (~5 % of V2) plus journal/WAL. Measured: 13 MB of WAL for 215 MB of V2 on the PC run. Dropping V2 frees pages to the freelist without writing them.
@@ -388,7 +388,7 @@ Test: `HistoryUnknownRunEquivalenceTest.kt`.
 
 - [ ] Whole-branch review (superpowers:requesting-code-review), focused on:
   - the KDoc retractions (Tasks 3, 6, 7);
-  - that every `.sq`/`.sqm` statement is 3.19-safe;
+  - that every `.sq`/`.sqm` statement is 3.18.2-safe;
   - that no V2 sample query remains.
 - [ ] Re-run the Task 9 real-DB gate on the final tip, through compaction and VACUUM on the copy. Record in the ledger the final bytes per ride and the migration time on the PC.
 - [ ] Rider install of the release APK: the progress screen shows (or the migration is instant), then old rides open with the same totals, the same «частичные данные» marks and the same exports as before, and the data size drops in Android settings.

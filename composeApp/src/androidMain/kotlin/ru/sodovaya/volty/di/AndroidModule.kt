@@ -82,6 +82,7 @@ import org.koin.dsl.module
 import org.koin.dsl.onClose
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.flow
@@ -91,7 +92,13 @@ import org.maplibre.android.offline.OfflineManager
 
 val androidModule = module {
     single { AndroidDatabaseOpener(androidContext()) }
-    single { DatabaseOpenGate(get<AndroidDatabaseOpener>(), Dispatchers.IO) }
+    // Its own thread, not Dispatchers.IO: queries parked on the shared pool before Ready must never starve the retry.
+    single {
+        DatabaseOpenGate(
+            get<AndroidDatabaseOpener>(),
+            java.util.concurrent.Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "volty-db-gate") }.asCoroutineDispatcher(),
+        ) { message, failure -> if (failure != null) android.util.Log.e("VoltyDb", message, failure) else android.util.Log.i("VoltyDb", message) }
+    }
     single { SqlDriverFactory(get(), get()) }
     // Inert until native connection startup awaits prepare(); one clock for BLE/GPS/detail.
     single {

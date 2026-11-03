@@ -7,7 +7,7 @@ import java.nio.file.Files
 import kotlin.test.*
 
 /**
- * Compact-history Task 4. minSdk 26 ships SQLite 3.19, so the schema files must stay inside what 3.19 runs (see the
+ * Compact-history Task 4. minSdk 26 ships SQLite 3.18.2, so the schema files must stay inside what 3.18.2 runs (see the
  * plan's Global Constraints). `27.sqm` is the 27th migration: it takes `27.db` to `28.db` and only ADDS tables.
  */
 class MigrationSqlCompatibilityTest {
@@ -69,7 +69,7 @@ class MigrationSqlCompatibilityTest {
         } finally { copy.delete() }
     }
 
-    /** A STATIC, line-based scan: it cannot run SQL on 3.19 (the JDBC driver is newer) and misses constructs split over lines. */
+    /** A STATIC, line-based scan: it cannot run SQL on 3.18.2 (the JDBC driver is newer) and misses constructs split over lines. */
     @Test fun noSqlNewerThan3_19() {
         val files = sqlDelightDir().walkTopDown().filter { it.isFile && (it.extension == "sq" || it.extension == "sqm") }.toList()
         assertTrue(files.size > 30, "the scan found only ${files.size} files")

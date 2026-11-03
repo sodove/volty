@@ -84,6 +84,8 @@ interface DatabaseOpener {
 class DatabaseOpenGate(
     private val opener: DatabaseOpener,
     private val dispatcher: CoroutineDispatcher,
+    /** Receives every attempt's numbers and every failure with its whole cause chain, so "send logs" carries them. */
+    private val log: (message: String, failure: Throwable?) -> Unit = { _, _ -> },
 ) {
     private val mutableState = MutableStateFlow<DatabaseOpenState>(DatabaseOpenState.Opening)
     val state: StateFlow<DatabaseOpenState> = mutableState.asStateFlow()
@@ -121,9 +123,12 @@ class DatabaseOpenGate(
         try {
             val stored = opener.storedVersion()
             val target = opener.targetVersion()
+            log("open attempt: stored=$stored target=$target", null)
             if (migrationNotice(stored, target) != null) {
-                required = migrationRequiredFreeBytes(opener.databaseBytes())
+                val bytes = opener.databaseBytes()
+                required = migrationRequiredFreeBytes(bytes)
                 val free = opener.freeBytes()
+                log("conversion pre-check: dbBytes=$bytes required=$required free=$free", null)
                 if (free < required) {
                     mutableState.value = DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(required, free))
                     return
@@ -135,6 +140,7 @@ class DatabaseOpenGate(
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (failure: Throwable) {
+            log("database open failed (required=$required)", failure)
             mutableState.value = DatabaseOpenState.Failed(classify(failure, required))
         }
     }
