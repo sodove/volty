@@ -13,7 +13,11 @@ import kotlinx.coroutines.launch
 /** The schema version whose `28.sqm` converts every ride to the compact layout (a long migration). */
 const val CONVERSION_SCHEMA_VERSION: Int = 29
 
-/** Free space the conversion needs at least: measured peak growth ~70 MB, plus the journal and margin. */
+/**
+ * The floor of [migrationRequiredFreeBytes], so a small database is not waved through with a few megabytes. Retraction: this
+ * said "measured peak growth ~70 MB, plus the journal and margin"; that figure missed the rollback journal and was wrong
+ * by 9x (see [migrationRequiredFreeBytes]). The 150 MB is a floor only, not a measurement.
+ */
 const val MIGRATION_MIN_FREE_BYTES: Long = 150L * 1024 * 1024
 
 /** A migration long enough that the rider is shown a screen instead of a frozen launch. */
@@ -66,10 +70,15 @@ sealed interface DatabaseOpenState {
  * open never removes data, and a fake cannot be asked to.
  */
 interface DatabaseOpener {
-    /** `PRAGMA user_version` of the file on disk, read without opening it for writing; 0 if absent. */
+    /**
+     * `PRAGMA user_version` of the file on disk, 0 if absent, without migrating it. The connection must be able to write:
+     * a migration killed mid-transaction leaves a hot rollback journal, and only a read-write connection rolls it back
+     * (a read-only one fails with SQLITE_READONLY_ROLLBACK on every start). So this is also the recovery step, and the
+     * gate asks it before anything else touches the file.
+     */
     fun storedVersion(): Int
     fun targetVersion(): Int
-    /** Size of the database and its WAL. */
+    /** Size of the database and its WAL, asked only after [storedVersion] has rolled back any hot journal. */
     fun databaseBytes(): Long
     fun freeBytes(): Long
     /** Opens the database; any migration runs inside. Throws [DatabaseFullException] on SQLITE_FULL. */
@@ -121,6 +130,8 @@ class DatabaseOpenGate(
     private fun attempt() {
         var required = MIGRATION_MIN_FREE_BYTES
         try {
+            // FIRST, before any size or free-space reading: the probe rolls back a journal a killed conversion left, which
+            // restores the file and returns the journal's space (547 MB on the rider's database).
             val stored = opener.storedVersion()
             val target = opener.targetVersion()
             log("open attempt: stored=$stored target=$target", null)

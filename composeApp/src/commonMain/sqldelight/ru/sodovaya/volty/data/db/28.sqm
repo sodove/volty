@@ -3,7 +3,10 @@
 --
 -- ATOMICITY. The unit is the WHOLE migration: AndroidSqliteDriver's open helper runs onUpgrade in one transaction, so a
 -- kill anywhere rolls back to the STORED version (27 on the rider's phone, whose one onUpgrade transaction runs 27.sqm and
--- this file) with V2 intact, and the next open starts over. Nothing here is incremental and no
+-- this file) with V2 intact, and the next open starts over. "Starts over" needs the version probe to open read-write: a
+-- kill after SQLite has spilled a page leaves a HOT volty.db-journal, which only a connection that may write rolls back
+-- (AndroidDatabaseOpener.storedVersion). Until the final review's C1 fix the probe was read-only, and such a kill left
+-- the app on its error screen for good. Nothing here is incremental and no
 -- ride is ever half converted, so there is no staged state and no reader needs to know about a conversion in progress.
 --
 -- RUNS ARE DETECTED HERE. Retraction: the plan said runs could not be detected in SQL (no window functions before 3.25) and

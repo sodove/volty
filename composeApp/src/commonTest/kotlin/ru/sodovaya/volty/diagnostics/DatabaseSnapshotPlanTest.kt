@@ -61,7 +61,18 @@ class DatabaseSnapshotPlanTest {
 
     @Test
     fun zipNameWhenWalTravels() {
-        assertEquals("volty-db-2026-10-29_07-05-09.zip", databaseSnapshotFileName(2026, 10, 29, 7, 5, 9, compressed = true, withWal = true))
+        assertEquals("volty-db-2026-10-29_07-05-09.zip", databaseSnapshotFileName(2026, 10, 29, 7, 5, 9, compressed = true, zipped = true))
+    }
+
+    @Test
+    fun anUnopenedShareShipsEveryCompanionThatExists() {
+        // After a killed migration: a hot journal beside a torn main file. Without the journal the copy is unusable (I1).
+        assertEquals(listOf("-journal"), unopenedSnapshotCompanions { if (it == "-journal") 546_906_504L else null })
+        // Incoherent on purpose: a rollback journal AND a WAL pair (no producer leaves both); all of them travel.
+        assertEquals(listOf("-journal", "-wal", "-shm"), unopenedSnapshotCompanions { 4096L })
+        // "Exists" is the rule, not "non-empty": an empty -wal or a truncated journal costs nothing to ship.
+        assertEquals(listOf("-wal", "-shm"), unopenedSnapshotCompanions { if (it == "-journal") null else 0L })
+        assertEquals(emptyList(), unopenedSnapshotCompanions { null })
     }
 
     private class FakeExporter : DatabaseSnapshotExporter {

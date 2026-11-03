@@ -50,6 +50,21 @@ fun snapshotFilesDecision(checkpointBusy: Boolean?, walBytes: Long): SnapshotFil
     else -> SnapshotFiles.DbAndWal
 }
 
+/** Every file SQLite may keep beside `volty.db`, in the order they go into the zip after it. */
+val DATABASE_COMPANION_SUFFIXES: List<String> = listOf("-journal", "-wal", "-shm")
+
+/**
+ * The companions an UNOPENED share (the startup gate's error screen) ships with `volty.db`: every one that exists, whatever
+ * its size. [lengthOf] is a suffix's file length, or null when there is no such file.
+ *
+ * Nothing has the database open there, so nothing has replayed a WAL or rolled back a journal. After a migration killed
+ * mid-transaction `volty.db` alone is a torn file whose good pages are in `volty.db-journal` (final review I1); shipping the
+ * journal lets whoever opens the copy read-write get the rider's database back. Retraction: this share used to copy
+ * `volty.db` and a non-empty `-wal` only.
+ */
+fun unopenedSnapshotCompanions(lengthOf: (suffix: String) -> Long?): List<String> =
+    DATABASE_COMPANION_SUFFIXES.filter { lengthOf(it) != null }
+
 /**
  * True while the recorder owns the database: an open ride, or a GPS route starting/recording/
  * stopping. The same fields the app's own recording UI reads (`canStop` is `ride != null`).
@@ -59,14 +74,14 @@ fun historyRecordingInProgress(status: ru.sodovaya.volty.domain.history.HistoryR
         status.route == ru.sodovaya.volty.domain.history.HistoryRecordingRouteStatus.RECORDING ||
         status.route == ru.sodovaya.volty.domain.history.HistoryRecordingRouteStatus.STOPPING
 
-/** `volty-db-<yyyy-MM-dd_HH-mm-ss>.db`, `.db.gz` when compressed, `.zip` for db + WAL. */
+/** `volty-db-<yyyy-MM-dd_HH-mm-ss>.db`, `.db.gz` when compressed, `.zip` for the db with any companion file. */
 fun databaseSnapshotFileName(
     year: Int, month: Int, day: Int, hour: Int, minute: Int, second: Int, compressed: Boolean,
-    withWal: Boolean = false,
+    zipped: Boolean = false,
 ): String {
     fun two(v: Int) = v.toString().padStart(2, '0')
     val stamp = "${year.toString().padStart(4, '0')}-${two(month)}-${two(day)}_${two(hour)}-${two(minute)}-${two(second)}"
-    if (withWal) return "volty-db-$stamp.zip"
+    if (zipped) return "volty-db-$stamp.zip"
     return "volty-db-$stamp.db" + if (compressed) ".gz" else ""
 }
 
@@ -92,8 +107,9 @@ interface DatabaseSnapshotExporter {
 
     /**
      * Copies the files of a database that could not be opened (the startup gate's error screen):
-     * no transaction, no recording check (nothing records while the gate is closed). Only meaningful
-     * while nothing else has the file open for writing.
+     * no transaction, no recording check (nothing records while the gate is closed), `volty.db` plus
+     * every companion [unopenedSnapshotCompanions] names. Only meaningful while nothing else has the
+     * file open for writing.
      */
     suspend fun shareUnopened(): DatabaseShareOutcome = DatabaseShareOutcome.Failed
 }

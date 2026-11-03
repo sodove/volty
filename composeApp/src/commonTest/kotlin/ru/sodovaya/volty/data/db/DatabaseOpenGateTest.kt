@@ -184,9 +184,68 @@ class DatabaseOpenGateTest {
         assertEquals(2, opener.calls.count { it == "open" })
     }
 
-    @Test fun anUnreadableVersionIsAVisibleFailureNotASkippedCheck() = runTest {
+    /**
+     * The disk after a process was killed inside 28.sqm (final review C1): `volty.db` torn by spilled pages and a hot
+     * `volty.db-journal` holding the old ones. Like SQLite, a probe that may write rolls the journal back on its first read
+     * (file restored, journal deleted, its space returned); one that may not fails every read, for ever, which is what the
+     * old read-only probe did. The numbers are the rider's: a 600 MB database, a 547 MB journal at t+90 s.
+     */
+    private class KilledMidConversionDisk(val probeCanWrite: Boolean) : DatabaseOpener {
+        val calls = mutableListOf<String>()
+        var stored = 27
+        var fileBytes = 670L * 1024 * 1024        // grown by the conversion before the kill
+        val originalBytes = 600L * 1024 * 1024
+        var journalBytes = 547L * 1024 * 1024
+        var free = 1000L * 1024 * 1024            // with the journal still on disk; 1547 MB once it is gone
+        override fun storedVersion(): Int {
+            calls += "storedVersion"
+            if (journalBytes > 0) {
+                if (!probeCanWrite) throw IllegalStateException("SQLITE_READONLY_ROLLBACK (776)")
+                fileBytes = originalBytes; free += journalBytes; journalBytes = 0
+            }
+            return stored
+        }
+        override fun targetVersion(): Int = 29
+        override fun databaseBytes(): Long { calls += "databaseBytes"; check(journalBytes == 0L) { "sized before the rollback" }; return fileBytes }
+        override fun freeBytes(): Long { calls += "freeBytes"; return free }
+        override fun open() { calls += "open"; check(journalBytes == 0L) { "opened over a hot journal" }; stored = 29 }
+    }
+
+    @Test fun aConversionKilledMidwayRestartsAfterTheProbeRollsItsJournalBack() = runTest {
+        val disk = KilledMidConversionDisk(probeCanWrite = true)
+        // The fixture separates the two orders: before the rollback 1000 MB free is short of 1.55 x 670 MB = 1038 MB
+        // (NoSpace for a rider whose phone has room); after it 1547 MB free covers 1.55 x 600 MB = 930 MB.
+        assertTrue(disk.free < migrationRequiredFreeBytes(disk.fileBytes))
+        assertTrue(disk.free + disk.journalBytes >= migrationRequiredFreeBytes(disk.originalBytes))
+        val duringOpen = mutableListOf<DatabaseOpenState>()
+        lateinit var gate: DatabaseOpenGate
+        gate = gateOf(object : DatabaseOpener by disk {
+            override fun open() { duringOpen += gate.state.value; disk.open() }
+        })
+        gate.start(backgroundScope); runCurrent()
+        assertEquals(DatabaseOpenState.Ready, gate.state.value, "the rides are reachable again")
+        assertEquals(listOf<DatabaseOpenState>(DatabaseOpenState.Migrating(27, 29)), duringOpen, "the conversion starts over")
+        assertEquals(listOf("storedVersion", "databaseBytes", "freeBytes", "open"), disk.calls, "sized only after the rollback")
+        assertEquals(0L, disk.journalBytes)
+        assertEquals(29, disk.stored)
+    }
+
+    @Test fun aProbeThatCannotRollTheJournalBackIsStuckOnEveryRetry() = runTest {
+        // What the read-only probe did: kept as the documented failure shape, so the test above is not passing by accident.
+        val disk = KilledMidConversionDisk(probeCanWrite = false)
+        val gate = gateOf(disk)
+        gate.start(backgroundScope); runCurrent()
+        assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.Other("IllegalStateException")), gate.state.value)
+        gate.retry(); runCurrent()
+        assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.Other("IllegalStateException")), gate.state.value)
+        assertFalse("open" in disk.calls, "nothing ever opened it")
+        assertEquals(547L * 1024 * 1024, disk.journalBytes)
+    }
+
+    @Test fun aCorruptFileIsAVisibleFailureAndIsNeverOpened() = runTest {
+        // Corruption is the one probe failure that must stay a failure: the open would hand the driver a damaged file.
         val opener = FakeOpener()
-        opener.storedFailure = RuntimeException("locked")
+        opener.storedFailure = RuntimeException("SQLITE_NOTADB")
         val gate = gateOf(opener)
         gate.start(backgroundScope); runCurrent()
         assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.Other("RuntimeException")), gate.state.value)

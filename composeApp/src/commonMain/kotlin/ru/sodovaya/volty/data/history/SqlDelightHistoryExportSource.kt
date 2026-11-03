@@ -116,9 +116,11 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
      * only keeps such a chain out of a run, so a converted ride holding such a series stops exporting. Measured: no series
      * of the rider's database does (0 of 26 rides, 1.3 M rows). A series that breaks it is REFUSED with INVALID_DATA instead
      * of merged: an earlier revision merged it in PK order and claimed `droppedLate` could only fall; that was unproven (heads would
-     * not be monotone, so the cross-series permutation differs from both V2 and time order). Cross-series order uses ONLY
-     * stored sequences of first members and run ends, never an interpolated interior one (those may coincide with
-     * another series').
+     * not be monotone, so the cross-series permutation differs from both V2 and time order). Cross-series order uses the
+     * stored sequences of first members and run ends. Retraction: this said "never an interpolated interior one"; a row cut
+     * by a back-dated marker (`splitStoredRunAt`) stores its tail's first member with the sequence `HistoryRunMembers`
+     * interpolated for it, and that stored value is what this merges on (final review M5). Only unknown records can move,
+     * ties fall to the series id, and every encoder ignores unknowns, so no exported byte changes.
      *
      * A run that starts in range is emitted as its first member and, only if the stored end lies at or before
      * `snapshot.through`, its end member (exact stored ticks). A run that ends after `through` emits its first member alone:

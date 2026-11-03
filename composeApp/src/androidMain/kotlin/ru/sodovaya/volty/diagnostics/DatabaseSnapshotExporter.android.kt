@@ -47,15 +47,21 @@ class AndroidDatabaseSnapshotExporter(
         val dir = File(context.cacheDir, DIR)
         val rawDb = File(dir, "snapshot.tmp")
         val rawWal = File(dir, "snapshot.tmp-wal")
+        // The companions an unopened share copies, as (suffix, raw copy); empty for an opened share.
+        var rawCompanions: List<Pair<String, File>> = emptyList()
         try {
             if (isRecording()) return@withContext DatabaseShareOutcome.Refused(SnapshotRefusal.RECORDING)
             val dbFile = context.getDatabasePath(DB_NAME)
             val walFile = File(dbFile.path + "-wal")
+            val companions = if (opened) emptyList() else unopenedSnapshotCompanions { suffix ->
+                File(dbFile.path + suffix).takeIf { it.isFile }?.length()
+            }
             dir.mkdirs()
             val old = dir.listFiles().orEmpty()
             // Space held by the previous snapshots comes back when they are deleted below.
             val free = dir.usableSpace + old.sumOf { it.length() }
-            val plan = databaseSnapshotPlan(false, dbFile.length() + walFile.length(), free)
+            val copied = if (opened) dbFile.length() + walFile.length() else dbFile.length() + companions.sumOf { File(dbFile.path + it).length() }
+            val plan = databaseSnapshotPlan(false, copied, free)
             if (plan is SnapshotPlan.Refuse) return@withContext DatabaseShareOutcome.Refused(plan.reason)
             // Only now: a refused attempt must not destroy a file a receiving app may still read.
             old.forEach { it.delete() }
@@ -66,11 +72,11 @@ class AndroidDatabaseSnapshotExporter(
             var refusal: SnapshotRefusal? = null
             var files: SnapshotFiles = SnapshotFiles.DbOnly
             if (!opened) {
-                // The gate's error screen: nothing has the database open, so there is no lock to take and
-                // no checkpoint to run; a WAL left behind travels with the main file.
-                files = if (walFile.exists() && walFile.length() > 0L) SnapshotFiles.DbAndWal else SnapshotFiles.DbOnly
+                // The gate's error screen: nothing has the database open, so there is no lock to take, no checkpoint to run
+                // and no journal rolled back; every companion left behind (a hot -journal after a killed migration, a
+                // -wal, a -shm) travels with the main file, which alone may be torn.
                 copy(dbFile, rawDb)
-                if (files == SnapshotFiles.DbAndWal) copy(walFile, rawWal)
+                rawCompanions = companions.map { suffix -> suffix to File(dir, "snapshot.tmp$suffix").also { copy(File(dbFile.path + suffix), it) } }
             } else try {
                 provider.database.transaction {
                     if (runBlocking { isRecording() }) { refusal = SnapshotRefusal.RECORDING; return@transaction }
@@ -87,24 +93,27 @@ class AndroidDatabaseSnapshotExporter(
             }
             refusal?.let { return@withContext DatabaseShareOutcome.Refused(it) }
 
-            val withWal = files == SnapshotFiles.DbAndWal
+            val extras = if (files == SnapshotFiles.DbAndWal) listOf("-wal" to rawWal) else rawCompanions
+            val zipped = extras.isNotEmpty()
             val compress = shouldCompressSnapshot(rawDb.length())
             val now = Calendar.getInstance()
             val target = File(dir, databaseSnapshotFileName(
                 now.get(Calendar.YEAR), now.get(Calendar.MONTH) + 1, now.get(Calendar.DAY_OF_MONTH),
-                now.get(Calendar.HOUR_OF_DAY), now.get(Calendar.MINUTE), now.get(Calendar.SECOND), compress, withWal,
+                now.get(Calendar.HOUR_OF_DAY), now.get(Calendar.MINUTE), now.get(Calendar.SECOND), compress, zipped,
             ))
             when {
-                withWal -> ZipOutputStream(target.outputStream().buffered()).use { zip ->
+                zipped -> ZipOutputStream(target.outputStream().buffered()).use { zip ->
                     zip.putNextEntry(ZipEntry(DB_NAME)); rawDb.inputStream().use { it.copyTo(zip, BUFFER) }; zip.closeEntry()
-                    zip.putNextEntry(ZipEntry("$DB_NAME-wal")); rawWal.inputStream().use { it.copyTo(zip, BUFFER) }; zip.closeEntry()
+                    for ((suffix, raw) in extras) {
+                        zip.putNextEntry(ZipEntry("$DB_NAME$suffix")); raw.inputStream().use { it.copyTo(zip, BUFFER) }; zip.closeEntry()
+                    }
                 }
                 compress -> rawDb.inputStream().use { input ->
                     GZIPOutputStream(target.outputStream().buffered(BUFFER)).use { input.copyTo(it, BUFFER) }
                 }
                 else -> check(rawDb.renameTo(target))
             }
-            val mime = when { withWal -> "application/zip"; compress -> "application/gzip"; else -> "application/vnd.sqlite3" }
+            val mime = when { zipped -> "application/zip"; compress -> "application/gzip"; else -> "application/vnd.sqlite3" }
             startShare(target, mime)
             DatabaseShareOutcome.Shared
         } catch (e: CancellationException) {
@@ -116,6 +125,7 @@ class AndroidDatabaseSnapshotExporter(
         } finally {
             rawDb.delete()
             rawWal.delete()
+            DATABASE_COMPANION_SUFFIXES.forEach { File(dir, "snapshot.tmp$it").delete() }
         }
     }
 

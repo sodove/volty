@@ -19,6 +19,16 @@ class MigrationSqlCompatibilityTest {
         "VACUUM INTO (SQLite 3.27)" to Regex("""\bVACUUM\s+INTO\b""", RegexOption.IGNORE_CASE),
         "DROP COLUMN (SQLite 3.35)" to Regex("""\bDROP\s+COLUMN\b""", RegexOption.IGNORE_CASE),
         "RENAME COLUMN (SQLite 3.25)" to Regex("""\bRENAME\s+COLUMN\b""", RegexOption.IGNORE_CASE),
+        "RETURNING (SQLite 3.35)" to Regex("""\bRETURNING\b""", RegexOption.IGNORE_CASE),
+        "aggregate FILTER (SQLite 3.30)" to Regex("""\bFILTER\s*\(\s*WHERE\b""", RegexOption.IGNORE_CASE),
+        "NULLS FIRST/LAST (SQLite 3.30)" to Regex("""\bNULLS\s+(FIRST|LAST)\b""", RegexOption.IGNORE_CASE),
+        "iif() (SQLite 3.32)" to Regex("""\bIIF\s*\(""", RegexOption.IGNORE_CASE),
+        "TRUE/FALSE literals (SQLite 3.23)" to Regex("""\b(TRUE|FALSE)\b""", RegexOption.IGNORE_CASE),
+        "JSON -> and ->> (SQLite 3.38)" to Regex("""->"""),
+        "MATERIALIZED CTE (SQLite 3.35)" to Regex("""\bMATERIALIZED\b""", RegexOption.IGNORE_CASE),
+        "generated column (SQLite 3.31)" to Regex("""\bGENERATED\s+ALWAYS\b|\bAS\s*\([^)]*\)\s*(STORED|VIRTUAL)\b""", RegexOption.IGNORE_CASE),
+        // Not scanned: UPDATE ... FROM (3.33). Line by line it cannot be told from `UPDATE t SET a = (SELECT b FROM u)`;
+        // a grep of every .sq/.sqm at the final review found none.
     )
 
     private fun sqlDelightDir(): File =
@@ -69,8 +79,12 @@ class MigrationSqlCompatibilityTest {
         } finally { copy.delete() }
     }
 
-    /** A STATIC, line-based scan: it cannot run SQL on 3.18.2 (the JDBC driver is newer) and misses constructs split over lines. */
-    @Test fun noSqlNewerThan3_19() {
+    /**
+     * A STATIC, line-based scan: it cannot run SQL on 3.18.2 (the JDBC driver is newer) and misses constructs split over lines.
+     * The floor is 3.18.2 (minSdk 26). This was named `noSqlNewerThan3_19` and checked five constructs, a narrower net than
+     * the constraint (final review M2). The stronger evidence for 28.sqm stays its one-off run on sqlite-jdbc 3.18.0 (ledger).
+     */
+    @Test fun noSqlNewerThan3_18_2() {
         val files = sqlDelightDir().walkTopDown().filter { it.isFile && (it.extension == "sq" || it.extension == "sqm") }.toList()
         assertTrue(files.size > 30, "the scan found only ${files.size} files")
         val hits = files.flatMap { file ->
@@ -85,7 +99,10 @@ class MigrationSqlCompatibilityTest {
     @Test fun scannerSeesEachForbiddenConstruct() {
         // Control: a scan whose patterns matched nothing would pass the test above just the same.
         val samples = listOf("SELECT row_number() OVER (ORDER BY a)", "INSERT INTO t VALUES (1) ON CONFLICT(a) DO UPDATE SET b = 1",
-            "VACUUM INTO 'x'", "ALTER TABLE t DROP COLUMN a", "ALTER TABLE t RENAME COLUMN a TO b")
+            "VACUUM INTO 'x'", "ALTER TABLE t DROP COLUMN a", "ALTER TABLE t RENAME COLUMN a TO b",
+            "DELETE FROM t RETURNING a", "SELECT count(*) FILTER (WHERE a > 0) FROM t", "SELECT a FROM t ORDER BY a NULLS LAST",
+            "SELECT iif(a, 1, 2) FROM t", "SELECT * FROM t WHERE a = TRUE", "SELECT j ->> 'a' FROM t",
+            "WITH c AS MATERIALIZED (SELECT 1) SELECT * FROM c", "CREATE TABLE t (a INTEGER, b INTEGER AS (a * 2) STORED)")
         assertEquals(forbidden.size, samples.size)
         forbidden.zip(samples).forEach { (rule, sample) -> assertTrue(rule.second.containsMatchIn(sample), rule.first) }
     }

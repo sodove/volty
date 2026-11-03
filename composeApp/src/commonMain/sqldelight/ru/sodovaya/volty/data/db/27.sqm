@@ -1,5 +1,6 @@
 -- Compact history, step 1 of 2 (plan 2026-10-29-compact-history-storage, Task 4). Additive only: the V2 tables stay
--- untouched and no row is copied here; Task 8's 28.sqm converts the old rides. See RideHistoryCompact.sq.
+-- untouched and no row is copied here; Task 9's 28.sqm converts the old rides (an earlier revision said Task 8). See
+-- RideHistoryCompact.sq.
 CREATE TABLE HistoryRideKeyV3 (rideNo INTEGER NOT NULL PRIMARY KEY, rideId TEXT NOT NULL UNIQUE);
 CREATE TABLE HistorySeriesV3 (seriesId INTEGER NOT NULL PRIMARY KEY, rideNo INTEGER NOT NULL,
   sourceId TEXT NOT NULL, metricId TEXT NOT NULL, cellIndex INTEGER NOT NULL DEFAULT -1 CHECK(cellIndex >= -1),
