@@ -283,7 +283,6 @@ internal fun LightRideDashboard(
             LightTopBar(
                 name = state.vehicle?.name ?: stringResource(Res.string.no_battery),
                 statusColor = if (state.connection is ru.sodovaya.volty.domain.model.ConnectionState.Connected) LocalLightHudPalette.current.battery else statusColor,
-                temperature = readouts.controllerTemperature,
                 onPillClick = component::onPillClicked,
                 onNearby = onOpenNearby,
                 onSettings = component::onOpenSettings,
@@ -628,7 +627,6 @@ private fun LightTopGraph(
 private fun LightTopBar(
     name: String,
     statusColor: Color,
-    temperature: LightReadout,
     onPillClick: () -> Unit,
     onNearby: () -> Unit,
     onSettings: () -> Unit,
@@ -667,13 +665,6 @@ private fun LightTopBar(
         }
         LightCircleButton(Icons.Default.Settings, "Настройки", onClick = onSettings)
     }
-    Text(
-        text = temperature.value.takeIf { temperature.unit.isNotEmpty() }?.let { "$it${temperature.unit}" } ?: "—",
-        color = LocalLightHudPalette.current.muted,
-        style = TextStyle(fontSize = lightHudSp(9.5f, layoutMode), lineHeight = lightHudSp(11f, layoutMode)),
-        modifier = Modifier.fillMaxWidth().padding(top = 1.dp),
-        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-    )
 }
 
 @Composable
