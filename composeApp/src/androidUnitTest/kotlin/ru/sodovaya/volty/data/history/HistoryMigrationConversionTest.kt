@@ -326,31 +326,66 @@ class HistoryMigrationConversionTest {
         assertEquals(20L, compactRows(driver).single().count)
     }
 
+    private val NL = System.lineSeparator()
+
+    /** Two realistic rides (T4 shape, ~47 k rows each, markers) so the planner sees tables of the size the conversion walks. */
+    private fun seedForPlans(driver: JdbcSqliteDriver) = bulk(driver) {
+        for (n in 0 until 2) {
+            val id = "ride$n"
+            val origin = HistoryTick(1_000_000L + n * 10_000_000L, n * 1000L, 1)
+            ride(driver, id, origin); source(driver, id, "ctl"); source(driver, id, "pack")
+            t4Rows(id, origin).forEach { insert(driver, it) }
+            marker(driver, id, 900_000, 100_000, HistoryMarkerKind.BLE_GAP, "pack")
+            marker(driver, id, 900_001, 200_000, HistoryMarkerKind.INTERRUPTED)
+        }
+    }
+
     /**
-     * The JDBC SQLite is newer than the phone's, so this proves the plan of a current planner: the joins are CROSS, which every
-     * version keeps in written order, and each ORDER BY is the index's own. A sort would be slower, never wrong: pos comes
-     * from ORDER BY whatever the plan.
+     * What the conversion's plan must be, on the SQLite that runs it (the JDBC one here; run this class against
+     * `org.xerial:sqlite-jdbc:3.18.0`, the phone's floor, for the old planner). The disaster is not a temp B-tree but a SCAN of a
+     * 1.3 M row table per outer row (~791 k x 1.3 M, a migration that never ends and so a database that never opens). So:
+     * every correlated lookup (`p`, `e`, `f`, `x`, and the break probe `b`) is a SEARCH, and the only SCAN of an INSERT is its
+     * one outer driving table. Planned after the earlier statements ran (the tables are real, as on the phone, with no
+     * ANALYZE) and again after ANALYZE.
      */
-    @Test fun noTempSortInConversion() {
+    @Test fun conversionPlansSearchEveryCorrelatedLookup() {
         val driver = v28()
+        seedForPlans(driver)
+        val version = query(driver, "SELECT sqlite_version()") { it.getString(0)!! }.single()
         val statements = HistoryV2Fixture.conversionStatements()
         val database = VoltyDatabaseProvider(driver).database
-        database.transaction {
-            val plans = ArrayList<Pair<String, String>>()
-            statements.forEach { statement ->
-                if (statement.startsWith("INSERT")) plans += statement to
-                    query(driver, "EXPLAIN QUERY PLAN $statement") { it.getString(3)!! }.joinToString("\n")
-                driver.execute(null, statement, 0)
+        for (analyze in listOf(false, true)) {
+            database.transaction {
+                if (analyze) driver.execute(null, "ANALYZE", 0)
+                val plans = ArrayList<Pair<String, List<String>>>()
+                statements.forEach { statement ->
+                    if (statement.startsWith("INSERT")) plans += statement to
+                        query(driver, "EXPLAIN QUERY PLAN $statement") { it.getString(3)!! }
+                    driver.execute(null, statement, 0)
+                }
+                assertEquals(8, plans.size, "every INSERT was explained")
+                for ((statement, plan) in plans) println("PLAN sqlite=$version analyze=$analyze" + NL + statement.lines().first() + NL + "  " + plan.joinToString(NL + "  "))
+                for ((statement, plan) in plans) {
+                    val where = "sqlite $version, analyze=$analyze" + NL + statement + NL + plan.joinToString(NL)
+                    // Series and keys: tens of rows per ride, not millions. Their sort is harmless and is left to the planner.
+                    if ("INTO HistorySeriesV3" in statement || "INTO HistoryRideKeyV3" in statement) continue
+                    assertFalse(plan.any { "USE TEMP B-TREE" in it }, where)
+                    // With statistics a planner may scan the 4-row marker table per series instead of probing it; the app never runs ANALYZE
+                    // (nothing in the sources does), so only the unanalysed plan, the phone's, is held to one SCAN.
+                    if (!analyze) assertTrue(plan.count { it.startsWith("SCAN") } <= 1, "more than one SCAN, the driving table:" + NL + where)
+                }
+                fun planOf(marker: String) = plans.single { marker in it.first }.second
+                fun needsSearch(plan: List<String>, vararg aliases: String) = aliases.forEach { alias ->
+                    // 3.18 prints "SEARCH TABLE T AS p USING ...", a current SQLite "SEARCH p USING ...".
+                    val search = Regex("^SEARCH (TABLE [^ ]+ AS )?$alias( .*)?$")
+                    assertTrue(plan.any { search.matches(it) }, "no SEARCH on '$alias'" + NL + plan.joinToString(NL))
+                }
+                val conversion = planOf("INTO HistoryConversionRow")
+                assertTrue(conversion.any { "HistorySampleV2_series_elapsed" in it }, conversion.joinToString(NL))
+                needsSearch(planOf("INTO HistoryConversionHead"), "p", "b")
+                needsSearch(planOf("INTO HistorySampleV3"), "f", "e", "x")
+                rollback()
             }
-            assertEquals(8, plans.size, "every INSERT was explained")
-            for ((statement, plan) in plans) {
-                // Series and keys: tens of rows per ride, not millions. Their sort is harmless and is left to the planner.
-                if ("INTO HistorySeriesV3" in statement || "INTO HistoryRideKeyV3" in statement) continue
-                assertFalse("USE TEMP B-TREE" in plan, "$statement\n$plan")
-            }
-            val conversion = plans.single { "INTO HistoryConversionRow" in it.first }.second
-            assertTrue("HistorySampleV2_series_elapsed" in conversion, conversion)
-            rollback()
         }
     }
 
