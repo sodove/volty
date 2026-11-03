@@ -241,6 +241,13 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     suspend fun setDynamicColorEnabled(enabled: Boolean) = store.edit { it[Keys.DYNAMIC_COLOR] = enabled }
     suspend fun setThemeAccent(accent: ThemeAccent) = store.edit { it[Keys.THEME_ACCENT] = accent.id }
     suspend fun setFirstLaunchDone() = store.edit { it[Keys.FIRST_LAUNCH_DONE] = true }
+
+    /**
+     * History compaction runs once per schema version (compact-history Task 11). Any future path that brings rides in
+     * from outside the recorder (a DB restore, an import) must lower this, or its singleton chains are never folded.
+     */
+    suspend fun historyCompactionDoneFor(): Int = store.data.first()[Keys.HISTORY_COMPACTION_DONE_SCHEMA] ?: 0
+    suspend fun markHistoryCompactionDone(schema: Int) { store.edit { it[Keys.HISTORY_COMPACTION_DONE_SCHEMA] = schema } }
     suspend fun setScanTimeoutSec(sec: Int) = store.edit { it[Keys.SCAN_TIMEOUT_SEC] = sec.coerceIn(1, 15) }
     suspend fun setAutoConnectCountdownSec(sec: Int) = store.edit { it[Keys.AUTO_CONNECT_COUNTDOWN_SEC] = sec }
     suspend fun setGuestModeShowSaved(show: Boolean) = store.edit { it[Keys.GUEST_MODE_SHOW_SAVED] = show }
@@ -344,6 +351,8 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color_enabled")
         val THEME_ACCENT = stringPreferencesKey("theme_accent")
         val FIRST_LAUNCH_DONE = booleanPreferencesKey("first_launch_done")
+        /** The schema version a full history compaction pass completed on (HistoryStorageMaintenance); 0 = never. */
+        val HISTORY_COMPACTION_DONE_SCHEMA = intPreferencesKey("history_compaction_done_schema")
         val SCAN_TIMEOUT_SEC = intPreferencesKey("scan_timeout_sec")
         val AUTO_CONNECT_COUNTDOWN_SEC = intPreferencesKey("auto_connect_countdown_sec")
         val GUEST_MODE_SHOW_SAVED = booleanPreferencesKey("guest_mode_show_saved")

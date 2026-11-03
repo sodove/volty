@@ -112,6 +112,15 @@ val androidModule = module {
                     scope.get<ru.sodovaya.volty.domain.history.HistoryRecordingRepository>().states.first())
             },
             dispatcher = Dispatchers.IO,
+            // Once per schema version (Task 11 fix round 1): only a COMPLETED pass marks it.
+            compactionDone = {
+                scope.get<ru.sodovaya.volty.data.prefs.AppPrefs>().historyCompactionDoneFor() >=
+                    ru.sodovaya.volty.data.db.VoltyDatabase.Schema.version.toInt()
+            },
+            markCompactionDone = {
+                scope.get<ru.sodovaya.volty.data.prefs.AppPrefs>()
+                    .markHistoryCompactionDone(ru.sodovaya.volty.data.db.VoltyDatabase.Schema.version.toInt())
+            },
         ) { message, failure ->
             if (failure != null) android.util.Log.w("VoltyHistory", message, failure) else android.util.Log.i("VoltyHistory", message)
         }

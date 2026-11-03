@@ -197,3 +197,7 @@ DELETE FROM HistorySampleV3 WHERE seriesId = :seriesId AND elapsedMillis = :elap
 -- Gap markers only matter to compaction; the kinds are filtered in Kotlin (HISTORY_GAP_MARKERS), as everywhere else.
 compactionMarkersV3:
 SELECT elapsedMillis, kind, sourceId FROM HistoryMarkerV2 WHERE rideId = :rideId ORDER BY elapsedMillis, sequence;
+
+-- Compact rides still RECORDING: compaction skips them, and a pass is not complete while one exists.
+compactionOpenRidesV3:
+SELECT COUNT(*) FROM HistoryRideKeyV3 k JOIN HistoryRideV2 r ON r.id = k.rideId WHERE r.status = 'RECORDING';

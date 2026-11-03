@@ -2,6 +2,8 @@ package ru.sodovaya.volty.data.history
 
 import app.cash.sqldelight.db.QueryResult
 import app.cash.sqldelight.db.SqlCursor
+import app.cash.sqldelight.db.SqlDriver
+import app.cash.sqldelight.db.SqlPreparedStatement
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
@@ -34,12 +36,32 @@ class HistoryStorageMaintenanceTest {
     private inner class Db(file: File? = null) {
         val driver = JdbcSqliteDriver(if (file == null) JdbcSqliteDriver.IN_MEMORY else "jdbc:sqlite:${file.absolutePath}").also { drivers += it }
         init { driver.execute(null, "PRAGMA foreign_keys=OFF", 0); VoltyDatabase.Schema.create(driver) }
-        val provider = VoltyDatabaseProvider(driver)
+        /** Counts every statement that names the sample table, so "no scan" is observed rather than assumed. */
+        var sampleQueries = 0
+        private val counting = object : SqlDriver by driver {
+            override fun <R> executeQuery(identifier: Int?, sql: String, mapper: (SqlCursor) -> QueryResult<R>, parameters: Int,
+                binders: (SqlPreparedStatement.() -> Unit)?): QueryResult<R> {
+                if ("HistorySampleV3" in sql) sampleQueries++
+                return driver.executeQuery(identifier, sql, mapper, parameters, binders)
+            }
+        }
+        val provider = VoltyDatabaseProvider(counting)
         val store = SqlDelightHistoryStore(provider, Dispatchers.Unconfined)
         var recording = false
+        /** Answers to hand out before falling back to [recording], one per isRecording() call. */
+        val recordingAnswers = ArrayDeque<Boolean>()
         var free = Long.MAX_VALUE
         val logged = ArrayList<String>()
-        val maintenance = HistoryStorageMaintenance(provider, { free }, { recording }, Dispatchers.Unconfined) { message, _ -> logged += message }
+        /** The app preference, modelled: the schema a completed pass was marked for, and the current schema. */
+        var doneFor = 0
+        var schema = 29
+        var marks = 0
+        val maintenance = HistoryStorageMaintenance(provider, { free }, { recordingAnswers.removeFirstOrNull() ?: recording }, Dispatchers.Unconfined,
+            compactionDone = { doneFor >= schema }, markCompactionDone = { doneFor = schema; marks++ }) { message, failure ->
+            logged += "$message ${failure?.message ?: ""}"
+        }
+        val compactor = HistoryRunCompactor(provider.database)
+        fun rideNo(rideId: String) = provider.database.rideHistoryCompactQueries.rideNoV3(rideId).executeAsOne()
 
         fun <T> query(sql: String, map: (SqlCursor) -> T): List<T> = driver.executeQuery(null, sql, { c ->
             val rows = ArrayList<T>()
@@ -152,19 +174,27 @@ class HistoryStorageMaintenanceTest {
         val exploded = db.rows("r1")
         assertNotEquals(reference, exploded)
 
-        // A kill inside ride 2's transaction: ride 1 is done, ride 2 untouched, ride 3 not reached.
+        // A failure inside ride 2's transaction (after its writes): ride 2 rolls back whole, is logged with its cause and
+        // skipped, and the pass goes on to ride 3 (review I2). The pass is FAILED, so the once-only flag stays unset.
         db.maintenance.insideRideTransaction = { if (it == "r2") throw IllegalStateException("killed") }
         val killed = db.run()
-        assertEquals(1, killed.ridesExamined)
+        assertEquals(HistoryStorageMaintenance.Status.FAILED, killed.status)
+        assertEquals(3, killed.ridesExamined)
+        assertEquals(listOf(db.rideNo("r2")), killed.failedRides)
         assertEquals(reference, db.rows("r1"))
         assertEquals(exploded, db.rows("r2"), "nothing half-written")
-        assertEquals(exploded, db.rows("r3"))
-        assertTrue(db.logged.any { "compaction stopped" in it })
+        assertEquals(reference, db.rows("r3"), "one bad ride does not stop the rides after it")
+        assertTrue(db.logged.any { "ride key ${db.rideNo("r2")}" in it && "killed" in it }, "${db.logged}")
+        assertEquals(0, db.marks, "a failed pass never marks the flag")
 
         db.maintenance.insideRideTransaction = {}
         val resumed = db.run()
+        assertEquals(HistoryStorageMaintenance.Status.COMPLETED, resumed.status)
         assertEquals(3, resumed.ridesExamined)
         ids.forEach { assertEquals(reference, db.rows(it), it) }
+        assertEquals(1, db.marks)
+        // Idempotent with the flag out of the way: a compacted ride has nothing left to fold.
+        db.doneFor = 0
         val again = db.run()
         assertEquals(0L, again.rowsRemoved, "a compacted ride has nothing left to fold")
         ids.forEach { assertEquals(reference, db.rows(it), it) }
@@ -244,6 +274,7 @@ class HistoryStorageMaintenanceTest {
         db.recording = true
         val idle = db.run()
         assertTrue(idle.stoppedByRecording)
+        assertEquals(HistoryStorageMaintenance.Status.DEFERRED, idle.status)
         assertEquals(0, idle.ridesExamined)
         assertEquals(listOf(1_000L to null, 1_300L to null), counts(db, "closed"))
         db.recording = false
@@ -251,6 +282,17 @@ class HistoryStorageMaintenanceTest {
         assertEquals(1, done.ridesExamined, "only the closed ride is listed")
         assertEquals(listOf(1_000L to 2L), counts(db, "closed"))
         assertEquals(listOf(1_000L to null, 1_300L to null), counts(db, "open"), "the writer's ride is left to the writer")
+        // Review I1: the open ride (a killed process's, not yet closed by recoverInterrupted) keeps the pass from completing.
+        assertEquals(HistoryStorageMaintenance.Status.DEFERRED, done.status)
+        assertFalse(done.stoppedByRecording, "no live recording: nothing to wait for in this process")
+        assertEquals(1L, done.openRides)
+        assertEquals(0, db.marks)
+        // Once it is closed, the next start compacts it and only then marks the flag.
+        runBlocking { db.store.finish("open", tick(100_000), HistoryRideStatus.INTERRUPTED) }
+        val later = db.run()
+        assertEquals(HistoryStorageMaintenance.Status.COMPLETED, later.status)
+        assertEquals(listOf(1_000L to 2L), counts(db, "open"))
+        assertEquals(1, db.marks)
     }
 
     @Test fun recordingThatStartsMidPassStopsBeforeTheNextRide() {
@@ -260,6 +302,8 @@ class HistoryStorageMaintenanceTest {
         val outcome = db.run()
         assertEquals(1, outcome.ridesExamined)
         assertTrue(outcome.stoppedByRecording)
+        assertEquals(HistoryStorageMaintenance.Status.DEFERRED, outcome.status)
+        assertEquals(0, db.marks)
         assertEquals(listOf(1_000L to 2L), counts(db, "a"))
         assertEquals(listOf(1_000L to null, 1_300L to null), counts(db, "b"))
     }
@@ -293,13 +337,154 @@ class HistoryStorageMaintenanceTest {
 
         db.free = 2 * live - 1
         assertFalse(db.run().vacuumed)
+        assertEquals(1, db.marks, "no rides: the first pass completes and marks the flag")
         assertEquals(freePages, db.long("PRAGMA freelist_count"))
         db.recording = true; db.free = Long.MAX_VALUE
         assertFalse(db.run().vacuumed)
         db.recording = false
-        assertTrue(db.run().vacuumed)
+        // Idle at the plan, recording by the time VACUUM would start (review M2): it does not start.
+        db.recordingAnswers.addAll(listOf(false, true))
+        assertFalse(db.run().vacuumed)
+        assertEquals(freePages, db.long("PRAGMA freelist_count"))
+        // The flag is set, yet the VACUUM plan is still derived on every start.
+        val vacuumed = db.run()
+        assertTrue(vacuumed.skippedAsDone)
+        assertTrue(vacuumed.vacuumed)
         assertEquals(0L, db.long("PRAGMA freelist_count"))
         assertTrue(file.length() < 10 * 1024 * 1024, "${file.length()} bytes")
+    }
+
+    // ---- Fix round 1: the once-only flag, the race re-check, and the clauses the DB layer feeds ----
+
+    @Test fun aCompletedPassMarksTheFlagAndTheNextStartReadsNoSample() {
+        val db = Db()
+        singles(db, "first", listOf(Triple(1_000, 10, null), Triple(1_300, 11, null)))
+        val pass = db.run()
+        assertEquals(HistoryStorageMaintenance.Status.COMPLETED, pass.status)
+        assertEquals(1, db.marks)
+        assertEquals(29, db.doneFor)
+        // A ride whose chain is still unfolded: with the flag current nothing looks at it, not even a read.
+        singles(db, "later", listOf(Triple(1_000, 10, null), Triple(1_300, 11, null)))
+        db.sampleQueries = 0
+        val skipped = db.run()
+        assertTrue(skipped.skippedAsDone)
+        assertEquals(HistoryStorageMaintenance.Status.COMPLETED, skipped.status)
+        assertEquals(0, skipped.ridesExamined)
+        assertEquals(0, db.sampleQueries, "no statement touched the sample table")
+        assertEquals(1, db.marks, "not marked again")
+        assertEquals(listOf(1_000L to null, 1_300L to null), counts(db, "later"))
+        // A new schema re-arms it.
+        db.schema = 30
+        val rearmed = db.run()
+        assertFalse(rearmed.skippedAsDone)
+        assertEquals(listOf(1_000L to 2L), counts(db, "later"))
+        assertEquals(30, db.doneFor)
+    }
+
+    @Test fun runUntilSettledWaitsForRecordingToEndAndThenFinishes() = runBlocking {
+        val db = Db()
+        listOf("a", "b").forEach { singles(db, it, listOf(Triple(1_000, 10, null), Triple(1_300, 11, null))) }
+        db.recording = true
+        var waits = 0
+        val outcome = db.maintenance.runUntilSettled { waits++; db.recording = false }
+        assertEquals(1, waits)
+        assertEquals(HistoryStorageMaintenance.Status.COMPLETED, outcome.status)
+        assertEquals(listOf(1_000L to 2L), counts(db, "a"))
+        assertEquals(listOf(1_000L to 2L), counts(db, "b"))
+        assertEquals(1, db.marks)
+        // A pass that is not stopped by a live recording (here a failure) is final: no waiting.
+        db.doneFor = 0
+        db.maintenance.insideRideTransaction = { throw IllegalStateException("x") }
+        singles(db, "c", listOf(Triple(1_000, 10, null), Triple(1_300, 11, null)))
+        val failed = db.maintenance.runUntilSettled { waits++ }
+        assertEquals(HistoryStorageMaintenance.Status.FAILED, failed.status)
+        assertEquals(1, waits)
+    }
+
+    /** Review I5a: the ride is re-read inside the write transaction, and the plan is redone there. */
+    @Test fun theWriteTransactionRechecksTheRideAndRedoesThePlan() {
+        val db = Db()
+        val pair = listOf(Triple(1_000L, 10L, null as Long?), Triple(1_300L, 11L, null))
+        singles(db, "reopened", pair); singles(db, "deleted", pair); singles(db, "changed", pair)
+        singles(db, "open", pair, status = HistoryRideStatus.RECORDING)
+        // Called directly: the list query already filters RECORDING, so only this reaches the compactor's own check.
+        assertEquals(HistoryRideCompaction.Recording, db.compactor.compactRide(db.rideNo("open")))
+        assertEquals(HistoryRideCompaction.Gone, db.compactor.compactRide(9_999))
+        // Between the read-only plan and the write: the ride turns RECORDING (incoherent, no producer does it), is
+        // deleted, or gains a known row between the pair. None of the stale plan may be written.
+        assertEquals(HistoryRideCompaction.Recording, db.compactor.compactRide(db.rideNo("reopened"), beforeWrite = {
+            db.driver.execute(null, "UPDATE HistoryRideV2 SET status = 'RECORDING' WHERE id = '$it'", 0)
+        }))
+        val deletedNo = db.rideNo("deleted")
+        assertEquals(HistoryRideCompaction.Gone, db.compactor.compactRide(deletedNo, beforeWrite = { runBlocking { db.store.delete(it) } }))
+        val changedNo = db.rideNo("changed")
+        assertEquals(HistoryRideCompaction.Folded(0), db.compactor.compactRide(changedNo, beforeWrite = {
+            val q = db.provider.database.rideHistoryCompactQueries
+            val id = q.seriesForV3(changedNo, "pack", "current_a", -1).executeAsOne()
+            q.insertSampleV3(id, origin.elapsedMillis + 1_150, 50, 0, 0, 7.0, null, null, null, null, null)
+        }))
+        assertEquals(listOf(1_000L to null, 1_150L to null, 1_300L to null), counts(db, "changed"))
+        assertEquals(listOf(1_000L to null, 1_300L to null), counts(db, "reopened"))
+        assertEquals(listOf(1_000L to null, 1_300L to null), counts(db, "open"))
+        assertEquals(0L, db.long("SELECT COUNT(*) FROM HistorySampleV3 s JOIN HistorySeriesV3 v ON v.seriesId = s.seriesId WHERE v.rideNo = $deletedNo"))
+    }
+
+    /** One row written exactly as given; a run when [endMs] is set. */
+    private fun raw(db: Db, rideId: String, ms: Long, sequence: Long, skew: Long = 0, delta: Long = 0, code: Long = 1,
+        endMs: Long? = null, endSequence: Long? = null, endSkew: Long? = null, count: Long? = null) {
+        val q = db.provider.database.rideHistoryCompactQueries
+        val id = q.seriesForV3(db.rideNo(rideId), "pack", "current_a", -1).executeAsOne()
+        q.insertSampleV3(id, origin.elapsedMillis + ms, sequence, skew, delta, null, code,
+            endMs?.let { origin.elapsedMillis + it }, endSequence, endSkew, count)
+    }
+
+    /** Review I5b: clock generation, skew and reason reach historyRunContinues from the stored columns. */
+    @Test fun storedClockSkewAndReasonEachKeepRowsApart() {
+        val db = Db()
+        listOf("generation", "skew16", "skew15", "reason", "control").forEach { singles(db, it, emptyList()) }
+        raw(db, "generation", 1_000, 10, delta = 1); raw(db, "generation", 1_300, 11, delta = 2)
+        raw(db, "skew16", 1_000, 10, skew = 3); raw(db, "skew16", 1_300, 11, skew = 19)
+        raw(db, "skew15", 1_000, 10, skew = 3); raw(db, "skew15", 1_300, 11, skew = 18)
+        raw(db, "reason", 1_000, 10, code = 1); raw(db, "reason", 1_300, 11, code = 2)
+        // Control in a later generation: equal deltas join, and the run keeps the generation and the end's own skew.
+        raw(db, "control", 1_000, 10, delta = 2, skew = 4); raw(db, "control", 1_300, 11, delta = 2, skew = 9)
+        db.run()
+        assertEquals(listOf(1_000L to null, 1_300L to null), counts(db, "generation"))
+        assertEquals(listOf(1_000L to null, 1_300L to null), counts(db, "skew16"))
+        assertEquals(listOf(1_000L to 2L), counts(db, "skew15"), "15 ms is inside the tolerance")
+        assertEquals(listOf(1_000L to null, 1_300L to null), counts(db, "reason"))
+        val run = db.rows("control").single()
+        assertEquals(listOf(4L, 2L, 9L), listOf(run[5], run[6], run[11]), "epochSkew, clockDelta, runEndEpochSkew")
+    }
+
+    /**
+     * Rule 2 fixtures: stored runs no producer emits, so only the END member's columns can decide. Run A ends with a skew
+     * 40 away from its head; its neighbour sits 2 ms from the END and 42 ms from the head (joins). Run B's neighbour matches
+     * the HEAD's skew and is 40 ms from the end (stays apart). Run C's neighbour has a sequence above the run's head
+     * sequence but below its end sequence (stays apart).
+     */
+    @Test fun aStoredRunIsJudgedByItsEndMember() {
+        val db = Db()
+        listOf("endSkew", "headSkew", "midSequence").forEach { singles(db, it, emptyList()) }
+        raw(db, "endSkew", 1_000, 10, skew = 0, endMs = 1_600, endSequence = 12, endSkew = 40, count = 3)
+        raw(db, "endSkew", 1_900, 13, skew = 42)
+        raw(db, "headSkew", 1_000, 10, skew = 0, endMs = 1_600, endSequence = 12, endSkew = 40, count = 3)
+        raw(db, "headSkew", 1_900, 13, skew = 0)
+        raw(db, "midSequence", 1_000, 10, endMs = 1_600, endSequence = 20, endSkew = 0, count = 3)
+        raw(db, "midSequence", 1_900, 15)
+        db.run()
+        assertEquals(listOf(1_000L to 4L), counts(db, "endSkew"))
+        assertEquals(listOf(origin.elapsedMillis + 1_900, 13L, 42L), db.rows("endSkew").single().let { listOf(it[9], it[10], it[11]) })
+        assertEquals(listOf(1_000L to 3L, 1_900L to null), counts(db, "headSkew"))
+        assertEquals(listOf(1_000L to 3L, 1_900L to null), counts(db, "midSequence"))
+    }
+
+    /** Review M1: only gap kinds split; a GPS_GAP between two singletons does not. */
+    @Test fun aNonGapMarkerDoesNotSplit() {
+        val db = Db()
+        singles(db, "gps", listOf(Triple(1_000, 10, null), Triple(1_300, 11, null)), listOf(HistoryMarker(tick(1_150), HistoryMarkerKind.GPS_GAP)))
+        db.run()
+        assertEquals(listOf(1_000L to 2L), counts(db, "gps"))
     }
 
     /** The merge fold itself, on the rows of one series with the known rows present (no neighbour probe needed). */

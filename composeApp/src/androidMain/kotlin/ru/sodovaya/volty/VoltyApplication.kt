@@ -12,6 +12,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.Koin
 import org.koin.core.context.startKoin
@@ -54,7 +55,13 @@ class VoltyApplication : Application() {
         }
         // Folds stored unknown chains into runs and VACUUMs when worth it; never while recording (HistoryStorageMaintenance).
         appScope.launch {
-            try { koin.get<ru.sodovaya.volty.data.history.HistoryStorageMaintenance>().run() }
+            try {
+                // A pass stopped by a live recording resumes once no ride is being recorded.
+                val recording = koin.get<ru.sodovaya.volty.domain.history.HistoryRecordingRepository>()
+                koin.get<ru.sodovaya.volty.data.history.HistoryStorageMaintenance>().runUntilSettled {
+                    recording.states.first { !ru.sodovaya.volty.diagnostics.historyRecordingInProgress(it) }
+                }
+            }
             catch (cancel: kotlinx.coroutines.CancellationException) { throw cancel }
             catch (failure: Exception) { android.util.Log.w("VoltyHistory", "History maintenance deferred", failure) }
         }
