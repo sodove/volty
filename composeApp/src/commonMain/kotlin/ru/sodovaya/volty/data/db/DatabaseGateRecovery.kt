@@ -53,7 +53,9 @@ val RIDE_HISTORY_TABLES: List<String> = listOf(
  * rider's 600 MB v27 database (desktop SQLite, DELETE journal, auto_vacuum FULL): 1.0 s, journal peak 38.6 MB, file
  * 600,178,688 to 249,856 bytes at the commit, 4 vehicles kept, integrity ok. So the journal is kept on (crash-safe:
  * a kill mid-clear rolls back like any transaction) instead of journal_mode OFF or MEMORY, which would risk the
- * vehicles for a saving of ~40 MB.
+ * vehicles for a saving of ~40 MB. The connection must also run with `secure_delete` OFF: Android's SQLite is built with
+ * it ON, which zeroes (so writes, so journals) every freed page; on the AVD that took the journal past 359 MB before
+ * this was known (see AndroidDatabaseOpener.clearRideHistory).
  */
 fun rideHistoryClearStatements(existingTables: Set<String>): List<String> =
     RIDE_HISTORY_TABLES.filter { it in existingTables }.map { "DELETE FROM $it" } +

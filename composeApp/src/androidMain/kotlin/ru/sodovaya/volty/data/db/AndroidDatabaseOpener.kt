@@ -77,12 +77,18 @@ class AndroidDatabaseOpener(private val context: Context) : DatabaseOpener, Data
     /**
      * Gate action CLEAR_RIDE_HISTORY (NoSpace only, so nothing has the file open). Same open as the version probe:
      * read-write, the no-op error handler, no foreign-key enforcement (Android's default), so each bare DELETE takes the
-     * truncate optimisation and the rollback journal stays small (measured 38.6 MB on the rider's 600 MB copy). The
-     * journal is NOT switched off: a kill mid-clear must roll back, never take the vehicles with it. Device-only wrapper;
-     * the statements are tested on sqlite-jdbc in `RideHistoryClearTest`.
+     * truncate optimisation. The journal is NOT switched off: a kill mid-clear must roll back, never take the vehicles
+     * with it (checked on the AVD: killed mid-clear with a 359 MB journal, the next start rolled back to the intact v27
+     * file and showed NoSpace again). Device-only wrapper; the statements are tested on sqlite-jdbc in `RideHistoryClearTest`.
+     *
+     * Retraction: the first revision relied on the desktop measurement alone (38.6 MB journal). On the AVD the journal
+     * passed 359 MB, because Android builds SQLite with SECURE_DELETE: every freed page is zeroed, so it is written, so
+     * it is journaled. secure_delete is turned off for this one connection: the rows are the rider's own, deleted at
+     * their request, and the file is truncated (auto_vacuum FULL) or VACUUMed right after.
      */
     override fun clearRideHistory() {
         SQLiteDatabase.openDatabase(file.path, null, VERSION_PROBE_FLAGS, KEEP_FILES).use { db ->
+            val secureDelete = db.rawQuery("PRAGMA secure_delete = 0", null).use { if (it.moveToFirst()) it.getLong(0) else -1L }
             val tables = db.rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'", null).use { cursor ->
                 buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
             }
@@ -94,7 +100,7 @@ class AndroidDatabaseOpener(private val context: Context) : DatabaseOpener, Data
                 db.endTransaction()
             }
             val freePages = DatabaseUtils.longForQuery(db, "PRAGMA freelist_count", null)
-            Log.i("VoltyDb", "ride history cleared: tables=${tables.count { it in RIDE_HISTORY_TABLES }} freePages=$freePages file=${file.length()}")
+            Log.i("VoltyDb", "ride history cleared: secureDelete=$secureDelete tables=${tables.count { it in RIDE_HISTORY_TABLES }} freePages=$freePages file=${file.length()}")
             if (freePages > 0) {
                 try { db.execSQL("VACUUM"); Log.i("VoltyDb", "vacuumed after the clear: file=${file.length()}") }
                 catch (failure: Exception) { Log.w("VoltyDb", "VACUUM after the clear failed; the free-space rule sees the old size", failure) }
