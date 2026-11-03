@@ -208,7 +208,7 @@ object OverlayTemplates {
     private fun meowChip(id: String, metric: VideoMetric, icon: String, rules: List<OverlayRule> = emptyList()) = OverlayWidget(
         id = id,
         metric = metric,
-        kind = OverlayWidgetKind.ICON_VALUE,
+        kind = OverlayWidgetKind.ICON_CHIP,
         iconName = icon,
         style = OverlayStyle(background = MEOW_CHIP, foreground = MEOW_WHITE, fontSize = MEOW_FONT, cornerRadius = 29f, padding = 20f),
         rules = rules,

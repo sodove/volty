@@ -21,13 +21,29 @@ fun videoPreviewAspect(cropWidth: Int, cropHeight: Int, rotationDegrees: Int): F
 fun videoPreviewFallbackAspect(landscape: Boolean): Float = if (landscape) 16f / 9f else 9f / 16f
 
 /**
- * The box the preview overlay is drawn in. The preview follows the display's rotation, so a reported aspect measured
- * in the other orientation is turned rather than trusted; nothing reported yet is the requested 16:9.
+ * The orientation the picture is held in while a file exists: the window's at the moment the recording left IDLE,
+ * kept until it is IDLE again; null while idle. The preview's and the file's rotation are frozen for the whole
+ * recording (`VideoCameraController.updateRotation`), so this, not the live window, is what the preview shows.
  */
-fun videoPreviewDisplayedAspect(reported: Float?, landscape: Boolean): Float {
+fun videoFrozenLandscape(phase: VideoRecordingPhase, previous: Boolean?, windowLandscape: Boolean): Boolean? =
+    if (phase == VideoRecordingPhase.IDLE) null else previous ?: windowLandscape
+
+/**
+ * The box the preview overlay is drawn in, and with its shape the scene's layout. Idle, the preview follows the
+ * display, so a reported aspect measured in the other orientation is turned rather than trusted. While recording the
+ * picture keeps [frozenLandscape] whatever the window does, and so must the overlay, or the preview would stop showing
+ * what is burned into the file. **Retraction (review I2):** the first version took the live window's orientation in
+ * both cases, so a rotation mid-recording laid a landscape overlay over a frozen portrait picture.
+ */
+fun videoPreviewDisplayedAspect(reported: Float?, windowLandscape: Boolean, frozenLandscape: Boolean? = null): Float {
+    val landscape = frozenLandscape ?: windowLandscape
     val aspect = reported?.takeIf { it.isFinite() && it > 0f } ?: return videoPreviewFallbackAspect(landscape)
     return if ((aspect > 1f) != landscape && aspect != 1f) 1f / aspect else aspect
 }
+
+/** The preview overlay is drawn only over a real picture: never before the first frame or on a failed camera. */
+fun videoPreviewOverlayShown(ready: Boolean, cameraFailed: Boolean, reportedAspect: Float?): Boolean =
+    ready && !cameraFailed && reportedAspect != null
 
 /**
  * How often the view-tree preview overlay is rebuilt: the file's own repaint cap ([MAX_RECORDED_REPAINT_HZ]), so the

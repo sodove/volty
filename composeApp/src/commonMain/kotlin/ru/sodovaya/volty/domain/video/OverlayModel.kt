@@ -30,10 +30,14 @@ enum class OverlayWidgetKind {
     VALUE_CARD,
 
     /**
-     * A chip: icon and number on one line, no word, as telemetry-studio's `icon_value` draws. **Retraction:** it used
-     * to be a labelled card with an icon squeezed in, and the editor folded it into "card", so no chip could be made.
+     * The older labelled card with an icon beside the number. Kept exactly as it draws, because it is the model's
+     * default kind and every saved 0.7.63 preset uses it. **Retraction:** 307706b0 redrew it as a label-less chip,
+     * which silently changed every rider's saved overlay; the chip is now its own kind, [ICON_CHIP].
      */
     ICON_VALUE,
+
+    /** A chip: icon and number on one line, no word, as telemetry-studio's `icon_value` draws. */
+    ICON_CHIP,
     ARC,
 
     /** The dashboard's quarter dial on the left of an [OverlayBox]: filled from the top, downwards. */
