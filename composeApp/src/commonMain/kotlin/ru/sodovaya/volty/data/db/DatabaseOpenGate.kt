@@ -30,12 +30,19 @@ fun migrationNotice(storedVersion: Int, targetVersion: Int): MigrationNotice? =
 
 /**
  * Free bytes that must be available before the conversion starts: the larger of
- * [MIGRATION_MIN_FREE_BYTES] and a quarter of the database. The measured peak on a 600 MB
- * database was +70 MB (journal 1.3 MB); 150 MB is that with a margin, and a quarter of the file
- * keeps the margin proportional for databases much larger than the one measured.
+ * [MIGRATION_MIN_FREE_BYTES] and 1.55 times the database.
+ *
+ * Measured 2026-11-03 on the AVD (Pixel 3a API 34 x86_64, debug build c5ec52ed + the rider's 600,178,688 byte v27 copy,
+ * `ls -l` of `databases/` every ~0.4 s): journal_mode is DELETE (a rollback journal; no -wal, no -shm ever appeared),
+ * auto_vacuum FULL. Peak `volty.db` 669,966,336 (+69.8 MB), peak `volty.db-journal` 546,906,504 (the old pages the DROP of
+ * the V2 table and the commit's auto-vacuum relocation overwrite are journaled), so the PEAK GROWTH over the starting file
+ * is 616.7 MB, 1.03 times the database. It falls to 82.2 MB at the commit. 137 s from launch to the finished conversion.
+ * An earlier revision of this comment said "+70 MB, journal 1.3 MB, so 150 MB is plenty": that counted the file's growth
+ * and sampled the journal between statements on JDBC; the journal is the larger half. The 1.55 is that 1.03 plus the 50 %
+ * margin; the floor keeps small databases from being waved through with a few megabytes.
  */
 fun migrationRequiredFreeBytes(databaseBytes: Long): Long =
-    maxOf(MIGRATION_MIN_FREE_BYTES, databaseBytes.coerceAtLeast(0L) / 4)
+    maxOf(MIGRATION_MIN_FREE_BYTES, databaseBytes.coerceAtLeast(0L) / 20 * 31)
 
 /** The database ran out of room (SQLITE_FULL). The migration is atomic, so nothing was changed. */
 class DatabaseFullException(cause: Throwable? = null) : Exception("Database is full", cause)

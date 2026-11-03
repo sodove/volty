@@ -24,7 +24,7 @@ class DatabaseOpenGateTest {
     private class FakeOpener(
         var stored: Int = 27,
         val target: Int = 29,
-        var bytes: Long = 600L * 1024 * 1024,
+        var bytes: Long = 50L * 1024 * 1024,   // under the floor: these tests are about the gate; the formula has its own test
         var free: Long = 400L * 1024 * 1024,
     ) : DatabaseOpener {
         val calls = mutableListOf<String>()
@@ -52,11 +52,14 @@ class DatabaseOpenGateTest {
         assertNull(migrationNotice(-1, 29))
     }
 
-    @Test fun requiredSpaceIsTheLargerOfFloorAndQuarterOfTheDatabase() {
+    @Test fun requiredSpaceIsTheLargerOfFloorAndMeasuredPeakWithMargin() {
         assertEquals(150 * mb, migrationRequiredFreeBytes(0))
-        assertEquals(150 * mb, migrationRequiredFreeBytes(600 * mb), "the measured 600 MB database needs the floor")
-        assertEquals(150 * mb, migrationRequiredFreeBytes(599 * mb))
-        assertEquals(1024 * mb, migrationRequiredFreeBytes(4096 * mb))
+        assertEquals(150 * mb, migrationRequiredFreeBytes(50 * mb), "a small database needs the floor")
+        // Measured on the AVD: 600,178,688 bytes grew by 616.7 MB at peak (file + journal); 1.55 times it is 930 MB.
+        assertEquals(600_178_688L / 20 * 31, migrationRequiredFreeBytes(600_178_688L))
+        assertTrue(migrationRequiredFreeBytes(600_178_688L) >= (69_787_648L + 546_906_504L) * 3 / 2, "measured peak growth (file + journal) plus 50 %")
+        assertEquals(930 * mb, migrationRequiredFreeBytes(600 * mb))
+        assertEquals(4096 * mb / 20 * 31, migrationRequiredFreeBytes(4096 * mb))
         assertEquals(150 * mb, migrationRequiredFreeBytes(-5), "an unreadable size is not negative room")
     }
 
@@ -112,7 +115,7 @@ class DatabaseOpenGateTest {
         val large = FakeOpener(bytes = 4096 * mb, free = 1000 * mb)
         gateOf(large).also {
             it.start(backgroundScope); runCurrent()
-            assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(1024 * mb, 1000 * mb)), it.state.value)
+            assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(migrationRequiredFreeBytes(4096 * mb), 1000 * mb)), it.state.value)
         }
     }
 
