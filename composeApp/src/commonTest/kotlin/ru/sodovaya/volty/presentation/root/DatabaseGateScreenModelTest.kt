@@ -4,6 +4,7 @@ import ru.sodovaya.volty.data.db.DatabaseGateAction
 import ru.sodovaya.volty.data.db.DatabaseOpenFailure
 import ru.sodovaya.volty.data.db.DatabaseOpenState
 import ru.sodovaya.volty.diagnostics.DatabaseShareOutcome
+import ru.sodovaya.volty.diagnostics.SnapshotRefusal
 import kotlin.test.Test
 import kotlin.test.assertEquals
 
@@ -66,6 +67,35 @@ class DatabaseGateScreenModelTest {
         val error = databaseGateScreenModel(DatabaseOpenState.Failed(DatabaseOpenFailure.Other("X")), recoveryFailed = true)
         assertEquals(true, (error as DatabaseGateScreenModel.Error).recoveryFailed)
         assertEquals(DatabaseGateScreenModel.Hidden, databaseGateScreenModel(DatabaseOpenState.Ready, recoveryFailed = true))
+    }
+
+    @Test fun retryIsOffWhileAShareCopiesTheFiles() {
+        val noSpace = DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(930 * mb, 500 * mb, 600 * mb))
+        assertEquals(false, (databaseGateScreenModel(noSpace, shareBusy = true) as DatabaseGateScreenModel.NoSpace).retryEnabled)
+        assertEquals(true, (databaseGateScreenModel(noSpace) as DatabaseGateScreenModel.NoSpace).retryEnabled)
+        val error = DatabaseOpenState.Failed(DatabaseOpenFailure.Other("X"))
+        assertEquals(false, (databaseGateScreenModel(error, shareBusy = true) as DatabaseGateScreenModel.Error).retryEnabled)
+        assertEquals(true, (databaseGateScreenModel(error) as DatabaseGateScreenModel.Error).retryEnabled)
+    }
+
+    @Test fun aRunningActionHasItsOwnScreen() {
+        assertEquals(DatabaseGateScreenModel.Working(DatabaseGateAction.CLEAR_RIDE_HISTORY),
+            databaseGateScreenModel(DatabaseOpenState.Recovering(DatabaseGateAction.CLEAR_RIDE_HISTORY)))
+        assertEquals(DatabaseGateScreenModel.Working(DatabaseGateAction.START_WITH_EMPTY_DATABASE),
+            databaseGateScreenModel(DatabaseOpenState.Recovering(DatabaseGateAction.START_WITH_EMPTY_DATABASE)))
+    }
+
+    @Test fun theClearDialogKnowsWhenNoCopyCanBeMade() {
+        fun copy(db: Long, free: Long, outcome: DatabaseShareOutcome? = null) = (databaseGateScreenModel(
+            DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(930 * mb, free, db)), shareOutcome = outcome,
+        ) as DatabaseGateScreenModel.NoSpace).copyPossible
+        // The share's rule: the file plus 16 MB must fit.
+        assertEquals(true, copy(db = 600 * mb, free = 616 * mb))
+        assertEquals(false, copy(db = 600 * mb, free = 616 * mb - 1), "one byte short: say a copy cannot be made")
+        assertEquals(false, copy(db = 600 * mb, free = 500 * mb), "500 MB free cannot hold a copy of a 600 MB file")
+        // Incoherent on purpose: the numbers say it fits, yet a share was already refused for space. Believe the refusal.
+        assertEquals(false, copy(db = 10 * mb, free = 900 * mb, outcome = DatabaseShareOutcome.Refused(SnapshotRefusal.NO_SPACE)))
+        assertEquals(true, copy(db = 10 * mb, free = 900 * mb, outcome = DatabaseShareOutcome.Failed))
     }
 }
 

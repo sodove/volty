@@ -1721,4 +1721,8 @@
     <string name="db_gate_start_empty_confirm">Удалить и начать заново</string>
     <string name="db_gate_cancel">Отмена</string>
     <string name="db_gate_recovery_failed">Не получилось. Подробности есть в логах.</string>
+    <string name="db_gate_clear_history_body_no_copy">Будут удалены все поездки, треки и телеметрия. Это нельзя отменить. Транспорт, гараж и настройки сохранятся. Сохранить копию поездок сейчас не получится: для неё не хватает свободного места. Если поездки нужны, сначала освободите место и нажмите «Отправить базу данных».</string>
+    <string name="db_gate_clearing_title">Удаляем историю поездок…</string>
+    <string name="db_gate_clearing_body">Это может занять до минуты. Если приложение закроется, удаление отменится и ничего не пропадёт.</string>
+    <string name="db_gate_resetting_title">Создаём чистую базу…</string>
 </resources>

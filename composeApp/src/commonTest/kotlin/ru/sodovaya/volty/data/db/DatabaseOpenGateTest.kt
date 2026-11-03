@@ -119,7 +119,7 @@ class DatabaseOpenGateTest {
         val opener = FakeOpener(free = 150 * mb - 1)
         val gate = gateOf(opener)
         gate.start(backgroundScope); runCurrent()
-        assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(150 * mb, 150 * mb - 1)), gate.state.value)
+        assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(150 * mb, 150 * mb - 1, 50 * mb)), gate.state.value)
         assertFalse("open" in opener.calls, "the migration is not even attempted")
     }
 
@@ -129,7 +129,7 @@ class DatabaseOpenGateTest {
         val large = FakeOpener(bytes = 4096 * mb, free = 1000 * mb)
         gateOf(large).also {
             it.start(backgroundScope); runCurrent()
-            assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(migrationRequiredFreeBytes(4096 * mb), 1000 * mb)), it.state.value)
+            assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(migrationRequiredFreeBytes(4096 * mb), 1000 * mb, 4096 * mb)), it.state.value)
         }
     }
 
@@ -154,7 +154,7 @@ class DatabaseOpenGateTest {
         assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(400 * mb + 1, 400 * mb)), gate.state.value)
         opener.free = 40 * mb; opener.openFailure = null
         gate.retry(); runCurrent()
-        assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(150 * mb, 40 * mb)), gate.state.value,
+        assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(150 * mb, 40 * mb, 50 * mb)), gate.state.value,
             "with 40 MB the pre-check refuses before any attempt")
         opener.free = 300 * mb
         gate.retry(); runCurrent()
@@ -389,6 +389,40 @@ class DatabaseOpenGateTest {
         recovery.clearFailure = null
         gate.recover(DatabaseGateAction.CLEAR_RIDE_HISTORY); runCurrent()
         assertFalse(gate.recoveryFailed.value)
+        assertEquals(DatabaseOpenState.Ready, gate.state.value)
+    }
+
+    @Test fun nothingTouchesTheFilesWhileAShareCopiesThem() = runTest {
+        // Re-review F2: the probe writes (it rolls a journal back) and an attempt may start the conversion.
+        val opener = FakeOpener(bytes = 600 * mb, free = 500 * mb)
+        val gate = gateWith(opener, FakeRecovery(opener))
+        gate.start(backgroundScope); runCurrent()
+        val noSpace = gate.state.value
+        opener.calls.clear()
+        gate.filesBeingCopied = true
+        gate.retry(); runCurrent()
+        gate.recover(DatabaseGateAction.CLEAR_RIDE_HISTORY); runCurrent()
+        assertEquals(emptyList(), opener.calls, "no probe, no clear under the copy")
+        assertEquals(noSpace, gate.state.value)
+        gate.filesBeingCopied = false
+        opener.free = 1000 * mb
+        gate.retry(); runCurrent()
+        assertEquals(DatabaseOpenState.Ready, gate.state.value, "after the copy, Retry works again")
+    }
+
+    @Test fun aRunningActionIsPublishedSoTheScreenIsNotBlank() = runTest {
+        val opener = FakeOpener(bytes = 600 * mb, free = 500 * mb)
+        val recovery = FakeRecovery(opener)
+        lateinit var gate: DatabaseOpenGate
+        val during = mutableListOf<DatabaseOpenState>()
+        recovery.onClear = { during += gate.state.value; opener.bytes = 256L * 1024 }
+        gate = gateWith(opener, recovery)
+        gate.start(backgroundScope); runCurrent()
+        gate.recover(DatabaseGateAction.CLEAR_RIDE_HISTORY)
+        assertEquals(DatabaseOpenState.Recovering(DatabaseGateAction.CLEAR_RIDE_HISTORY), gate.state.value, "published at once")
+        assertEquals(emptySet(), databaseGateActions(gate.state.value), "nothing else is offered meanwhile")
+        runCurrent()
+        assertEquals(listOf<DatabaseOpenState>(DatabaseOpenState.Recovering(DatabaseGateAction.CLEAR_RIDE_HISTORY)), during)
         assertEquals(DatabaseOpenState.Ready, gate.state.value)
     }
 }

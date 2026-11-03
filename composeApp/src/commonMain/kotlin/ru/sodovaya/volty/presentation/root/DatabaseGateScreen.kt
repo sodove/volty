@@ -1,6 +1,10 @@
 package ru.sodovaya.volty.presentation.root
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -33,6 +37,10 @@ import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.db_gate_cancel
 import volty.composeapp.generated.resources.db_gate_clear_history
 import volty.composeapp.generated.resources.db_gate_clear_history_body
+import volty.composeapp.generated.resources.db_gate_clear_history_body_no_copy
+import volty.composeapp.generated.resources.db_gate_clearing_body
+import volty.composeapp.generated.resources.db_gate_clearing_title
+import volty.composeapp.generated.resources.db_gate_resetting_title
 import volty.composeapp.generated.resources.db_gate_clear_history_confirm
 import volty.composeapp.generated.resources.db_gate_clear_history_title
 import volty.composeapp.generated.resources.db_gate_error_body
@@ -74,6 +82,13 @@ fun DatabaseGateScreen(
         Surface(modifier = Modifier.fillMaxSize()) {
             when (model) {
                 DatabaseGateScreenModel.Hidden, DatabaseGateScreenModel.Blank -> Unit
+                is DatabaseGateScreenModel.Working -> GateColumn {
+                    val clear = model.action == DatabaseGateAction.CLEAR_RIDE_HISTORY
+                    Text(stringResource(if (clear) Res.string.db_gate_clearing_title else Res.string.db_gate_resetting_title),
+                        style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    if (clear) Text(stringResource(Res.string.db_gate_clearing_body), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+                }
                 DatabaseGateScreenModel.Updating -> GateColumn {
                     Text(stringResource(Res.string.db_gate_updating_title), style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -82,15 +97,15 @@ fun DatabaseGateScreen(
                 is DatabaseGateScreenModel.NoSpace -> GateColumn {
                     Text(stringResource(Res.string.db_gate_no_space_title), style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
                     Text(stringResource(Res.string.db_gate_no_space_body, model.freeUpMegabytes), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
-                    Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) { Text(stringResource(Res.string.db_gate_retry)) }
+                    Button(onClick = onRetry, enabled = model.retryEnabled, modifier = Modifier.fillMaxWidth()) { Text(stringResource(Res.string.db_gate_retry)) }
                     ShareButtons(model.shareBusy, onSendLogs, onShareDatabase)
                     shareStatus(model.shareBusy, model.shareOutcome)?.let { Text(it, style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center) }
-                    GateActions(model.actions, model.recoveryFailed, onGateAction)
+                    GateActions(model.actions, model.recoveryFailed, onGateAction, copyPossible = model.copyPossible)
                 }
                 is DatabaseGateScreenModel.Error -> GateColumn {
                     Text(stringResource(Res.string.db_gate_error_title), style = MaterialTheme.typography.headlineSmall, textAlign = TextAlign.Center)
                     Text(stringResource(Res.string.db_gate_error_body), style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
-                    Button(onClick = onRetry, modifier = Modifier.fillMaxWidth()) { Text(stringResource(Res.string.db_gate_retry)) }
+                    Button(onClick = onRetry, enabled = model.retryEnabled, modifier = Modifier.fillMaxWidth()) { Text(stringResource(Res.string.db_gate_retry)) }
                     ShareButtons(model.shareBusy, onSendLogs, onShareDatabase)
                     shareStatus(model.shareBusy, model.shareOutcome)?.let { Text(it, style = MaterialTheme.typography.labelMedium, textAlign = TextAlign.Center) }
                     GateActions(model.actions, model.recoveryFailed, onGateAction)
@@ -129,7 +144,12 @@ private fun ShareButtons(shareBusy: Boolean, onSendLogs: () -> Unit, onShareData
  * lost and recommends sharing the database first. Which action is offered is [DatabaseGateScreenModel]'s decision.
  */
 @Composable
-private fun GateActions(actions: Set<DatabaseGateAction>, recoveryFailed: Boolean, onGateAction: (DatabaseGateAction) -> Unit) {
+private fun GateActions(
+    actions: Set<DatabaseGateAction>,
+    recoveryFailed: Boolean,
+    onGateAction: (DatabaseGateAction) -> Unit,
+    copyPossible: Boolean = true,
+) {
     var confirming by remember { mutableStateOf<DatabaseGateAction?>(null) }
     val danger = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)
     for (action in DatabaseGateAction.entries.filter { it in actions }) {
@@ -149,7 +169,12 @@ private fun GateActions(actions: Set<DatabaseGateAction>, recoveryFailed: Boolea
         AlertDialog(
             onDismissRequest = { confirming = null },
             title = { Text(stringResource(if (clear) Res.string.db_gate_clear_history_title else Res.string.db_gate_start_empty_title)) },
-            text = { Text(stringResource(if (clear) Res.string.db_gate_clear_history_body else Res.string.db_gate_start_empty_body)) },
+            // Scrolls: at font scale 2.0 on the AVD the body was cut off mid-sentence otherwise.
+            text = { Column(modifier = Modifier.verticalScroll(rememberScrollState())) { Text(stringResource(when {
+                !clear -> Res.string.db_gate_start_empty_body
+                copyPossible -> Res.string.db_gate_clear_history_body
+                else -> Res.string.db_gate_clear_history_body_no_copy
+            })) } },
             confirmButton = {
                 TextButton(onClick = { confirming = null; onGateAction(action) }, colors = danger) {
                     Text(stringResource(if (clear) Res.string.db_gate_clear_history_confirm else Res.string.db_gate_start_empty_confirm))
@@ -162,9 +187,15 @@ private fun GateActions(actions: Set<DatabaseGateAction>, recoveryFailed: Boolea
 
 @Composable
 private fun GateColumn(content: @Composable () -> Unit) {
-    Column(
-        modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(horizontal = 24.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) { content() }
+    // Scrolls, and stays centred when everything fits: the column is at least the viewport tall. Without the scroll a
+    // Column squeezes its LAST children to zero height when they do not fit (a small phone, a large font), and on
+    // NoSpace those are the share and clear controls (re-review F1).
+    BoxWithConstraints(modifier = Modifier.fillMaxSize().safeDrawingPadding()) {
+        Column(
+            modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).heightIn(min = maxHeight)
+                .padding(horizontal = 24.dp, vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) { content() }
+    }
 }

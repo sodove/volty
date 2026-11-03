@@ -52,8 +52,12 @@ fun migrationRequiredFreeBytes(databaseBytes: Long): Long =
 class DatabaseFullException(cause: Throwable? = null) : Exception("Database is full", cause)
 
 sealed interface DatabaseOpenFailure {
-    /** Not enough free storage. The rider can free [requiredBytes] - [freeBytes] and retry. */
-    data class NotEnoughSpace(val requiredBytes: Long, val freeBytes: Long) : DatabaseOpenFailure
+    /**
+     * Not enough free storage. The rider can free [requiredBytes] - [freeBytes] and retry. [databaseBytes] is the file the
+     * pre-check measured (0 when the shortage surfaced as SQLITE_FULL instead): the screen uses it to tell whether a
+     * copy of the database could be shared at all.
+     */
+    data class NotEnoughSpace(val requiredBytes: Long, val freeBytes: Long, val databaseBytes: Long = 0L) : DatabaseOpenFailure
     /** Anything else. [type] is the exception class only: messages can carry paths. */
     data class Other(val type: String) : DatabaseOpenFailure
 }
@@ -63,6 +67,8 @@ sealed interface DatabaseOpenState {
     data class Migrating(val fromVersion: Int, val toVersion: Int) : DatabaseOpenState
     data object Ready : DatabaseOpenState
     data class Failed(val failure: DatabaseOpenFailure) : DatabaseOpenState
+    /** A confirmed [DatabaseGateAction] is running (the clear takes ~30 s on the AVD); the open follows it. */
+    data class Recovering(val action: DatabaseGateAction) : DatabaseOpenState
 }
 
 /**
@@ -115,9 +121,9 @@ class DatabaseOpenGate(
     fun recover(action: DatabaseGateAction) {
         val scope = scope ?: return
         val recovery = recovery ?: return
-        if (running?.isActive == true || action !in databaseGateActions(mutableState.value)) return
+        if (filesBeingCopied || running?.isActive == true || action !in databaseGateActions(mutableState.value)) return
         mutableRecoveryFailed.value = false
-        mutableState.value = DatabaseOpenState.Opening
+        mutableState.value = DatabaseOpenState.Recovering(action)
         running = scope.launch(dispatcher) {
             try {
                 log("gate action $action", null)
@@ -132,12 +138,20 @@ class DatabaseOpenGate(
                 log("gate action $action failed", failure)
                 mutableRecoveryFailed.value = true
             }
+            mutableState.value = DatabaseOpenState.Opening
             attempt()
         }
     }
 
     @kotlin.concurrent.Volatile private var scope: CoroutineScope? = null
     @kotlin.concurrent.Volatile private var running: Job? = null
+
+    /**
+     * True while the error screen's share copies the files (set by the caller around `shareUnopened`). [retry] and
+     * [recover] do nothing meanwhile: since C1 the probe WRITES (it rolls a hot journal back) and an attempt may start
+     * the conversion, either of which would tear the very copy the rider was told to take first (re-review F2).
+     */
+    @kotlin.concurrent.Volatile var filesBeingCopied: Boolean = false
 
     /** Begins opening; a no-op while an attempt is running or after it has succeeded. */
     fun start(scope: CoroutineScope) {
@@ -148,7 +162,7 @@ class DatabaseOpenGate(
     /** Runs the attempt again after a [DatabaseOpenState.Failed]; nothing else can be retried. */
     fun retry() {
         val scope = scope ?: return
-        if (mutableState.value !is DatabaseOpenState.Failed) return
+        if (filesBeingCopied || mutableState.value !is DatabaseOpenState.Failed) return
         mutableRecoveryFailed.value = false
         launchAttempt(scope)
     }
@@ -179,7 +193,7 @@ class DatabaseOpenGate(
                 val free = opener.freeBytes()
                 log("conversion pre-check: dbBytes=$bytes required=$required free=$free", null)
                 if (free < required) {
-                    mutableState.value = DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(required, free))
+                    mutableState.value = DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(required, free, bytes))
                     return
                 }
                 mutableState.value = DatabaseOpenState.Migrating(stored, target)

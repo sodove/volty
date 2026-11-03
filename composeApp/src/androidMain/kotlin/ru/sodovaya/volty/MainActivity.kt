@@ -139,21 +139,29 @@ class MainActivity : ComponentActivity() {
     private fun keepScreenOnWhileMigrating() {
         lifecycleScope.launch {
             databaseGate.state.collect { state ->
-                if (state is DatabaseOpenState.Migrating) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-                else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                if (state is DatabaseOpenState.Migrating || state is DatabaseOpenState.Recovering) {
+                    window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                } else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
         }
     }
 
     private fun shareUnopenedDatabase() {
-        if (databaseShareBusy) return
+        // Only from a failed open: then no attempt runs, and filesBeingCopied keeps Retry and the gate actions out until
+        // the copy is done (re-review F2).
+        if (databaseShareBusy || databaseGate.state.value !is DatabaseOpenState.Failed) return
         databaseShareBusy = true
         databaseShareOutcome = null
+        databaseGate.filesBeingCopied = true
         lifecycleScope.launch {
-            val outcome = runCatching { getKoin().get<DatabaseSnapshotExporter>().shareUnopened() }
-                .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else DatabaseShareOutcome.Failed }
-            databaseShareBusy = false
-            databaseShareOutcome = outcome
+            try {
+                val outcome = runCatching { getKoin().get<DatabaseSnapshotExporter>().shareUnopened() }
+                    .getOrElse { if (it is kotlinx.coroutines.CancellationException) throw it else DatabaseShareOutcome.Failed }
+                databaseShareOutcome = outcome
+            } finally {
+                databaseGate.filesBeingCopied = false
+                databaseShareBusy = false
+            }
         }
     }
 
