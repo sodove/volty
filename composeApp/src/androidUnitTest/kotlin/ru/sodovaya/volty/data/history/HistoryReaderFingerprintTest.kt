@@ -205,6 +205,22 @@ class HistoryReaderFingerprintTest {
         assertEquals(0, cutOverview(windowOverview(10, "K", false), windowOverview(12, "K", false)))
         assertEquals(1, cutOverview(windowOverview(10, "K", false), windowOverview(13, "K", false)))
         assertEquals(1, cutOverview(windowOverview(10, "K", false), windowOverview(10, "K2", false)))
+        // Ruling 8: `# cutMembers` widens the bound to the cut runs' members inside the window, never beyond, and only
+        // while `known` and the window's samples line hold.
+        val members = "# cutMembers r|k|w1 6"
+        fun membersOverview(x: String, y: String, extra: String = members, samplesB: String = samples) =
+            diff(lines(samples, x), lines(marked, extra, samplesB, y), cut).size
+        assertEquals(0, membersOverview(windowOverview(198, "K", false), windowOverview(203, "K", false)))
+        assertEquals(0, membersOverview(windowOverview(198, "K", false), windowOverview(204, "K", false)))
+        assertEquals(1, membersOverview(windowOverview(198, "K", false), windowOverview(205, "K", false)), "beyond the bound")
+        assertEquals(1, membersOverview(windowOverview(198, "K", false), windowOverview(203, "K2", false)), "a known point moved")
+        assertEquals(2, membersOverview(windowOverview(198, "K", false), windowOverview(203, "K", false),
+            samplesB = "r|k|w1.samples|n=4 sha=K2 chains=2"), "the window's samples line moved")
+        assertEquals(1, membersOverview(windowOverview(198, "K", false), windowOverview(203, "K", false), extra = "# cutMembers r|k|w2 6"),
+            "another window's bound does not apply")
+        assertEquals(1, membersOverview(windowOverview(198, "K", false), windowOverview(201, "K", false), extra = "# cutMembers r|k|w1 1"),
+            "a smaller bound than 2 keeps 2, not more")
+        assertEquals(0, membersOverview(windowOverview(198, "K", false), windowOverview(200, "K", false), extra = "# cutMembers r|k|w1 1"))
         // Thinned: the same bounds (review I1).
         assertEquals(0, cutOverview(windowOverview(600, "K", true), windowOverview(599, "K", true)))
         assertEquals(1, cutOverview(windowOverview(600, "K", true), windowOverview(590, "K", true)))

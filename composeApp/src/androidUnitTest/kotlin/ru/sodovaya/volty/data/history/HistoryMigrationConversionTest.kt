@@ -482,9 +482,22 @@ class HistoryMigrationConversionTest {
             val rows = long(driver, "SELECT COUNT(*) FROM HistorySampleV2")
             println("[migration] before: ${pages()} v2Rows=$rows rides=${long(driver, "SELECT COUNT(*) FROM HistoryRideV2")}")
             val orphans = long(driver, "SELECT COUNT(*) FROM HistorySampleV2 WHERE rideId NOT IN (SELECT id FROM HistoryRideV2)")
+            val originalPages = long(driver, "PRAGMA page_count")
             val started = System.nanoTime()
-            VoltyDatabaseProvider(driver).database.transaction { VoltyDatabase.Schema.migrate(driver, version, 29) }
+            // The statements Schema.migrate runs, one by one in ONE transaction, so the peak file and rollback-journal sizes
+            // can be read between them: the free space a phone needs. The commit's own auto-vacuum moves are not seen here.
+            val journal = File(copy.path + "-journal")
+            var peakPages = 0L; var peakJournal = 0L
+            VoltyDatabaseProvider(driver).database.transaction {
+                VoltyDatabase.Schema.migrate(driver, version, 28)
+                for (statement in HistoryV2Fixture.conversionStatements()) {
+                    driver.execute(null, statement, 0)
+                    peakPages = maxOf(peakPages, long(driver, "PRAGMA page_count"))
+                    peakJournal = maxOf(peakJournal, journal.length())
+                }
+            }
             val millis = (System.nanoTime() - started) / 1_000_000
+            println("[migration] peak: pages=$peakPages growth=${(peakPages - originalPages) * 4096} B journal=$peakJournal B")
             driver.execute(null, "PRAGMA user_version = 29", 0)
             val runs = long(driver, "SELECT COUNT(*) FROM HistorySampleV3 WHERE runCount IS NOT NULL")
             val total = long(driver, "SELECT COUNT(*) FROM HistorySampleV3")

@@ -71,8 +71,9 @@ import java.util.concurrent.Executors
  * member may even cross the window edge. It applies ONLY to a window the candidate marks as cutting a chain of that
  * series (a `# cut ride|key|w<k>` comment: a window bound strictly inside a whole-ride chain), ONLY to its
  * `w<k>.unknownEdges`, `w<k>.overview` and `w<k>.stats` lines, and only when that window's `w<k>.samples` line (known rows
- * and chain count) is identical. The overview must keep `markers`, `truncated` and `known` equal and `n` within 2 (one
- * member per edge), thinned or not; the stats may differ only in `complete`/`pendingWalk`/`hasGap` (the verdicts that
+ * and chain count) is identical. The overview must keep `markers`, `truncated` and `known` equal and `n` within the
+ * window's `# cutMembers ride|key|w<k> <m>` bound (at least 2), thinned or not; the stats may differ only in
+ * `complete`/`pendingWalk`/`hasGap` (the verdicts that
  * the in-window unknown count and last tick feed), never in min, max, energy or average. Whole-ride lines never get it.
  *
  * ## A back-dated marker that split an uneven run (Ruling 5)
@@ -360,9 +361,11 @@ object HistoryReaderFingerprint {
                         val keyText = "${key.sourceId}/${key.metricId}/${key.cellIndex ?: ""}"
                         var lastRowElapsed: Long? = null
                         var unknownSpans = emptyList<LongRange>()
+                        var unknownTicks = LongArray(0)
                         guarded(emit, id, keyText, "samplesFull") {
                             val rows = pageAll(store, id, key, range, HISTORY_DETAIL_PAGE_SIZE)
                             lastRowElapsed = rows.lastOrNull()?.tick?.elapsedMillis
+                            unknownTicks = rows.filter { it.value == null }.map { it.tick.elapsedMillis }.toLongArray()
                             val segments = collapseUnknownChains(rows, markers)
                             unknownSpans = segments.mapNotNull {
                                 when (it) {
@@ -432,8 +435,13 @@ object HistoryReaderFingerprint {
                             // A window bound strictly inside a whole-ride chain: the only place RANGE_CUT_EDGE applies.
                             val from = ride.started.elapsedMillis + (window.startEpochMillis - ride.started.epochMillis)
                             val to = ride.started.elapsedMillis + (window.endEpochMillis - ride.started.epochMillis)
-                            if (unknownSpans.any { (it.first < from && from <= it.last) || (it.first <= to && to < it.last) })
+                            val cutting = unknownSpans.filter { (it.first < from && from <= it.last) || (it.first <= to && to < it.last) }
+                            if (cutting.isNotEmpty()) {
                                 writer.append("# cut $id|$keyText|w$index\n")
+                                // Ruling 8: the members of the cut runs inside the window bound how far `n` may move.
+                                val members = unknownTicks.count { tick -> tick in from..to && cutting.any { tick in it } }
+                                writer.append("# cutMembers $id|$keyText|w$index $members\n")
+                            }
                             guarded(emit, id, keyText, "w$index.samples") {
                                 val rows = pageAll(store, id, key, window, HISTORY_DETAIL_PAGE_SIZE)
                                 val segments = collapseUnknownChains(rows, markers)
@@ -586,6 +594,11 @@ object HistoryReaderFingerprint {
     fun compare(baseline: File, candidate: File, tolerate: Set<Tolerance> = emptySet()): List<Difference> {
         val a = parse(baseline); val b = parse(candidate)
         val cuts = scopes(baseline, "cut") + scopes(candidate, "cut")
+        val cutMembers = HashMap<String, Long>()
+        (scopes(baseline, "cutMembers") + scopes(candidate, "cutMembers")).forEach { scope ->
+            val count = scope.substringAfterLast(' ').toLongOrNull() ?: return@forEach
+            cutMembers.merge(scope.substringBeforeLast(' '), count, ::maxOf)
+        }
         val backdated = scopes(baseline, "backdatedSplit") + scopes(candidate, "backdatedSplit")
         val differences = ArrayList<Difference>()
         for (location in (a.keys + b.keys).toSortedSet()) {
@@ -593,7 +606,7 @@ object HistoryReaderFingerprint {
             if (x == y) continue
             val reader = location.substringAfterLast('|')
             if (Tolerance.CHAIN_MEMBERS in tolerate && reader == "chainMembers") continue
-            if (Tolerance.RANGE_CUT_EDGE in tolerate && x != null && y != null && rangeCutEdgeTolerated(location, x, y, a, b, cuts)) continue
+            if (Tolerance.RANGE_CUT_EDGE in tolerate && x != null && y != null && rangeCutEdgeTolerated(location, x, y, a, b, cuts, cutMembers)) continue
             if (Tolerance.BACKDATED_SPLIT in tolerate && x != null && y != null && backdatedSplitTolerated(location, x, y, a, b, backdated)) continue
             if (Tolerance.OVERVIEW_ROW_SELECTION in tolerate && (reader == "overview" || Regex("w\\d+\\.overview").matches(reader)) &&
                 x != null && y != null && overviewDifferenceTolerated(fields(x), fields(y))) continue
@@ -602,8 +615,15 @@ object HistoryReaderFingerprint {
         return differences
     }
 
+    /**
+     * Ruling 8 (retraction of the fixed slack of 2): a window that cuts an UNEVEN run counts the run's interpolated members,
+     * not its real ones, so how many fall inside the window can differ by more than one per edge (measured on the rider's
+     * database: a 575-member run with 9..1425 ms steps put 2..6 more or fewer members in a window). The overview's `n` may
+     * therefore move by at most the members of the cut runs inside the window (`# cutMembers`, the larger of both sides),
+     * and never by less than the old 2.
+     */
     private fun rangeCutEdgeTolerated(location: String, x: String, y: String, a: Map<String, String>, b: Map<String, String>,
-        cuts: Set<String>): Boolean {
+        cuts: Set<String>, cutMembers: Map<String, Long> = emptyMap()): Boolean {
         val reader = location.substringAfterLast('|')
         val window = Regex("""(w\d+)\.(unknownEdges|overview|stats)""").matchEntire(reader) ?: return false
         val prefix = location.substringBeforeLast('|')
@@ -612,7 +632,8 @@ object HistoryReaderFingerprint {
         if (a[samples] == null || a[samples] != b[samples]) return false
         return when (window.groupValues[2]) {
             "unknownEdges" -> true
-            "overview" -> overviewWithin(fields(x), fields(y), slack = 2, breaksEqual = false)
+            "overview" -> overviewWithin(fields(x), fields(y),
+                slack = maxOf(2L, cutMembers["$prefix|${window.groupValues[1]}"] ?: 0L), breaksEqual = false)
             else -> {
                 val p = fields(x); val q = fields(y)
                 val verdicts = setOf("complete", "pendingWalk", "hasGap")
