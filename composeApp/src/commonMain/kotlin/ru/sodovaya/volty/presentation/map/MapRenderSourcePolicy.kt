@@ -36,7 +36,8 @@ internal object LegacyBuildingLayerPolicy {
                 heightProperty = "render_height",
                 baseProperty = "render_min_height",
                 color = if (darkTheme) "#31424B" else "#D5DCE0",
-                opacity = 0.82f,
+                // Dark 3D buildings read washed and see-through at 0.82: +0.09 (owner feedback 2026-11-04).
+                opacity = if (darkTheme) 0.91f else 0.82f,
                 minZoom = 13f,
             ),
         )
