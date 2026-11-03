@@ -91,12 +91,23 @@ class MapThemeBundledStyleTest {
             assertTrue(t.getValue("highway_path") < t.getValue("highway_major_casing"))
             // Footpaths are subordinate to even the minor roads and stay close to upstream's dim L10.
             assertTrue(t.getValue("highway_path") < t.getValue("highway_minor"))
-            assertTrue(t.getValue("highway_path") < 14.0)
-            // Roads are visibly above the ground, for the night legibility lift.
-            assertTrue(t.getValue("highway_minor") - t.getValue("background") > 8.0)
-            // Upstream order of ground tones is rebuilt: building lighter than land, outline lighter than building.
-            assertTrue(t.getValue("building") > t.getValue("landuse_residential"))
-            assertTrue(t.getValue("building") < 12.0)
+            assertTrue(t.getValue("highway_path") < 17.0)
+            // Roads are visibly above the ground...
+            assertTrue(t.getValue("highway_minor") - t.getValue("background") > 10.0)
+            assertTrue(t.getValue("highway_path") - t.getValue("background") > 7.0)
+            // ...but subdued: no road line, casing included, is as light as the buildings.
+            // Retraction: 00c12bff put the major casing at tone 36, brighter than every building,
+            // and it dominated the map (owner feedback 2026-11-04, 0.7.64 screenshots); 0.7.63's
+            // roads were also lighter than its buildings, which the owner does not want back.
+            val building3d = Hct.fromInt(palette.building3d).tone
+            for (id in listOf("highway_minor", "highway_major_subtle", "highway_major_casing", "highway_motorway_casing", "highway_motorway_subtle", "highway_path")) {
+                assertTrue(t.getValue(id) < t.getValue("building"), "$id at ${t.getValue(id)} not darker than building fill ${t.getValue("building")}")
+                assertTrue(t.getValue(id) < building3d, "$id at ${t.getValue(id)} not darker than 3D buildings at $building3d")
+            }
+            // Buildings stand well clear of a near-black ground.
+            assertTrue(t.getValue("building") - t.getValue("landuse_residential") > 20.0)
+            assertTrue(t.getValue("landuse_residential") > t.getValue("background"))
+            assertTrue(t.getValue("background") in 3.0..5.5, "background ${t.getValue("background")}")
         }
     }
 
