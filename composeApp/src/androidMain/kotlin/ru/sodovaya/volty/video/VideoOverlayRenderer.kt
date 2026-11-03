@@ -30,6 +30,7 @@ internal class VideoOverlayRenderer(context: Context) {
         system: UnitSystem,
         trip: OverlayTrip,
         scales: Map<VideoMetric, Float>,
+        dials: Map<VideoMetric, Double>,
     ) {
         clear(canvas)
         val crop = frame.cropRect
@@ -47,7 +48,7 @@ internal class VideoOverlayRenderer(context: Context) {
         }
         // Invert the output's mirror so text remains readable on the front camera too.
         if (frame.isMirroring) { canvas.translate(width.toFloat(), 0f); canvas.scale(-1f, 1f) }
-        drawer.draw(canvas, buildOverlayScene(OverlaySceneInput(preset, snapshot, strings, system, width, height, trip, scales), drawer))
+        drawer.draw(canvas, buildOverlayScene(OverlaySceneInput(preset, snapshot, strings, system, width, height, trip, scales, dials), drawer))
         canvas.restore()
     }
 

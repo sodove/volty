@@ -48,8 +48,11 @@ data class OverlayDrawKey(
     val noLink: Boolean = false,
 )
 
-/** Arc sweep resolution: half a degree of a 270 degree dial is finer than the eye or the encoder can tell. */
-private const val ARC_STEPS = 540
+/**
+ * Sweep resolution: 1.5 degrees of a 270 degree dial. It was 540 steps; a smoothed dial would then repaint on nearly
+ * every frame of any change, and each repaint is a full software raster on the camera's GL thread.
+ */
+private const val ARC_STEPS = 180
 
 fun overlayDrawKey(
     preset: OverlayPreset,
@@ -60,12 +63,13 @@ fun overlayDrawKey(
     clockText: String? = null,
     trip: OverlayTrip = OverlayTrip(),
     scales: Map<VideoMetric, Float> = emptyMap(),
+    dials: Map<VideoMetric, Double> = emptyMap(),
 ): OverlayDrawKey {
     val facets = preset.widgets.map { widget ->
         val reading = overlayReading(widget.metric, snapshot, trip)
         val style = overlayStyle(widget, reading)
         val swept = widget.kind in SWEPT_KINDS
-        val arcStep = if (swept) overlayFraction(widget, reading, system, scales)?.let { (it * ARC_STEPS).roundToInt() } else null
+        val arcStep = if (swept) overlayFraction(widget, reading, system, scales, dials)?.let { (it * ARC_STEPS).roundToInt() } else null
         OverlayWidgetFacet(
             text = videoValueText(widget.metric, reading, system),
             foreground = style.foreground,

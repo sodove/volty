@@ -87,6 +87,9 @@ internal class VideoCameraController(private val context: Context, private val o
     private val renderer = VideoOverlayRenderer(context)
     private val scales = OverlayScaleTracker()
     private val tripTracker = VideoTripTracker()
+    private val dialSmoother = ru.sodovaya.volty.presentation.video.VideoDialSmoother()
+    /** True while the editor takes a still, so the frame it gets has no old overlay burned into it. */
+    @Volatile var overlayHidden = false
     @Volatile private var recordedSeconds = 0L
     @Volatile private var overlayRecording = false
     private val shutterGuard = VideoShutterGuard()
@@ -247,6 +250,11 @@ internal class VideoCameraController(private val context: Context, private val o
                         mutableState.update { it.copy(clockMismatch = true) }
                     }
                     val snapshot = synchronized(timeline) { timeline.sample(time) }
+                    if (overlayHidden) {
+                        renderer.clear(frame.overlayCanvas)
+                        gate.invalidate()
+                        return@attempt
+                    }
                     val preset = preset
                     val trip = if (overlayUsesTrip(preset)) {
                         tripTracker.trip(
@@ -258,13 +266,14 @@ internal class VideoCameraController(private val context: Context, private val o
                         OverlayTrip()
                     }
                     val ranges = scales.update(preset, snapshot, unitSystem)
-                    val key = overlayDrawKey(preset, snapshot, strings, unitSystem, geometryOf(frame), trip = trip, scales = ranges)
+                    val dials = dialSmoother.advance(snapshot, time)
+                    val key = overlayDrawKey(preset, snapshot, strings, unitSystem, geometryOf(frame), trip = trip, scales = ranges, dials = dials)
                     // Touching the canvas costs a software raster plus a full-size upload; skipping it leaves the
                     // previous overlay in place, which is correct whenever the key has not changed.
                     if (!gate.shouldDraw(key)) return@attempt
                     val canvas = frame.overlayCanvas
                     try {
-                        renderer.draw(frame, canvas, preset, snapshot, strings, unitSystem, trip, ranges)
+                        renderer.draw(frame, canvas, preset, snapshot, strings, unitSystem, trip, ranges, dials)
                     } catch (error: Exception) {
                         runCatching { renderer.clear(canvas) }
                         throw error

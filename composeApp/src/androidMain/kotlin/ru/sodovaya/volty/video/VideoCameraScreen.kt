@@ -33,7 +33,11 @@ import android.os.Vibrator
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import java.util.UUID
 import ru.sodovaya.volty.domain.model.Vehicle
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.video.*
@@ -117,10 +121,25 @@ internal fun VideoCameraScreen(
     }
     var confirmStop by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(VideoSheetKind.NONE) }
+    var still by remember { mutableStateOf<ImageBitmap?>(null) }
+    var pendingPreset by remember { mutableStateOf<OverlayPreset?>(null) }
+    val scope = rememberCoroutineScope()
+    // The editor's stage uses a real frame when one can be had. The overlay comes off first, or the old one would be
+    // baked into the picture under the one being arranged; the camera itself goes away with the PreviewView.
+    fun openEditor() {
+        sheet = VideoSheetKind.NONE
+        camera.overlayHidden = true
+        scope.launch {
+            delay(STILL_SETTLE_MILLIS)
+            still = previewView?.bitmap?.asImageBitmap()
+            editing = true
+        }
+    }
     val vehicleName = vehicle.collectAsState().value?.name.orEmpty()
     SideEffect { camera.audioWanted = audio; onEditing(editing) }
     // One policy for the system Back and the on-screen one: a live recording is never ended by a single tap.
     fun requestBack() {
+        if (pendingPreset != null) { pendingPreset = null; return }
         if (sheet != VideoSheetKind.NONE) { sheet = VideoSheetKind.NONE; return }
         when (videoBackAction(editing, state.phase, confirmStop && state.phase != VideoRecordingPhase.IDLE)) {
             VideoBackAction.DISMISS_CONFIRM -> confirmStop = false
@@ -133,7 +152,10 @@ internal fun VideoCameraScreen(
     BackHandler { requestBack() }
     VideoHaptics(context, state)
     if (editing && idle) {
-        VideoOverlayEditor(document, component::change, onClose = { editing = false })
+        VideoOverlayEditor(document, overlayStrings, camera.unitSystem, still, component::change, onClose = {
+            editing = false
+            camera.overlayHidden = false
+        })
         return
     }
     // A recording takes every sheet down with it: only the stop is reachable while it runs.
@@ -236,12 +258,32 @@ internal fun VideoCameraScreen(
             )
             VideoSheetKind.OVERLAY -> VideoOverlaySheet(
                 document,
-                onPreset = { component.change(document.copy(selected = it)) },
+                onPreset = { preset ->
+                    if (overlayPresetSwitchLosesEdits(document) && preset != document.selected) pendingPreset = preset
+                    else component.change(document.copy(selected = preset))
+                },
                 onTripScope = { component.change(document.copy(tripScope = it)) },
-                onCustomize = { sheet = VideoSheetKind.NONE; editing = true },
+                onCustomize = ::openEditor,
                 onDismiss = { sheet = VideoSheetKind.NONE },
             )
             VideoSheetKind.NONE -> Unit
+        }
+        pendingPreset?.let { preset ->
+            val copyName = stringResource(Res.string.video_editor_copy_name, overlayPresetName(document.selected, document.saved))
+            val canKeep = document.saved.size < OVERLAY_MAX_SAVED
+            VideoDecisionSheet(
+                title = stringResource(Res.string.video_editor_lose_title),
+                text = stringResource(Res.string.video_editor_lose_text),
+                primary = stringResource(Res.string.video_editor_lose_save).takeIf { canKeep },
+                onPrimary = {
+                    overlayKeepAsCopy(document, UUID.randomUUID().toString(), copyName)?.let { component.change(it.copy(selected = preset)) }
+                    pendingPreset = null
+                },
+                destructive = stringResource(Res.string.video_editor_lose_discard),
+                onDestructive = { component.change(document.copy(selected = preset)); pendingPreset = null },
+                neutral = stringResource(Res.string.video_editor_lose_keep),
+                onNeutral = { pendingPreset = null },
+            )
         }
         if (confirmStop && state.phase != VideoRecordingPhase.IDLE) {
             VideoBackConfirm(
@@ -257,6 +299,7 @@ private enum class VideoSheetKind { NONE, QUALITY, OVERLAY }
 private const val STATUS_REFRESH_MILLIS = 500L
 private const val STORAGE_REFRESH_MILLIS = 5_000L
 private const val SAVED_NOTICE_MILLIS = 6_000L
+private const val STILL_SETTLE_MILLIS = 300L
 
 /** Pulses follow the recorder's own state, so the rider feels what happened, not what was pressed. */
 @Composable

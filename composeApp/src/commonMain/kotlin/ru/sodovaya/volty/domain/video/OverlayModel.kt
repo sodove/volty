@@ -107,6 +107,10 @@ data class OverlayBar(
     val secondary: VideoMetric? = null,
 )
 
+/** The editor's S to XL, relative to the size a preset was drawn at. */
+@Serializable
+enum class OverlayWidgetSize(val scale: Float) { S(0.75f), M(1f), L(1.25f), XL(1.5f) }
+
 /** One of nine points of a frame. Keeping an anchor rather than a position is what survives a change of aspect. */
 @Serializable
 enum class OverlayAnchor(val horizontal: Int, val vertical: Int) {
@@ -172,6 +176,7 @@ data class OverlayWidget(
     /** Null keeps the older auto-flowing row (cards) or percent position (arcs): how saved presets are drawn. */
     val placement: OverlayPlacement? = null,
     val bar: OverlayBar = OverlayBar(),
+    val size: OverlayWidgetSize = OverlayWidgetSize.M,
 )
 
 @Serializable

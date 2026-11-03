@@ -310,6 +310,34 @@ internal fun VideoSheet(onDismiss: () -> Unit, content: @Composable ColumnScope.
     }
 }
 
+/** A question with up to three big answers. */
+@Composable
+internal fun VideoDecisionSheet(
+    title: String,
+    text: String,
+    primary: String?,
+    onPrimary: () -> Unit,
+    destructive: String,
+    onDestructive: () -> Unit,
+    neutral: String,
+    onNeutral: () -> Unit,
+) {
+    VideoSheet(onNeutral) {
+        Text(title, color = HudText, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+        Text(text, color = HudMuted, fontSize = 14.sp)
+        primary?.let { SheetButton(it, Accent, Color(0xFF04202A), onPrimary) }
+        SheetButton(neutral, ButtonFill, HudText, onNeutral)
+        SheetButton(destructive, Rec, Color.White, onDestructive)
+    }
+}
+
+@Composable
+internal fun VideoSheetButton(text: String, fill: Color, ink: Color, enabled: Boolean = true, onClick: () -> Unit) {
+    Box(Modifier.alpha(if (enabled) 1f else 0.4f)) {
+        SheetButton(text, fill, ink, if (enabled) onClick else ({}))
+    }
+}
+
 @Composable
 internal fun VideoBackConfirm(onContinue: () -> Unit, onStop: () -> Unit) {
     VideoSheet(onContinue) {

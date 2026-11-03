@@ -25,6 +25,16 @@ fun overlayRuleFired(widget: OverlayWidget, reading: VideoReading?): Boolean {
     return widget.rules.any { it.threshold.isFinite() && ruleMatches(value, it) }
 }
 
+/**
+ * The one widget worth a chip of its own: the first whose every rule has fired, so only a top threshold (duty 85,
+ * temperature 80, charge 15) speaks up. The lower tiers already recolour their value, and a chip on each would talk
+ * over the whole ride.
+ */
+fun overlayWarning(preset: OverlayPreset, snapshot: VideoSnapshot?): OverlayWidget? = preset.widgets.firstOrNull { widget ->
+    val value = snapshot?.readings?.get(widget.metric)?.value?.takeIf(Double::isFinite)
+    value != null && widget.rules.isNotEmpty() && widget.rules.all { it.threshold.isFinite() && ruleMatches(value, it) }
+}
+
 private fun ruleMatches(value: Double, rule: OverlayRule): Boolean = when (rule.comparison) {
     OverlayComparison.GT -> value > rule.threshold
     OverlayComparison.GTE -> value >= rule.threshold

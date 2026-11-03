@@ -14,6 +14,9 @@ private fun rungsFor(metric: VideoMetric): List<Float>? = when (metric) {
     else -> null
 }
 
+/** True when [metric] has a ladder, so a dial of it can learn its range. */
+fun overlayHasLadder(metric: VideoMetric): Boolean = rungsFor(metric) != null
+
 /**
  * The live ranges of [OverlayArc.autoScale] dials, through [GaugeScale.displayRung]: widening is instant and a dial
  * never narrows, so a range steps a few times per ride and then holds. Nothing here is persisted: a recording starts
@@ -57,8 +60,11 @@ fun overlayFraction(
     reading: VideoReading?,
     system: UnitSystem,
     scales: Map<VideoMetric, Float>,
+    dials: Map<VideoMetric, Double> = emptyMap(),
 ): Double? {
-    val value = reading?.value?.takeIf(Double::isFinite) ?: return null
+    // Unknown first: a smoothed value never brings back a reading that has gone.
+    reading?.value?.takeIf(Double::isFinite) ?: return null
+    val value = dials[widget.metric] ?: reading.value
     val shown = if (widget.arc.autoScale) shownValue(widget.metric, value, system).toDouble() else value
     val min = widget.arc.min.toDouble()
     val span = overlayScaleMax(widget, scales).toDouble() - min

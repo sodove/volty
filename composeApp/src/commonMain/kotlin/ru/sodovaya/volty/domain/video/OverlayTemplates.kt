@@ -205,6 +205,16 @@ object OverlayTemplates {
         ),
     )
 
+    /** The rules a metric comes with: the thresholds of the built-in presets, or none. */
+    fun defaultRules(metric: VideoMetric): List<OverlayRule> = when (metric) {
+        VideoMetric.DUTY -> dutyRules()
+        VideoMetric.SOC -> socRules()
+        VideoMetric.ESC_TEMPERATURE, VideoMetric.MOTOR_TEMPERATURE, VideoMetric.BATTERY_TEMPERATURE -> temperatureRules()
+        else -> emptyList()
+    }
+
+    fun cardStyle(accent: String): OverlayStyle = style(accent)
+
     private fun style(accent: String) = OverlayStyle(
         background = CARD,
         foreground = TEXT,

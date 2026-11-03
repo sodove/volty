@@ -47,7 +47,16 @@ data class OverlayTextOp(
 
 data class OverlayIconOp(val icon: OverlayIcon, val x: Float, val y: Float, val size: Float, val color: Int) : OverlayOp
 
-data class OverlayWidgetBounds(val id: String, val left: Float, val top: Float, val right: Float, val bottom: Float)
+data class OverlayWidgetBounds(
+    val id: String,
+    val left: Float,
+    val top: Float,
+    val right: Float,
+    val bottom: Float,
+    val valueSize: Float = 0f,
+    val unitSize: Float = 0f,
+    val labelSize: Float = 0f,
+)
 
 /** Everything one overlay frame draws. [widgets] is for tests and for picking a widget in the editor. */
 data class OverlayScene(val width: Int, val height: Int, val ops: List<OverlayOp>, val widgets: List<OverlayWidgetBounds>)
@@ -77,6 +86,8 @@ data class OverlaySceneInput(
     val height: Int,
     val trip: OverlayTrip = OverlayTrip(),
     val scales: Map<VideoMetric, Float> = emptyMap(),
+    /** Smoothed values for sweeps only; see `VideoDialSmoother`. Numbers never read these. */
+    val dials: Map<VideoMetric, Double> = emptyMap(),
 )
 
 /**
@@ -160,7 +171,7 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
         for (widget in input.preset.widgets) {
             val box = flowed[widget.id] ?: resolve(widget) ?: continue
             draw(widget, box)
-            bounds += OverlayWidgetBounds(widget.id, box.left, box.top, box.right, box.bottom)
+            bounds += OverlayWidgetBounds(widget.id, box.left, box.top, box.right, box.bottom, box.value, box.unit, box.label)
         }
         val chipTop = spec?.chipY?.times(frame.scaledUnit) ?: ((flowBottom ?: frame.margin) + FLOW_GAP * frame.unit)
         chips(chipTop)
@@ -353,7 +364,7 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
         val under = 12f * frame.scaledUnit
         ops += OverlayArcOp(cx, cy, radius, start, sweep, stroke + under, UNDER_COLOR)
         ops += OverlayArcOp(cx, cy, radius, start, sweep, stroke * 0.55f, TRACK_COLOR)
-        val fraction = overlayFraction(widget, reading, input.system, input.scales) ?: return
+        val fraction = overlayFraction(widget, reading, input.system, input.scales, input.dials) ?: return
         if (fraction > 0.0) ops += OverlayArcOp(cx, cy, radius, start, sweep * fraction.toFloat(), stroke, color)
     }
 
@@ -449,7 +460,7 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
         val height = bottom - top
         val inset = height * 0.13f
         ops += OverlayRectOp(left, top, right, bottom, height / 2, BAR_TRACK_COLOR, BAR_STROKE_COLOR, 2f * f)
-        val fraction = overlayFraction(widget, reading, input.system, input.scales) ?: 0.0
+        val fraction = overlayFraction(widget, reading, input.system, input.scales, input.dials) ?: 0.0
         if (fraction > 0.0) {
             val fillRight = left + inset + (right - left - inset * 2) * fraction.toFloat()
             ops += OverlayRectOp(left + inset, top + inset, fillRight, bottom - inset, (height - inset * 2) / 2, color)
@@ -484,6 +495,12 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
             chip(input.strings.noLink, y, PINK_COLOR, ON_PINK_COLOR)
             y += (CHIP_HEIGHT + CHIP_GAP) * frame.unit
         }
+        overlayWarning(input.preset, input.snapshot)?.let { widget ->
+            val reading = widget.reading()
+            val unit = input.strings.unit(widget.metric, input.system)
+            chip("${label(widget)} ${videoValueText(widget.metric, reading, input.system)} $unit".trim(), y, ORANGE_COLOR, ON_ORANGE_COLOR)
+            y += (CHIP_HEIGHT + CHIP_GAP) * frame.unit
+        }
         if (input.snapshot?.demo == true) chip(input.strings.demo, y, CYAN_COLOR, ON_CYAN_COLOR)
     }
 
@@ -503,6 +520,7 @@ private val UNIT_COLOR = OverlayPalette.UNIT.toInt()
 private val ORANGE_COLOR = OverlayPalette.ORANGE.toInt()
 private val PINK_COLOR = OverlayPalette.PINK.toInt()
 private val CYAN_COLOR = OverlayPalette.CYAN.toInt()
+private val ON_ORANGE_COLOR = OverlayPalette.ON_ORANGE.toInt()
 private val ON_PINK_COLOR = OverlayPalette.ON_PINK.toInt()
 private val ON_CYAN_COLOR = OverlayPalette.ON_CYAN.toInt()
 private val STROKE_COLOR = OverlayPalette.CARD_STROKE.toInt()

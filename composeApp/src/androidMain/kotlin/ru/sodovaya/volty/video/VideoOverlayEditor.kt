@@ -1,872 +1,640 @@
 package ru.sodovaya.volty.video
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.imePadding
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Redo
+import androidx.compose.material.icons.automirrored.filled.Undo
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material.icons.filled.Crop169
+import androidx.compose.material.icons.filled.CropPortrait
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Wallpaper
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.key
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import java.util.UUID
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
-import ru.sodovaya.volty.domain.video.OverlayComparison
-import ru.sodovaya.volty.domain.video.OverlayTextDraft
-import ru.sodovaya.volty.domain.video.overlayColorAlpha
-import ru.sodovaya.volty.domain.video.overlayColorWithAlpha
-import ru.sodovaya.volty.domain.video.overlayWidgetWithMetric
-import ru.sodovaya.volty.domain.video.OverlayDocument
-import ru.sodovaya.volty.domain.video.OverlayIcon
-import ru.sodovaya.volty.domain.video.OverlayCodec
-import ru.sodovaya.volty.domain.video.OverlayPreset
-import ru.sodovaya.volty.domain.video.OverlayRule
-import ru.sodovaya.volty.domain.video.OverlayStyle
-import ru.sodovaya.volty.domain.video.OverlayTemplates
-import ru.sodovaya.volty.domain.video.OverlayWidget
-import ru.sodovaya.volty.domain.video.OverlayWidgetKind
-import ru.sodovaya.volty.domain.video.VideoMetric
-import ru.sodovaya.volty.domain.video.validOverlayPreset
-import volty.composeapp.generated.resources.Res
-import volty.composeapp.generated.resources.video_editor_kind_arc_left
-import volty.composeapp.generated.resources.video_editor_kind_arc_right
-import volty.composeapp.generated.resources.video_editor_kind_bar
-import volty.composeapp.generated.resources.video_editor_kind_text
-import volty.composeapp.generated.resources.video_editor_metric_distance
-import volty.composeapp.generated.resources.video_editor_metric_elapsed
-import volty.composeapp.generated.resources.video_editor_template_large
-import volty.composeapp.generated.resources.video_editor_template_panel
-import volty.composeapp.generated.resources.video_editor_add_rule
-import volty.composeapp.generated.resources.video_editor_add_widget
-import volty.composeapp.generated.resources.video_editor_appearance
-import volty.composeapp.generated.resources.video_editor_arc
-import volty.composeapp.generated.resources.video_editor_arc_max
-import volty.composeapp.generated.resources.video_editor_arc_min
-import volty.composeapp.generated.resources.video_editor_arc_radius
-import volty.composeapp.generated.resources.video_editor_arc_thickness
-import volty.composeapp.generated.resources.video_editor_arc_x
-import volty.composeapp.generated.resources.video_editor_arc_y
-import volty.composeapp.generated.resources.video_editor_background
-import volty.composeapp.generated.resources.video_editor_center_cards
-import volty.composeapp.generated.resources.video_editor_clear_color
-import volty.composeapp.generated.resources.video_editor_close
-import volty.composeapp.generated.resources.video_editor_comparison
-import volty.composeapp.generated.resources.video_editor_comparison_eq
-import volty.composeapp.generated.resources.video_editor_comparison_gt
-import volty.composeapp.generated.resources.video_editor_comparison_gte
-import volty.composeapp.generated.resources.video_editor_comparison_lt
-import volty.composeapp.generated.resources.video_editor_comparison_lte
-import volty.composeapp.generated.resources.video_editor_comparison_ne
-import volty.composeapp.generated.resources.video_editor_corner_radius
-import volty.composeapp.generated.resources.video_editor_delete
-import volty.composeapp.generated.resources.video_editor_font_size
-import volty.composeapp.generated.resources.video_editor_foreground
-import volty.composeapp.generated.resources.video_editor_kind
-import volty.composeapp.generated.resources.video_editor_kind_arc
-import volty.composeapp.generated.resources.video_editor_kind_icon_value
-import volty.composeapp.generated.resources.video_editor_kind_value_card
-import volty.composeapp.generated.resources.video_editor_icon
-import volty.composeapp.generated.resources.video_editor_icon_auto
-import volty.composeapp.generated.resources.video_editor_icon_battery
-import volty.composeapp.generated.resources.video_editor_icon_bolt
-import volty.composeapp.generated.resources.video_editor_icon_current
-import volty.composeapp.generated.resources.video_editor_icon_gauge
-import volty.composeapp.generated.resources.video_editor_icon_temperature
-import volty.composeapp.generated.resources.video_editor_icon_warning
-import volty.composeapp.generated.resources.video_editor_label
-import volty.composeapp.generated.resources.video_editor_metric
-import volty.composeapp.generated.resources.video_editor_move_down
-import volty.composeapp.generated.resources.video_editor_move_up
-import volty.composeapp.generated.resources.video_editor_no_saved_templates
-import volty.composeapp.generated.resources.video_editor_opacity
-import volty.composeapp.generated.resources.video_editor_padding
-import volty.composeapp.generated.resources.video_editor_remove_widget
-import volty.composeapp.generated.resources.video_editor_rule_background
-import volty.composeapp.generated.resources.video_editor_rule_foreground
-import volty.composeapp.generated.resources.video_editor_rule_number
-import volty.composeapp.generated.resources.video_editor_rules
-import volty.composeapp.generated.resources.video_editor_save_template
-import volty.composeapp.generated.resources.video_editor_saved_templates
-import volty.composeapp.generated.resources.video_editor_shadow
-import volty.composeapp.generated.resources.video_editor_template_hud
-import volty.composeapp.generated.resources.video_editor_template_minimal
-import volty.composeapp.generated.resources.video_editor_template_name
-import volty.composeapp.generated.resources.video_editor_template_racing
-import volty.composeapp.generated.resources.video_editor_template_top_row
-import volty.composeapp.generated.resources.video_editor_templates
-import volty.composeapp.generated.resources.video_editor_threshold
-import volty.composeapp.generated.resources.video_editor_title
-import volty.composeapp.generated.resources.video_editor_unit
-import volty.composeapp.generated.resources.video_editor_widget_number
-import volty.composeapp.generated.resources.video_editor_widgets
-import volty.composeapp.generated.resources.video_editor_metric_battery_current
-import volty.composeapp.generated.resources.video_editor_metric_battery_power
-import volty.composeapp.generated.resources.video_editor_metric_battery_temperature
-import volty.composeapp.generated.resources.video_editor_metric_controller_current
-import volty.composeapp.generated.resources.video_editor_metric_controller_power
-import volty.composeapp.generated.resources.video_editor_metric_duty
-import volty.composeapp.generated.resources.video_editor_metric_esc_temperature
-import volty.composeapp.generated.resources.video_editor_metric_motor_current
-import volty.composeapp.generated.resources.video_editor_metric_motor_temperature
-import volty.composeapp.generated.resources.video_editor_metric_soc
-import volty.composeapp.generated.resources.video_editor_metric_speed
-import volty.composeapp.generated.resources.video_editor_metric_voltage
+import ru.sodovaya.volty.domain.video.*
+import ru.sodovaya.volty.util.UnitSystem
+import volty.composeapp.generated.resources.*
+import java.util.UUID
 
-private const val MAX_SAVED_TEMPLATES = 32
+private val Panel = Color(OverlayPalette.PANEL)
+private val Sheet = Color(0xFF0B1C28)
+private val Ink = Color(OverlayPalette.TEXT)
+private val Muted = Color(OverlayPalette.MUTED)
+private val Accent = Color(OverlayPalette.CYAN)
+private val Danger = Color(OverlayPalette.PINK)
+private val Warn = Color(OverlayPalette.ORANGE)
+private val Fill = Color(0x403E5C6C)
+private val OnAccent = Color(0xFF04202A)
 
-private val backgroundSwatches = listOf("#B320252A", "#D9000000", "#CC1A2B39", "#C92E3945", "#B31B6A55")
-private val foregroundSwatches = listOf("#FFFFFFFF", "#FF42D392", "#FFFFC857", "#FF69C5FF", "#FFFF7070")
+private enum class EditorTab { DATA, LOOK, PLACE }
+private enum class StageBackdrop { STILL, DUSK, DAY }
+private enum class Naming { NONE, COPY }
 
-@OptIn(ExperimentalLayoutApi::class)
+private val Swatches: List<Pair<Long, StringResource>> = listOf(
+    OverlayPalette.CYAN to Res.string.video_editor_color_cyan,
+    OverlayPalette.GREEN to Res.string.video_editor_color_teal,
+    OverlayPalette.BATTERY to Res.string.video_editor_color_green,
+    OverlayPalette.ORANGE to Res.string.video_editor_color_orange,
+    OverlayPalette.PINK to Res.string.video_editor_color_pink,
+    OverlayPalette.TEXT to Res.string.video_editor_color_white,
+)
+
+private fun OverlayWidget.dot(): Color = Color(overlayColorArgb(style.accent ?: style.foreground))
+
+/**
+ * Mock D: one screen, frame on top and a sheet below. Everything it decides is in [reduceOverlayEditor]; this file
+ * turns touches into actions and draws the state. The stage draws with the very [OverlayCanvasDrawer] and scene builder
+ * the recording uses, so what the rider arranges is what gets burned in.
+ */
 @Composable
 internal fun VideoOverlayEditor(
     document: OverlayDocument,
+    strings: VideoOverlayStrings,
+    system: UnitSystem,
+    still: ImageBitmap?,
     onChange: (OverlayDocument) -> Unit,
     onClose: () -> Unit,
 ) {
-    val builtIns = remember { OverlayTemplates.all() }
-    var newTemplateName by remember(document.selected.id) { mutableStateOf("") }
-    val templateDraftId = remember(document.selected.id) { UUID.randomUUID().toString() }
-    val additionPreviewId = remember(document.selected.id, document.selected.widgets.map { it.id }) {
-        UUID.randomUUID().toString()
+    val context = LocalContext.current
+    val drawer = remember { OverlayCanvasDrawer(OverlayFonts(context)) }
+    val env = remember(strings, system) { OverlayEditorEnv(strings, system, drawer) }
+    var state by remember { mutableStateOf(OverlayEditorState.open(document)) }
+    var naming by remember { mutableStateOf(Naming.NONE) }
+    var adding by remember { mutableStateOf(false) }
+    var backdrop by remember { mutableStateOf(if (still != null) StageBackdrop.STILL else StageBackdrop.DAY) }
+
+    fun dispatch(action: OverlayEditorAction) {
+        val previous = state.document
+        state = reduceOverlayEditor(state, action, env)
+        if (state.document != previous) onChange(state.document)
+        if (state.closed) onClose()
     }
-    val defaultMetric = VideoMetric.SPEED
-    val templateDraft = document.selected.copy(id = templateDraftId, name = newTemplateName.trim())
-    val canSaveTemplate = newTemplateName.isNotBlank() &&
-        document.saved.size < MAX_SAVED_TEMPLATES &&
-        isValidDocument(document.copy(saved = document.saved + templateDraft))
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .imePadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = stringResource(Res.string.video_editor_title),
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.weight(1f),
-            )
-            TextButton(onClick = onClose) { Text(stringResource(Res.string.video_editor_close)) }
+    BackHandler {
+        when {
+            naming != Naming.NONE -> naming = Naming.NONE
+            adding -> adding = false
+            state.confirm != null -> dispatch(OverlayEditorAction.ConfirmCancel)
+            state.selectedId != null -> dispatch(OverlayEditorAction.Select(null))
+            else -> dispatch(OverlayEditorAction.RequestClose)
         }
+    }
+    fun save() {
+        if (state.canOverwrite) dispatch(OverlayEditorAction.Save) else naming = Naming.COPY
+    }
 
-        Card {
-            Column(
-                modifier = Modifier.fillMaxWidth().padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                EditorSectionTitle(stringResource(Res.string.video_editor_templates))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    builtIns.forEach { preset ->
-                        FilterChip(
-                            selected = document.selected.id == preset.id,
-                            onClick = { publish(document.copy(selected = preset), onChange) },
-                            label = { Text(stringResource(builtinName(preset))) },
-                        )
+    val nextBackdrop = {
+        backdrop = when (backdrop) {
+            StageBackdrop.STILL -> StageBackdrop.DUSK
+            StageBackdrop.DUSK -> StageBackdrop.DAY
+            StageBackdrop.DAY -> if (still != null) StageBackdrop.STILL else StageBackdrop.DUSK
+        }
+    }
+
+    BoxWithConstraints(Modifier.fillMaxSize().background(Panel).safeDrawingPadding()) {
+        val wide = maxWidth > maxHeight
+        Column(Modifier.fillMaxSize()) {
+            EditorTopBar(state, onClose = { dispatch(OverlayEditorAction.RequestClose) }, onSave = ::save, dispatch = ::dispatch)
+            if (wide) {
+                Row(Modifier.weight(1f)) {
+                    EditorStage(state, env, drawer, still, backdrop, nextBackdrop, ::dispatch, Modifier.weight(1f).fillMaxHeight())
+                    EditorSheet(state, adding, { adding = it }, { naming = Naming.COPY }, ::dispatch, Modifier.width(360.dp).fillMaxHeight())
+                }
+            } else {
+                EditorStage(state, env, drawer, still, backdrop, nextBackdrop, ::dispatch, Modifier.weight(1f).fillMaxWidth())
+                EditorSheet(state, adding, { adding = it }, { naming = Naming.COPY }, ::dispatch, Modifier.fillMaxWidth().height(312.dp))
+            }
+        }
+        state.confirm?.let { confirm ->
+            EditorConfirm(confirm, state,
+                onSave = { save() },
+                onDiscard = { dispatch(OverlayEditorAction.ConfirmDiscard) },
+                onCancel = { dispatch(OverlayEditorAction.ConfirmCancel) })
+        }
+        if (naming == Naming.COPY) {
+            val base = stringResource(Res.string.video_editor_copy_name, overlayPresetName(state.draft, state.document.saved))
+            NameSheet(base,
+                onName = { name ->
+                    dispatch(OverlayEditorAction.SaveAs(UUID.randomUUID().toString(), name))
+                    naming = Naming.NONE
+                },
+                onDismiss = { naming = Naming.NONE })
+        }
+    }
+}
+
+@Composable
+private fun EditorTopBar(state: OverlayEditorState, onClose: () -> Unit, onSave: () -> Unit, dispatch: (OverlayEditorAction) -> Unit) {
+    Row(Modifier.fillMaxWidth().height(60.dp).padding(horizontal = 6.dp), verticalAlignment = Alignment.CenterVertically) {
+        IconTarget(Icons.Default.Close, stringResource(Res.string.video_editor_close), onClick = onClose)
+        Column(Modifier.weight(1f).padding(start = 4.dp)) {
+            Text(overlayPresetName(state.draft, state.document.saved), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            when {
+                state.edited -> Text(stringResource(Res.string.video_editor_changed), color = Warn, fontSize = 11.sp, maxLines = 1)
+                state.isBuiltIn -> Text(stringResource(Res.string.video_editor_builtin_note), color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
+        IconTarget(Icons.AutoMirrored.Filled.Undo, stringResource(Res.string.video_editor_undo), enabled = state.canUndo) { dispatch(OverlayEditorAction.Undo) }
+        IconTarget(Icons.AutoMirrored.Filled.Redo, stringResource(Res.string.video_editor_redo), enabled = state.canRedo) { dispatch(OverlayEditorAction.Redo) }
+        val enabled = state.edited && (state.canOverwrite || state.canSaveCopy)
+        Box(
+            Modifier.height(44.dp).alpha(if (enabled) 1f else 0.4f).clip(RoundedCornerShape(22.dp)).background(Accent)
+                .clickable(enabled = enabled, role = Role.Button, onClick = onSave).padding(horizontal = 15.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(stringResource(Res.string.video_editor_save), color = OnAccent, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun IconTarget(icon: ImageVector, description: String, enabled: Boolean = true, selected: Boolean = false, onClick: () -> Unit) {
+    Box(
+        Modifier.size(48.dp).alpha(if (enabled) 1f else 0.32f).clip(CircleShape)
+            .background(if (selected) Accent else Color.Transparent)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(icon, description, tint = if (selected) OnAccent else Ink, modifier = Modifier.size(24.dp))
+    }
+}
+
+private fun backdropBrush(backdrop: StageBackdrop): Brush = when (backdrop) {
+    StageBackdrop.DAY -> Brush.verticalGradient(
+        0f to Color(0xFFB9DCF2), 0.38f to Color(0xFFF7FBFC), 0.47f to Color.White,
+        0.48f to Color(0xFFCFD3CF), 1f to Color(0xFFADAEAB),
+    )
+    else -> Brush.verticalGradient(
+        0f to Color(0xFF0D1A2C), 0.36f to Color(0xFF54496A), 0.47f to Color(0xFFF2B06E),
+        0.48f to Color(0xFF10131A), 1f to Color(0xFF0C0F14),
+    )
+}
+
+@Composable
+private fun EditorStage(
+    state: OverlayEditorState,
+    env: OverlayEditorEnv,
+    drawer: OverlayCanvasDrawer,
+    still: ImageBitmap?,
+    backdrop: StageBackdrop,
+    onBackdrop: () -> Unit,
+    dispatch: (OverlayEditorAction) -> Unit,
+    modifier: Modifier,
+) {
+    val designW = overlayDesignWidth(state.landscape)
+    val designH = overlayDesignHeight(state.landscape)
+    val scene = remember(state.draft, state.landscape, env) {
+        val sample = overlaySampleSnapshot()
+        val scales = OverlayScaleTracker().update(state.draft, sample, env.system)
+        buildOverlayScene(
+            OverlaySceneInput(state.draft, sample, env.strings, env.system, designW.toInt(), designH.toInt(), OVERLAY_SAMPLE_TRIP, scales),
+            env.measure,
+        )
+    }
+    val latestScene by rememberUpdatedState(scene)
+    val selected = scene.widgets.firstOrNull { it.id == state.selectedId }
+
+    BoxWithConstraints(modifier.background(Color(0xFF040B11))) {
+        val density = LocalDensity.current
+        val availableW = maxWidth - 62.dp
+        val fit = minOf(availableW / designW, maxHeight / designH)
+        val frameW = fit * designW
+        val frameH = fit * designH
+        val toDesign = with(density) { 1f / fit.toPx() }
+        val lift = with(density) { 48.dp.toPx() } * toDesign
+
+        Column(Modifier.padding(start = 7.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            IconTarget(Icons.Default.CropPortrait, stringResource(Res.string.video_editor_portrait), selected = !state.landscape) {
+                dispatch(OverlayEditorAction.SetOrientation(false))
+            }
+            IconTarget(Icons.Default.Crop169, stringResource(Res.string.video_editor_landscape), selected = state.landscape) {
+                dispatch(OverlayEditorAction.SetOrientation(true))
+            }
+            IconTarget(Icons.Default.Wallpaper, stringResource(Res.string.video_editor_background), onClick = onBackdrop)
+        }
+        Box(
+            Modifier.align(Alignment.Center).offset(x = 28.dp).size(frameW, frameH).clipToBounds()
+                .pointerInput(toDesign) {
+                    detectTapGestures { position ->
+                        dispatch(OverlayEditorAction.Select(overlayHitTest(latestScene.widgets, position.x * toDesign, position.y * toDesign)))
                     }
                 }
-
-                HorizontalDivider()
-                EditorSectionTitle(stringResource(Res.string.video_editor_saved_templates))
-                if (document.saved.isEmpty()) {
-                    EditorCaption(stringResource(Res.string.video_editor_no_saved_templates))
-                } else {
-                    document.saved.forEach { preset ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            FilterChip(
-                                selected = document.selected.id == preset.id,
-                                onClick = { publish(document.copy(selected = preset), onChange) },
-                                label = { Text(preset.name, maxLines = 1) },
-                                modifier = Modifier.weight(1f),
-                            )
-                            TextButton(
-                                onClick = {
-                                    val remaining = document.saved.filterNot { it.id == preset.id }
-                                    val selected = if (document.selected.id == preset.id) OverlayTemplates.hud() else document.selected
-                                    publish(document.copy(selected = selected, saved = remaining), onChange)
-                                },
-                            ) { Text(stringResource(Res.string.video_editor_delete)) }
-                        }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    OutlinedTextField(
-                        value = newTemplateName,
-                        onValueChange = { newTemplateName = it },
-                        label = { Text(stringResource(Res.string.video_editor_template_name)) },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Button(
-                        onClick = {
-                            val name = newTemplateName.trim()
-                            if (name.isNotEmpty() && document.saved.size < MAX_SAVED_TEMPLATES) {
-                                val savedPreset = document.selected.copy(id = UUID.randomUUID().toString(), name = name)
-                                val candidate = document.copy(saved = document.saved + savedPreset)
-                                if (isValidDocument(candidate)) {
-                                    onChange(candidate)
-                                    newTemplateName = ""
-                                }
-                            }
+                .pointerInput(toDesign, lift) {
+                    detectDragGestures(
+                        onDragStart = { position ->
+                            overlayHitTest(latestScene.widgets, position.x * toDesign, position.y * toDesign)
+                                ?.let { dispatch(OverlayEditorAction.DragStart(it, lift)) }
                         },
-                        enabled = canSaveTemplate,
-                    ) { Text(stringResource(Res.string.video_editor_save_template)) }
+                        onDrag = { change, amount ->
+                            change.consume()
+                            dispatch(OverlayEditorAction.DragBy(amount.x * toDesign, amount.y * toDesign))
+                        },
+                        onDragEnd = { dispatch(OverlayEditorAction.DragEnd) },
+                        onDragCancel = { dispatch(OverlayEditorAction.DragCancel) },
+                    )
+                },
+        ) {
+            if (backdrop == StageBackdrop.STILL && still != null) {
+                Image(still, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+            } else {
+                Box(Modifier.fillMaxSize().background(backdropBrush(backdrop)))
+            }
+            Canvas(Modifier.fillMaxSize()) {
+                val k = size.width / designW
+                drawIntoCanvas { canvas ->
+                    val native = canvas.nativeCanvas
+                    native.save()
+                    native.scale(k, k)
+                    drawer.draw(native, scene)
+                    native.restore()
+                }
+                val drag = state.drag
+                if (drag != null) {
+                    val dash = PathEffect.dashPathEffect(floatArrayOf(20f * k, 20f * k))
+                    val faint = Color.White.copy(alpha = 0.16f)
+                    for (x in listOf(designW / 3, designW * 2 / 3)) drawLine(faint, Offset(x * k, 0f), Offset(x * k, size.height), 3f * k, pathEffect = dash)
+                    for (y in listOf(designH / 3, designH * 2 / 3)) drawLine(faint, Offset(0f, y * k), Offset(size.width, y * k), 3f * k, pathEffect = dash)
+                    val margin = 54f * k
+                    drawRect(Color.White.copy(alpha = 0.3f), Offset(margin, margin), Size(size.width - 2 * margin, size.height - 2 * margin), style = Stroke(3f * k))
+                    for (guide in drag.guides) {
+                        val p = guide.position * k
+                        if (guide.vertical) drawLine(Danger, Offset(p, 0f), Offset(p, size.height), 7f * k)
+                        else drawLine(Danger, Offset(0f, p), Offset(size.width, p), 7f * k)
+                    }
+                }
+                if (selected != null) {
+                    val inset = 10f * k
+                    drawRoundRect(
+                        Accent, Offset(selected.left * k - inset, selected.top * k - inset),
+                        Size((selected.right - selected.left) * k + 2 * inset, (selected.bottom - selected.top) * k + 2 * inset),
+                        CornerRadius(28f * k), style = Stroke(10f * k),
+                    )
+                }
+            }
+            Text(
+                stringResource(Res.string.video_editor_sample),
+                color = Color.White, fontSize = 10.sp, fontWeight = FontWeight.Bold,
+                modifier = Modifier.padding(6.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xAA000000)).padding(horizontal = 7.dp, vertical = 5.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun EditorSheet(
+    state: OverlayEditorState,
+    adding: Boolean,
+    onAdding: (Boolean) -> Unit,
+    onDuplicate: () -> Unit,
+    dispatch: (OverlayEditorAction) -> Unit,
+    modifier: Modifier,
+) {
+    var tab by remember { mutableStateOf(EditorTab.DATA) }
+    Column(modifier.clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)).background(Sheet).padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 12.dp)) {
+        Box(Modifier.align(Alignment.CenterHorizontally).padding(bottom = 6.dp).size(40.dp, 4.dp).clip(RoundedCornerShape(2.dp)).background(Color(0xFF5A7482)))
+        val widget = state.selected
+        val drag = state.drag
+        when {
+            drag != null -> DragPanel(state, drag)
+            adding -> AddPanel(onPick = { metric ->
+                dispatch(OverlayEditorAction.AddWidget(UUID.randomUUID().toString(), metric))
+                onAdding(false)
+            }, onCancel = { onAdding(false) })
+            widget != null -> WidgetPanel(state, widget, tab, { tab = it }, dispatch)
+            else -> OverviewPanel(state, onAdd = { onAdding(true) }, onDuplicate, dispatch)
+        }
+    }
+}
+
+@Composable
+private fun SectionLabel(text: String) {
+    Text(text, color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(bottom = 5.dp))
+}
+
+@Composable
+private fun Tile(text: String, on: Boolean, modifier: Modifier = Modifier, enabled: Boolean = true, height: Int = 52, onClick: () -> Unit) {
+    Box(
+        modifier.height(height.dp).alpha(if (enabled) 1f else 0.35f).clip(RoundedCornerShape(13.dp)).background(if (on) Accent else Fill)
+            .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 6.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(text, color = if (on) OnAccent else Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, textAlign = TextAlign.Center, maxLines = 2, overflow = TextOverflow.Ellipsis, lineHeight = 15.sp)
+    }
+}
+
+@Composable
+private fun OverviewPanel(state: OverlayEditorState, onAdd: () -> Unit, onDuplicate: () -> Unit, dispatch: (OverlayEditorAction) -> Unit) {
+    val builtIns = remember { OverlayTemplates.all() }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        SectionLabel(stringResource(Res.string.video_editor_preset))
+        Row(Modifier.horizontalScroll(rememberScrollState()).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            (builtIns + state.document.saved).forEach { preset ->
+                Tile(overlayPresetName(preset, state.document.saved), preset.id == state.draft.id, Modifier.widthIn(min = 92.dp), height = 56) {
+                    dispatch(OverlayEditorAction.RequestPreset(preset))
                 }
             }
         }
+        Row(Modifier.fillMaxWidth().height(44.dp), verticalAlignment = Alignment.CenterVertically) {
+            TextAction(Icons.Default.ContentCopy, stringResource(Res.string.video_editor_duplicate), enabled = state.canSaveCopy, onClick = onDuplicate)
+            if (state.canOverwrite) {
+                Spacer(Modifier.width(12.dp))
+                TextAction(Icons.Default.Delete, stringResource(Res.string.video_editor_delete)) { dispatch(OverlayEditorAction.RequestDelete(state.draft.id)) }
+            }
+            Spacer(Modifier.weight(1f))
+            TextAction(Icons.Default.Add, stringResource(Res.string.video_editor_add), enabled = state.draft.widgets.size < 24, onClick = onAdd)
+        }
+        if (!state.canSaveCopy) Text(stringResource(Res.string.video_editor_full), color = Warn, fontSize = 12.sp)
+        state.draft.widgets.forEach { widget ->
+            val box = widget.placement?.let { if (state.landscape) it.landscape else it.portrait }
+            val hidden = widget.placement != null && box == null
+            Row(
+                Modifier.fillMaxWidth().height(50.dp).clickable(role = Role.Button) { dispatch(OverlayEditorAction.Select(widget.id)) },
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(Modifier.size(10.dp).clip(CircleShape).background(widget.dot()))
+                Text(overlayLabel(widget, widgetLabelStrings()), color = Ink, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, modifier = Modifier.weight(1f))
+                Text(
+                    listOfNotNull(stringResource(kindLabel(widget.kind)), box?.let { stringResource(anchorLabel(it.anchor)) }, if (hidden) stringResource(Res.string.video_editor_hidden) else null).joinToString(" · "),
+                    color = Muted, fontSize = 12.sp, maxLines = 1,
+                )
+            }
+        }
+    }
+}
 
-        SwitchSetting(
-            label = stringResource(Res.string.video_editor_center_cards),
-            checked = document.selected.centerCards,
-            onCheckedChange = { centered ->
-                publish(document.copy(selected = document.selected.copy(centerCards = centered)), onChange)
+@Composable
+private fun TextAction(icon: ImageVector, text: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Row(
+        Modifier.height(44.dp).alpha(if (enabled) 1f else 0.4f).clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(icon, null, tint = Accent, modifier = Modifier.size(20.dp))
+        Text(text, color = Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/** The metric's automatic labels for the widget list; the file's own burned-in words come from the capture screen. */
+@Composable
+private fun widgetLabelStrings() = VideoOverlayStrings(labels = VideoMetric.entries.associateWith { videoMetricLabel(it) })
+
+@Composable
+private fun WidgetPanel(state: OverlayEditorState, widget: OverlayWidget, tab: EditorTab, onTab: (EditorTab) -> Unit, dispatch: (OverlayEditorAction) -> Unit) {
+    Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(overlayLabel(widget, widgetLabelStrings()), color = widget.dot(), fontSize = 15.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        IconTarget(Icons.Default.Delete, stringResource(Res.string.video_editor_delete), enabled = state.draft.widgets.size > 1) { dispatch(OverlayEditorAction.DeleteWidget) }
+        IconTarget(Icons.Default.Close, stringResource(Res.string.video_editor_close)) { dispatch(OverlayEditorAction.Select(null)) }
+    }
+    Row(Modifier.fillMaxWidth().height(48.dp).padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        listOf(EditorTab.DATA to Res.string.video_editor_tab_data, EditorTab.LOOK to Res.string.video_editor_tab_look, EditorTab.PLACE to Res.string.video_editor_tab_place)
+            .forEach { (value, label) -> Tile(stringResource(label), tab == value, Modifier.weight(1f), height = 42) { onTab(value) } }
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) {
+        when (tab) {
+            EditorTab.DATA -> DataTab(widget, dispatch)
+            EditorTab.LOOK -> LookTab(widget, dispatch)
+            EditorTab.PLACE -> PlaceTab(state, widget, dispatch)
+        }
+    }
+}
+
+@Composable
+private fun MetricGrid(selected: VideoMetric?, onPick: (VideoMetric) -> Unit) {
+    VideoMetric.entries.chunked(3).forEach { row ->
+        Row(Modifier.fillMaxWidth().padding(bottom = 7.dp), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            row.forEach { metric -> Tile(videoMetricLabel(metric), metric == selected, Modifier.weight(1f), height = 56) { onPick(metric) } }
+            repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+        }
+    }
+}
+
+@Composable
+private fun DataTab(widget: OverlayWidget, dispatch: (OverlayEditorAction) -> Unit) {
+    MetricGrid(widget.metric) { dispatch(OverlayEditorAction.SetMetric(it)) }
+    SectionLabel(stringResource(Res.string.video_editor_label))
+    val automatic = isAutoOverlayLabel(widget)
+    BasicTextField(
+        value = if (automatic) "" else widget.label,
+        onValueChange = { dispatch(OverlayEditorAction.SetLabel(it)) },
+        singleLine = true,
+        textStyle = TextStyle(color = Ink, fontSize = 15.sp),
+        cursorBrush = SolidColor(Accent),
+        decorationBox = { inner ->
+            Box(Modifier.fillMaxWidth().height(52.dp).clip(RoundedCornerShape(13.dp)).background(Fill).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) {
+                if (automatic) Text(stringResource(Res.string.video_editor_label_auto), color = Muted, fontSize = 15.sp)
+                inner()
+            }
+        },
+    )
+}
+
+@Composable
+private fun LookTab(widget: OverlayWidget, dispatch: (OverlayEditorAction) -> Unit) {
+    val placedSize = listOf(
+        OverlayWidgetSize.S to Res.string.video_editor_size_s, OverlayWidgetSize.M to Res.string.video_editor_size_m,
+        OverlayWidgetSize.L to Res.string.video_editor_size_l, OverlayWidgetSize.XL to Res.string.video_editor_size_xl,
+    )
+    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        placedSize.forEach { (size, label) -> Tile(stringResource(label), widget.size == size, Modifier.weight(1f)) { dispatch(OverlayEditorAction.SetSize(size)) } }
+    }
+    val dial = widget.kind == OverlayWidgetKind.ARC || widget.kind == OverlayWidgetKind.ARC_LEFT || widget.kind == OverlayWidgetKind.ARC_RIGHT
+    Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf(
+            Triple(OverlayWidgetKind.VALUE_CARD, Res.string.video_editor_kind_card, widget.kind == OverlayWidgetKind.VALUE_CARD || widget.kind == OverlayWidgetKind.ICON_VALUE),
+            Triple(OverlayWidgetKind.ARC, Res.string.video_editor_kind_dial, dial),
+            Triple(OverlayWidgetKind.BAR, Res.string.video_editor_kind_bar, widget.kind == OverlayWidgetKind.BAR),
+            Triple(OverlayWidgetKind.TEXT, Res.string.video_editor_kind_text, widget.kind == OverlayWidgetKind.TEXT),
+        ).forEach { (kind, label, on) ->
+            Tile(stringResource(label), on, Modifier.weight(1f), enabled = overlayKindAllowed(kind, widget.metric)) {
+                if (!on) dispatch(OverlayEditorAction.SetKind(kind))
+            }
+        }
+    }
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Swatches.forEach { (color, name) ->
+            val hex = OverlayPalette.hex(color)
+            val on = widget.style.accent == hex
+            Column(
+                Modifier.width(54.dp).clickable(role = Role.Button) { dispatch(OverlayEditorAction.SetAccent(hex)) },
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Box(
+                    Modifier.size(46.dp).then(if (on) Modifier.border(2.dp, Color.White, CircleShape).padding(4.dp) else Modifier)
+                        .clip(CircleShape).background(Color(color)),
+                )
+                Text(stringResource(name), color = if (on) Color.White else Muted, fontSize = 10.sp, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+private fun PlaceTab(state: OverlayEditorState, widget: OverlayWidget, dispatch: (OverlayEditorAction) -> Unit) {
+    val box = widget.placement?.let { if (state.landscape) it.landscape else it.portrait }
+    val hidden = widget.placement != null && box == null
+    box?.let { Text(stringResource(anchorLabel(it.anchor)), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(bottom = 6.dp)) }
+    if (!hidden) {
+        Row(Modifier.fillMaxWidth().padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            val step = OVERLAY_NUDGE_STEP
+            listOf(
+                Triple(Icons.Default.KeyboardArrowUp, Res.string.video_editor_move_up, Offset(0f, -step)),
+                Triple(Icons.Default.KeyboardArrowDown, Res.string.video_editor_move_down, Offset(0f, step)),
+                Triple(Icons.Default.KeyboardArrowLeft, Res.string.video_editor_move_left, Offset(-step, 0f)),
+                Triple(Icons.Default.KeyboardArrowRight, Res.string.video_editor_move_right, Offset(step, 0f)),
+            ).forEach { (icon, label, move) ->
+                Box(
+                    Modifier.weight(1f).height(52.dp).clip(RoundedCornerShape(13.dp)).background(Fill)
+                        .clickable(role = Role.Button) { dispatch(OverlayEditorAction.Nudge(move.x, move.y)) },
+                    contentAlignment = Alignment.Center,
+                ) { Icon(icon, stringResource(label), tint = Ink, modifier = Modifier.size(28.dp)) }
+            }
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Tile(stringResource(Res.string.video_editor_restore), false, Modifier.fillMaxWidth()) { dispatch(OverlayEditorAction.RestorePlace) }
+        Tile(
+            stringResource(if (hidden) Res.string.video_editor_show_here else Res.string.video_editor_hide_here), false, Modifier.fillMaxWidth(),
+        ) { dispatch(OverlayEditorAction.SetHidden(!hidden)) }
+    }
+}
+
+@Composable
+private fun DragPanel(state: OverlayEditorState, drag: OverlayEditorDrag) {
+    val widget = state.draft.widgets.firstOrNull { it.id == drag.id }
+    val box = widget?.placement?.let { if (state.landscape) it.landscape else it.portrait }
+    Row(Modifier.fillMaxWidth().height(38.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(box?.let { stringResource(anchorLabel(it.anchor)) }.orEmpty(), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        if (drag.guides.isNotEmpty()) Text(stringResource(Res.string.video_editor_snapped), color = Danger, fontSize = 13.sp)
+    }
+    Text(stringResource(Res.string.video_editor_drag_hint), color = Muted, fontSize = 13.sp)
+}
+
+@Composable
+private fun AddPanel(onPick: (VideoMetric) -> Unit, onCancel: () -> Unit) {
+    Row(Modifier.fillMaxWidth().height(40.dp), verticalAlignment = Alignment.CenterVertically) {
+        Text(stringResource(Res.string.video_editor_add_title), color = Ink, fontSize = 15.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
+        IconTarget(Icons.Default.Close, stringResource(Res.string.video_editor_close), onClick = onCancel)
+    }
+    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState())) { MetricGrid(null, onPick) }
+}
+
+@Composable
+internal fun EditorConfirm(confirm: OverlayEditorConfirm, state: OverlayEditorState, onSave: () -> Unit, onDiscard: () -> Unit, onCancel: () -> Unit) {
+    if (confirm is OverlayEditorConfirm.Delete) {
+        VideoDecisionSheet(
+            title = stringResource(Res.string.video_editor_delete_title),
+            text = stringResource(Res.string.video_editor_delete_text),
+            primary = null, onPrimary = {},
+            destructive = stringResource(Res.string.video_editor_delete), onDestructive = onDiscard,
+            neutral = stringResource(Res.string.video_editor_lose_keep), onNeutral = onCancel,
+        )
+    } else {
+        VideoDecisionSheet(
+            title = stringResource(Res.string.video_editor_lose_title),
+            text = stringResource(Res.string.video_editor_lose_text),
+            primary = stringResource(Res.string.video_editor_lose_save).takeIf { state.canOverwrite || state.canSaveCopy }, onPrimary = onSave,
+            destructive = stringResource(Res.string.video_editor_lose_discard), onDestructive = onDiscard,
+            neutral = stringResource(Res.string.video_editor_lose_keep), onNeutral = onCancel,
+        )
+    }
+}
+
+@Composable
+private fun NameSheet(initial: String, onName: (String) -> Unit, onDismiss: () -> Unit) {
+    var name by remember { mutableStateOf(initial) }
+    VideoSheet(onDismiss) {
+        Text(stringResource(Res.string.video_editor_name_title), color = Ink, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+        BasicTextField(
+            value = name,
+            onValueChange = { name = it.take(64) },
+            singleLine = true,
+            textStyle = TextStyle(color = Ink, fontSize = 17.sp),
+            cursorBrush = SolidColor(Accent),
+            decorationBox = { inner ->
+                Box(Modifier.fillMaxWidth().height(56.dp).clip(RoundedCornerShape(13.dp)).background(Fill).padding(horizontal = 12.dp), contentAlignment = Alignment.CenterStart) { inner() }
             },
         )
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            EditorSectionTitle(stringResource(Res.string.video_editor_widgets), Modifier.weight(1f))
-            val canAddWidget = validOverlayPreset(
-                document.selected.copy(
-                    widgets = document.selected.widgets + OverlayWidget(
-                        id = additionPreviewId,
-                        metric = defaultMetric,
-                    ),
-                ),
-            )
-            OutlinedButton(
-                onClick = {
-                    val widget = OverlayWidget(
-                        id = UUID.randomUUID().toString(),
-                        metric = defaultMetric,
-                    )
-                    updatePreset(document, onChange) { it.copy(widgets = it.widgets + widget) }
-                },
-                enabled = canAddWidget,
-            ) { Text(stringResource(Res.string.video_editor_add_widget)) }
-        }
-
-        document.selected.widgets.forEachIndexed { index, widget ->
-            key(document.selected.id, widget.id) {
-            WidgetEditor(
-                index = index,
-                widget = widget,
-                widgetCount = document.selected.widgets.size,
-                onUpdate = { changed ->
-                    updatePreset(document, onChange) { preset ->
-                        preset.copy(widgets = preset.widgets.map { if (it.id == widget.id) changed else it })
-                    }
-                },
-                onMove = { delta ->
-                    val destination = index + delta
-                    val reordered = document.selected.widgets.toMutableList().apply {
-                        add(destination, removeAt(index))
-                    }
-                    updatePreset(document, onChange) { it.copy(widgets = reordered) }
-                },
-                onRemove = {
-                    updatePreset(document, onChange) { preset ->
-                        preset.copy(widgets = preset.widgets.filterNot { it.id == widget.id })
-                    }
-                },
-            )
-            }
-        }
-        Spacer(Modifier.height(12.dp))
+        VideoSheetButton(stringResource(Res.string.video_editor_save), Accent, OnAccent, enabled = name.isNotBlank(), onClick = { onName(name) })
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun WidgetEditor(
-    index: Int,
-    widget: OverlayWidget,
-    widgetCount: Int,
-    onUpdate: (OverlayWidget) -> Boolean,
-    onMove: (Int) -> Unit,
-    onRemove: () -> Unit,
-) {
-    val canAddRule = remember(widget.rules.size) {
-        validOverlayPreset(
-            OverlayPreset(
-                id = "editor-validation",
-                name = "Editor",
-                widgets = listOf(widget.copy(rules = widget.rules + OverlayRule(OverlayComparison.GT, 0.0))),
-            ),
-        )
-    }
-
-    Card {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    stringResource(Res.string.video_editor_widget_number, index + 1),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                    verticalArrangement = Arrangement.spacedBy(0.dp),
-                ) {
-                    TextButton(onClick = { onMove(-1) }, enabled = index > 0) {
-                        Text("↑ ${stringResource(Res.string.video_editor_move_up)}")
-                    }
-                    TextButton(onClick = { onMove(1) }, enabled = index < widgetCount - 1) {
-                        Text("↓ ${stringResource(Res.string.video_editor_move_down)}")
-                    }
-                    TextButton(onClick = onRemove, enabled = widgetCount > 1) {
-                        Text(stringResource(Res.string.video_editor_remove_widget))
-                    }
-                }
-            }
-
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                CompactSelector(
-                    label = stringResource(Res.string.video_editor_metric),
-                    selected = widget.metric,
-                    choices = VideoMetric.entries,
-                    display = { videoMetricLabel(it) },
-                    onSelected = { metric ->
-                        onUpdate(overlayWidgetWithMetric(widget, metric))
-                    },
-                    modifier = Modifier.weight(1f),
-                )
-                CompactSelector(
-                    label = stringResource(Res.string.video_editor_kind),
-                    selected = widget.kind,
-                    choices = OverlayWidgetKind.entries,
-                    display = { stringResource(kindLabel(it)) },
-                    onSelected = { kind -> onUpdate(widget.copy(kind = kind)) },
-                    modifier = Modifier.weight(1f),
-                )
-            }
-
-            if (widget.kind == OverlayWidgetKind.ICON_VALUE) {
-                CompactSelector(
-                    label = stringResource(Res.string.video_editor_icon),
-                    selected = widget.icon,
-                    choices = OverlayIcon.entries,
-                    display = { stringResource(iconLabel(it)) },
-                    onSelected = { icon -> onUpdate(widget.copy(icon = icon)) },
-                    modifier = Modifier.fillMaxWidth(),
-                )
-            }
-
-            // No unit field: the burned-in unit comes from the unit system (see VideoOverlayStrings.unit). An empty label
-            // follows the metric; typing one pins it.
-            DraftTextField(
-                value = widget.label,
-                label = stringResource(Res.string.video_editor_label),
-                modifier = Modifier.fillMaxWidth(),
-            ) { value -> onUpdate(widget.copy(label = value)) }
-
-            if (widget.kind == OverlayWidgetKind.ARC) {
-                HorizontalDivider()
-                EditorSectionTitle(stringResource(Res.string.video_editor_arc))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DraftNumberField(
-                        widget.arc.x,
-                        stringResource(Res.string.video_editor_arc_x),
-                        Modifier.weight(1f),
-                    ) { value -> onUpdate(widget.copy(arc = widget.arc.copy(x = value))) }
-                    DraftNumberField(
-                        widget.arc.y,
-                        stringResource(Res.string.video_editor_arc_y),
-                        Modifier.weight(1f),
-                    ) { value -> onUpdate(widget.copy(arc = widget.arc.copy(y = value))) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DraftNumberField(
-                        widget.arc.radius,
-                        stringResource(Res.string.video_editor_arc_radius),
-                        Modifier.weight(1f),
-                    ) { value -> onUpdate(widget.copy(arc = widget.arc.copy(radius = value))) }
-                    DraftNumberField(
-                        widget.arc.thickness,
-                        stringResource(Res.string.video_editor_arc_thickness),
-                        Modifier.weight(1f),
-                    ) { value -> onUpdate(widget.copy(arc = widget.arc.copy(thickness = value))) }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    DraftNumberField(
-                        widget.arc.min,
-                        stringResource(Res.string.video_editor_arc_min),
-                        Modifier.weight(1f),
-                    ) { value -> onUpdate(widget.copy(arc = widget.arc.copy(min = value))) }
-                    DraftNumberField(
-                        widget.arc.max,
-                        stringResource(Res.string.video_editor_arc_max),
-                        Modifier.weight(1f),
-                    ) { value -> onUpdate(widget.copy(arc = widget.arc.copy(max = value))) }
-                }
-            }
-
-            HorizontalDivider()
-            EditorSectionTitle(stringResource(Res.string.video_editor_appearance))
-            ColorEditor(
-                value = widget.style.background,
-                label = stringResource(Res.string.video_editor_background),
-                swatches = backgroundSwatches,
-            ) { color -> onUpdate(widget.copy(style = widget.style.copy(background = color))) }
-            ColorEditor(
-                value = widget.style.foreground,
-                label = stringResource(Res.string.video_editor_foreground),
-                swatches = foregroundSwatches,
-            ) { color -> onUpdate(widget.copy(style = widget.style.copy(foreground = color))) }
-            SliderSetting(
-                value = widget.style.background.alphaHex().toFloat(),
-                valueRange = 0f..255f,
-                steps = 254,
-                format = { stringResource(Res.string.video_editor_opacity, (it / 255f * 100f).toInt()) },
-            ) { alpha ->
-                val background = widget.style.background.withAlpha(alpha.toInt())
-                onUpdate(widget.copy(style = widget.style.copy(background = background)))
-            }
-            SliderSetting(
-                value = widget.style.fontSize,
-                valueRange = 8f..96f,
-                format = { stringResource(Res.string.video_editor_font_size, it.toInt()) },
-            ) { value -> onUpdate(widget.copy(style = widget.style.copy(fontSize = value))) }
-            SliderSetting(
-                value = widget.style.cornerRadius,
-                valueRange = 0f..64f,
-                format = { stringResource(Res.string.video_editor_corner_radius, it.toInt()) },
-            ) { value -> onUpdate(widget.copy(style = widget.style.copy(cornerRadius = value))) }
-            SliderSetting(
-                value = widget.style.padding,
-                valueRange = 0f..100f,
-                format = { stringResource(Res.string.video_editor_padding, it.toInt()) },
-            ) { value -> onUpdate(widget.copy(style = widget.style.copy(padding = value))) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(Res.string.video_editor_shadow), modifier = Modifier.weight(1f))
-                Switch(
-                    checked = widget.style.shadow,
-                    onCheckedChange = { enabled -> onUpdate(widget.copy(style = widget.style.copy(shadow = enabled))) },
-                )
-            }
-
-            HorizontalDivider()
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                EditorSectionTitle(stringResource(Res.string.video_editor_rules), Modifier.weight(1f))
-                OutlinedButton(
-                    onClick = {
-                        onUpdate(widget.copy(rules = widget.rules + OverlayRule(OverlayComparison.GT, 50.0)))
-                    },
-                    enabled = canAddRule,
-                ) { Text(stringResource(Res.string.video_editor_add_rule)) }
-            }
-            widget.rules.forEachIndexed { ruleIndex, rule ->
-                key(ruleIndex, widget.rules.size) {
-                RuleEditor(
-                    index = ruleIndex,
-                    rule = rule,
-                    onUpdate = { changed ->
-                        onUpdate(widget.copy(rules = widget.rules.mapIndexed { i, old -> if (i == ruleIndex) changed else old }))
-                    },
-                    onRemove = { onUpdate(widget.copy(rules = widget.rules.filterIndexed { i, _ -> i != ruleIndex })) },
-                )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun RuleEditor(
-    index: Int,
-    rule: OverlayRule,
-    onUpdate: (OverlayRule) -> Boolean,
-    onRemove: () -> Unit,
-) {
-    Card(shape = RoundedCornerShape(12.dp)) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(Res.string.video_editor_rule_number, index + 1),
-                    style = MaterialTheme.typography.titleSmall,
-                    modifier = Modifier.weight(1f),
-                )
-                TextButton(onClick = onRemove) { Text(stringResource(Res.string.video_editor_remove_widget)) }
-            }
-            CompactSelector(
-                label = stringResource(Res.string.video_editor_comparison),
-                selected = rule.comparison,
-                choices = OverlayComparison.entries,
-                display = { stringResource(comparisonLabel(it)) },
-                onSelected = { comparison -> onUpdate(rule.copy(comparison = comparison)) },
-                modifier = Modifier.fillMaxWidth(),
-            )
-            DraftNumberField(
-                value = rule.threshold,
-                label = stringResource(Res.string.video_editor_threshold),
-                modifier = Modifier.fillMaxWidth(),
-            ) { value -> onUpdate(rule.copy(threshold = value.toDouble())) }
-            NullableColorEditor(
-                value = rule.foreground,
-                label = stringResource(Res.string.video_editor_rule_foreground),
-                swatches = foregroundSwatches,
-            ) { color -> onUpdate(rule.copy(foreground = color)) }
-            NullableColorEditor(
-                value = rule.background,
-                label = stringResource(Res.string.video_editor_rule_background),
-                swatches = backgroundSwatches,
-            ) { color -> onUpdate(rule.copy(background = color)) }
-        }
-    }
-}
-
-@Composable
-private fun ColorEditor(
-    value: String,
-    label: String,
-    swatches: List<String>,
-    onValue: (String) -> Boolean,
-) {
-    DraftTextField(
-        value = value,
-        label = label,
-        keyboardType = KeyboardType.Ascii,
-        modifier = Modifier.fillMaxWidth(),
-    ) { color -> onValue(color.uppercase()) }
-    ColorSwatches(swatches = swatches, selected = value, onSelected = { onValue(it.uppercase()) })
-}
-
-@Composable
-private fun NullableColorEditor(
-    value: String?,
-    label: String,
-    swatches: List<String>,
-    onValue: (String?) -> Boolean,
-) {
-    DraftTextField(
-        value = value.orEmpty(),
-        label = label,
-        keyboardType = KeyboardType.Ascii,
-        modifier = Modifier.fillMaxWidth(),
-    ) { color -> onValue(color.takeIf(String::isNotBlank)?.uppercase()) }
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        ColorSwatches(swatches = swatches, selected = value, onSelected = { onValue(it) })
-        TextButton(onClick = { onValue(null) }) { Text(stringResource(Res.string.video_editor_clear_color)) }
-    }
-}
-
-@Composable
-private fun ColorSwatches(swatches: List<String>, selected: String?, onSelected: (String) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-        swatches.forEach { colorValue ->
-            val color = remember(colorValue) { colorValue.toComposeColor() }
-            Box(
-                modifier = Modifier
-                    .size(38.dp)
-                    .background(color, RoundedCornerShape(7.dp))
-                    .clickable { onSelected(colorValue) },
-            ) {
-                if (selected.equals(colorValue, ignoreCase = true)) {
-                    Text("✓", color = MaterialTheme.colorScheme.onPrimary, modifier = Modifier.align(Alignment.Center))
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DraftTextField(
-    value: String,
-    label: String,
-    modifier: Modifier = Modifier,
-    keyboardType: KeyboardType = KeyboardType.Text,
-    onCandidate: (String) -> Boolean,
-) {
-    var draft by remember { mutableStateOf(OverlayTextDraft(value)) }
-    LaunchedEffect(value) { draft = draft.synced(value) }
-    OutlinedTextField(
-        value = draft.text,
-        onValueChange = { candidate ->
-            draft = draft.edited(candidate, runCatching { onCandidate(candidate) }.getOrDefault(false))
-        },
-        label = { Text(label) },
-        singleLine = true,
-        isError = draft.invalid,
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
-        modifier = modifier.onFocusChanged { draft = draft.copy(focused = it.isFocused) },
-    )
-}
-
-@Composable
-private fun DraftNumberField(
-    value: Float,
-    label: String,
-    modifier: Modifier = Modifier,
-    onCandidate: (Float) -> Boolean,
-) {
-    DraftTextField(
-        value = value.toString(),
-        label = label,
-        keyboardType = KeyboardType.Decimal,
-        modifier = modifier,
-    ) { candidate ->
-        candidate.replace(',', '.').toDoubleOrNull()?.takeIf(Double::isFinite)?.let { onCandidate(it.toFloat()) }
-            ?: false
-    }
-}
-
-@Composable
-private fun DraftNumberField(
-    value: Double,
-    label: String,
-    modifier: Modifier = Modifier,
-    onCandidate: (Double) -> Boolean,
-) {
-    DraftTextField(
-        value = value.toString(),
-        label = label,
-        keyboardType = KeyboardType.Decimal,
-        modifier = modifier,
-    ) { candidate ->
-        candidate.replace(',', '.').toDoubleOrNull()?.takeIf(Double::isFinite)?.let(onCandidate) ?: false
-    }
-}
-
-@Composable
-private fun CompactSelector(
-    label: String,
-    selected: VideoMetric,
-    choices: List<VideoMetric>,
-    display: @Composable (VideoMetric) -> String,
-    onSelected: (VideoMetric) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    SelectorMenu(label, display(selected), choices, display, onSelected, modifier)
-}
-
-@Composable
-private fun CompactSelector(
-    label: String,
-    selected: OverlayWidgetKind,
-    choices: List<OverlayWidgetKind>,
-    display: @Composable (OverlayWidgetKind) -> String,
-    onSelected: (OverlayWidgetKind) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    SelectorMenu(label, display(selected), choices, display, onSelected, modifier)
-}
-
-@Composable
-private fun CompactSelector(
-    label: String,
-    selected: OverlayIcon,
-    choices: List<OverlayIcon>,
-    display: @Composable (OverlayIcon) -> String,
-    onSelected: (OverlayIcon) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    SelectorMenu(label, display(selected), choices, display, onSelected, modifier)
-}
-
-@Composable
-private fun CompactSelector(
-    label: String,
-    selected: OverlayComparison,
-    choices: List<OverlayComparison>,
-    display: @Composable (OverlayComparison) -> String,
-    onSelected: (OverlayComparison) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    SelectorMenu(label, display(selected), choices, display, onSelected, modifier)
-}
-
-@Composable
-private fun <T> SelectorMenu(
-    label: String,
-    current: String,
-    choices: List<T>,
-    display: @Composable (T) -> String,
-    onSelected: (T) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    var expanded by remember { mutableStateOf(false) }
-    Column(modifier = modifier) {
-        Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Box {
-            OutlinedButton(onClick = { expanded = true }, modifier = Modifier.fillMaxWidth()) {
-                Text(current, maxLines = 3, modifier = Modifier.weight(1f))
-                Text("⌄")
-            }
-            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-                choices.forEach { choice ->
-                    DropdownMenuItem(
-                        text = { Text(display(choice)) },
-                        onClick = {
-                            expanded = false
-                            onSelected(choice)
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SliderSetting(
-    value: Float,
-    valueRange: ClosedFloatingPointRange<Float>,
-    format: @Composable (Float) -> String,
-    modifier: Modifier = Modifier,
-    steps: Int = 0,
-    onValueChange: (Float) -> Unit,
-) {
-    Column(modifier = modifier.fillMaxWidth()) {
-        Text(format(value), style = MaterialTheme.typography.bodyMedium)
-        Slider(
-            value = value.coerceIn(valueRange),
-            onValueChange = onValueChange,
-            valueRange = valueRange,
-            steps = steps,
-        )
-    }
-}
-
-@Composable
-private fun SwitchSetting(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
-    Card {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(label, modifier = Modifier.weight(1f))
-            Checkbox(checked = checked, onCheckedChange = onCheckedChange)
-        }
-    }
-}
-
-@Composable
-private fun EditorSectionTitle(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.titleSmall,
-        fontWeight = FontWeight.SemiBold,
-        modifier = modifier,
-    )
-}
-
-@Composable
-private fun EditorCaption(text: String) {
-    Text(text, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-}
-
-private fun updatePreset(
-    document: OverlayDocument,
-    onChange: (OverlayDocument) -> Unit,
-    transform: (OverlayPreset) -> OverlayPreset,
-): Boolean {
-    return publish(document.copy(selected = transform(document.selected)), onChange)
-}
-
-private fun publish(document: OverlayDocument, onChange: (OverlayDocument) -> Unit): Boolean =
-    if (isValidDocument(document)) {
-        onChange(document)
-        true
-    } else false
-
-private fun isValidDocument(document: OverlayDocument): Boolean =
-    runCatching { OverlayCodec.encode(document) }.isSuccess
-
-internal fun builtinName(preset: OverlayPreset): StringResource = when (preset.name) {
-    "Top Row" -> Res.string.video_editor_template_top_row
-    "HUD" -> Res.string.video_editor_template_hud
-    "Minimal" -> Res.string.video_editor_template_minimal
-    "Panel" -> Res.string.video_editor_template_panel
-    "Large" -> Res.string.video_editor_template_large
+internal fun builtinName(preset: OverlayPreset): StringResource = when (preset.id) {
+    "top-row" -> Res.string.video_editor_template_top_row
+    "hud" -> Res.string.video_editor_template_hud
+    "minimal" -> Res.string.video_editor_template_minimal
+    "studio-panel" -> Res.string.video_editor_template_panel
+    "studio-large" -> Res.string.video_editor_template_large
     else -> Res.string.video_editor_template_racing
 }
 
 private fun kindLabel(kind: OverlayWidgetKind): StringResource = when (kind) {
-    OverlayWidgetKind.VALUE_CARD -> Res.string.video_editor_kind_value_card
-    OverlayWidgetKind.ICON_VALUE -> Res.string.video_editor_kind_icon_value
-    OverlayWidgetKind.ARC -> Res.string.video_editor_kind_arc
-    OverlayWidgetKind.ARC_LEFT -> Res.string.video_editor_kind_arc_left
-    OverlayWidgetKind.ARC_RIGHT -> Res.string.video_editor_kind_arc_right
+    OverlayWidgetKind.VALUE_CARD, OverlayWidgetKind.ICON_VALUE -> Res.string.video_editor_kind_card
+    OverlayWidgetKind.ARC, OverlayWidgetKind.ARC_LEFT, OverlayWidgetKind.ARC_RIGHT -> Res.string.video_editor_kind_dial
     OverlayWidgetKind.BAR -> Res.string.video_editor_kind_bar
     OverlayWidgetKind.TEXT -> Res.string.video_editor_kind_text
 }
 
-private fun comparisonLabel(comparison: OverlayComparison): StringResource = when (comparison) {
-    OverlayComparison.GT -> Res.string.video_editor_comparison_gt
-    OverlayComparison.GTE -> Res.string.video_editor_comparison_gte
-    OverlayComparison.LT -> Res.string.video_editor_comparison_lt
-    OverlayComparison.LTE -> Res.string.video_editor_comparison_lte
-    OverlayComparison.EQ -> Res.string.video_editor_comparison_eq
-    OverlayComparison.NE -> Res.string.video_editor_comparison_ne
-}
-
-private fun iconLabel(icon: OverlayIcon): StringResource = when (icon) {
-    OverlayIcon.AUTO -> Res.string.video_editor_icon_auto
-    OverlayIcon.BATTERY -> Res.string.video_editor_icon_battery
-    OverlayIcon.BOLT -> Res.string.video_editor_icon_bolt
-    OverlayIcon.TEMPERATURE -> Res.string.video_editor_icon_temperature
-    OverlayIcon.GAUGE -> Res.string.video_editor_icon_gauge
-    OverlayIcon.WARNING -> Res.string.video_editor_icon_warning
-    OverlayIcon.CURRENT -> Res.string.video_editor_icon_current
+private fun anchorLabel(anchor: OverlayAnchor): StringResource = when (anchor) {
+    OverlayAnchor.TOP_START -> Res.string.video_anchor_top_start
+    OverlayAnchor.TOP_CENTER -> Res.string.video_anchor_top_center
+    OverlayAnchor.TOP_END -> Res.string.video_anchor_top_end
+    OverlayAnchor.CENTER_START -> Res.string.video_anchor_center_start
+    OverlayAnchor.CENTER -> Res.string.video_anchor_center
+    OverlayAnchor.CENTER_END -> Res.string.video_anchor_center_end
+    OverlayAnchor.BOTTOM_START -> Res.string.video_anchor_bottom_start
+    OverlayAnchor.BOTTOM_CENTER -> Res.string.video_anchor_bottom_center
+    OverlayAnchor.BOTTOM_END -> Res.string.video_anchor_bottom_end
 }
 
 @Composable
@@ -886,12 +654,3 @@ internal fun videoMetricLabel(metric: VideoMetric): String = stringResource(when
     VideoMetric.ELAPSED -> Res.string.video_editor_metric_elapsed
     VideoMetric.DISTANCE -> Res.string.video_editor_metric_distance
 })
-
-private fun String.alphaHex(): Int = overlayColorAlpha(this)
-
-private fun String.withAlpha(alpha: Int): String =
-    overlayColorWithAlpha(this, alpha)
-
-private fun String.toComposeColor(): Color =
-    runCatching { Color(android.graphics.Color.parseColor(this)) }.getOrDefault(Color.Transparent)
-

@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class OverlaySceneTest {
@@ -213,6 +214,21 @@ class OverlaySceneTest {
         val scene = scene(OverlayTemplates.minimal(), full, 1920, 1080)
         assertTrue(scene.ops.filterIsInstance<OverlayScrimOp>().none { it.darkAtTop })
         assertTrue(scene.widgets.all { it.top > 1080 / 2 })
+    }
+
+    @Test
+    fun onlyATopThresholdEarnsAChipAndItSaysTheNumber() {
+        val hud = OverlayTemplates.hud()
+        val hot = live(VideoMetric.ESC_TEMPERATURE to VideoReading(85.0), VideoMetric.DUTY to VideoReading(90.0))
+        val scene = scene(hud, hot, 1080, 1920)
+        val chip = scene.texts().single { it.runs.singleOrNull()?.text?.endsWith("90 %") == true }
+        assertEquals(OverlayPalette.ON_ORANGE.toInt(), chip.runs.single().color)
+        assertFalse(scene.texts().any { it.runs.singleOrNull()?.text?.endsWith("85 °C") == true }, "one chip, first widget wins")
+
+        assertNull(overlayWarning(hud, live(VideoMetric.ESC_TEMPERATURE to VideoReading(70.0))), "the lower tier only recolours")
+        assertNull(overlayWarning(hud, live(VideoMetric.ESC_TEMPERATURE to VideoReading(Double.NaN))))
+        assertNull(overlayWarning(hud, null))
+        assertEquals("soc", overlayWarning(hud, live(VideoMetric.SOC to VideoReading(10.0)))?.id)
     }
 
     // --- the racing preset ---
