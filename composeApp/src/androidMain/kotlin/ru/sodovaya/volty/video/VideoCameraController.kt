@@ -67,6 +67,15 @@ internal data class VideoCameraState(
     /** The current file's size and length so far, for the time-left estimate. */
     val recordedBytes: Long = 0,
     val recordedNanos: Long = 0,
+    /**
+     * The camera itself failed and needs a rebind. Kept apart from [error] and from the file's outcome: a camera that
+     * fails mid-recording still finalizes a good file, and that must not make the failure look like a clean save.
+     */
+    val cameraFailed: Boolean = false,
+    /** How the last recording ended; null until one has. */
+    val stopOutcome: VideoStopOutcome? = null,
+    /** The app stopped the last recording itself, to keep a minute of storage in hand. */
+    val stoppedForStorage: Boolean = false,
 )
 
 /** Main-thread camera owner; only the overlay listener runs on its dedicated GL thread. */
@@ -79,21 +88,22 @@ internal class VideoCameraController(private val context: Context, private val o
     private var capture: VideoCapture<Recorder>? = null
     private var recording: Recording? = null
     private var current: Segment? = null
-    private var effect: OverlayEffect? = null
+    private var effects: List<OverlayEffect> = emptyList()
     private var view: PreviewView? = null
+    // Two effects, two threads: the file's overlay must never wait behind the preview's.
     private val overlayThread = HandlerThread("RideVideoOverlay").apply { start() }
     private val handler = Handler(overlayThread.looper)
+    private val previewThread = HandlerThread("RideVideoPreviewOverlay").apply { start() }
+    private val previewHandler = Handler(previewThread.looper)
     private val timeline = VideoTimeline()
-    private val renderer = VideoOverlayRenderer(context)
-    private val scales = OverlayScaleTracker()
-    private val tripTracker = VideoTripTracker()
-    private val dialSmoother = ru.sodovaya.volty.presentation.video.VideoDialSmoother()
+    private val videoRenderer = VideoOverlayRenderer(context)
+    private val previewRenderer = VideoOverlayRenderer(context)
+    private var storageStopRequested = false
     /** True while the editor takes a still, so the frame it gets has no old overlay burned into it. */
     @Volatile var overlayHidden = false
     @Volatile private var recordedSeconds = 0L
     @Volatile private var overlayRecording = false
     private val shutterGuard = VideoShutterGuard()
-    private val frameRate = VideoFrameRateMeter()
     /** The microphone choice, from the screen; the volume keys need it as much as the shutter does. */
     @Volatile var audioWanted = false
     @Volatile var preset: OverlayPreset = OverlayTemplates.hud()
@@ -207,6 +217,93 @@ internal class VideoCameraController(private val context: Context, private val o
         )
     }
 
+    /**
+     * Everything one overlay target needs, confined to that target's GL thread.
+     *
+     * **Why two effects (I5).** The file's rotation follows the accelerometer and the preview's follows the display,
+     * so with auto-rotate off and the phone clamped sideways they differ (preview 0, file 90). One effect for
+     * PREVIEW and VIDEO_CAPTURE together is a sharing effect: CameraX feeds it one stream and one rotation, and the
+     * overlay would come out sideways in one of the two. CameraX allows one effect per target as long as the targets
+     * do not overlap ("More than one effects has targets %s" is its only check, besides "one sharing effect"), and
+     * each then receives its own target's `Frame.rotationDegrees`. The cost is a second raster at the preview's size
+     * on its own thread; the recorded one is capped by [OverlayRepaintLimiter] and the preview is not.
+     */
+    private inner class OverlayPipeline(
+        private val recorded: Boolean,
+        private val renderer: VideoOverlayRenderer,
+        realtime: Boolean,
+    ) {
+        private val clock = VideoFrameClock(realtime)
+        private val gate = OverlayDrawGate()
+        private val limiter = OverlayRepaintLimiter()
+        private val scales = OverlayScaleTracker()
+        private val trips = VideoTripTracker()
+        private val dials = ru.sodovaya.volty.presentation.video.VideoDialSmoother()
+        private val meter = VideoFrameRateMeter()
+        private var clockReported = false
+        private val guard = OverlayDrawGuard { error ->
+            Log.w(TAG, "Overlay draw failed; the frame is recorded without it, further failures are counted only", error)
+            mutableState.update { it.copy(overlayFailed = true) }
+        }
+
+        /**
+         * Runs on this target's GL thread. An exception that escapes it kills the process, and with it the whole
+         * recording, so nothing in here may throw. Returning true even after a failure keeps the frame flowing to
+         * the encoder (false would DROP it): it just carries the previous overlay or none.
+         */
+        fun onDraw(frame: Frame): Boolean {
+            val drawn = guard.attempt { draw(frame) }
+            if (!drawn) gate.invalidate()
+            return true
+        }
+
+        private fun draw(frame: Frame) {
+            if (recorded) meter.onFrame(frame.timestampNanos)?.let { rate ->
+                if (rate != state.value.frameRate) mutableState.update { it.copy(frameRate = rate) }
+            }
+            val now = SystemClock.elapsedRealtime()
+            val time = clock.frameMillis(frame.timestampNanos, now)
+            if (clock.timebaseMismatch && !clockReported) {
+                clockReported = true
+                Log.w(TAG, "Camera claims a REALTIME timebase but its frames disagree; estimating the offset instead")
+                mutableState.update { it.copy(clockMismatch = true) }
+            }
+            val snapshot = synchronized(timeline) { timeline.sample(time) }
+            if (overlayHidden) {
+                renderer.clear(frame.overlayCanvas)
+                gate.invalidate()
+                return
+            }
+            val preset = preset
+            val trip = if (overlayUsesTrip(preset)) {
+                trips.trip(
+                    tripScope, overlayRecording, recordedSeconds,
+                    RideSessionClock.secondsAt(System.currentTimeMillis()),
+                    snapshot?.readings?.get(VideoMetric.DISTANCE)?.value,
+                )
+            } else {
+                OverlayTrip()
+            }
+            val ranges = scales.update(preset, snapshot, unitSystem)
+            val smoothed = dials.advance(snapshot, time)
+            val key = overlayDrawKey(preset, snapshot, strings, unitSystem, geometryOf(frame), trip = trip, scales = ranges, dials = smoothed)
+            // Touching the canvas costs a software raster plus a full-size upload; skipping it leaves the previous
+            // overlay in place, which is correct whenever the key has not changed.
+            if (!gate.wouldDraw(key)) return
+            // While a file is being written its overlay repaints at most 15 times a second (I6); a held-back change
+            // is drawn on a later frame, since the gate has not recorded it.
+            if (!limiter.allow(now, limited = recorded && overlayRecording)) return
+            gate.shouldDraw(key)
+            val canvas = frame.overlayCanvas
+            try {
+                renderer.draw(frame, canvas, preset, snapshot, strings, unitSystem, trip, ranges, smoothed)
+            } catch (error: Exception) {
+                runCatching { renderer.clear(canvas) }
+                throw error
+            }
+        }
+    }
+
     private fun bind() {
         val cameraProvider = provider ?: return
         val previewView = view ?: return
@@ -220,69 +317,20 @@ internal class VideoCameraController(private val context: Context, private val o
             require(qualities.isNotEmpty()) { "No supported video quality" }
             val quality = state.value.quality.takeIf { it in qualities } ?: qualities.first()
             cameraProvider.unbind(*listOfNotNull(preview, capture).toTypedArray())
-            effect?.close()
+            effects.forEach { it.close() }
             val realtime = Camera2CameraInfo.from(info).getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
                 CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
-            val clock = VideoFrameClock(realtime)
-            val nextEffect = OverlayEffect(CameraEffect.PREVIEW or CameraEffect.VIDEO_CAPTURE, 0, handler) { error ->
+            val onError = { error: Throwable ->
                 ContextCompat.getMainExecutor(context).execute { if (token == generation && !disposed) failed(error) }
             }
             // A new effect has a new, empty overlay surface: its own gate and guard, never the previous bind's.
-            val gate = OverlayDrawGate()
-            val guard = OverlayDrawGuard { error ->
-                Log.w(TAG, "Overlay draw failed; the frame is recorded without it, further failures are counted only", error)
-                mutableState.update { it.copy(overlayFailed = true) }
-            }
-            var clockReported = false
-            nextEffect.setOnDrawListener { frame ->
-                // This runs on the GL thread. An exception that escapes it kills the process, and with it the whole
-                // recording, so nothing in here may throw. Returning true even after a failure keeps the frame
-                // flowing to the encoder (false would DROP it): it just carries the previous overlay or none.
-                val drawn = guard.attempt {
-                    frameRate.onFrame(frame.timestampNanos)?.let { rate ->
-                        if (rate != state.value.frameRate) mutableState.update { it.copy(frameRate = rate) }
-                    }
-                    val now = SystemClock.elapsedRealtime()
-                    val time = clock.frameMillis(frame.timestampNanos, now)
-                    if (clock.timebaseMismatch && !clockReported) {
-                        clockReported = true
-                        Log.w(TAG, "Camera claims a REALTIME timebase but its frames disagree; estimating the offset instead")
-                        mutableState.update { it.copy(clockMismatch = true) }
-                    }
-                    val snapshot = synchronized(timeline) { timeline.sample(time) }
-                    if (overlayHidden) {
-                        renderer.clear(frame.overlayCanvas)
-                        gate.invalidate()
-                        return@attempt
-                    }
-                    val preset = preset
-                    val trip = if (overlayUsesTrip(preset)) {
-                        tripTracker.trip(
-                            tripScope, overlayRecording, recordedSeconds,
-                            RideSessionClock.secondsAt(System.currentTimeMillis()),
-                            snapshot?.readings?.get(VideoMetric.DISTANCE)?.value,
-                        )
-                    } else {
-                        OverlayTrip()
-                    }
-                    val ranges = scales.update(preset, snapshot, unitSystem)
-                    val dials = dialSmoother.advance(snapshot, time)
-                    val key = overlayDrawKey(preset, snapshot, strings, unitSystem, geometryOf(frame), trip = trip, scales = ranges, dials = dials)
-                    // Touching the canvas costs a software raster plus a full-size upload; skipping it leaves the
-                    // previous overlay in place, which is correct whenever the key has not changed.
-                    if (!gate.shouldDraw(key)) return@attempt
-                    val canvas = frame.overlayCanvas
-                    try {
-                        renderer.draw(frame, canvas, preset, snapshot, strings, unitSystem, trip, ranges, dials)
-                    } catch (error: Exception) {
-                        runCatching { renderer.clear(canvas) }
-                        throw error
-                    }
-                }
-                if (!drawn) gate.invalidate()
-                true
-            }
-            effect = nextEffect
+            val videoEffect = OverlayEffect(CameraEffect.VIDEO_CAPTURE, 0, handler, onError)
+            val videoPipeline = OverlayPipeline(recorded = true, renderer = videoRenderer, realtime = realtime)
+            videoEffect.setOnDrawListener(videoPipeline::onDraw)
+            val previewEffect = OverlayEffect(CameraEffect.PREVIEW, 0, previewHandler, onError)
+            val previewPipeline = OverlayPipeline(recorded = false, renderer = previewRenderer, realtime = realtime)
+            previewEffect.setOnDrawListener(previewPipeline::onDraw)
+            effects = listOf(videoEffect, previewEffect)
             val display = displayRotation()
             val nextPreview = Preview.Builder().setTargetRotation(display)
                 .setTargetAspectRatio(AspectRatio.RATIO_16_9).build().also {
@@ -295,15 +343,15 @@ internal class VideoCameraController(private val context: Context, private val o
             capture = nextCapture
             // Preview uses FIT_CENTER, so the whole encoded composition is visible in either aspect ratio.
             cameraProvider.bindToLifecycle(owner, selector, UseCaseGroup.Builder()
-                .addUseCase(nextPreview).addUseCase(nextCapture).addEffect(nextEffect).build())
-            mutableState.update { it.copy(ready = true, qualities = qualities, quality = quality,
+                .addUseCase(nextPreview).addUseCase(nextCapture).addEffect(videoEffect).addEffect(previewEffect).build())
+            mutableState.update { it.copy(ready = true, cameraFailed = false, qualities = qualities, quality = quality,
                 canSwitch = cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) && cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) }
         } catch (error: Exception) { failed(error) }
     }
 
     /** The one thing the on-screen shutter and the volume keys both press. Only ever called from a press. */
     fun shutter() {
-        val action = videoShutterAction(state.value.phase, state.value.ready)
+        val action = videoShutterAction(state.value.phase, state.value.ready, blocked = overlayHidden)
         if (action == VideoShutterAction.NONE || !shutterGuard.allow(SystemClock.elapsedRealtime())) return
         if (action == VideoShutterAction.START) start(audioWanted) else stop()
     }
@@ -314,8 +362,19 @@ internal class VideoCameraController(private val context: Context, private val o
         StatFs((directory.takeIf { it.exists() } ?: Environment.getExternalStorageDirectory()).path).availableBytes
     }.getOrNull()
 
+    /** The app's own stop when storage runs short; the file then finalizes with a minute's room for its index. */
+    fun stopForStorage() {
+        if (state.value.phase != VideoRecordingPhase.RECORDING) return
+        Log.w(TAG, "Stopping: less than a minute of storage left")
+        storageStopRequested = true
+        stop()
+    }
+
     private fun start(audio: Boolean) {
         if (!state.value.ready || !canEditVideoOverlay(state.value.phase) || recording != null) return
+        // Never record with the overlay switched off for the editor's still: it would stay off for the whole file.
+        if (overlayHidden) return
+        storageStopRequested = false
         if (audio && ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             failed(SecurityException("Microphone permission required")); return
         }
@@ -325,7 +384,7 @@ internal class VideoCameraController(private val context: Context, private val o
         rideStamp = "Volty_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.ROOT).format(Date())}"
         // The file's rotation is fixed when a recording starts: take the sensor's latest word now.
         orientation.rotation?.let { capture?.targetRotation = it }
-        mutableState.update { it.copy(phase = VideoRecordingPhase.STARTING, saved = null, savedParts = 0, interrupted = false, error = null, durationSeconds = 0, recordedBytes = 0, recordedNanos = 0) }
+        mutableState.update { it.copy(phase = VideoRecordingPhase.STARTING, saved = null, savedParts = 0, interrupted = false, error = null, durationSeconds = 0, recordedBytes = 0, recordedNanos = 0, stopOutcome = null, stoppedForStorage = false) }
         finalization.recordingStarted()
         try {
             launchSegment()
@@ -453,12 +512,20 @@ internal class VideoCameraController(private val context: Context, private val o
         current = null
         overlayRecording = false
         recordedSeconds = 0
+        val forStorage = storageStopRequested
+        storageStopRequested = false
         if (outcome == VideoOutputStatus.DISCARD) {
             mutableState.update { it.copy(phase = VideoRecordingPhase.IDLE, saved = it.saved.takeIf { _ -> it.savedParts > 0 },
-                error = "${event.error}: ${event.cause?.message.orEmpty()}") }
+                error = "${event.error}: ${event.cause?.message.orEmpty()}",
+                stopOutcome = videoStopOutcome(it.cameraFailed, discarded = true, interrupted = false, stoppedForStorage = forStorage),
+                stoppedForStorage = forStorage) }
         } else {
+            // A camera failure keeps its error: the file being fine says nothing about the camera (I1).
             mutableState.update { it.copy(phase = VideoRecordingPhase.IDLE, saved = uri, savedParts = it.savedParts + 1,
-                interrupted = outcome == VideoOutputStatus.INTERRUPTED, error = null) }
+                interrupted = outcome == VideoOutputStatus.INTERRUPTED || forStorage,
+                error = if (it.cameraFailed) it.error else null,
+                stopOutcome = videoStopOutcome(it.cameraFailed, discarded = false, interrupted = outcome == VideoOutputStatus.INTERRUPTED, stoppedForStorage = forStorage),
+                stoppedForStorage = forStorage) }
         }
         rotating = false
         if (disposed) {
@@ -470,7 +537,7 @@ internal class VideoCameraController(private val context: Context, private val o
 
     private fun failed(error: Throwable) {
         Log.w(TAG, "Camera failed", error)
-        mutableState.update { it.copy(ready = false, error = error.message ?: error.javaClass.simpleName) }
+        mutableState.update { it.copy(ready = false, cameraFailed = true, error = error.message ?: error.javaClass.simpleName) }
         if (recording != null) stop() else mutableState.update { it.copy(phase = VideoRecordingPhase.IDLE) }
     }
 
@@ -489,8 +556,9 @@ internal class VideoCameraController(private val context: Context, private val o
         preview = null
         capture = null
         // close queues GL resource disposal onto the supplied handler before quitSafely.
-        effect?.close(); effect = null
+        effects.forEach { it.close() }; effects = emptyList()
         overlayThread.quitSafely()
+        previewThread.quitSafely()
     }
 
     private companion object {

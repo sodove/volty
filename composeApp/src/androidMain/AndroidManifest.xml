@@ -83,7 +83,7 @@
             </intent-filter>
         </activity>
         <activity android:name=".video.RideVideoActivity" android:exported="false"
-            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|keyboard|keyboardHidden|fontScale|density|layoutDirection" />
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|uiMode|keyboard|keyboardHidden|fontScale|density|layoutDirection|locale|colorMode|navigation|touchscreen|mcc|mnc|fontWeightAdjustment" />
         <service
             android:name=".service.MonitoringService"
             android:foregroundServiceType="connectedDevice|location"

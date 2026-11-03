@@ -123,20 +123,25 @@ internal fun VideoCameraScreen(
     var sheet by remember { mutableStateOf(VideoSheetKind.NONE) }
     var still by remember { mutableStateOf<ImageBitmap?>(null) }
     var pendingPreset by remember { mutableStateOf<OverlayPreset?>(null) }
+    var opening by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     // The editor's stage uses a real frame when one can be had. The overlay comes off first, or the old one would be
     // baked into the picture under the one being arranged; the camera itself goes away with the PreviewView.
     fun openEditor() {
+        // From the first line: the overlay is about to go off, so no press may start a recording until the editor
+        // is up (I3). The controller refuses a start while it is off as well.
+        opening = true
         sheet = VideoSheetKind.NONE
         camera.overlayHidden = true
         scope.launch {
             delay(STILL_SETTLE_MILLIS)
             still = previewView?.bitmap?.asImageBitmap()
             editing = true
+            opening = false
         }
     }
     val vehicleName = vehicle.collectAsState().value?.name.orEmpty()
-    SideEffect { camera.audioWanted = audio; onEditing(editing) }
+    SideEffect { camera.audioWanted = audio; onEditing(editing || opening) }
     // One policy for the system Back and the on-screen one: a live recording is never ended by a single tap.
     fun requestBack() {
         if (pendingPreset != null) { pendingPreset = null; return }
@@ -155,6 +160,7 @@ internal fun VideoCameraScreen(
         VideoOverlayEditor(document, overlayStrings, camera.unitSystem, still, component::change, onClose = {
             editing = false
             camera.overlayHidden = false
+            still = null
         })
         return
     }
@@ -165,7 +171,7 @@ internal fun VideoCameraScreen(
     LaunchedEffect(camera) {
         while (true) {
             freeBytes = withContext(Dispatchers.IO) { camera.freeBytes() }
-            delay(STORAGE_REFRESH_MILLIS)
+            delay(if (idle) STORAGE_REFRESH_MILLIS else STORAGE_REFRESH_RECORDING_MILLIS)
         }
     }
     val now by produceState(SystemClock.elapsedRealtime()) {
@@ -178,7 +184,7 @@ internal fun VideoCameraScreen(
     val storage = videoStorageStatus(freeBytes, videoBitsPerSecond(height, audio, state.recordedBytes, state.recordedNanos))
     val chromeState = VideoChromeState(
         phase = state.phase,
-        canShoot = allowed && (state.ready || !idle),
+        canShoot = allowed && !opening && (state.ready || !idle),
         canSwitch = idle && state.canSwitch,
         elapsedSeconds = state.durationSeconds,
         chips = videoChips(linkMonitor.status(now), vehicleName, storage),
@@ -193,19 +199,31 @@ internal fun VideoCameraScreen(
         onQuality = { sheet = VideoSheetKind.QUALITY },
         onOverlay = { sheet = VideoSheetKind.OVERLAY },
     )
+    // I4: a storage alarm while recording, and the app's own stop with a minute in hand.
+    val bitsPerSecond = videoBitsPerSecond(height, audio, state.recordedBytes, state.recordedNanos)
+    var wasLow by remember { mutableStateOf(false) }
+    LaunchedEffect(freeBytes, state.phase) {
+        val recording = state.phase == VideoRecordingPhase.RECORDING
+        val low = storage?.low == true
+        if (videoStorageAlert(wasLow, low, recording)) vibrate(context, VideoHaptic.LOW_STORAGE)
+        wasLow = low
+        if (recording && videoStorageMustStop(freeBytes, bitsPerSecond)) camera.stopForStorage()
+    }
     var savedVisible by remember { mutableStateOf(false) }
     LaunchedEffect(state.saved) {
         savedVisible = state.saved != null
         if (savedVisible) { delay(SAVED_NOTICE_MILLIS); savedVisible = false }
     }
     val notices = videoCaptureNotices(VideoCaptureFacts(
-        error = state.error != null,
+        error = state.cameraFailed || state.stopOutcome == VideoStopOutcome.FAILED,
         overlayFailed = state.overlayFailed,
         audioDenied = audioDenied,
         clockMismatch = state.clockMismatch,
-        saved = savedVisible,
+        // An interrupted file stays on screen until the next recording: it is news the rider did not ask for.
+        saved = savedVisible || state.interrupted,
         savedParts = state.savedParts,
         interrupted = state.interrupted,
+        stoppedForStorage = state.stoppedForStorage,
     )).map { noticeText(it, state.savedParts) }
 
     BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black).safeDrawingPadding()) {
@@ -235,7 +253,7 @@ internal fun VideoCameraScreen(
             }
             VideoNotices(
                 notices,
-                showRetry = state.error != null && idle && allowed,
+                showRetry = state.cameraFailed && idle && allowed,
                 onRetry = { previewView?.let(camera::attach) },
                 modifier = Modifier.align(Alignment.BottomCenter),
             )
@@ -276,8 +294,8 @@ internal fun VideoCameraScreen(
                 text = stringResource(Res.string.video_editor_lose_text),
                 primary = stringResource(Res.string.video_editor_lose_save).takeIf { canKeep },
                 onPrimary = {
-                    overlayKeepAsCopy(document, UUID.randomUUID().toString(), copyName)?.let { component.change(it.copy(selected = preset)) }
-                    pendingPreset = null
+                    val kept = overlayKeepAsCopy(document, UUID.randomUUID().toString(), copyName)
+                    if (kept != null && component.change(kept.copy(selected = preset))) pendingPreset = null
                 },
                 destructive = stringResource(Res.string.video_editor_lose_discard),
                 onDestructive = { component.change(document.copy(selected = preset)); pendingPreset = null },
@@ -298,6 +316,7 @@ private enum class VideoSheetKind { NONE, QUALITY, OVERLAY }
 
 private const val STATUS_REFRESH_MILLIS = 500L
 private const val STORAGE_REFRESH_MILLIS = 5_000L
+private const val STORAGE_REFRESH_RECORDING_MILLIS = 2_000L
 private const val SAVED_NOTICE_MILLIS = 6_000L
 private const val STILL_SETTLE_MILLIS = 300L
 
@@ -306,15 +325,19 @@ private const val STILL_SETTLE_MILLIS = 300L
 private fun VideoHaptics(context: android.content.Context, state: VideoCameraState) {
     val previous = remember { mutableStateOf(state.phase) }
     LaunchedEffect(state.phase) {
-        val haptic = videoHapticFor(previous.value, state.phase, state.error != null)
+        val haptic = videoHapticFor(previous.value, state.phase, state.stopOutcome)
         previous.value = state.phase
-        val vibrator = context.getSystemService(Vibrator::class.java) ?: return@LaunchedEffect
-        when (haptic) {
-            VideoHaptic.STARTED -> vibrator.vibrate(VibrationEffect.createOneShot(90, VibrationEffect.DEFAULT_AMPLITUDE))
-            VideoHaptic.STOPPED -> vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 70, 90, 70), -1))
-            VideoHaptic.FAILED -> vibrator.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
-            null -> Unit
-        }
+        haptic?.let { vibrate(context, it) }
+    }
+}
+
+private fun vibrate(context: android.content.Context, haptic: VideoHaptic) {
+    val vibrator = context.getSystemService(Vibrator::class.java) ?: return
+    when (haptic) {
+        VideoHaptic.STARTED -> vibrator.vibrate(VibrationEffect.createOneShot(90, VibrationEffect.DEFAULT_AMPLITUDE))
+        VideoHaptic.STOPPED -> vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 70, 90, 70), -1))
+        VideoHaptic.FAILED -> vibrator.vibrate(VibrationEffect.createOneShot(500, VibrationEffect.DEFAULT_AMPLITUDE))
+        VideoHaptic.LOW_STORAGE -> vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 60, 80, 60, 80, 60), -1))
     }
 }
 
@@ -341,6 +364,7 @@ private fun videoChips(link: VideoLinkStatus, vehicleName: String, storage: Vide
 @Composable
 private fun noticeText(notice: VideoCaptureNotice, savedParts: Int): String = when (notice) {
     VideoCaptureNotice.ERROR -> stringResource(Res.string.video_error)
+    VideoCaptureNotice.STORAGE_STOPPED -> stringResource(Res.string.video_stopped_storage)
     VideoCaptureNotice.OVERLAY_FAILED -> stringResource(Res.string.video_overlay_failed)
     VideoCaptureNotice.AUDIO_DENIED -> stringResource(Res.string.video_audio_denied)
     VideoCaptureNotice.CLOCK_MISMATCH -> stringResource(Res.string.video_clock_mismatch)

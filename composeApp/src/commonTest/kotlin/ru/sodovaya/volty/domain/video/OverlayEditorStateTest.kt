@@ -514,6 +514,14 @@ class OverlayEditorStateTest {
         assertNull(overlayKeepAsCopy(OverlayDocument(selected = orphan, saved = full), "k", "x"))
     }
 
+    @Test
+    fun aCopyOfALongNameIsCutToFitInsteadOfBeingRefused() {
+        val orphan = hud.copy(widgets = hud.widgets.take(2))
+        val kept = overlayKeepAsCopy(OverlayDocument(selected = orphan), "k", "Я".repeat(80) + ", копия")!!
+        assertEquals(64, kept.selected.name.length)
+        assertTrue(validOverlayPreset(kept.selected))
+    }
+
     // --- persistence ---
 
     @Test

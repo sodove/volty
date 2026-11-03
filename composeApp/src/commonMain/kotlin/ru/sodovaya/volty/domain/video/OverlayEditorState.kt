@@ -4,6 +4,7 @@ import ru.sodovaya.volty.util.UnitSystem
 import kotlin.math.abs
 
 const val OVERLAY_MAX_SAVED = 32
+private const val MAX_PRESET_NAME = 64
 private const val MAX_WIDGETS = 24
 private const val HISTORY_LIMIT = 50
 
@@ -130,7 +131,8 @@ fun overlayPresetSwitchLosesEdits(document: OverlayDocument): Boolean {
 
 /** The selected preset kept under a new id, or null when the saved list is full or the name is empty. */
 fun overlayKeepAsCopy(document: OverlayDocument, id: String, name: String): OverlayDocument? {
-    val trimmed = name.trim()
+    // The validator caps a name at 64; «…, копия» on a long name would otherwise be refused without a word.
+    val trimmed = name.trim().take(MAX_PRESET_NAME).trim()
     if (trimmed.isEmpty() || document.saved.size >= OVERLAY_MAX_SAVED) return null
     val copy = document.selected.copy(id = id, name = trimmed)
     return document.copy(selected = copy, saved = document.saved + copy)

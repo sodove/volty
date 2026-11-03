@@ -14,8 +14,10 @@ enum class VideoShutterAction { START, STOP, NONE }
  * What a press of the shutter means. This is the only road to a recording: nothing calls start on entering the
  * screen, and a press while the file is being prepared or finalized does nothing rather than queue a second action.
  */
-fun videoShutterAction(phase: VideoRecordingPhase, ready: Boolean): VideoShutterAction = when (phase) {
-    VideoRecordingPhase.IDLE -> if (ready) VideoShutterAction.START else VideoShutterAction.NONE
+fun videoShutterAction(phase: VideoRecordingPhase, ready: Boolean, blocked: Boolean = false): VideoShutterAction = when (phase) {
+    // [blocked]: the editor is opening and the live overlay is off for its still. A recording started in that
+    // window would burn nothing in for its whole length, which is the loss this feature exists to prevent.
+    VideoRecordingPhase.IDLE -> if (ready && !blocked) VideoShutterAction.START else VideoShutterAction.NONE
     VideoRecordingPhase.RECORDING -> VideoShutterAction.STOP
     VideoRecordingPhase.STARTING, VideoRecordingPhase.STOPPING -> VideoShutterAction.NONE
 }
@@ -42,15 +44,19 @@ enum class VideoVolumeKey {
 }
 
 /**
- * The volume keys are a second shutter on the capture screen. While the file is starting or stopping a press is
- * swallowed: it must neither queue an action nor change the volume mid-ride. Holding a key auto-repeats, and only the
- * first press counts. The editor and an unavailable camera leave the keys alone.
+ * The volume keys START a recording and nothing else. **Retraction:** they were a full second shutter, so one press
+ * stopped a live recording, with no question asked, although Back asks first because a stray glove tap must not end
+ * the ride's video. A handlebar clamp grips exactly the edges the keys are on. While a file exists, the keys are
+ * swallowed (no stop, and no volume change mid-ride); stopping is the on-screen shutter.
+ *
+ * The keys can still start a recording from a pocket when the screen is on and this screen is in front. That is a
+ * press, not an auto-start, and it is the rider's call: the screen is kept on deliberately for the mount.
  */
 fun videoVolumeKey(phase: VideoRecordingPhase, ready: Boolean, editing: Boolean, repeatCount: Int): VideoVolumeKey = when {
     editing -> VideoVolumeKey.PASS
     phase == VideoRecordingPhase.IDLE && !ready -> VideoVolumeKey.PASS
+    phase != VideoRecordingPhase.IDLE -> VideoVolumeKey.CONSUME
     repeatCount > 0 -> VideoVolumeKey.CONSUME
-    videoShutterAction(phase, ready) == VideoShutterAction.NONE -> VideoVolumeKey.CONSUME
     else -> VideoVolumeKey.SHUTTER
 }
 
@@ -61,19 +67,81 @@ fun videoRecordingClock(totalSeconds: Long): String {
     return "${two(seconds / 3600)}:${two((seconds % 3600) / 60)}:${two(seconds % 60)}"
 }
 
-enum class VideoHaptic { STARTED, STOPPED, FAILED }
+enum class VideoHaptic { STARTED, STOPPED, FAILED, LOW_STORAGE }
+
+/** How a recording ended, as the rider must feel it; kept apart from whether the camera still works. */
+enum class VideoStopOutcome {
+    /** The rider stopped it, and the file is whole. */
+    COMPLETE,
+
+    /** Something else stopped it (storage, the camera going away, a limit). A file was kept. */
+    INTERRUPTED,
+
+    /** Nothing usable was kept, or the camera failed. */
+    FAILED,
+}
 
 /**
- * Feedback follows what the recorder actually did, not the press: one pulse for a started recording, two for a
- * stopped one, and a long one for a recording that ended on an error, because that is the case a rider must not miss.
+ * [cameraFailed] wins: a camera that failed mid-recording finalizes a perfectly good file, and an earlier revision
+ * reported exactly that ("saved") while the shutter was dead.
  */
-fun videoHapticFor(previous: VideoRecordingPhase, next: VideoRecordingPhase, hasError: Boolean): VideoHaptic? = when {
+fun videoStopOutcome(cameraFailed: Boolean, discarded: Boolean, interrupted: Boolean, stoppedForStorage: Boolean): VideoStopOutcome = when {
+    cameraFailed || discarded -> VideoStopOutcome.FAILED
+    interrupted || stoppedForStorage -> VideoStopOutcome.INTERRUPTED
+    else -> VideoStopOutcome.COMPLETE
+}
+
+/**
+ * Feedback follows what the recorder actually did, not the press: one pulse for a started recording, two for a stop
+ * the rider asked for, and a long one for any stop they did not ask for. **Retraction:** an interrupted recording
+ * (storage, source inactive) used to get the same double pulse as a deliberate stop, so a rider at speed who felt
+ * "stopped" without touching anything had no reason to look.
+ */
+fun videoHapticFor(previous: VideoRecordingPhase, next: VideoRecordingPhase, outcome: VideoStopOutcome?): VideoHaptic? = when {
     previous == next -> null
     next == VideoRecordingPhase.RECORDING -> VideoHaptic.STARTED
     next == VideoRecordingPhase.IDLE && previous != VideoRecordingPhase.IDLE ->
-        if (hasError) VideoHaptic.FAILED else VideoHaptic.STOPPED
+        if (outcome == null || outcome == VideoStopOutcome.COMPLETE) VideoHaptic.STOPPED else VideoHaptic.FAILED
     else -> null
 }
+
+/** One pulse at the moment the storage chip turns orange during a recording, and only then. */
+fun videoStorageAlert(wasLow: Boolean, isLow: Boolean, recording: Boolean): Boolean = recording && isLow && !wasLow
+
+/** Seconds of video the app keeps in hand: it stops the file itself rather than lean on CameraX's own reserve. */
+const val STORAGE_STOP_MARGIN_SECONDS = 60L
+
+/**
+ * True when the app should stop the recording now: less than [STORAGE_STOP_MARGIN_SECONDS] of video fits. The
+ * file then finalizes with room to spare for its index, instead of depending on the Recorder stopping in time.
+ */
+fun videoStorageMustStop(freeBytes: Long?, bitsPerSecond: Long): Boolean {
+    if (freeBytes == null || freeBytes < 0 || bitsPerSecond <= 0) return false
+    return freeBytes * 8 < bitsPerSecond * STORAGE_STOP_MARGIN_SECONDS
+}
+
+/**
+ * Caps how often the RECORDED overlay is repainted. Each repaint is a full software raster of the whole frame on the
+ * camera's GL thread, and with smoothed dials the redraw gate alone would let almost every frame through. The preview
+ * is not capped. A change held back is not lost: the gate has not seen it, so it is drawn on the first frame after
+ * the interval.
+ */
+class OverlayRepaintLimiter(private val minIntervalMillis: Long = 1000L / MAX_RECORDED_REPAINT_HZ) {
+    private var last: Long? = null
+
+    fun allow(nowMillis: Long, limited: Boolean): Boolean {
+        val previous = last
+        if (limited && previous != null && nowMillis - previous in 0 until minIntervalMillis) return false
+        last = nowMillis
+        return true
+    }
+
+    fun reset() {
+        last = null
+    }
+}
+
+const val MAX_RECORDED_REPAINT_HZ = 15L
 
 // --- storage ---------------------------------------------------------------------------------------------------
 
@@ -197,7 +265,7 @@ class VideoFrameRateMeter {
 
 // --- notices ---------------------------------------------------------------------------------------------------
 
-enum class VideoCaptureNotice { ERROR, OVERLAY_FAILED, AUDIO_DENIED, CLOCK_MISMATCH, INTERRUPTED, SAVED_PARTS, SAVED }
+enum class VideoCaptureNotice { ERROR, STORAGE_STOPPED, OVERLAY_FAILED, AUDIO_DENIED, CLOCK_MISMATCH, INTERRUPTED, SAVED_PARTS, SAVED }
 
 data class VideoCaptureFacts(
     val error: Boolean = false,
@@ -207,11 +275,13 @@ data class VideoCaptureFacts(
     val saved: Boolean = false,
     val savedParts: Int = 0,
     val interrupted: Boolean = false,
+    val stoppedForStorage: Boolean = false,
 )
 
 /** Most serious first; the screen shows the first [MAX_NOTICES], so a saved file can never hide a failure. */
 fun videoCaptureNotices(facts: VideoCaptureFacts): List<VideoCaptureNotice> = buildList {
     if (facts.error) add(VideoCaptureNotice.ERROR)
+    if (facts.stoppedForStorage) add(VideoCaptureNotice.STORAGE_STOPPED)
     if (facts.overlayFailed) add(VideoCaptureNotice.OVERLAY_FAILED)
     if (facts.audioDenied) add(VideoCaptureNotice.AUDIO_DENIED)
     if (facts.clockMismatch) add(VideoCaptureNotice.CLOCK_MISMATCH)

@@ -43,9 +43,11 @@ class VideoCapturePolicyTest {
     }
 
     @Test
-    fun theVolumeKeysAreAShutterOnlyWhereThereIsOne() {
+    fun theVolumeKeysOnlyEverStartARecording() {
         assertEquals(VideoVolumeKey.SHUTTER, videoVolumeKey(idle, ready = true, editing = false, repeatCount = 0))
-        assertEquals(VideoVolumeKey.SHUTTER, videoVolumeKey(recording, ready = true, editing = false, repeatCount = 0))
+        // A clamp on the phone's long edges must not be able to end the ride's video.
+        assertEquals(VideoVolumeKey.CONSUME, videoVolumeKey(recording, ready = true, editing = false, repeatCount = 0))
+        assertEquals(VideoVolumeKey.CONSUME, videoVolumeKey(recording, ready = false, editing = false, repeatCount = 0))
         assertEquals(VideoVolumeKey.PASS, videoVolumeKey(idle, ready = false, editing = false, repeatCount = 0))
         assertEquals(VideoVolumeKey.PASS, videoVolumeKey(idle, ready = true, editing = true, repeatCount = 0))
     }
@@ -59,14 +61,81 @@ class VideoCapturePolicyTest {
 
     @Test
     fun hapticsFollowTheRecorderNotThePress() {
-        assertEquals(VideoHaptic.STARTED, videoHapticFor(starting, recording, hasError = false))
-        assertEquals(VideoHaptic.STOPPED, videoHapticFor(stopping, idle, hasError = false))
-        assertEquals(VideoHaptic.FAILED, videoHapticFor(recording, idle, hasError = true))
-        assertEquals(VideoHaptic.FAILED, videoHapticFor(starting, idle, hasError = true))
-        assertNull(videoHapticFor(idle, starting, hasError = false))
-        assertNull(videoHapticFor(recording, stopping, hasError = false))
-        assertNull(videoHapticFor(recording, recording, hasError = false))
-        assertNull(videoHapticFor(idle, idle, hasError = true))
+        val complete = VideoStopOutcome.COMPLETE
+        val failed = VideoStopOutcome.FAILED
+        assertEquals(VideoHaptic.STARTED, videoHapticFor(starting, recording, null))
+        assertEquals(VideoHaptic.STOPPED, videoHapticFor(stopping, idle, complete))
+        assertEquals(VideoHaptic.FAILED, videoHapticFor(recording, idle, failed))
+        assertEquals(VideoHaptic.FAILED, videoHapticFor(starting, idle, failed))
+        assertNull(videoHapticFor(idle, starting, null))
+        assertNull(videoHapticFor(recording, stopping, null))
+        assertNull(videoHapticFor(recording, recording, null))
+        assertNull(videoHapticFor(idle, idle, failed))
+    }
+
+    @Test
+    fun aStopTheRiderDidNotAskForFeelsLikeAFailure() {
+        assertEquals(VideoHaptic.FAILED, videoHapticFor(recording, idle, VideoStopOutcome.INTERRUPTED))
+        assertEquals(VideoHaptic.FAILED, videoHapticFor(stopping, idle, VideoStopOutcome.INTERRUPTED))
+    }
+
+    @Test
+    fun aCameraFailureOutranksAGoodFile() {
+        assertEquals(VideoStopOutcome.FAILED, videoStopOutcome(cameraFailed = true, discarded = false, interrupted = false, stoppedForStorage = false))
+        assertEquals(VideoStopOutcome.FAILED, videoStopOutcome(cameraFailed = false, discarded = true, interrupted = true, stoppedForStorage = false))
+        assertEquals(VideoStopOutcome.INTERRUPTED, videoStopOutcome(cameraFailed = false, discarded = false, interrupted = true, stoppedForStorage = false))
+        assertEquals(VideoStopOutcome.INTERRUPTED, videoStopOutcome(cameraFailed = false, discarded = false, interrupted = false, stoppedForStorage = true))
+        assertEquals(VideoStopOutcome.COMPLETE, videoStopOutcome(cameraFailed = false, discarded = false, interrupted = false, stoppedForStorage = false))
+    }
+
+    @Test
+    fun lowStoragePulsesOnceWhenItTurnsLowDuringARecording() {
+        assertTrue(videoStorageAlert(wasLow = false, isLow = true, recording = true))
+        assertFalse(videoStorageAlert(wasLow = true, isLow = true, recording = true))
+        assertFalse(videoStorageAlert(wasLow = false, isLow = true, recording = false))
+        assertFalse(videoStorageAlert(wasLow = true, isLow = false, recording = true))
+    }
+
+    @Test
+    fun theAppStopsTheFileWithAMinuteInHand() {
+        val bits = 8_000_000L // one MB/s
+        assertFalse(videoStorageMustStop(60_000_000L, bits))
+        assertTrue(videoStorageMustStop(59_999_999L, bits))
+        assertFalse(videoStorageMustStop(null, bits))
+        assertFalse(videoStorageMustStop(-1, bits))
+        assertFalse(videoStorageMustStop(10, 0))
+    }
+
+    @Test
+    fun theOpeningEditorBlocksTheShutterButNeverAStop() {
+        // The race: the overlay is off for the editor's still, the chrome is still on screen.
+        assertEquals(VideoShutterAction.NONE, videoShutterAction(idle, ready = true, blocked = true))
+        assertEquals(VideoShutterAction.STOP, videoShutterAction(recording, ready = true, blocked = true))
+        assertEquals(VideoVolumeKey.PASS, videoVolumeKey(idle, ready = true, editing = true, repeatCount = 0))
+    }
+
+    @Test
+    fun recordedRepaintsAreCappedAtFifteenAndThePreviewIsNot() {
+        val limiter = OverlayRepaintLimiter()
+        val frames = (0 until 60).map { it * 33L / 1 }
+        val drawn = frames.count { limiter.allow(it, limited = true) }
+        assertTrue(drawn <= 15 * 2 + 1, "60 frames over ~2 s drew $drawn")
+        assertTrue(drawn >= 14, "a change is held back, never dropped: $drawn")
+
+        val free = OverlayRepaintLimiter()
+        assertEquals(60, frames.count { free.allow(it, limited = false) })
+    }
+
+    @Test
+    fun theCapNeverStarvesAndAResetAllowsAtOnce() {
+        val limiter = OverlayRepaintLimiter(66)
+        assertTrue(limiter.allow(1_000, true))
+        assertFalse(limiter.allow(1_033, true))
+        assertTrue(limiter.allow(1_066, true))
+        limiter.reset()
+        assertTrue(limiter.allow(1_070, true))
+        // A clock that steps back is not a reason to stop drawing.
+        assertTrue(limiter.allow(500, true))
     }
 
     @Test
@@ -197,6 +266,8 @@ class VideoCapturePolicyTest {
     fun aSavedFileNeverHidesAFailure() {
         val all = VideoCaptureFacts(error = true, overlayFailed = true, clockMismatch = true, saved = true)
         assertEquals(listOf(VideoCaptureNotice.ERROR, VideoCaptureNotice.OVERLAY_FAILED), videoCaptureNotices(all))
+        val storage = VideoCaptureFacts(stoppedForStorage = true, saved = true, interrupted = true)
+        assertEquals(listOf(VideoCaptureNotice.STORAGE_STOPPED, VideoCaptureNotice.INTERRUPTED), videoCaptureNotices(storage))
     }
 
     @Test

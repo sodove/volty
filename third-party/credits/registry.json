@@ -95,7 +95,7 @@
         "Christian Robertson",
         "Google"
       ],
-      "website": "https://github.com/googlefonts/roboto-classic",
+      "website": "https://android.googlesource.com/platform/external/roboto-fonts/",
       "licenseIds": [
         "Roboto-Apache"
       ]

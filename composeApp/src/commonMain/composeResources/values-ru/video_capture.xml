@@ -31,4 +31,5 @@
     <string name="video_storage_mb">%1$s МБ</string>
     <string name="video_storage_hours">%1$d ч %2$d мин</string>
     <string name="video_storage_minutes">%1$d мин</string>
+    <string name="video_stopped_storage">Запись остановлена: места оставалось меньше чем на минуту. Видео сохранено.</string>
 </resources>

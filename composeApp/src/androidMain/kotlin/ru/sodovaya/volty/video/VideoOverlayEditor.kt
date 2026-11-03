@@ -103,7 +103,7 @@ internal fun VideoOverlayEditor(
     strings: VideoOverlayStrings,
     system: UnitSystem,
     still: ImageBitmap?,
-    onChange: (OverlayDocument) -> Unit,
+    onChange: (OverlayDocument) -> Boolean,
     onClose: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -114,10 +114,18 @@ internal fun VideoOverlayEditor(
     var adding by remember { mutableStateOf(false) }
     var backdrop by remember { mutableStateOf(if (still != null) StageBackdrop.STILL else StageBackdrop.DAY) }
 
+    var rejected by remember { mutableStateOf(false) }
     fun dispatch(action: OverlayEditorAction) {
-        val previous = state.document
-        state = reduceOverlayEditor(state, action, env)
-        if (state.document != previous) onChange(state.document)
+        val before = state
+        val next = reduceOverlayEditor(before, action, env)
+        // A document the store refuses (too large, invalid) must not look saved: keep the editor where it was.
+        if (next.document != before.document && !onChange(next.document)) {
+            state = before.copy(confirm = null)
+            rejected = true
+            return
+        }
+        rejected = false
+        state = next
         if (state.closed) onClose()
     }
     BackHandler {
@@ -145,6 +153,9 @@ internal fun VideoOverlayEditor(
         val wide = maxWidth > maxHeight
         Column(Modifier.fillMaxSize()) {
             EditorTopBar(state, onClose = { dispatch(OverlayEditorAction.RequestClose) }, onSave = ::save, dispatch = ::dispatch)
+            if (rejected) {
+                Text(stringResource(Res.string.video_editor_save_failed), color = Warn, fontSize = 13.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+            }
             if (wide) {
                 Row(Modifier.weight(1f)) {
                     EditorStage(state, env, drawer, still, backdrop, nextBackdrop, ::dispatch, Modifier.weight(1f).fillMaxHeight())
@@ -246,12 +257,15 @@ private fun EditorStage(
 
     BoxWithConstraints(modifier.background(Color(0xFF040B11))) {
         val density = LocalDensity.current
+        check(density.density > 0f)
         val availableW = maxWidth - 62.dp
         val fit = minOf(availableW / designW, maxHeight / designH)
         val frameW = fit * designW
         val frameH = fit * designH
         val toDesign = with(density) { 1f / fit.toPx() }
-        val lift = with(density) { 48.dp.toPx() } * toDesign
+        // No lift: the mock's 48 dp clearance was stored into the position, so even a tiny drag made the widget
+        // jump for good (review Minor 1). The widget follows the finger; the arrows place it exactly.
+        val lift = 0f
 
         Column(Modifier.padding(start = 7.dp, top = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             IconTarget(Icons.Default.CropPortrait, stringResource(Res.string.video_editor_portrait), selected = !state.landscape) {

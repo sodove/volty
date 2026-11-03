@@ -98,6 +98,9 @@ class OverlayDrawGate {
     var skipped: Long = 0
         private set
 
+    /** Whether [shouldDraw] would draw, without recording anything: lets a caller hold a change back for later. */
+    fun wouldDraw(key: OverlayDrawKey): Boolean = key != last
+
     fun shouldDraw(key: OverlayDrawKey): Boolean {
         if (key == last) {
             skipped++

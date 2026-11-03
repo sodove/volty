@@ -31,4 +31,5 @@
     <string name="video_storage_mb">%1$s MB</string>
     <string name="video_storage_hours">%1$d h %2$d min</string>
     <string name="video_storage_minutes">%1$d min</string>
+    <string name="video_stopped_storage">Recording stopped: less than a minute of storage was left. The video is saved.</string>
 </resources>

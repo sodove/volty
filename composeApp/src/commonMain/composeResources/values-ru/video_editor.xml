@@ -1,5 +1,4 @@
 <resources>
-    <string name="video_editor_title">Телеметрия на видео</string>
     <string name="video_editor_close">Закрыть</string>
     <string name="video_editor_template_top_row">Верхний ряд</string>
     <string name="video_editor_template_hud">HUD</string>
@@ -27,7 +26,6 @@
     <string name="video_editor_changed">есть изменения</string>
     <string name="video_editor_builtin_note">Встроенный пресет сохранится копией</string>
     <string name="video_editor_save">Сохранить</string>
-    <string name="video_editor_save_copy">Сохранить копию</string>
     <string name="video_editor_duplicate">Дублировать</string>
     <string name="video_editor_undo">Отменить</string>
     <string name="video_editor_redo">Повторить</string>
@@ -40,7 +38,7 @@
     <string name="video_editor_label">Подпись</string>
     <string name="video_editor_label_auto">По метрике</string>
     <string name="video_editor_snapped">примагничено</string>
-    <string name="video_editor_drag_hint">Виджет идёт выше пальца, его не закрывает перчатка. Стрелки на вкладке «Место» двигают его точнее.</string>
+    <string name="video_editor_drag_hint">Отпустите, чтобы оставить здесь. Стрелки на вкладке «Место» двигают точнее.</string>
     <string name="video_editor_restore">Вернуть на место</string>
     <string name="video_editor_hide_here">Скрыть в этой ориентации</string>
     <string name="video_editor_show_here">Показать в этой ориентации</string>
@@ -84,4 +82,5 @@
     <string name="video_anchor_bottom_start">Снизу слева</string>
     <string name="video_anchor_bottom_center">Снизу по центру</string>
     <string name="video_anchor_bottom_end">Снизу справа</string>
+    <string name="video_editor_save_failed">Не удалось сохранить: пресеты не помещаются. Удалите один из сохранённых и повторите.</string>
 </resources>

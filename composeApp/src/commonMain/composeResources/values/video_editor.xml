@@ -1,5 +1,4 @@
 <resources>
-    <string name="video_editor_title">Telemetry overlay</string>
     <string name="video_editor_close">Close</string>
     <string name="video_editor_template_top_row">Top Row</string>
     <string name="video_editor_template_hud">HUD</string>
@@ -27,7 +26,6 @@
     <string name="video_editor_changed">Unsaved changes</string>
     <string name="video_editor_builtin_note">A built-in preset is saved as a copy</string>
     <string name="video_editor_save">Save</string>
-    <string name="video_editor_save_copy">Save a copy</string>
     <string name="video_editor_duplicate">Duplicate</string>
     <string name="video_editor_undo">Undo</string>
     <string name="video_editor_redo">Redo</string>
@@ -40,7 +38,7 @@
     <string name="video_editor_label">Label</string>
     <string name="video_editor_label_auto">From the metric</string>
     <string name="video_editor_snapped">snapped</string>
-    <string name="video_editor_drag_hint">The widget rides above your finger so a glove does not hide it. Use the arrows for fine moves after you let go.</string>
+    <string name="video_editor_drag_hint">Let go to leave it here. The arrows on the Place tab move it precisely.</string>
     <string name="video_editor_restore">Put it back</string>
     <string name="video_editor_hide_here">Hide in this orientation</string>
     <string name="video_editor_show_here">Show in this orientation</string>
@@ -84,4 +82,5 @@
     <string name="video_anchor_bottom_start">Bottom left</string>
     <string name="video_anchor_bottom_center">Bottom centre</string>
     <string name="video_anchor_bottom_end">Bottom right</string>
+    <string name="video_editor_save_failed">Could not save: the presets do not fit. Delete a saved preset and try again.</string>
 </resources>
