@@ -98,7 +98,9 @@ val androidModule = module {
         DatabaseOpenGate(
             get<AndroidDatabaseOpener>(),
             java.util.concurrent.Executors.newSingleThreadExecutor { runnable -> Thread(runnable, "volty-db-gate") }.asCoroutineDispatcher(),
-        ) { message, failure -> if (failure != null) android.util.Log.e("VoltyDb", message, failure) else android.util.Log.i("VoltyDb", message) }
+            log = { message, failure -> if (failure != null) android.util.Log.e("VoltyDb", message, failure) else android.util.Log.i("VoltyDb", message) },
+            recovery = get<AndroidDatabaseOpener>(),
+        )
     }
     single { SqlDriverFactory(get(), get()) }
     // Compact-history Task 11: started by VoltyApplication once the gate is Ready; runs on IO, a ride per transaction.

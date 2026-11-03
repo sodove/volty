@@ -1,7 +1,9 @@
 package ru.sodovaya.volty.presentation.root
 
+import ru.sodovaya.volty.data.db.DatabaseGateAction
 import ru.sodovaya.volty.data.db.DatabaseOpenFailure
 import ru.sodovaya.volty.data.db.DatabaseOpenState
+import ru.sodovaya.volty.data.db.databaseGateActions
 import ru.sodovaya.volty.diagnostics.DatabaseShareOutcome
 
 /** What the full-screen database gate shows. Everything the screen decides is decided here. */
@@ -16,10 +18,28 @@ sealed interface DatabaseGateScreenModel {
      * minutes and that the app must stay open.
      */
     data object Updating : DatabaseGateScreenModel
-    /** Not enough storage; [freeUpMegabytes] is how much more the rider has to free. Retry only. */
-    data class NoSpace(val freeUpMegabytes: Long) : DatabaseGateScreenModel
-    /** Any other failure. The data is untouched; logs and the database can be shared. */
-    data class Error(val shareBusy: Boolean, val shareOutcome: DatabaseShareOutcome?) : DatabaseGateScreenModel
+    /**
+     * Not enough storage; [freeUpMegabytes] is how much more the rider has to free. Retry, the logs and the database can
+     * be shared, and [actions] offers emptying the ride history (owner request 2026-11-03).
+     */
+    data class NoSpace(
+        val freeUpMegabytes: Long,
+        val shareBusy: Boolean = false,
+        val shareOutcome: DatabaseShareOutcome? = null,
+        val actions: Set<DatabaseGateAction> = setOf(DatabaseGateAction.CLEAR_RIDE_HISTORY),
+        val recoveryFailed: Boolean = false,
+    ) : DatabaseGateScreenModel
+    /**
+     * Any other failure. The data is untouched; logs and the database can be shared, and [actions] offers starting with
+     * an empty database. Retraction: this screen used to promise it never offers to delete; the owner asked for a way
+     * out (2026-11-03), and it stays behind a confirmation that says what is lost.
+     */
+    data class Error(
+        val shareBusy: Boolean,
+        val shareOutcome: DatabaseShareOutcome?,
+        val actions: Set<DatabaseGateAction> = setOf(DatabaseGateAction.START_WITH_EMPTY_DATABASE),
+        val recoveryFailed: Boolean = false,
+    ) : DatabaseGateScreenModel
 }
 
 private const val MEGABYTE = 1024L * 1024
@@ -28,17 +48,25 @@ fun databaseGateScreenModel(
     state: DatabaseOpenState,
     shareBusy: Boolean = false,
     shareOutcome: DatabaseShareOutcome? = null,
+    recoveryFailed: Boolean = false,
 ): DatabaseGateScreenModel = when (state) {
     DatabaseOpenState.Ready -> DatabaseGateScreenModel.Hidden
     DatabaseOpenState.Opening -> DatabaseGateScreenModel.Blank
     is DatabaseOpenState.Migrating -> DatabaseGateScreenModel.Updating
     is DatabaseOpenState.Failed -> when (val failure = state.failure) {
-        is DatabaseOpenFailure.NotEnoughSpace ->
-            DatabaseGateScreenModel.NoSpace(freeUpMegabytes = megabytesToFree(failure.requiredBytes, failure.freeBytes))
-        is DatabaseOpenFailure.Other -> DatabaseGateScreenModel.Error(shareBusy, shareOutcome)
+        is DatabaseOpenFailure.NotEnoughSpace -> DatabaseGateScreenModel.NoSpace(
+            freeUpMegabytes = megabytesToFree(failure.requiredBytes, failure.freeBytes),
+            shareBusy = shareBusy, shareOutcome = shareOutcome, actions = offered(state, shareBusy), recoveryFailed = recoveryFailed,
+        )
+        is DatabaseOpenFailure.Other ->
+            DatabaseGateScreenModel.Error(shareBusy, shareOutcome, offered(state, shareBusy), recoveryFailed)
     }
 }
 
 /** Whole megabytes missing, rounded up, never below 1: "free 0 MB" would be no instruction. */
 fun megabytesToFree(requiredBytes: Long, freeBytes: Long): Long =
     ((requiredBytes - freeBytes).coerceAtLeast(0L) + MEGABYTE - 1).div(MEGABYTE).coerceAtLeast(1L)
+
+/** No destructive action while a share is copying the files: deleting them under the copy would ship a torn file. */
+private fun offered(state: DatabaseOpenState, shareBusy: Boolean): Set<DatabaseGateAction> =
+    if (shareBusy) emptySet() else databaseGateActions(state)

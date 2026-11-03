@@ -300,4 +300,95 @@ class DatabaseOpenGateTest {
         gate.start(backgroundScope); runCurrent()
         assertTrue(released.isCompleted)
     }
+
+    // --- The rider's destructive ways out (owner request 2026-11-03) ---
+
+    /** Records what was asked of it; [onClear]/[onDelete] model what the platform does to the disk. */
+    private class FakeRecovery(val opener: FakeOpener, val calls: MutableList<String> = opener.calls) : DatabaseRecovery {
+        var clearFailure: Throwable? = null
+        var onClear: () -> Unit = { opener.bytes = 256L * 1024 }          // history gone: the file is a few hundred KB
+        var onDelete: () -> Unit = { opener.stored = 0; opener.bytes = 0 } // no file: a fresh install
+        override fun clearRideHistory() { calls += "clearRideHistory"; clearFailure?.let { throw it }; onClear() }
+        override fun deleteDatabase() { calls += "deleteDatabase"; onDelete() }
+    }
+
+    private fun TestScope.gateWith(opener: FakeOpener, recovery: DatabaseRecovery) =
+        DatabaseOpenGate(opener, StandardTestDispatcher(testScheduler), recovery = recovery)
+
+    @Test fun eachFailureOffersExactlyItsOwnWayOut() {
+        assertEquals(setOf(DatabaseGateAction.CLEAR_RIDE_HISTORY),
+            databaseGateActions(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(930 * mb, 500 * mb))))
+        assertEquals(setOf(DatabaseGateAction.START_WITH_EMPTY_DATABASE),
+            databaseGateActions(DatabaseOpenState.Failed(DatabaseOpenFailure.Other("SQLiteDatabaseCorruptException"))))
+        for (state in listOf(DatabaseOpenState.Opening, DatabaseOpenState.Migrating(27, 29), DatabaseOpenState.Ready))
+            assertEquals(emptySet(), databaseGateActions(state), "$state")
+    }
+
+    @Test fun clearingTheHistoryOnNoSpaceKeepsTheFileAndOpensAfterwards() = runTest {
+        // The rider's case: 600 MB of history, 500 MB free, 930 MB needed.
+        val opener = FakeOpener(bytes = 600 * mb, free = 500 * mb)
+        val recovery = FakeRecovery(opener)
+        val gate = gateWith(opener, recovery)
+        gate.start(backgroundScope); runCurrent()
+        assertTrue((gate.state.value as DatabaseOpenState.Failed).failure is DatabaseOpenFailure.NotEnoughSpace)
+        opener.calls.clear()
+        gate.recover(DatabaseGateAction.CLEAR_RIDE_HISTORY); runCurrent()
+        assertEquals(DatabaseOpenState.Ready, gate.state.value)
+        assertEquals(listOf("clearRideHistory", "storedVersion", "databaseBytes", "freeBytes", "open"), opener.calls,
+            "cleared first, then the whole attempt again, sized after the clear")
+        assertFalse("deleteDatabase" in opener.calls, "a healthy database is never deleted")
+        assertFalse(gate.recoveryFailed.value)
+    }
+
+    @Test fun anActionTheStateDoesNotOfferDoesNothing() = runTest {
+        val noSpace = FakeOpener(bytes = 600 * mb, free = 500 * mb)
+        val gate = gateWith(noSpace, FakeRecovery(noSpace))
+        gate.recover(DatabaseGateAction.CLEAR_RIDE_HISTORY); runCurrent()
+        assertTrue(noSpace.calls.isEmpty(), "before start there is nothing to recover")
+        gate.start(backgroundScope); runCurrent()
+        noSpace.calls.clear()
+        gate.recover(DatabaseGateAction.START_WITH_EMPTY_DATABASE); runCurrent()
+        assertEquals(emptyList(), noSpace.calls, "NoSpace never deletes the file")
+
+        val ready = FakeOpener(stored = 29)
+        val readyGate = gateWith(ready, FakeRecovery(ready))
+        readyGate.start(backgroundScope); runCurrent()
+        ready.calls.clear()
+        for (action in DatabaseGateAction.entries) readyGate.recover(action)
+        runCurrent()
+        assertEquals(emptyList(), ready.calls, "an open database is never touched")
+    }
+
+    @Test fun startingEmptyAfterAnUnreadableFileDeletesItAndOpensAFreshOne() = runTest {
+        val opener = FakeOpener()
+        opener.storedFailure = RuntimeException("SQLITE_NOTADB")
+        val recovery = FakeRecovery(opener)
+        recovery.onDelete = { opener.storedFailure = null; opener.stored = 0 }
+        val gate = gateWith(opener, recovery)
+        gate.start(backgroundScope); runCurrent()
+        assertEquals(DatabaseOpenState.Failed(DatabaseOpenFailure.Other("RuntimeException")), gate.state.value)
+        gate.recover(DatabaseGateAction.CLEAR_RIDE_HISTORY); runCurrent()
+        assertFalse("clearRideHistory" in opener.calls, "an untrustworthy file is not edited")
+        gate.recover(DatabaseGateAction.START_WITH_EMPTY_DATABASE); runCurrent()
+        assertEquals(DatabaseOpenState.Ready, gate.state.value)
+        assertEquals(1, opener.calls.count { it == "deleteDatabase" })
+        assertFalse("freeBytes" in opener.calls, "a fresh database needs no conversion and no space check")
+    }
+
+    @Test fun aClearThatFailsSaysSoAndTheGateReadsTheFileAgain() = runTest {
+        val opener = FakeOpener(bytes = 600 * mb, free = 500 * mb)
+        val recovery = FakeRecovery(opener).apply { clearFailure = IllegalStateException("SQLITE_FULL") }
+        val gate = gateWith(opener, recovery)
+        gate.start(backgroundScope); runCurrent()
+        opener.calls.clear()
+        gate.recover(DatabaseGateAction.CLEAR_RIDE_HISTORY); runCurrent()
+        assertTrue(gate.recoveryFailed.value)
+        assertEquals(listOf("clearRideHistory", "storedVersion", "databaseBytes", "freeBytes"), opener.calls)
+        assertEquals(setOf(DatabaseGateAction.CLEAR_RIDE_HISTORY), databaseGateActions(gate.state.value),
+            "still NoSpace: a failed clear never turns into an offer to delete the file")
+        recovery.clearFailure = null
+        gate.recover(DatabaseGateAction.CLEAR_RIDE_HISTORY); runCurrent()
+        assertFalse(gate.recoveryFailed.value)
+        assertEquals(DatabaseOpenState.Ready, gate.state.value)
+    }
 }

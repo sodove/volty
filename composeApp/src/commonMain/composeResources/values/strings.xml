@@ -1713,4 +1713,14 @@
     <string name="db_gate_retry">Try again</string>
     <string name="db_gate_send_logs">Send logs</string>
     <string name="db_gate_share_database">Send database</string>
+    <string name="db_gate_clear_history">Delete ride history…</string>
+    <string name="db_gate_clear_history_title">Delete all ride history?</string>
+    <string name="db_gate_clear_history_body">All rides, tracks and telemetry will be deleted. This cannot be undone. Vehicles, the garage and settings are kept. If you need the rides, tap “Send database” first and keep the file.</string>
+    <string name="db_gate_clear_history_confirm">Delete history</string>
+    <string name="db_gate_start_empty">Start with an empty database…</string>
+    <string name="db_gate_start_empty_title">Start with an empty database?</string>
+    <string name="db_gate_start_empty_body">The whole database file will be deleted: all rides, tracks and telemetry, and every vehicle in the garage with its settings. This cannot be undone. App settings are kept. Tap “Send database” first to keep a copy.</string>
+    <string name="db_gate_start_empty_confirm">Delete and start over</string>
+    <string name="db_gate_cancel">Cancel</string>
+    <string name="db_gate_recovery_failed">That did not work. The logs have the details.</string>
 </resources>

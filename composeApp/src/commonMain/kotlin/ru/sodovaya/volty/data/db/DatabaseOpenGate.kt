@@ -67,7 +67,8 @@ sealed interface DatabaseOpenState {
 
 /**
  * What the gate needs from the platform. There is deliberately no delete operation: a failed
- * open never removes data, and a fake cannot be asked to.
+ * open never removes data, and a fake cannot be asked to. The rider's explicit, confirmed ways to
+ * delete live apart, in [DatabaseRecovery].
  */
 interface DatabaseOpener {
     /**
@@ -93,11 +94,47 @@ interface DatabaseOpener {
 class DatabaseOpenGate(
     private val opener: DatabaseOpener,
     private val dispatcher: CoroutineDispatcher,
+    /** The rider's destructive ways out of a failed open; null offers none. See [recover]. */
+    private val recovery: DatabaseRecovery? = null,
     /** Receives every attempt's numbers and every failure with its whole cause chain, so "send logs" carries them. */
     private val log: (message: String, failure: Throwable?) -> Unit = { _, _ -> },
 ) {
     private val mutableState = MutableStateFlow<DatabaseOpenState>(DatabaseOpenState.Opening)
     val state: StateFlow<DatabaseOpenState> = mutableState.asStateFlow()
+
+    private val mutableRecoveryFailed = MutableStateFlow(false)
+    /** True after a [recover] threw, until the next one starts: the screen says it did not work. */
+    val recoveryFailed: StateFlow<Boolean> = mutableRecoveryFailed.asStateFlow()
+
+    /**
+     * Runs a confirmed [DatabaseGateAction] and then the open again. Only the action the current state offers
+     * ([databaseGateActions]) runs, and only while no attempt is running: a stale button press after the state moved on
+     * does nothing. If the action throws, the open is attempted anyway (it re-reads the file and reports what it finds)
+     * and [recoveryFailed] is set, so a failed clear never escalates to a different offer by itself.
+     */
+    fun recover(action: DatabaseGateAction) {
+        val scope = scope ?: return
+        val recovery = recovery ?: return
+        if (running?.isActive == true || action !in databaseGateActions(mutableState.value)) return
+        mutableRecoveryFailed.value = false
+        mutableState.value = DatabaseOpenState.Opening
+        running = scope.launch(dispatcher) {
+            try {
+                log("gate action $action", null)
+                when (action) {
+                    DatabaseGateAction.CLEAR_RIDE_HISTORY -> recovery.clearRideHistory()
+                    DatabaseGateAction.START_WITH_EMPTY_DATABASE -> recovery.deleteDatabase()
+                }
+                log("gate action $action done", null)
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (failure: Throwable) {
+                log("gate action $action failed", failure)
+                mutableRecoveryFailed.value = true
+            }
+            attempt()
+        }
+    }
 
     @kotlin.concurrent.Volatile private var scope: CoroutineScope? = null
     @kotlin.concurrent.Volatile private var running: Job? = null
@@ -112,6 +149,7 @@ class DatabaseOpenGate(
     fun retry() {
         val scope = scope ?: return
         if (mutableState.value !is DatabaseOpenState.Failed) return
+        mutableRecoveryFailed.value = false
         launchAttempt(scope)
     }
 

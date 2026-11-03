@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.presentation.root
 
+import ru.sodovaya.volty.data.db.DatabaseGateAction
 import ru.sodovaya.volty.data.db.DatabaseOpenFailure
 import ru.sodovaya.volty.data.db.DatabaseOpenState
 import ru.sodovaya.volty.diagnostics.DatabaseShareOutcome
@@ -28,10 +29,12 @@ class DatabaseGateScreenModelTest {
         assertEquals(1, megabytesToFree(requiredBytes = 400 * mb + 1, freeBytes = 400 * mb))
     }
 
-    @Test fun errorCarriesTheShareProgressAndOutcomeAndNeverOffersToDelete() {
+    // Retraction: this test was named "...AndNeverOffersToDelete". The owner asked for a way out (2026-11-03); the offer is
+    // pinned below instead, and it is withdrawn while a share is copying the files.
+    @Test fun errorCarriesTheShareProgressAndOutcome() {
         val failed = DatabaseOpenState.Failed(DatabaseOpenFailure.Other("SQLiteException"))
         assertEquals(DatabaseGateScreenModel.Error(false, null), databaseGateScreenModel(failed))
-        assertEquals(DatabaseGateScreenModel.Error(true, null), databaseGateScreenModel(failed, shareBusy = true))
+        assertEquals(DatabaseGateScreenModel.Error(true, null, actions = emptySet()), databaseGateScreenModel(failed, shareBusy = true))
         assertEquals(DatabaseGateScreenModel.Error(false, DatabaseShareOutcome.Failed),
             databaseGateScreenModel(failed, shareOutcome = DatabaseShareOutcome.Failed))
     }
@@ -40,4 +43,29 @@ class DatabaseGateScreenModelTest {
         assertEquals(DatabaseGateScreenModel.Updating,
             databaseGateScreenModel(DatabaseOpenState.Migrating(27, 29), shareBusy = true, shareOutcome = DatabaseShareOutcome.Failed))
     }
+
+    @Test fun eachFailureScreenOffersItsOwnDestructiveActionAndNoOther() {
+        val noSpace = databaseGateScreenModel(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(930 * mb, 500 * mb)))
+        assertEquals(setOf(DatabaseGateAction.CLEAR_RIDE_HISTORY), (noSpace as DatabaseGateScreenModel.NoSpace).actions)
+        val error = databaseGateScreenModel(DatabaseOpenState.Failed(DatabaseOpenFailure.Other("SQLiteDatabaseCorruptException")))
+        assertEquals(setOf(DatabaseGateAction.START_WITH_EMPTY_DATABASE), (error as DatabaseGateScreenModel.Error).actions)
+    }
+
+    @Test fun noDestructiveActionWhileAShareIsCopyingTheFiles() {
+        val noSpace = DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(930 * mb, 500 * mb))
+        val model = databaseGateScreenModel(noSpace, shareBusy = true) as DatabaseGateScreenModel.NoSpace
+        assertEquals(emptySet(), model.actions)
+        assertEquals(true, model.shareBusy, "NoSpace carries the share state too: sharing first is what the dialog recommends")
+        val error = databaseGateScreenModel(DatabaseOpenState.Failed(DatabaseOpenFailure.Other("X")), shareBusy = true)
+        assertEquals(emptySet(), (error as DatabaseGateScreenModel.Error).actions)
+    }
+
+    @Test fun aFailedActionIsShownOnBothFailureScreens() {
+        val noSpace = databaseGateScreenModel(DatabaseOpenState.Failed(DatabaseOpenFailure.NotEnoughSpace(930 * mb, 500 * mb)), recoveryFailed = true)
+        assertEquals(true, (noSpace as DatabaseGateScreenModel.NoSpace).recoveryFailed)
+        val error = databaseGateScreenModel(DatabaseOpenState.Failed(DatabaseOpenFailure.Other("X")), recoveryFailed = true)
+        assertEquals(true, (error as DatabaseGateScreenModel.Error).recoveryFailed)
+        assertEquals(DatabaseGateScreenModel.Hidden, databaseGateScreenModel(DatabaseOpenState.Ready, recoveryFailed = true))
+    }
 }
+

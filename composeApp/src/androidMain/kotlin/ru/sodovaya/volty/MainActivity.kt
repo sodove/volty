@@ -67,11 +67,13 @@ class MainActivity : ComponentActivity() {
                 )
             } else {
                 // Not a dialog and no dismiss action: the app behind it does not exist yet.
+                val recoveryFailed by databaseGate.recoveryFailed.collectAsState()
                 DatabaseGateScreen(
-                    model = databaseGateScreenModel(databaseState, databaseShareBusy, databaseShareOutcome),
+                    model = databaseGateScreenModel(databaseState, databaseShareBusy, databaseShareOutcome, recoveryFailed),
                     onRetry = databaseGate::retry,
                     onSendLogs = { getKoin().get<LogExporter>().exportLogs() },
                     onShareDatabase = ::shareUnopenedDatabase,
+                    onGateAction = databaseGate::recover,
                 )
             }
         }

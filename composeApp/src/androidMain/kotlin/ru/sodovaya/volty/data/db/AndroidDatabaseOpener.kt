@@ -3,6 +3,8 @@ package ru.sodovaya.volty.data.db
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.database.DatabaseErrorHandler
+import android.database.DatabaseUtils
+import ru.sodovaya.volty.BuildConfig
 import android.database.sqlite.SQLiteDiskIOException
 import android.database.sqlite.SQLiteFullException
 import android.os.StatFs
@@ -17,7 +19,7 @@ import java.io.File
  * Opens `volty.db` for [DatabaseOpenGate]. [rawDriver] is built here and not opened until the
  * gate calls [open]; the repositories only ever see it wrapped in a [GatedSqlDriver].
  */
-class AndroidDatabaseOpener(private val context: Context) : DatabaseOpener {
+class AndroidDatabaseOpener(private val context: Context) : DatabaseOpener, DatabaseRecovery {
     private val file: File get() = context.getDatabasePath(DB_NAME)
 
     /** Constructing the driver does not touch the file: `AndroidSqliteDriver` opens on its first statement. */
@@ -61,9 +63,50 @@ class AndroidDatabaseOpener(private val context: Context) : DatabaseOpener {
     override fun databaseBytes(): Long = file.length() + File(file.path + "-wal").length()
 
     override fun freeBytes(): Long {
+        // DEBUG BUILDS ONLY (BuildConfig.DEBUG is a compile-time false in release, so the branch is not compiled in):
+        // `files/debug_gate_free_bytes` holding a number replaces the measured free space, so the NoSpace screen and its
+        // clear can be exercised on an emulator with room to spare. Written with run-as; absent on every real install.
+        if (BuildConfig.DEBUG) {
+            File(context.filesDir, "debug_gate_free_bytes").takeIf { it.isFile }?.readText()?.trim()?.toLongOrNull()?.let { return it }
+        }
         // The databases directory exists once the file does; before that its parent is on the same volume.
         val dir = generateSequence(file.parentFile) { it.parentFile }.firstOrNull { it.exists() } ?: file
         return StatFs(dir.path).availableBytes
+    }
+
+    /**
+     * Gate action CLEAR_RIDE_HISTORY (NoSpace only, so nothing has the file open). Same open as the version probe:
+     * read-write, the no-op error handler, no foreign-key enforcement (Android's default), so each bare DELETE takes the
+     * truncate optimisation and the rollback journal stays small (measured 38.6 MB on the rider's 600 MB copy). The
+     * journal is NOT switched off: a kill mid-clear must roll back, never take the vehicles with it. Device-only wrapper;
+     * the statements are tested on sqlite-jdbc in `RideHistoryClearTest`.
+     */
+    override fun clearRideHistory() {
+        SQLiteDatabase.openDatabase(file.path, null, VERSION_PROBE_FLAGS, KEEP_FILES).use { db ->
+            val tables = db.rawQuery("SELECT name FROM sqlite_master WHERE type = 'table'", null).use { cursor ->
+                buildSet { while (cursor.moveToNext()) add(cursor.getString(0)) }
+            }
+            db.beginTransaction()
+            try {
+                rideHistoryClearStatements(tables).forEach(db::execSQL)
+                db.setTransactionSuccessful()
+            } finally {
+                db.endTransaction()
+            }
+            val freePages = DatabaseUtils.longForQuery(db, "PRAGMA freelist_count", null)
+            Log.i("VoltyDb", "ride history cleared: tables=${tables.count { it in RIDE_HISTORY_TABLES }} freePages=$freePages file=${file.length()}")
+            if (freePages > 0) {
+                try { db.execSQL("VACUUM"); Log.i("VoltyDb", "vacuumed after the clear: file=${file.length()}") }
+                catch (failure: Exception) { Log.w("VoltyDb", "VACUUM after the clear failed; the free-space rule sees the old size", failure) }
+            }
+        }
+    }
+
+    /** Gate action START_WITH_EMPTY_DATABASE (Failed only): the file and its -journal, -wal, -shm (and -mj*) go. */
+    override fun deleteDatabase() {
+        if (!file.exists()) return
+        check(SQLiteDatabase.deleteDatabase(file)) { "the database file could not be deleted" }
+        Log.i("VoltyDb", "database deleted by the rider; the next open creates an empty one")
     }
 
     override fun open() {

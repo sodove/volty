@@ -1711,4 +1711,14 @@
     <string name="db_gate_retry">Повторить</string>
     <string name="db_gate_send_logs">Отправить логи</string>
     <string name="db_gate_share_database">Отправить базу данных</string>
+    <string name="db_gate_clear_history">Удалить историю поездок…</string>
+    <string name="db_gate_clear_history_title">Удалить всю историю поездок?</string>
+    <string name="db_gate_clear_history_body">Будут удалены все поездки, треки и телеметрия. Это нельзя отменить. Транспорт, гараж и настройки сохранятся. Если поездки нужны, сначала нажмите «Отправить базу данных» и сохраните файл.</string>
+    <string name="db_gate_clear_history_confirm">Удалить историю</string>
+    <string name="db_gate_start_empty">Начать с чистой базой…</string>
+    <string name="db_gate_start_empty_title">Начать с чистой базой?</string>
+    <string name="db_gate_start_empty_body">Файл базы данных будет удалён целиком: все поездки, треки и телеметрия, а также весь транспорт в гараже и его настройки. Это нельзя отменить. Настройки приложения сохранятся. Сначала нажмите «Отправить базу данных», чтобы сохранить копию.</string>
+    <string name="db_gate_start_empty_confirm">Удалить и начать заново</string>
+    <string name="db_gate_cancel">Отмена</string>
+    <string name="db_gate_recovery_failed">Не получилось. Подробности есть в логах.</string>
 </resources>
