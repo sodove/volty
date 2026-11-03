@@ -75,7 +75,7 @@ class MapRenderSourcePolicyTest {
                 heightProperty = "render_height",
                 baseProperty = "render_min_height",
                 color = "#31424B",
-                opacity = 0.82f,
+                opacity = 0.91f,
                 minZoom = 13f,
             ),
             issuedLayers.single(),

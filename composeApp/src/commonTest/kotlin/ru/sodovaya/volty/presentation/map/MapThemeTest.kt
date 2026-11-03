@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.map
 import com.materialkolor.hct.Hct
 import kotlinx.serialization.json.*
 import kotlin.test.*
+import ru.sodovaya.volty.domain.model.ThemeAccent
 import ru.sodovaya.volty.presentation.common.seededTonalColors
 
 class MapThemeTest {
@@ -22,7 +23,10 @@ class MapThemeTest {
         assertTrue(Hct.fromInt(dark.background).tone < 8.0)
         assertTrue(Hct.fromInt(light.background).tone > 95.0)
         assertTrue(Hct.fromInt(dark.building).tone > Hct.fromInt(dark.land).tone)
-        assertTrue(Hct.fromInt(dark.road).tone > Hct.fromInt(dark.building).tone)
+        // Retraction: this pinned road > building, true only while b5d7e964 drew the buildings near-black.
+        // Owner feedback 2026-11-04: roads stay darker than the buildings.
+        assertTrue(Hct.fromInt(dark.road).tone < Hct.fromInt(dark.building).tone)
+        assertTrue(Hct.fromInt(dark.road).tone > Hct.fromInt(dark.land).tone)
         assertTrue(Hct.fromInt(dark.text).tone > 75.0)
         assertTrue(Hct.fromInt(light.text).tone < 30.0)
     }
@@ -143,13 +147,49 @@ class MapThemeTest {
         assertEquals(93.0, tone(light.building), 1.0)
         assertEquals(88.0, tone(light.buildingOutline), 1.0)
         assertEquals(90.0, tone(light.building3d), 1.0)
+        // Dark (owner feedback 2026-11-04): near-black ground, lighter tinted buildings, subdued
+        // roads between them. b5d7e964's 4 / 2 / 3 / 11 / 9 made the 3D city black on black.
         val dark = mapThemePalette(tones, true)
         assertEquals(4.0, tone(dark.background), 1.5)
-        assertEquals(2.0, tone(dark.land), 1.5)
-        assertEquals(3.0, tone(dark.building), 1.5)
-        assertEquals(11.0, tone(dark.buildingOutline), 1.5)
+        assertEquals(6.0, tone(dark.land), 1.5)
+        assertEquals(30.0, tone(dark.building), 1.5)
+        assertEquals(34.0, tone(dark.buildingOutline), 1.5)
+        assertEquals(31.0, tone(dark.building3d), 1.5)
+        assertEquals(20.0, tone(dark.road), 1.5)
+        assertEquals(26.0, tone(dark.roadMajor), 1.5)
+        assertEquals(21.0, tone(dark.roadMotorway), 1.5)
+        assertEquals(29.0, tone(dark.roadOutline), 1.5)
+        assertEquals(15.0, tone(dark.path), 1.5)
         assertTrue(tone(dark.building) > tone(dark.land)) // building lighter than the ground it stands on
         assertTrue(tone(dark.text) > 75.0) // the intentional dark label lift is kept
+    }
+
+    @Test fun dark_ground_is_near_neutral_for_every_accent_while_buildings_keep_their_tint() {
+        for (accent in ThemeAccent.entries) {
+            val dark = mapThemePalette(seededTonalColors(accent.seedArgb), true)
+            // «я бы чутка фон ослабил»: at tone 5 a chroma-3 ground read red or purple. The cap is 1.0;
+            // rounding a near-black HCT colour to 8-bit sRGB measures back up to ~1.6, hence 2.2.
+            for ((name, c) in listOf("background" to dark.background, "land" to dark.land, "halo" to dark.halo)) {
+                assertTrue(Hct.fromInt(c).chroma <= 2.2, "$accent $name chroma ${Hct.fromInt(c).chroma}")
+            }
+            assertTrue(Hct.fromInt(dark.building3d).chroma > Hct.fromInt(dark.land).chroma, "$accent 3D buildings lost their tint")
+        }
+    }
+
+    @Test fun dark_buildings_carry_real_colour_capped_lower_for_warm_accents() {
+        // «он будто бы боится дать saturation зданиям»: chroma 5-6 read as flat grey.
+        for (accent in ThemeAccent.entries) {
+            val dark = mapThemePalette(seededTonalColors(accent.seedArgb), true)
+            val warm = accent == ThemeAccent.ORANGE || accent == ThemeAccent.PINK
+            for ((name, c) in listOf("building" to dark.building, "buildingOutline" to dark.buildingOutline, "building3d" to dark.building3d)) {
+                val chroma = Hct.fromInt(c).chroma
+                if (warm) assertEquals(8.0, chroma, 1.0, "$accent $name")
+                else assertEquals(12.0, chroma, 1.0, "$accent $name")
+            }
+            // Roads stay neutral.
+            // Roads stay neutral: capped at 3, which a teal hue measures back a little higher.
+            assertTrue(Hct.fromInt(dark.road).chroma < 5.0, "$accent road chroma ${Hct.fromInt(dark.road).chroma}")
+        }
     }
 
     @Test fun hud_cards_keep_their_own_tones_when_the_map_ground_goes_near_black() {
