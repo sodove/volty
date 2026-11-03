@@ -8,6 +8,8 @@ import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.websocket.WebSockets
 import ru.sodovaya.volty.BuildConfig
+import ru.sodovaya.volty.data.db.AndroidDatabaseOpener
+import ru.sodovaya.volty.data.db.DatabaseOpenGate
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
 import ru.sodovaya.volty.data.ble.AndroidBleAdapterStateProvider
@@ -88,7 +90,9 @@ import kotlinx.coroutines.flow.stateIn
 import org.maplibre.android.offline.OfflineManager
 
 val androidModule = module {
-    single { SqlDriverFactory(androidContext()) }
+    single { AndroidDatabaseOpener(androidContext()) }
+    single { DatabaseOpenGate(get<AndroidDatabaseOpener>(), Dispatchers.IO) }
+    single { SqlDriverFactory(get(), get()) }
     // Inert until native connection startup awaits prepare(); one clock for BLE/GPS/detail.
     single {
         val store = get<ru.sodovaya.volty.data.history.SqlDelightHistoryStore>()
@@ -173,6 +177,7 @@ val androidModule = module {
             },
             newId = { java.util.UUID.randomUUID().toString() },
             retryOpportunities = native.resumeOpportunities.map { Unit },
+            awaitDatabase = get<DatabaseOpenGate>()::awaitReady,
         )
     }
     single<SocialCredentialStore> { AndroidSocialCredentialStore(androidContext()) }

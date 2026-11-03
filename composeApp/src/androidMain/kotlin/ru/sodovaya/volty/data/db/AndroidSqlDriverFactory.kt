@@ -1,10 +1,17 @@
 package ru.sodovaya.volty.data.db
 
-import android.content.Context
 import app.cash.sqldelight.db.SqlDriver
-import app.cash.sqldelight.driver.android.AndroidSqliteDriver
+import kotlinx.coroutines.runBlocking
 
-actual class SqlDriverFactory(private val context: Context) {
-    actual fun create(): SqlDriver =
-        AndroidSqliteDriver(VoltyDatabase.Schema, context, "volty.db")
+/**
+ * Hands out the driver every repository holds: the opener's driver behind a [GatedSqlDriver] that
+ * waits for [DatabaseOpenGate] before the first statement. Nothing here opens the database.
+ */
+actual class SqlDriverFactory(
+    private val opener: AndroidDatabaseOpener,
+    private val gate: DatabaseOpenGate,
+) {
+    actual fun create(): SqlDriver = GatedSqlDriver(opener.rawDriver) {
+        if (!gate.isReady) runBlocking { gate.awaitReady() }
+    }
 }

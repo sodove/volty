@@ -1702,4 +1702,15 @@
     <string name="credits_licenses">Licenses</string>
     <string name="credits_read_license">Read license</string>
     <string name="credits_notice">Copyright and notices</string>
+
+    <!-- Database gate: shown while the ride history is converted, or when that cannot happen -->
+    <string name="db_gate_updating_title">Updating ride history…</string>
+    <string name="db_gate_updating_body">This may take a couple of minutes. Please do not close the app and keep the screen on.</string>
+    <string name="db_gate_no_space_title">Not enough free space</string>
+    <string name="db_gate_no_space_body">Updating the ride history needs more free storage. Free at least %1$d MB and try again. Your rides have not been changed.</string>
+    <string name="db_gate_error_title">Could not open the ride history</string>
+    <string name="db_gate_error_body">Nothing has been deleted. Try again, or send the logs and the database so it can be fixed.</string>
+    <string name="db_gate_retry">Try again</string>
+    <string name="db_gate_send_logs">Send logs</string>
+    <string name="db_gate_share_database">Send database</string>
 </resources>

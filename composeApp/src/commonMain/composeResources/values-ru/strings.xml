@@ -1700,4 +1700,15 @@
     <string name="credits_licenses">Лицензии</string>
     <string name="credits_read_license">Читать лицензию</string>
     <string name="credits_notice">Авторские права и уведомления</string>
+
+    <!-- Database gate: shown while the ride history is converted, or when that cannot happen -->
+    <string name="db_gate_updating_title">Обновляем историю поездок…</string>
+    <string name="db_gate_updating_body">Это может занять пару минут. Не закрывайте приложение и не гасите экран.</string>
+    <string name="db_gate_no_space_title">Не хватает свободного места</string>
+    <string name="db_gate_no_space_body">Чтобы обновить историю поездок, нужно больше свободного места. Освободите не менее %1$d МБ и повторите. Ваши поездки не изменены.</string>
+    <string name="db_gate_error_title">Не удалось открыть историю поездок</string>
+    <string name="db_gate_error_body">Ничего не удалено. Повторите попытку или отправьте логи и базу данных, чтобы это можно было исправить.</string>
+    <string name="db_gate_retry">Повторить</string>
+    <string name="db_gate_send_logs">Отправить логи</string>
+    <string name="db_gate_share_database">Отправить базу данных</string>
 </resources>

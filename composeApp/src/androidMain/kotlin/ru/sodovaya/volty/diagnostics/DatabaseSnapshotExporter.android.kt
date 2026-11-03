@@ -39,7 +39,11 @@ class AndroidDatabaseSnapshotExporter(
     private val provider: VoltyDatabaseProvider,
 ) : DatabaseSnapshotExporter {
 
-    override suspend fun share(isRecording: suspend () -> Boolean): DatabaseShareOutcome = withContext(Dispatchers.IO) {
+    override suspend fun share(isRecording: suspend () -> Boolean): DatabaseShareOutcome = copyAndShare(isRecording, opened = true)
+
+    override suspend fun shareUnopened(): DatabaseShareOutcome = copyAndShare({ false }, opened = false)
+
+    private suspend fun copyAndShare(isRecording: suspend () -> Boolean, opened: Boolean): DatabaseShareOutcome = withContext(Dispatchers.IO) {
         val dir = File(context.cacheDir, DIR)
         val rawDb = File(dir, "snapshot.tmp")
         val rawWal = File(dir, "snapshot.tmp-wal")
@@ -57,11 +61,17 @@ class AndroidDatabaseSnapshotExporter(
             old.forEach { it.delete() }
 
             // Best effort outside the lock, only to keep the WAL (and so the lock time) small.
-            runCatching { checkpointBusy() }
+            if (opened) runCatching { checkpointBusy() }
 
             var refusal: SnapshotRefusal? = null
             var files: SnapshotFiles = SnapshotFiles.DbOnly
-            try {
+            if (!opened) {
+                // The gate's error screen: nothing has the database open, so there is no lock to take and
+                // no checkpoint to run; a WAL left behind travels with the main file.
+                files = if (walFile.exists() && walFile.length() > 0L) SnapshotFiles.DbAndWal else SnapshotFiles.DbOnly
+                copy(dbFile, rawDb)
+                if (files == SnapshotFiles.DbAndWal) copy(walFile, rawWal)
+            } else try {
                 provider.database.transaction {
                     if (runBlocking { isRecording() }) { refusal = SnapshotRefusal.RECORDING; return@transaction }
                     val busy = runCatching { checkpointBusy() }.getOrNull()

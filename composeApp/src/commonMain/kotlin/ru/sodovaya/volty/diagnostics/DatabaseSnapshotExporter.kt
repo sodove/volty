@@ -89,6 +89,13 @@ interface DatabaseSnapshotExporter {
      * that starts in between still refuses the copy.
      */
     suspend fun share(isRecording: suspend () -> Boolean): DatabaseShareOutcome
+
+    /**
+     * Copies the files of a database that could not be opened (the startup gate's error screen):
+     * no transaction, no recording check (nothing records while the gate is closed). Only meaningful
+     * while nothing else has the file open for writing.
+     */
+    suspend fun shareUnopened(): DatabaseShareOutcome = DatabaseShareOutcome.Failed
 }
 
 /** The part of the settings page that decides *whether* to share, split out so it is testable. */

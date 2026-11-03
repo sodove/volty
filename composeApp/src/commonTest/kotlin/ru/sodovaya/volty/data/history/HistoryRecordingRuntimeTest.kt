@@ -251,6 +251,7 @@ class HistoryRecordingRuntimeTest {
         var preparations = 0
         var failPrepare = false
         var prepareGate: CompletableDeferred<Unit>? = null
+        var databaseGate: CompletableDeferred<Unit>? = null
         var allocations = 0
         var failAllocation = false
         var onAllocate: (() -> Unit)? = null
@@ -267,7 +268,7 @@ class HistoryRecordingRuntimeTest {
             { check(!failAllocation) { "writer unavailable" }; allocations++; onAllocate?.invoke(); writer }, MutableStateFlow(RideLocationState()),
             HistoryLocationForegroundAuthority({ true }) { "10000000-0000-0000-0000-000000000001" },
             { service += it; check(!it || !failService) { "service unavailable" } },
-            { scope, _ -> Native(scope).also { natives += it } }, { nextId }, opportunities)
+            { scope, _ -> Native(scope).also { natives += it } }, { nextId }, opportunities) { databaseGate?.await() }
         val vehicle = Vehicle("bike", "Bike", "bicycle", listOf(Pack(0, "Pack", BmsType.ANT_BMS, "AA")), emptyList(),
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0))
         val spec = LinkSpec("AA", ProtocolKind.ANT, listOf(OwnedSource(0)))
@@ -276,6 +277,30 @@ class HistoryRecordingRuntimeTest {
             return assertNotNull(binding.ingress.capture(Emitter(), "attempt", spec, vehicle,
                 SampleSessionOwnership { true }, channel)).also { assertTrue(it.prepareForObservation()) }
         }
+    }
+
+    @Test fun nothingIsPreparedRecoveredOrAllocatedBeforeTheDatabaseIsReady() = runTest {
+        val f = Fixture(this); val database = CompletableDeferred<Unit>(); f.databaseGate = database
+        val preparing = async { f.runtime.prepare() }
+        try {
+            runCurrent()
+            assertFalse(preparing.isCompleted)
+            assertEquals(0, f.preparations, "interrupted-ride recovery reads the database"); assertEquals(0, f.allocations, "no writer before the database")
+            assertTrue(f.service.isEmpty())
+            database.complete(Unit)
+            preparing.await()
+            assertEquals(1, f.preparations); assertEquals(1, f.allocations)
+        } finally { database.complete(Unit); runCatching { preparing.await() }; f.runtime.close() }
+    }
+
+    @Test fun closingWhilePreparationWaitsForTheDatabaseDoesNotQueueBehindTheWait() = runTest {
+        val f = Fixture(this); val database = CompletableDeferred<Unit>(); f.databaseGate = database
+        val preparing = async { runCatching { f.runtime.prepare() } }
+        runCurrent()
+        f.runtime.close()
+        database.complete(Unit)
+        assertTrue(preparing.await().isFailure, "a runtime closed during the wait must not come up afterwards")
+        assertEquals(0, f.preparations); assertEquals(0, f.allocations)
     }
 
     @Test fun vehicleGoneForTheAbsenceWindowFinishesTheRideAndReleasesGps() = runTest {

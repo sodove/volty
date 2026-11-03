@@ -23,6 +23,12 @@ internal class HistoryRecordingRuntime(
     private val createLocationSession: (CoroutineScope, CapturedHistoryGpsRecording) -> HistoryRecordingLocationSession,
     private val newId: () -> String,
     private val retryOpportunities: Flow<Unit> = emptyFlow(),
+    /**
+     * Suspends until the database is open (and any migration has finished). Recovery, the writer and
+     * every ride start behind [prepare], and the BLE connection awaits [prepare], so nothing records
+     * and nothing connects against a database that is still being converted.
+     */
+    private val awaitDatabase: suspend () -> Unit = {},
 ) {
     internal class Binding(val controller: RideRecordingController, val ingress: HistoryTelemetryIngress,
         val locations: Flow<HistoryRecordingLocationSnapshot?>,
@@ -41,6 +47,9 @@ internal class HistoryRecordingRuntime(
     val opportunityFailure = mutableOpportunityFailure.asStateFlow()
 
     suspend fun prepare(): Binding {
+        currentCoroutineContext().ensureActive()
+        // Before the lock: a close() during a long migration must not queue behind the wait.
+        awaitDatabase()
         currentCoroutineContext().ensureActive()
         return controls.withLock {
             currentCoroutineContext().ensureActive()
