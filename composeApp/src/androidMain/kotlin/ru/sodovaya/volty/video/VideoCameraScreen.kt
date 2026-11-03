@@ -126,6 +126,9 @@ internal fun VideoCameraScreen(
         onDispose { owner.lifecycle.removeObserver(observer) }
     }
     var confirmStop by remember { mutableStateOf(false) }
+    // The orientation the picture was in when the recording started; see videoFrozenLandscape.
+    // Plain memory, not state: it is derived during composition from the phase and the window, both already state.
+    val frozenMemory = remember { arrayOfNulls<Boolean>(1) }
     var sheet by remember { mutableStateOf(VideoSheetKind.NONE) }
     var still by remember { mutableStateOf<ImageBitmap?>(null) }
     var pendingPreset by remember { mutableStateOf<OverlayPreset?>(null) }
@@ -242,6 +245,7 @@ internal fun VideoCameraScreen(
         }
         BoxWithConstraints(Modifier.fillMaxSize().safeDrawingPadding()) {
             val landscape = videoCaptureIsLandscape(maxWidth.value, maxHeight.value)
+            val frozenLandscape = videoFrozenLandscape(state.phase, frozenMemory[0], landscape).also { frozenMemory[0] = it }
             // One tree for both orientations: moving the PreviewView to another parent would rebind the camera.
             Box(
                 Modifier.fillMaxSize().padding(end = if (landscape) VideoChromeSize else 0.dp, bottom = if (landscape) 0.dp else VideoChromeSize),
@@ -259,7 +263,10 @@ internal fun VideoCameraScreen(
                             camera.attach(this)
                         }
                     }, update = { it.setBackgroundColor(letterbox) }, modifier = Modifier.fillMaxSize())
-                    PreviewOverlay(camera, videoPreviewDisplayedAspect(state.previewAspect, landscape), Modifier.align(Alignment.Center))
+                    // Over a real picture only, and while recording in the orientation the picture is frozen in (I2).
+                    if (videoPreviewOverlayShown(state.ready, state.cameraFailed, state.previewAspect)) {
+                        PreviewOverlay(camera, videoPreviewDisplayedAspect(state.previewAspect, landscape, frozenLandscape), Modifier.align(Alignment.Center))
+                    }
                 } else {
                     Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(stringResource(Res.string.video_permissions), style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurface, textAlign = androidx.compose.ui.text.style.TextAlign.Center)

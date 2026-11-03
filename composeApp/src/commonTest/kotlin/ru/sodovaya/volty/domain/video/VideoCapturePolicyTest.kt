@@ -15,20 +15,48 @@ class VideoCapturePolicyTest {
     // --- layout ---
 
     @Test
-    fun thePreviewOverlayIsFittedToTheDisplayedFrame() {
+    fun idleThePreviewOverlayIsFittedToTheFrameTheDisplayShows() {
         // The emulator's 1280x720 sensor crop, turned 90° for a portrait display: a 9:16 box.
         assertEquals(720f / 1280f, videoPreviewAspect(1280, 720, 90)!!, 1e-6f)
         assertEquals(1280f / 720f, videoPreviewAspect(1280, 720, 0)!!, 1e-6f)
         assertEquals(720f / 1280f, videoPreviewAspect(1280, 720, -270)!!, 1e-6f)
         assertNull(videoPreviewAspect(0, 720, 90), "no crop yet")
-        // Until the camera reports, the requested 16:9 upright; a report from the other orientation is turned.
-        assertEquals(9f / 16f, videoPreviewDisplayedAspect(null, landscape = false), 1e-6f)
-        assertEquals(16f / 9f, videoPreviewDisplayedAspect(null, landscape = true), 1e-6f)
-        assertEquals(16f / 9f, videoPreviewDisplayedAspect(9f / 16f, landscape = true), 1e-6f)
-        assertEquals(3f / 4f, videoPreviewDisplayedAspect(3f / 4f, landscape = false), 1e-6f)
-        assertEquals(9f / 16f, videoPreviewDisplayedAspect(Float.NaN, landscape = false), 1e-6f)
+        // Idle, the preview follows the display: a report measured in the other orientation is turned.
+        assertEquals(9f / 16f, videoPreviewDisplayedAspect(null, windowLandscape = false), 1e-6f)
+        assertEquals(16f / 9f, videoPreviewDisplayedAspect(null, windowLandscape = true), 1e-6f)
+        assertEquals(16f / 9f, videoPreviewDisplayedAspect(9f / 16f, windowLandscape = true), 1e-6f)
+        assertEquals(3f / 4f, videoPreviewDisplayedAspect(3f / 4f, windowLandscape = false), 1e-6f)
+        assertEquals(9f / 16f, videoPreviewDisplayedAspect(Float.NaN, windowLandscape = false), 1e-6f)
         // The preview overlay never repaints faster than the file's own overlay.
         assertEquals(1000L / MAX_RECORDED_REPAINT_HZ, VIDEO_PREVIEW_OVERLAY_MILLIS)
+    }
+
+    @Test
+    fun aRotationMidRecordingKeepsTheOverlayOnTheFrozenPicture() {
+        // Start in portrait, rotate to landscape while recording (review I2).
+        var frozen: Boolean? = null
+        frozen = videoFrozenLandscape(idle, frozen, windowLandscape = false)
+        assertNull(frozen, "idle follows the window")
+        frozen = videoFrozenLandscape(starting, frozen, windowLandscape = false)
+        assertEquals(false, frozen)
+        frozen = videoFrozenLandscape(recording, frozen, windowLandscape = true)
+        assertEquals(false, frozen, "the window turned, the picture did not")
+        // The preview still shows the 9:16 portrait picture, so the overlay box (and with it the portrait layout) stays.
+        assertEquals(9f / 16f, videoPreviewDisplayedAspect(9f / 16f, windowLandscape = true, frozenLandscape = frozen), 1e-6f)
+        assertEquals(9f / 16f, videoPreviewDisplayedAspect(null, windowLandscape = true, frozenLandscape = frozen), 1e-6f)
+        frozen = videoFrozenLandscape(stopping, frozen, windowLandscape = true)
+        assertEquals(false, frozen)
+        frozen = videoFrozenLandscape(idle, frozen, windowLandscape = true)
+        assertNull(frozen, "after the stop the overlay follows the window again")
+        assertEquals(16f / 9f, videoPreviewDisplayedAspect(9f / 16f, windowLandscape = true, frozenLandscape = frozen), 1e-6f)
+    }
+
+    @Test
+    fun thePreviewOverlayIsDrawnOnlyOverAPicture() {
+        assertTrue(videoPreviewOverlayShown(ready = true, cameraFailed = false, reportedAspect = 0.5625f))
+        assertFalse(videoPreviewOverlayShown(ready = false, cameraFailed = false, reportedAspect = 0.5625f))
+        assertFalse(videoPreviewOverlayShown(ready = true, cameraFailed = true, reportedAspect = 0.5625f))
+        assertFalse(videoPreviewOverlayShown(ready = true, cameraFailed = false, reportedAspect = null), "no frame yet")
     }
 
     @Test

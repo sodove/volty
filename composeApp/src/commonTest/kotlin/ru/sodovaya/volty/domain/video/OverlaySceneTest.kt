@@ -306,7 +306,7 @@ class OverlaySceneTest {
 
     @Test
     fun aChipDrawsItsIconAndNumberAndNoWord() {
-        val chip = OverlayWidget(id = "v", metric = VideoMetric.VOLTAGE, kind = OverlayWidgetKind.ICON_VALUE, iconName = "car-battery")
+        val chip = OverlayWidget(id = "v", metric = VideoMetric.VOLTAGE, kind = OverlayWidgetKind.ICON_CHIP, iconName = "car-battery")
         val scene = scene(OverlayPreset("p", "P", listOf(chip)), full, 1920, 1080)
         val icon = scene.ops.filterIsInstance<OverlayIconOp>().single()
         assertEquals("car-battery", icon.icon)
@@ -324,7 +324,7 @@ class OverlaySceneTest {
         val card = OverlayWidget(id = "c", metric = VideoMetric.SOC, kind = OverlayWidgetKind.VALUE_CARD, icon = OverlayIcon.BATTERY)
         assertTrue(scene(OverlayPreset("p", "P", listOf(card)), full, 1920, 1080).ops.none { it is OverlayIconOp })
 
-        val chip = OverlayWidget(id = "v", metric = VideoMetric.VOLTAGE, kind = OverlayWidgetKind.ICON_VALUE)
+        val chip = OverlayWidget(id = "v", metric = VideoMetric.VOLTAGE, kind = OverlayWidgetKind.ICON_CHIP)
         val empty = scene(OverlayPreset("p", "P", listOf(chip)), live(VideoMetric.SPEED to VideoReading(10.0)), 1920, 1080)
         assertTrue(empty.has("—"))
         assertFalse(empty.has("0"), "no invented zero")

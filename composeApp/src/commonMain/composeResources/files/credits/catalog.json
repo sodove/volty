@@ -955,6 +955,19 @@
       ]
     },
     {
+      "id": "manual:fontawesome",
+      "name": "Font Awesome Free",
+      "licenseIds": [
+        "CC-BY-4.0",
+        "FontAwesome-OFL"
+      ],
+      "authors": [
+        "Fonticons, Inc."
+      ],
+      "website": "https://fontawesome.com",
+      "notice": "Font Awesome Free 6.7.2 by Fonticons, Inc. (https://fontawesome.com)\n\nThe ride-video overlay draws its icons from fa-solid-900.ttf, copied unmodified from\nthe npm package @fortawesome/fontawesome-free 6.7.2 (webfonts/fa-solid-900.ttf,\nSHA-256 d2f0593540b0e33ba6de255a54f272d466e31144806956bea8cfdbf7edffc9bd), the same\nfont and version telemetry-studio uses.\n\nFont: Copyright (c) 2024 Fonticons, Inc., with Reserved Font Name \"Font Awesome\",\nlicensed under the SIL Open Font License 1.1.\nIcons: Font Awesome Free icons by Fonticons, Inc., licensed under the Creative\nCommons Attribution 4.0 International License (CC BY 4.0),\nhttps://creativecommons.org/licenses/by/4.0/ . The icons are drawn as glyphs of the\nunmodified font; no icon was altered.\n"
+    },
+    {
       "id": "androidx.fragment:fragment",
       "name": "fragment",
       "version": "1.8.9",
@@ -2909,11 +2922,12 @@
       "third-party/credits/licenses/WebRTC.txt": "e6b282fe6c0fb353928923470457f31b44cbab203effd60c0cde4a5bb96c8aec",
       "third-party/credits/licenses/libyuv-BSD.txt": "2b2cc1180c7e6988328ad2033b04b80117419db9c4c584918bbb3cfec7e9364f",
       "third-party/credits/licenses/loeuc-MIT.txt": "23568e12beba7669ab60ea1fc479da2feefeab384ee582b2e6cf55daace3bc7f",
+      "third-party/credits/notices/FontAwesome.txt": "7cfc64e3e0aa253f7e93ff573a7e0ced774acf03812cd95ce243d1c32bab8c9c",
       "third-party/credits/notices/JAIN-SIP.txt": "95225345eb50294f9e3171b4e0c8e14de99096c9d3fc1667a927a877c85023e9",
       "third-party/credits/notices/Noto.txt": "ff7c39c70ccc486e8ce7fbeaababc6edeaf408793f71125d65dff3c72f0d2422",
       "third-party/credits/notices/OpenFreeMap.txt": "c6463c28481518788fb6da237ff92368e0f534f07f2e4627936a92bffa97c86d",
       "third-party/credits/notices/WebRTC.txt": "1e0fb9081df9cf8a8cfda6efa67575bcbcdb02f640f5e090f3e48e27f9a2e8cf",
-      "third-party/credits/registry.json": "2e5956c231850b2a56c06088fb61e24e83693f9c80f3d2d3186df81e30986241"
+      "third-party/credits/registry.json": "713d0db1d8fec6f3110b6561787974a99fa2c11925151a4b9c62c52b9cb279a2"
     },
     "binaries": {
       "composeApp/libs/audioswitch-039a35aefab7747c557242fa216c9ea11743b604.aar": "c8240221daa9a96d4ea01a4dc6f6f6b10b4903d2a71f9b57f838bdfeb6c3fcbc",

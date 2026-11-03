@@ -150,11 +150,12 @@ internal class VideoCameraController(private val context: Context, private val o
 
     fun attach(previewView: PreviewView) {
         view = previewView
-        previewView.previewStreamState.observe(owner) { stream ->
-            if (stream != PreviewView.StreamState.STREAMING) return@observe
-            val info = preview?.resolutionInfo ?: return@observe
-            val aspect = videoPreviewAspect(info.cropRect.width(), info.cropRect.height(), info.rotationDegrees)
-            if (aspect != state.value.previewAspect) mutableState.update { it.copy(previewAspect = aspect) }
+        // Once per view: Retry calls attach again, and every extra observer would live until the screen closes.
+        if (observedView !== previewView) {
+            observedView = previewView
+            previewView.previewStreamState.observe(owner) { stream ->
+                if (stream == PreviewView.StreamState.STREAMING) refreshPreviewAspect()
+            }
         }
         startSensors()
         val future = ProcessCameraProvider.getInstance(context)
@@ -180,6 +181,16 @@ internal class VideoCameraController(private val context: Context, private val o
     fun updateRotation(rotation: Int) {
         if (!canEditVideoOverlay(state.value.phase)) return
         preview?.targetRotation = rotation
+        refreshPreviewAspect()
+    }
+
+    private var observedView: PreviewView? = null
+
+    /** The displayed frame's shape, from what the preview actually streams; refreshed on every stream or rotation change. */
+    private fun refreshPreviewAspect() {
+        val info = preview?.resolutionInfo ?: return
+        val aspect = videoPreviewAspect(info.cropRect.width(), info.cropRect.height(), info.rotationDegrees)
+        if (aspect != state.value.previewAspect) mutableState.update { it.copy(previewAspect = aspect) }
     }
 
     @Suppress("DEPRECATION")

@@ -604,12 +604,12 @@ private fun LookTab(widget: OverlayWidget, dispatch: (OverlayEditorAction) -> Un
         placedSize.forEach { (size, label) -> Tile(stringResource(label), widget.size == size, Modifier.weight(1f)) { dispatch(OverlayEditorAction.SetSize(size)) } }
     }
     val dial = widget.kind == OverlayWidgetKind.ARC || widget.kind == OverlayWidgetKind.ARC_LEFT || widget.kind == OverlayWidgetKind.ARC_RIGHT
-    // **Retraction:** the card tile used to stand for ICON_VALUE as well, so no chip with an icon could be made.
+    // The chip is its own kind; the card tile also stands for the older labelled card with an icon (ICON_VALUE).
     // Five kinds do not fit a phone's width whole («Карточ-ка» broke on the emulator), so the row scrolls.
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
         listOf(
-            Triple(OverlayWidgetKind.VALUE_CARD, Res.string.video_editor_kind_card, widget.kind == OverlayWidgetKind.VALUE_CARD),
-            Triple(OverlayWidgetKind.ICON_VALUE, Res.string.video_editor_kind_chip, widget.kind == OverlayWidgetKind.ICON_VALUE),
+            Triple(OverlayWidgetKind.VALUE_CARD, Res.string.video_editor_kind_card, widget.kind == OverlayWidgetKind.VALUE_CARD || widget.kind == OverlayWidgetKind.ICON_VALUE),
+            Triple(OverlayWidgetKind.ICON_CHIP, Res.string.video_editor_kind_chip, widget.kind == OverlayWidgetKind.ICON_CHIP),
             Triple(OverlayWidgetKind.ARC, Res.string.video_editor_kind_dial, dial),
             Triple(OverlayWidgetKind.BAR, Res.string.video_editor_kind_bar, widget.kind == OverlayWidgetKind.BAR),
             Triple(OverlayWidgetKind.TEXT, Res.string.video_editor_kind_text, widget.kind == OverlayWidgetKind.TEXT),
@@ -637,7 +637,7 @@ private fun LookTab(widget: OverlayWidget, dispatch: (OverlayEditorAction) -> Un
             }
         }
     }
-    if (widget.kind == OverlayWidgetKind.ICON_VALUE) IconPicker(widget, dispatch)
+    if (widget.kind == OverlayWidgetKind.ICON_CHIP || widget.kind == OverlayWidgetKind.ICON_VALUE) IconPicker(widget, dispatch)
 }
 
 /**
@@ -793,8 +793,8 @@ internal fun builtinName(preset: OverlayPreset): StringResource = when (preset.i
 }
 
 private fun kindLabel(kind: OverlayWidgetKind): StringResource = when (kind) {
-    OverlayWidgetKind.VALUE_CARD -> Res.string.video_editor_kind_card
-    OverlayWidgetKind.ICON_VALUE -> Res.string.video_editor_kind_chip
+    OverlayWidgetKind.VALUE_CARD, OverlayWidgetKind.ICON_VALUE -> Res.string.video_editor_kind_card
+    OverlayWidgetKind.ICON_CHIP -> Res.string.video_editor_kind_chip
     OverlayWidgetKind.ARC, OverlayWidgetKind.ARC_LEFT, OverlayWidgetKind.ARC_RIGHT -> Res.string.video_editor_kind_dial
     OverlayWidgetKind.BAR -> Res.string.video_editor_kind_bar
     OverlayWidgetKind.TEXT -> Res.string.video_editor_kind_text

@@ -1,6 +1,19 @@
 {
   "projects": [
     {
+      "id": "manual:fontawesome",
+      "name": "Font Awesome Free",
+      "authors": [
+        "Fonticons, Inc."
+      ],
+      "website": "https://fontawesome.com",
+      "licenseIds": [
+        "FontAwesome-OFL",
+        "CC-BY-4.0"
+      ],
+      "noticePath": "third-party/credits/notices/FontAwesome.txt"
+    },
+    {
       "id": "manual:loeuc",
       "name": "loeuc-core",
       "authors": [

@@ -32,8 +32,13 @@ internal class OverlayFonts(context: Context) {
     val bold: Typeface = load(context, "fonts/Roboto-Bold.ttf", Typeface.DEFAULT_BOLD)
     val medium: Typeface = load(context, "fonts/Roboto-Medium.ttf", Typeface.DEFAULT)
 
-    /** Font Awesome Free 6.7.2 Solid, the glyphs telemetry-studio draws its icons from (OFL 1.1). Null: no icons. */
-    val icons: Typeface? = runCatching { Typeface.createFromAsset(context.assets, ICON_FONT) }.getOrNull()
+    /**
+     * Font Awesome Free 6.7.2 Solid, the glyphs telemetry-studio draws its icons from (OFL 1.1). Null: no icons, and
+     * the scene then reserves no room for them ([OverlayTextMeasure.iconsAvailable]); the failure is logged.
+     */
+    val icons: Typeface? = runCatching { Typeface.createFromAsset(context.assets, ICON_FONT) }
+        .onFailure { android.util.Log.w("RideVideo", "Icon font $ICON_FONT failed to load; overlays draw without icons", it) }
+        .getOrNull()
 
     companion object {
         const val ICON_FONT = "fonts/fa-solid-900.ttf"
@@ -59,6 +64,8 @@ internal class OverlayCanvasDrawer(private val fonts: OverlayFonts) : OverlayTex
     private val rect = RectF()
     private val glyph = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.LEFT }
     private val glyphBounds = android.graphics.Rect()
+
+    override val iconsAvailable: Boolean get() = fonts.icons != null
 
     override fun width(text: String, size: Float, bold: Boolean): Float {
         this.text.letterSpacing = 0f

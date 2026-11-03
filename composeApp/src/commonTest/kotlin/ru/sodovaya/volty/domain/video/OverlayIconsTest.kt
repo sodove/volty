@@ -68,8 +68,8 @@ class OverlayIconsTest {
     @Test
     fun theEditorMakesAChipAndPicksItsIcon() {
         val card = OverlayWidget(id = "c", metric = VideoMetric.VOLTAGE, kind = OverlayWidgetKind.VALUE_CARD)
-        val chip = reduceOverlayEditor(editor(card), OverlayEditorAction.SetKind(OverlayWidgetKind.ICON_VALUE)).selected!!
-        assertEquals(OverlayWidgetKind.ICON_VALUE, chip.kind)
+        val chip = reduceOverlayEditor(editor(card), OverlayEditorAction.SetKind(OverlayWidgetKind.ICON_CHIP)).selected!!
+        assertEquals(OverlayWidgetKind.ICON_CHIP, chip.kind)
         assertNotNull(chip.placement, "a chip is placed like any widget")
 
         var state = reduceOverlayEditor(editor(chip), OverlayEditorAction.SetIcon("fire"))
@@ -86,7 +86,7 @@ class OverlayIconsTest {
 
     @Test
     fun aChipKeepsItsIconWhenItsMetricChangesUnlessItWasTheMetricsOwn() {
-        val own = OverlayWidget(id = "c", metric = VideoMetric.VOLTAGE, kind = OverlayWidgetKind.ICON_VALUE, iconName = "car-battery")
+        val own = OverlayWidget(id = "c", metric = VideoMetric.VOLTAGE, kind = OverlayWidgetKind.ICON_CHIP, iconName = "car-battery")
         assertNull(overlayWidgetWithMetric(own, VideoMetric.SOC).iconName)
         val chosen = own.copy(iconName = "rocket")
         assertEquals("rocket", overlayWidgetWithMetric(chosen, VideoMetric.SOC).iconName)
@@ -94,7 +94,7 @@ class OverlayIconsTest {
 
     @Test
     fun aTimeCanBeAChip() {
-        assertTrue(overlayKindAllowed(OverlayWidgetKind.ICON_VALUE, VideoMetric.ELAPSED))
+        assertTrue(overlayKindAllowed(OverlayWidgetKind.ICON_CHIP, VideoMetric.ELAPSED))
         assertFalse(overlayKindAllowed(OverlayWidgetKind.ARC, VideoMetric.ELAPSED))
     }
 
