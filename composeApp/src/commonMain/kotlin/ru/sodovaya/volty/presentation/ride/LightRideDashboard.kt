@@ -111,8 +111,6 @@ import kotlin.math.sqrt
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-internal val LightHudBackground = Color(0xFF07131E)
-
 internal data class LightHudPalette(
     val text: Color,
     val muted: Color,
@@ -820,24 +818,19 @@ private fun LightCircleButton(icon: androidx.compose.ui.graphics.vector.ImageVec
     }
 }
 
+/**
+ * Shown only when no map is mounted under the HUD. It is the theme's map
+ * background, the same colour the real map's backing box paints. Retraction:
+ * an earlier revision drew a fixed navy (#081725 to #142B33) placeholder with a
+ * fake street grid and road, in both themes; the outgoing HUD painted it on
+ * the first frame of every Ride -> other-screen crossfade (see
+ * [ru.sodovaya.volty.presentation.map.rideHudMapBacked]), and it matched
+ * neither the light nor the dark map.
+ */
 @Composable
 private fun LightMapFallback() {
-    Canvas(Modifier.fillMaxSize().background(Brush.linearGradient(listOf(Color(0xFF081725), Color(0xFF142B33))))) {
-        repeat(10) { i ->
-            val x = size.width * (i + 1) / 11f
-            drawLine(Color(0xFF28424B).copy(alpha = 0.35f), Offset(x, 0f), Offset(x - size.width * 0.28f, size.height), strokeWidth = 1.dp.toPx())
-        }
-        repeat(8) { i ->
-            val y = size.height * (i + 1) / 9f
-            drawLine(Color(0xFF28424B).copy(alpha = 0.35f), Offset(0f, y), Offset(size.width, y + size.height * 0.12f), strokeWidth = 1.dp.toPx())
-        }
-        val road = Path().apply {
-            moveTo(-20f, size.height * 0.76f)
-            cubicTo(size.width * 0.25f, size.height * 0.52f, size.width * 0.58f, size.height * 0.67f, size.width + 20f, size.height * 0.35f)
-        }
-        drawPath(road, Color(0xFF6A8B91).copy(alpha = 0.28f), style = Stroke(width = 12.dp.toPx(), cap = StrokeCap.Round))
-        drawPath(road, Color(0xFF243D45).copy(alpha = 0.9f), style = Stroke(width = 7.dp.toPx(), cap = StrokeCap.Round))
-    }
+    val background = Color(ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette.current.background)
+    Box(Modifier.fillMaxSize().background(background))
 }
 
 @Composable

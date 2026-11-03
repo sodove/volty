@@ -212,7 +212,8 @@ fun RideDashboardScreen(
                 .background(
                     when {
                         state.style != DashboardStyle.LIGHT -> MaterialTheme.colorScheme.background
-                        mapLayer == null -> LightHudBackground
+                        // Retraction: this was a fixed navy (#07131E) in both themes.
+                        mapLayer == null -> Color(ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette.current.background)
                         else -> Color.Transparent
                     }
                 )

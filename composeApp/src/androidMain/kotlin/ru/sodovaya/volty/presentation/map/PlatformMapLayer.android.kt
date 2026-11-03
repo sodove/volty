@@ -115,12 +115,19 @@ private const val MAX_TRAIL_POINTS = 240
 private object MapViewCache {
     private val views = mutableMapOf<String, MapView>()
 
-    fun obtain(key: String, context: Context): MapView = synchronized(this) {
+    fun obtain(key: String, context: Context, loadColor: Int): MapView = synchronized(this) {
         views[key] ?: run {
             MapLibre.getInstance(context.applicationContext)
             MapView(
                 context,
-                MapLibreMapOptions().textureMode(rideMapTextureModeRequiredForMapCapture),
+                // The load colour is the MapView foreground until its first
+                // rendered frame. Built without attributes it is 0 (transparent,
+                // read from the 13.0.2 bytecode), which already showed the themed
+                // box behind; it is set explicitly so a library default can
+                // never put an off-theme frame on screen.
+                MapLibreMapOptions()
+                    .textureMode(rideMapTextureModeRequiredForMapCapture)
+                    .foregroundLoadColor(loadColor),
             ).also { view ->
                 view.onCreate(null)
                 views[key] = view
@@ -209,7 +216,7 @@ private fun AndroidMapLibreView(
     val motionEstimator = remember(cacheKey) { RideMapMotionEstimator() }
     val cameraSmoother = remember(cacheKey) { RideMapCameraSmoother() }
     val hazeState = rememberHazeState()
-    val mapView = remember(context, cacheKey) { MapViewCache.obtain(cacheKey, context) }
+    val mapView = remember(context, cacheKey) { MapViewCache.obtain(cacheKey, context, palette.background) }
 
     DisposableEffect(hazeState) {
         publishMapHazeState(hazeState)

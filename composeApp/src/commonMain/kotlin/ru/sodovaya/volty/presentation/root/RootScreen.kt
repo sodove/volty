@@ -78,6 +78,7 @@ import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
 import ru.sodovaya.volty.presentation.map.rideMapHostState
 import ru.sodovaya.volty.presentation.map.rideMapRenderActive
+import ru.sodovaya.volty.presentation.map.rideHudMapBacked
 import ru.sodovaya.volty.presentation.map.RIDE_MAP_FADE_MILLIS
 import ru.sodovaya.volty.presentation.map.NavigationMapRenderPolicy
 import ru.sodovaya.volty.presentation.map.NavigationMapScene
@@ -355,8 +356,9 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                         instance.component,
                         // The native map is hosted above at Root level so its
                         // Compose/GL surface survives tab changes. Light only
-                        // needs a non-null marker to leave the HUD transparent.
-                        mapLayer = if (mapHost.visible) ({}) else null,
+                        // needs a non-null marker to leave the HUD transparent,
+                        // and the outgoing HUD needs it until its fade ends.
+                        mapLayer = if (rideHudMapBacked(mapHost)) ({}) else null,
                         onOpenBattery = { component.onTab(RootComponent.Tab.Battery) },
                         onOpenNearby = { component.onTab(RootComponent.Tab.Nearby) },
                         onOpenGroupMap = component::onOpenGroupMap,

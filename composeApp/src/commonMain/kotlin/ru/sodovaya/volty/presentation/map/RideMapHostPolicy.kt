@@ -28,6 +28,17 @@ internal const val RIDE_MAP_FADE_MILLIS = 300
  */
 internal fun rideMapRenderActive(visible: Boolean, alpha: Float): Boolean = visible || alpha > 0f
 
+/**
+ * Whether the Ride HUD has the root-hosted map under it, and so must stay
+ * transparent. It follows [RideMapHostState.mounted], not `visible`: the stack's
+ * active child changes on the first frame of a crossfade, while the outgoing
+ * Ride child stays composed for the whole fade. Retraction: an earlier revision
+ * keyed the HUD on `visible`, so the outgoing HUD switched to its opaque
+ * fallback (a hardcoded navy placeholder map) on the first frame of every
+ * Ride -> other-screen transition and covered the real map as it faded.
+ */
+internal fun rideHudMapBacked(host: RideMapHostState): Boolean = host.mounted
+
 /** Haze can only sample the live map when MapLibre renders through a TextureView. */
 internal const val rideMapTextureModeRequiredForMapCapture = true
 

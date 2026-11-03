@@ -117,6 +117,24 @@ class RideMapHostPolicyTest {
         assertEquals(false, rideMapRenderActive(visible = false, alpha = 0f))
     }
 
+    // The outgoing Ride HUD is still composed for the whole crossfade, but the
+    // stack's active child has already changed, so `visible` is false from the
+    // first frame. A HUD that asked `visible` painted its opaque fallback over
+    // the fading map (the 2026-11-04 flash). It must ask whether the map exists.
+    @Test fun outgoingRideHudStaysTransparentWhileTheRetainedMapFadesOut() {
+        for (screen in listOf(RideMapScreen.OTHER, RideMapScreen.BATTERY, RideMapScreen.NEARBY)) {
+            val host = rideMapHostState(rideAvailable = true, activeScreen = screen, activeStyle = null)
+            assertEquals(false, host.visible)
+            assertTrue(rideHudMapBacked(host), "$screen")
+        }
+        assertTrue(rideHudMapBacked(rideMapHostState(true, RideMapScreen.RIDE, DashboardStyle.LIGHT)))
+    }
+
+    @Test fun rideHudFallsBackOnlyWhenNoMapIsMountedUnderIt() {
+        assertEquals(false, rideHudMapBacked(rideMapHostState(false, RideMapScreen.RIDE, DashboardStyle.LIGHT)))
+        assertEquals(false, rideHudMapBacked(rideMapHostState(false, RideMapScreen.OTHER, null)))
+    }
+
     @Test fun mapFadeMatchesTheScreenCrossfade() {
         assertEquals(300, RIDE_MAP_FADE_MILLIS)
     }
