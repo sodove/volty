@@ -48,6 +48,20 @@ internal fun resolveDeviceTypes(
     }
     rememberedType?.let { memory ->
         if (memory.address == address) {
+            // A Begode-family NAME (GotWay_*, Begode*, EX*, ...) is a certain detection, and Veteran / Leaperkim are
+            // detected by *different* names (LK12345, Sherman...). A scan memory that says Veteran / Leaperkim for an
+            // address advertising a Begode name is therefore a stale or mistaken pick (one wrong dropdown choice was
+            // enough: the wizard then seeded Veteran for a GotWay_59672), and must not keep outvoting the name.
+            if (detectedBmsType == BmsType.BEGODE && detectedControllerType == null &&
+                (memory.controllerType == ControllerType.VETERAN || memory.controllerType == ControllerType.NOSFET ||
+                    memory.bmsType == BmsType.LEAPERKIM)
+            ) {
+                return ResolvedDeviceTypes(
+                    bmsType = BmsType.BEGODE,
+                    controllerType = null,
+                    provenance = DeviceTypeProvenance.DETECTED
+                )
+            }
             return if (memory.controllerType != null) {
                 // A failed/aborted VESC setup can leave a remembered controller
                 // role for the address. Begode/Veteran advertisements are also

@@ -1822,12 +1822,13 @@
         "OpenMapTiles-BSD"
       ],
       "authors": [
+        "CartoDB Inc., Stamen and Paul Norman (Dark design, CC BY 3.0)",
         "Mapbox",
         "OpenMapTiles contributors",
         "Zsolt Ero"
       ],
       "website": "https://github.com/hyperknot/openfreemap-styles",
-      "notice": "Bundled OpenFreeMap style snapshots\n===================================\n\nThis directory contains the dark and bright OpenFreeMap styles, sourced from\nhttps://github.com/hyperknot/openfreemap-styles at commit\n72e1480dfc92858d334647037988bd2591fdb021.\n\nThe snapshots are transformed at runtime only to replace remote tile and font\nURLs with Volty's local PMTiles loopback server and to remove decorations that\nneed an unavailable sprite atlas.  The original repository is MIT-licensed:\nCopyright (c) 2023 Zsolt Ero.\n\nThe styles derive from OpenMapTiles / OSM Bright GL Style.  Their code is BSD\n3-Clause and visual design is CC BY 4.0.  Volty exposes the required map\nattribution in the map corner: © OpenMapTiles © OpenStreetMap contributors.\nSee the upstream LICENSE.md for the full notices:\nhttps://github.com/hyperknot/openfreemap-styles/blob/72e1480dfc92858d334647037988bd2591fdb021/LICENSE.md\n"
+      "notice": "Bundled OpenFreeMap style snapshots\n===================================\n\nThis directory contains the dark and bright OpenFreeMap styles, sourced from\nhttps://github.com/hyperknot/openfreemap-styles at commit\n72e1480dfc92858d334647037988bd2591fdb021.  The original repository is\nMIT-licensed: Copyright (c) 2023 Zsolt Ero.\n\nLineage of the two styles (they are not the same family):\n- Bright derives from OpenMapTiles / OSM Bright GL Style\n  (https://github.com/openmaptiles/osm-bright-gl-style).\n- Dark derives from OpenMapTiles / Dark Matter GL Style\n  (https://github.com/openmaptiles/dark-matter-gl-style), whose design is\n  derived from CartoDB Basemaps by Stamen and Paul Norman for CartoDB Inc.,\n  licensed CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/).\nThe code of these styles is BSD 3-Clause and their visual design CC BY 4.0\n(CC BY 3.0 for the CartoDB-derived design of Dark).\n\nCHANGES made by Volty (indications of modification, as CC BY requires):\n- At runtime the snapshots are transformed to replace remote tile and font\n  URLs with Volty's local PMTiles loopback server and to remove decorations\n  that need an unavailable sprite atlas.\n- The colours of selected layers are modified at runtime to follow the app's\n  theme accent and light/dark mode: the background, land use, buildings and\n  place and road labels in both styles, and in the dark style also the roads,\n  road casings and footpaths.  Only paint colours are changed, by shifting the\n  tone of each upstream colour; hues and chroma of those layers are replaced by\n  a neutral tint of the chosen accent.  Water, parks, railways, boundaries and\n  all geometry, sources, tile URLs, sprite and glyph references are untouched.\n  The bright style keeps OpenFreeMap's own road colours.\n- The dark style's labels are brighter than upstream for legibility.\n\nVolty exposes the required map attribution in the map corner, as links:\n(c) OpenFreeMap (c) OpenMapTiles (c) OpenStreetMap.  The attribution is also\nshown on every route preview snapshot.\nSee the upstream LICENSE.md for the full notices:\nhttps://github.com/hyperknot/openfreemap-styles/blob/72e1480dfc92858d334647037988bd2591fdb021/LICENSE.md\n"
     },
     {
       "id": "com.stadiamaps:osrm-openapi",
@@ -2863,7 +2864,7 @@
     "inputs": {
       "THIRD_PARTY_NOTICES.md": "43a514e8c7f31c6b3f59d16719342f96e4b42803c4004448432ef0ce6c2bd4f9",
       "composeApp/src/androidMain/assets/offline-map-glyphs/NOTICE.txt": "ff7c39c70ccc486e8ce7fbeaababc6edeaf408793f71125d65dff3c72f0d2422",
-      "composeApp/src/androidMain/assets/offline-map-styles/NOTICE.txt": "15395f8527ea030b2387442da9fc0f62e121bc2b85753ca2787e0703931b73f4",
+      "composeApp/src/androidMain/assets/offline-map-styles/NOTICE.txt": "c6463c28481518788fb6da237ff92368e0f534f07f2e4627936a92bffa97c86d",
       "composeApp/src/androidMain/cpp/rnnoise/COPYING": "45d37ca1cdb278c088e1aa85e0e65ca3a534ed86a28dcc96ca16810248a61d35",
       "composeApp/src/androidMain/cpp/rnnoise/VERSION": "8dd7f57c376c4645dbcf50042a1e43dd217f422900ca5ac73a3e46307818ceaf",
       "composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/history/ported/LICENSE": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
@@ -2886,9 +2887,9 @@
       "third-party/credits/licenses/loeuc-MIT.txt": "23568e12beba7669ab60ea1fc479da2feefeab384ee582b2e6cf55daace3bc7f",
       "third-party/credits/notices/JAIN-SIP.txt": "95225345eb50294f9e3171b4e0c8e14de99096c9d3fc1667a927a877c85023e9",
       "third-party/credits/notices/Noto.txt": "ff7c39c70ccc486e8ce7fbeaababc6edeaf408793f71125d65dff3c72f0d2422",
-      "third-party/credits/notices/OpenFreeMap.txt": "15395f8527ea030b2387442da9fc0f62e121bc2b85753ca2787e0703931b73f4",
+      "third-party/credits/notices/OpenFreeMap.txt": "c6463c28481518788fb6da237ff92368e0f534f07f2e4627936a92bffa97c86d",
       "third-party/credits/notices/WebRTC.txt": "1e0fb9081df9cf8a8cfda6efa67575bcbcdb02f640f5e090f3e48e27f9a2e8cf",
-      "third-party/credits/registry.json": "90a0c41d57c32aee34121f5e561e20aa8f07b4846e4330d28070faab13e000da"
+      "third-party/credits/registry.json": "33d3e009be22f5b78049dacd5b0169810755442065a1b86b24bdf7b9bc6a72ee"
     },
     "binaries": {
       "composeApp/libs/audioswitch-039a35aefab7747c557242fa216c9ea11743b604.aar": "c8240221daa9a96d4ea01a4dc6f6f6b10b4903d2a71f9b57f838bdfeb6c3fcbc",

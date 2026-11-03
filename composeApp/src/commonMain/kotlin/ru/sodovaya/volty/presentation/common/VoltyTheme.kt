@@ -22,9 +22,14 @@ val LocalVoltyDarkTheme = staticCompositionLocalOf { false }
 @Composable
 fun VoltyTheme(content: @Composable () -> Unit) {
     val appPrefs: AppPrefs = koinInject()
-    val themeMode by appPrefs.themeMode.collectAsState()
-    val dynamicColorEnabled by appPrefs.dynamicColorEnabled.collectAsState()
-    val accent by appPrefs.themeAccent.collectAsState()
+    // Cold start: DataStore has not answered yet on the first frame, and the per-field flows hold
+    // placeholder defaults (accent DEFAULT, dynamic colour on). Painting those for a frame or two
+    // is the flash a non-default user saw, so nothing is composed until the stored choice arrives
+    // (one small read; the window background shows meanwhile).
+    val prefs = appPrefs.themePrefs.collectAsState().value ?: return
+    val themeMode = prefs.mode
+    val dynamicColorEnabled = prefs.dynamicColor
+    val accent = prefs.accent
     val systemDark = isSystemInDarkTheme()
     val darkTheme = when (themeMode) {
         "light" -> false

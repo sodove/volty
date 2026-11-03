@@ -78,7 +78,8 @@
       "authors": [
         "Zsolt Ero",
         "OpenMapTiles contributors",
-        "Mapbox"
+        "Mapbox",
+        "CartoDB Inc., Stamen and Paul Norman (Dark design, CC BY 3.0)"
       ],
       "website": "https://github.com/hyperknot/openfreemap-styles",
       "licenseIds": [

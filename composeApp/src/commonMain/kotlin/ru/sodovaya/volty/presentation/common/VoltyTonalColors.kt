@@ -14,7 +14,15 @@ class VoltyTonalColors(
     val tertiary: (Int) -> Int,
     val neutral: (Int) -> Int,
     val neutralVariant: (Int) -> Int,
+    val error: (Int) -> Int = ERROR_FAMILY,
 )
+
+/** Fixed green for the tertiary family: the same hue as the hand-tuned default scheme (0xFF2E6B3A). */
+private const val TERTIARY_HUE = 145.0
+private const val TERTIARY_CHROMA = 30.0
+
+/** Fixed red family for error roles, independent of the accent. */
+private val ERROR_FAMILY: (Int) -> Int = TonalPalette.fromHueAndChroma(25.0, 84.0)::tone
 
 fun seededTonalColors(seedArgb: Int): VoltyTonalColors {
     val seed = Hct.fromInt(seedArgb)
@@ -23,7 +31,10 @@ fun seededTonalColors(seedArgb: Int): VoltyTonalColors {
     return VoltyTonalColors(
         primary = family(seed.hue, 48.0),
         secondary = family(seed.hue, 20.0),
-        tertiary = family((seed.hue + 60.0) % 360.0, 24.0),
+        // Retraction: tertiary used to be seed hue + 60. Screens read it as "connected"/"ok", so a
+        // blue accent made the connection dot magenta and a pink one orange. It is a fixed green now
+        // (chroma 30, hue 145) for every accent; status colours themselves live in VoltyStatusColors.
+        tertiary = family(TERTIARY_HUE, TERTIARY_CHROMA),
         neutral = family(seed.hue, 6.0),
         neutralVariant = family(seed.hue, 12.0),
     )
@@ -35,8 +46,13 @@ fun seededVoltyColorScheme(tones: VoltyTonalColors, dark: Boolean): ColorScheme 
     fun t(t: Int) = Color(tones.tertiary(t))
     fun n(t: Int) = Color(tones.neutral(t))
     fun v(t: Int) = Color(tones.neutralVariant(t))
+    fun e(t: Int) = Color(tones.error(t))
     val base = if (dark) darkColorScheme() else lightColorScheme()
     return base.copy(
+        // Explicit rather than inherited from the baseline scheme: an alarm colour must not depend
+        // on whatever defaults a library update brings.
+        error = e(if (dark) 80 else 40), onError = e(if (dark) 20 else 100),
+        errorContainer = e(if (dark) 30 else 90), onErrorContainer = e(if (dark) 90 else 10),
         primary = p(if (dark) 80 else 40), onPrimary = p(if (dark) 20 else 100),
         primaryContainer = p(if (dark) 30 else 90), onPrimaryContainer = p(if (dark) 90 else 10),
         inversePrimary = p(if (dark) 40 else 80), surfaceTint = p(if (dark) 80 else 40),

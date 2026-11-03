@@ -16,7 +16,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
-import kotlinx.coroutines.suspendCancellableCoroutine
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.Style
@@ -38,7 +37,6 @@ import org.maplibre.geojson.Point
 import ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette
 import ru.sodovaya.volty.presentation.map.MapThemePalette
 import ru.sodovaya.volty.presentation.map.themeMapStyle
-import kotlin.coroutines.resume
 
 @Composable
 internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkTheme: Boolean, modifier: Modifier) {
@@ -77,11 +75,11 @@ private suspend fun routeSnapshot(context: Context, points: List<Pair<Double, Do
         .withRegion(LatLngBounds.Builder().include(LatLng(bounds.south, bounds.west)).include(LatLng(bounds.north, bounds.east)).build())
         .withPixelRatio(pixelRatio)
         .withLogo(false)
-    return suspendCancellableCoroutine { continuation ->
+    return awaitSnapshotOrNull<ImageBitmap> { onResult, onFailure ->
         val snapshotter = MapSnapshotter(context, options)
-        continuation.invokeOnCancellation { snapshotter.cancel() }
-        snapshotter.start({ result -> if (continuation.isActive) continuation.resume(result.bitmap.asImageBitmap()) },
-            { _ -> if (continuation.isActive) continuation.resume(null) })
+        snapshotter.start({ result -> try { onResult(result.bitmap.asImageBitmap()) } catch (_: Exception) { onFailure() } },
+            { _ -> onFailure() })
+        snapshotter::cancel
     }
 }
 

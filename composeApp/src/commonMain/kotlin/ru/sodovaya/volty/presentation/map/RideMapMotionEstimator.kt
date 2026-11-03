@@ -73,8 +73,10 @@ internal class RideMapMotionEstimator(
         val oldDisplay = previous?.let { positionAt(it, fix.timestampMillis) }
         val previousFix = previous?.fix
         val derivedMotion = previousFix?.let { deriveMotion(it, fix) }
-        val speed = validSpeed(fix.speedMetersPerSecond)
-            ?: derivedMotion?.speedMetersPerSecond
+        // max(), not "fix first": a fix may carry speed 0 (or a stale hasSpeed with no real value - mocked and some
+        // fused fixes do) while its position visibly moved. validSpeed() accepts 0, so "fix first" let that 0 outvote
+        // the displacement, `moving` stayed false and the heading never updated: the map did not rotate.
+        val speed = listOfNotNull(validSpeed(fix.speedMetersPerSecond), derivedMotion?.speedMetersPerSecond).maxOrNull()
             ?: previous?.speedMetersPerSecond
         val moving = speed != null && speed >= policy.movingSpeedThresholdMetersPerSecond
         val candidateBearing = validBearing(fix.bearingDegrees)
