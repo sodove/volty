@@ -115,7 +115,7 @@ Worker limits can be set directly in its environment. Byte limits are integers:
 | `MAX_CACHE_BYTES` | 64 GiB, including reserved validation space |
 | `MIN_FREE_BYTES` | 1 GiB |
 | `WORKERS` / `MAX_PENDING` | 2 / 8 |
-| `MAX_CATALOG_BYTES` | 4 MiB (see "Catalog size and rollout order") |
+| `MAX_CATALOG_BYTES` | 16 MiB (see "Catalog size and rollout order") |
 | `PRUNE_GRACE_SECONDS` | 604800 |
 | `REFRESH_SECONDS` | 900 |
 | `REQUEST_TIMEOUT_SECONDS` / `DOWNLOAD_TIMEOUT_SECONDS` | 30 / 1800 |
@@ -151,16 +151,17 @@ returned in public failure messages.
 
 ## Catalog size and rollout order
 
-The signed catalog was 3,999,559 bytes in October 2026 against a 4 MiB limit
+The signed catalog was 3,999,559 bytes in October 2026 against the old 4 MiB limit
 (4,194,304). App 0.7.59 and earlier reject a larger catalog ("Catalog is too large")
-and then cannot refresh, update or add regions. App 0.7.60 accepts 16 MiB. The
-server therefore keeps 4 MiB as its default: the package service
-(`VOLTY_OFFLINE_MAX_CATALOG_BYTES`) and the worker (`maxCatalogBytes` in
+and then cannot refresh, update or add regions. App 0.7.60 accepts 16 MiB. Riders
+have since moved to 0.7.60+, so both server limits now default to 16 MiB: the package
+service (`VOLTY_OFFLINE_MAX_CATALOG_BYTES`) and the worker (`maxCatalogBytes` in
 `production.json`, which refuses to publish a larger `catalog.json` and keeps the
-previous one). Order:
+previous one). Order that was followed:
 
 1. Ship app >= 0.7.60 and wait until riders have it.
-2. Raise both limits (up to 16 MiB).
+2. Raise both limits (up to 16 MiB). Done; a client older than 0.7.60 can no longer
+   be assumed to refresh a catalog above 4 MiB.
 3. Only then build many more cells, or enable `compactCatalog` once the app can ask
    `/offline/resolve` for the rider's position.
 
