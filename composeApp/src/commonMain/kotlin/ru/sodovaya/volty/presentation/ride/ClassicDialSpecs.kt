@@ -478,7 +478,7 @@ object ClassicDialSpecs {
         // used to be spelled out here and returned a well-formed 0.0 on every Begode (G §9.1).
         val whPerKm = MotionReadings.whPerKm(motion)
         val duty = MotionReadings.dutyPercent(motion)
-        val batteryCurrent = MotionReadings.batteryCurrentA(motion)
+        val batteryCurrent = ru.sodovaya.volty.domain.stats.batteryInputCurrent(motion, battery)?.dischargePositiveAmps
         val power = MotionReadings.powerW(motion)
         // Retraction: this read `MotionReadings.speedKmh(motion)` alone, so a battery-only vehicle's dial showed `—`
         // although the screen had a GPS speed (2026-11-04), and it skipped the `isConnected` gate Light applies.

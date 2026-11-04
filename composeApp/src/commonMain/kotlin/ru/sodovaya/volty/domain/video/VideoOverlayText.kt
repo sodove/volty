@@ -36,7 +36,7 @@ data class VideoOverlayStrings(
         VideoMetric.SPEED -> if (system == UnitSystem.IMPERIAL) UnitFormatter.speedUnit(system) else kmh
         VideoMetric.DUTY, VideoMetric.SOC -> percent
         VideoMetric.ESC_TEMPERATURE, VideoMetric.MOTOR_TEMPERATURE, VideoMetric.BATTERY_TEMPERATURE -> celsius
-        VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.BATTERY_CURRENT -> amp
+        VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.INPUT_CURRENT, VideoMetric.BATTERY_CURRENT -> amp
         VideoMetric.CONTROLLER_POWER, VideoMetric.BATTERY_POWER -> watt
         VideoMetric.VOLTAGE -> volt
         VideoMetric.ELAPSED -> ""
@@ -51,6 +51,7 @@ data class VideoOverlayStrings(
             VideoMetric.MOTOR_TEMPERATURE to "Motor temp",
             VideoMetric.MOTOR_CURRENT to "Motor current",
             VideoMetric.CONTROLLER_CURRENT to "ESC current",
+            VideoMetric.INPUT_CURRENT to "Input current",
             VideoMetric.CONTROLLER_POWER to "ESC power",
             VideoMetric.SOC to "Charge",
             VideoMetric.VOLTAGE to "Voltage",
@@ -106,7 +107,7 @@ fun videoElapsedText(totalSeconds: Long): String {
 /** The widest plausible value text for [metric], so a card never changes size when 9 becomes 10. */
 fun videoValueExemplar(metric: VideoMetric): String = when (metric) {
     VideoMetric.CONTROLLER_POWER, VideoMetric.BATTERY_POWER -> "${MINUS}99999"
-    VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.BATTERY_CURRENT -> "${MINUS}999"
+    VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.INPUT_CURRENT, VideoMetric.BATTERY_CURRENT -> "${MINUS}999"
     VideoMetric.DUTY -> "≥100"
     VideoMetric.ELAPSED -> "9:59:59"
     VideoMetric.DISTANCE -> "999.9"
@@ -126,6 +127,7 @@ private val LEGACY_DEFAULT_LABELS: Map<VideoMetric, Set<String>> = mapOf(
     VideoMetric.MOTOR_TEMPERATURE to setOf("T motor"),
     VideoMetric.MOTOR_CURRENT to setOf("I motor"),
     VideoMetric.CONTROLLER_CURRENT to setOf("I ESC"),
+    VideoMetric.INPUT_CURRENT to setOf("Input current"),
     VideoMetric.CONTROLLER_POWER to setOf("P ESC"),
     VideoMetric.SOC to setOf("SOC batt", "SOC"),
     VideoMetric.VOLTAGE to setOf("U batt"),
@@ -155,7 +157,7 @@ fun autoOverlayIcon(metric: VideoMetric): OverlayIcon = when (metric) {
     VideoMetric.SPEED, VideoMetric.DUTY, VideoMetric.ELAPSED, VideoMetric.DISTANCE -> OverlayIcon.GAUGE
     VideoMetric.SOC, VideoMetric.VOLTAGE -> OverlayIcon.BATTERY
     VideoMetric.BATTERY_POWER, VideoMetric.CONTROLLER_POWER -> OverlayIcon.BOLT
-    VideoMetric.BATTERY_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.MOTOR_CURRENT -> OverlayIcon.CURRENT
+    VideoMetric.BATTERY_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.INPUT_CURRENT, VideoMetric.MOTOR_CURRENT -> OverlayIcon.CURRENT
     else -> OverlayIcon.TEMPERATURE
 }
 

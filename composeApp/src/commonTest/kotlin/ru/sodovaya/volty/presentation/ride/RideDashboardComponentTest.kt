@@ -1873,7 +1873,7 @@ class RideDashboardComponentTest {
         assertRing("motion collector")
 
         // 3. the vehicle-data collector.
-        repo.activeVehicleData.value = VehicleData(aggregate = BmsData(voltage = 78f, isConnected = true))
+        repo.activeVehicleData.value = VehicleData(aggregate = BmsData(voltage = 78f, hasCurrent = false, isConnected = true))
         advanceUntilIdle()
         assertRing("vehicle-data collector")
 

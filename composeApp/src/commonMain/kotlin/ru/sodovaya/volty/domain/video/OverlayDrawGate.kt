@@ -46,13 +46,34 @@ data class OverlayDrawKey(
     val geometry: OverlayGeometry,
     val clockText: String? = null,
     val noLink: Boolean = false,
+    /** Quantized animated content positions: motion must redraw even after the number stops changing. */
+    val textPositions: Map<String, Float> = emptyMap(),
 )
 
 /**
- * Sweep resolution: 1.5 degrees of a 270 degree dial. It was 540 steps; a smoothed dial would then repaint on nearly
- * every frame of any change, and each repaint is a full software raster on the camera's GL thread.
+ * Sweep resolution: 0.1 degree of a 270 degree dial (under half a pixel at the stock radius).
+ * Retraction: the former 180 steps saved raster work but visibly stepped an otherwise interpolated sweep.
  */
-private const val ARC_STEPS = 180
+private const val ARC_STEPS = 2700
+
+/**
+ * Returns the numeric value the overlay should print or sweep from. A smoothed sample is display-only: it can replace
+ * a value only while the same raw reading is finite and present, and its provenance flags remain those of that raw
+ * reading. Trip counters are owned by their clocks and always retain the supplied value.
+ */
+fun displayedReading(
+    metric: VideoMetric,
+    raw: VideoReading?,
+    dials: Map<VideoMetric, Double>?,
+): VideoReading? {
+    val reading = raw ?: return null
+    val rawValue = reading.value ?: return reading
+    if (!rawValue.isFinite() || metric.isTripCounter() || dials == null) return reading
+    val smoothed = dials[metric]?.takeIf(Double::isFinite)
+    return reading.copy(value = smoothed)
+}
+
+private fun VideoMetric.isTripCounter() = this == VideoMetric.ELAPSED || this == VideoMetric.DISTANCE
 
 fun overlayDrawKey(
     preset: OverlayPreset,
@@ -63,19 +84,22 @@ fun overlayDrawKey(
     clockText: String? = null,
     trip: OverlayTrip = OverlayTrip(),
     scales: Map<VideoMetric, Float> = emptyMap(),
-    dials: Map<VideoMetric, Double> = emptyMap(),
+    dials: Map<VideoMetric, Double>? = null,
 ): OverlayDrawKey {
     val facets = preset.widgets.map { widget ->
-        val reading = overlayReading(widget.metric, snapshot, trip)
-        val style = overlayStyle(widget, reading)
+        val rawReading = overlayReading(widget.metric, snapshot, trip)
+        val reading = displayedReading(widget.metric, rawReading, dials)
+        val style = overlayStyle(widget, rawReading)
         val swept = widget.kind in SWEPT_KINDS
-        val arcStep = if (swept) overlayFraction(widget, reading, system, scales, dials)?.let { (it * ARC_STEPS).roundToInt() } else null
+        val arcStep = if (swept) overlayFraction(widget, reading, system, scales)?.let { (it * ARC_STEPS).roundToInt() } else null
         OverlayWidgetFacet(
             text = videoValueText(widget.metric, reading, system),
             foreground = style.foreground,
             background = style.background,
             arcStep = arcStep,
-            secondaryText = widget.bar.secondary?.let { videoValueText(it, overlayReading(it, snapshot, trip), system) },
+            secondaryText = widget.bar.secondary?.let { metric ->
+                videoValueText(metric, displayedReading(metric, overlayReading(metric, snapshot, trip), dials), system)
+            },
             scaleMax = if (swept && widget.arc.autoScale) overlayScaleMax(widget, scales) else null,
         )
     }

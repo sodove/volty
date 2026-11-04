@@ -11,6 +11,8 @@ class VideoFinalizationGate(private val requestStop: () -> Unit, private val rel
     private var closing = false
     private var released = false
 
+    val hasPendingRecordings: Boolean get() = outstanding > 0
+
     fun recordingStarted() {
         check(!closing && outstanding == 0)
         outstanding = 1

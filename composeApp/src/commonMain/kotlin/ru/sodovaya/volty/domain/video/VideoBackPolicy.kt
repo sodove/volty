@@ -14,8 +14,6 @@ enum class VideoBackAction {
     /** Nothing is recording; leave. */
     CLOSE_SCREEN,
 
-    /** The file is being finalized; leaving now would race the muxer, and the screen closes by itself soon. */
-    IGNORE,
 }
 
 /**
@@ -26,6 +24,8 @@ fun videoBackAction(editing: Boolean, phase: VideoRecordingPhase, confirming: Bo
     confirming -> VideoBackAction.DISMISS_CONFIRM
     editing -> VideoBackAction.CLOSE_EDITOR
     phase == VideoRecordingPhase.IDLE -> VideoBackAction.CLOSE_SCREEN
-    phase == VideoRecordingPhase.STOPPING -> VideoBackAction.IGNORE
+    // Retraction (2026-11-05): waiting for Finalize used to trap Back indefinitely after a camera failure.
+    // The controller's finalization gate retains resources independently of the Activity's lifetime.
+    phase == VideoRecordingPhase.STOPPING -> VideoBackAction.CLOSE_SCREEN
     else -> VideoBackAction.CONFIRM_STOP
 }

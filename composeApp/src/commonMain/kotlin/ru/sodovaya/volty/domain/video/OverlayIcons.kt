@@ -98,7 +98,7 @@ fun autoOverlayIconName(metric: VideoMetric): String = when (metric) {
     VideoMetric.SOC -> "battery-full"
     VideoMetric.VOLTAGE -> "car-battery"
     VideoMetric.BATTERY_POWER, VideoMetric.CONTROLLER_POWER -> "bolt"
-    VideoMetric.BATTERY_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.MOTOR_CURRENT -> "plug"
+    VideoMetric.BATTERY_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.INPUT_CURRENT, VideoMetric.MOTOR_CURRENT -> "plug"
     VideoMetric.ESC_TEMPERATURE, VideoMetric.MOTOR_TEMPERATURE, VideoMetric.BATTERY_TEMPERATURE -> "temperature-half"
 }
 

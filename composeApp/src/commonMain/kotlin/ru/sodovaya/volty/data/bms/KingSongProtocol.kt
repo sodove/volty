@@ -240,6 +240,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource, ProtocolFacts {
             voltage = voltage,
             current = current,
             hasCurrent = true,
+            currentSource = ru.sodovaya.volty.domain.model.BmsCurrentSource.CONTROLLER,
             power = 0f,
             hasPower = false,
             soc = 0f,

@@ -189,7 +189,7 @@ fun overlayDefaultAccent(metric: VideoMetric): String = OverlayPalette.hex(
     when (metric) {
         VideoMetric.SPEED, VideoMetric.CONTROLLER_POWER, VideoMetric.BATTERY_POWER -> OverlayPalette.CYAN
         VideoMetric.DUTY -> OverlayPalette.GREEN
-        VideoMetric.SOC, VideoMetric.VOLTAGE, VideoMetric.BATTERY_CURRENT, VideoMetric.CONTROLLER_CURRENT -> OverlayPalette.BATTERY
+        VideoMetric.SOC, VideoMetric.VOLTAGE, VideoMetric.BATTERY_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.INPUT_CURRENT -> OverlayPalette.BATTERY
         VideoMetric.ESC_TEMPERATURE, VideoMetric.BATTERY_TEMPERATURE -> OverlayPalette.ORANGE
         VideoMetric.MOTOR_TEMPERATURE, VideoMetric.MOTOR_CURRENT -> OverlayPalette.PINK
         VideoMetric.ELAPSED, VideoMetric.DISTANCE -> OverlayPalette.TEXT
@@ -615,6 +615,7 @@ fun overlaySampleSnapshot(): VideoSnapshot = VideoSnapshot(
         VideoMetric.MOTOR_TEMPERATURE to VideoReading(41.0),
         VideoMetric.MOTOR_CURRENT to VideoReading(-24.0),
         VideoMetric.CONTROLLER_CURRENT to VideoReading(-20.0),
+        VideoMetric.INPUT_CURRENT to VideoReading(18.0),
         VideoMetric.CONTROLLER_POWER to VideoReading(1762.0),
         VideoMetric.SOC to VideoReading(78.0),
         VideoMetric.VOLTAGE to VideoReading(96.4),

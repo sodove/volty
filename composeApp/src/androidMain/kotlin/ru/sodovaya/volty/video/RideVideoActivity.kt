@@ -67,7 +67,7 @@ class RideVideoActivity : ComponentActivity() {
         setContent {
             VoltyTheme {
                 VideoCameraScreen(camera, component, linkMonitor, repository.activeVehicle,
-                    onClose = { camera.closeWhenFinalized { finish() } },
+                    onClose = { camera.closeScreen { finish() } },
                     onEditing = { editingOverlay = it },
                     onSegmentMinutes = { minutes ->
                         camera.setSegmentMinutes(minutes)
@@ -94,8 +94,13 @@ class RideVideoActivity : ComponentActivity() {
         camera.updateRotation(rotation)
     }
 
+    override fun onStart() {
+        super.onStart()
+        if (::camera.isInitialized) camera.onHostStarted()
+    }
+
     override fun onStop() {
-        if (::camera.isInitialized) camera.stop()
+        if (::camera.isInitialized) camera.onHostStopped()
         lifecycleScope.launch {
             runCatching { if (!appVisibility.isVisible) repository.onAppPaused() }
         }

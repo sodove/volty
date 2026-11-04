@@ -980,18 +980,17 @@ class BegodeProtocol(
             // as a motion→motion leak, where before it was a dead store.
             motorCurrentA = if (sawLiveMotion) -phaseCurrentA else 0f,
             batteryCurrentA = controllerBatteryCurrent,
+            hasBatteryCurrent = batteryCurrent != null,
             inputVoltageV = voltage ?: 0f,
             // The same latch shape as hasDuty, one field over (G §9.3): a
             // missing cell count leaves no honest voltage, 0 V is what the
             // non-nullable field has to carry, and this is what stops the fold
             // averaging that 0 into a mixed vehicle's real rail.
             hasInputVoltage = voltage != null,
-            // Voltage-derived, so it is exactly as unknown as the voltage: 0 W
-            // whenever the cell count is missing. Spec D §2's `powerW =
-            // voltage x current`. G §9: the dashboard used to render that 0 as
-            // a confident "0.0 kW", so it now travels with a flag too.
+            // Retraction (2026-11-05): voltage alone used to earn power here, even before the battery-current
+            // frame arrived. Both factors are required; the placeholder 0 A is not a measurement.
             powerW = (voltage ?: 0f) * controllerBatteryCurrent,
-            hasPower = voltage != null,
+            hasPower = voltage != null && batteryCurrent != null,
             escTempC = if (sawLiveMotion) boardTempC else NO_TEMP_SENSOR_C,
             motorTempC = motorTemp ?: NO_TEMP_SENSOR_C,
             hasMotorTemp = motorTemp != null,
@@ -1692,6 +1691,7 @@ class BegodeProtocol(
             voltage = 0f,
             current = batteryCurrent ?: 0f,
             hasCurrent = batteryCurrent != null,
+            currentSource = ru.sodovaya.volty.domain.model.BmsCurrentSource.CONTROLLER,
             power = 0f,
             hasPower = false,
             // No fuel gauge and no cells: soc = 0 here means "unknown", not

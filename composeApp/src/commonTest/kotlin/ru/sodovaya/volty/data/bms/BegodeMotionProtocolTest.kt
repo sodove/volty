@@ -71,6 +71,21 @@ import kotlin.time.ExperimentalTime
  */
 @OptIn(ExperimentalTime::class)
 class BegodeMotionProtocolTest {
+    @Test
+    fun controllerCurrentPresenceRequiresItsOwnFrameAndSyntheticPackKeepsItsOrigin() {
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 0))
+        val before = assertNotNull(protocol.latestMotion(0))
+        assertFalse(before.hasBatteryCurrent, "a live frame has phase current, not measured battery current")
+        assertFalse(before.hasPower, "voltage alone cannot earn input power")
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 250, motorTempRaw = 30, dutyRaw = 20))
+        assertTrue(assertNotNull(protocol.latestMotion(0)).hasBatteryCurrent)
+        assertEquals(ru.sodovaya.volty.domain.model.BmsCurrentSource.CONTROLLER,
+            assertNotNull(protocol.latestData(0)).currentSource)
+        assertEquals(ru.sodovaya.volty.domain.model.BmsCurrentSource.BMS,
+            assertNotNull(protocolFedWithFixture().latestData(0)).currentSource)
+    }
+
 
     private fun protocolFedWithFixture(): BegodeProtocol {
         val protocol = BegodeProtocol()

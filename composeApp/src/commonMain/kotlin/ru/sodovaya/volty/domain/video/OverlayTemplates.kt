@@ -179,6 +179,10 @@ object OverlayTemplates {
      * - conditions as in the JSON: SOC under 30 / 15 and temperature from 60 / 80 turn the chip orange / red at 50 %,
      *   speed from 45 / 65 turns the arc amber / red as TS paints it.
      *
+     * **Retraction:** an earlier revision described TS's `current` as the battery's current and mapped the chip to
+     * strict BMS `BATTERY_CURRENT`. The stock chip now uses `INPUT_CURRENT`, which selects genuine BMS current first
+     * and falls back to controller input current.
+     *
      * One deliberate difference: TS shows the warning triangle on the duty chip permanently. Here the triangle is
      * earned (the approved rule: a warning sign only while a rule fires), so the duty chip carries Volty's duty
      * thresholds, 70 / 85, and shows the triangle and the orange / red chip only above them.
@@ -201,7 +205,7 @@ object OverlayTemplates {
         meowChip("soc", VideoMetric.SOC, "battery-full", meowRules(OverlayComparison.LT, 30.0, 15.0)),
         meowChip("temperature", VideoMetric.ESC_TEMPERATURE, "fire", meowRules(OverlayComparison.GTE, 60.0, 80.0)),
         meowChip("power", VideoMetric.CONTROLLER_POWER, "bolt"),
-        meowChip("current", VideoMetric.BATTERY_CURRENT, "gauge"),
+        meowChip("current", VideoMetric.INPUT_CURRENT, "gauge"),
         meowChip("duty", VideoMetric.DUTY, OverlayIcons.WARNING, meowRules(OverlayComparison.GTE, 70.0, 85.0)),
     )
 

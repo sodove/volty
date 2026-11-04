@@ -12,9 +12,18 @@ internal object OverlayLegacyTemplates {
     private val legacy by lazy { listOf(topRow(), hud(), minimal(), racing()).associateBy { it.id } }
 
     fun upgraded(preset: OverlayPreset): OverlayPreset {
-        val old = legacy[preset.id] ?: return preset
         // 0.7.63 wrote English labels into the presets; a later revision stores them blank.
         val normalized = preset.copy(widgets = preset.widgets.map { if (isAutoOverlayLabel(it)) it.copy(label = "") else it })
+        val currentIconStock = if (preset.id == "ts-meow-icons" || preset.id == "ts-meow-icons-trip") {
+            OverlayTemplates.byId(preset.id)
+        } else null
+        val oldIconStock = currentIconStock?.copy(widgets = currentIconStock.widgets.map { widget ->
+                if (widget.id == "current") widget.copy(metric = VideoMetric.BATTERY_CURRENT) else widget
+            })
+        // Compare the whole prior preset shape: custom edits and saved user copies are left alone.
+        if (oldIconStock != null && normalized == oldIconStock) return OverlayTemplates.byId(preset.id) ?: preset
+
+        val old = legacy[preset.id] ?: return preset
         return if (normalized == old) OverlayTemplates.byId(preset.id) ?: preset else preset
     }
 

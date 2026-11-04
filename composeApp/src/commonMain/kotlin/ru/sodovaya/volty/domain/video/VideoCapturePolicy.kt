@@ -45,12 +45,6 @@ fun videoPreviewDisplayedAspect(reported: Float?, windowLandscape: Boolean, froz
 fun videoPreviewOverlayShown(ready: Boolean, cameraFailed: Boolean, reportedAspect: Float?): Boolean =
     ready && !cameraFailed && reportedAspect != null
 
-/**
- * How often the view-tree preview overlay is rebuilt: the file's own repaint cap ([MAX_RECORDED_REPAINT_HZ]), so the
- * preview never promises a smoother overlay than the file gets.
- */
-const val VIDEO_PREVIEW_OVERLAY_MILLIS = 1000L / 15L
-
 // --- the shutter -------------------------------------------------------------------------------------------------
 
 enum class VideoShutterAction { START, STOP, NONE }
@@ -164,29 +158,6 @@ fun videoStorageMustStop(freeBytes: Long?, bitsPerSecond: Long): Boolean {
     if (freeBytes == null || freeBytes < 0 || bitsPerSecond <= 0) return false
     return freeBytes * 8 < bitsPerSecond * STORAGE_STOP_MARGIN_SECONDS
 }
-
-/**
- * Caps how often the RECORDED overlay is repainted. Each repaint is a full software raster of the whole frame on the
- * camera's GL thread, and with smoothed dials the redraw gate alone would let almost every frame through. The preview
- * is not capped. A change held back is not lost: the gate has not seen it, so it is drawn on the first frame after
- * the interval.
- */
-class OverlayRepaintLimiter(private val minIntervalMillis: Long = 1000L / MAX_RECORDED_REPAINT_HZ) {
-    private var last: Long? = null
-
-    fun allow(nowMillis: Long, limited: Boolean): Boolean {
-        val previous = last
-        if (limited && previous != null && nowMillis - previous in 0 until minIntervalMillis) return false
-        last = nowMillis
-        return true
-    }
-
-    fun reset() {
-        last = null
-    }
-}
-
-const val MAX_RECORDED_REPAINT_HZ = 15L
 
 // --- storage ---------------------------------------------------------------------------------------------------
 

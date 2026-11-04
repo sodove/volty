@@ -114,12 +114,12 @@ class OverlayIconsTest {
     }
 
     @Test
-    fun meowIconsReadsTheFieldsTelemetryStudioReadsAndInventsNothing() {
+    fun meowIconsUsesAutomaticInputCurrentAndOtherwiseKeepsStudioFields() {
         val metrics = OverlayTemplates.meowIcons().widgets.map { it.metric }
         assertEquals(
             listOf(
                 VideoMetric.VOLTAGE, VideoMetric.SOC, VideoMetric.ESC_TEMPERATURE, VideoMetric.CONTROLLER_POWER,
-                VideoMetric.BATTERY_CURRENT, VideoMetric.DUTY, VideoMetric.SPEED,
+                VideoMetric.INPUT_CURRENT, VideoMetric.DUTY, VideoMetric.SPEED,
             ),
             metrics,
         )

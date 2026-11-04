@@ -10,6 +10,7 @@ enum class VideoMetric(val unit: String) {
     MOTOR_TEMPERATURE("°C"),
     MOTOR_CURRENT("A"),
     CONTROLLER_CURRENT("A"),
+    INPUT_CURRENT("A"),
     CONTROLLER_POWER("W"),
     SOC("%"),
     VOLTAGE("V"),
@@ -261,23 +262,91 @@ class VideoTimeline(
     /** Returns the latest sample at or before the frame time, while it is fresh. */
     fun sample(frameTimeMillis: Long): VideoSnapshot? {
         val currentVehicle = vehicleId ?: return null
-        val latestCausalSample = snapshots
-            .asSequence()
-            .filter { it.vehicleId == currentVehicle && it.timeMillis <= frameTimeMillis }
-            .maxByOrNull(VideoSnapshot::timeMillis)
-            ?: return null
+        var latestCausalSample: VideoSnapshot? = null
+        for (candidate in snapshots) {
+            if (candidate.vehicleId != currentVehicle || candidate.timeMillis > frameTimeMillis) continue
+            val latest = latestCausalSample
+            if (latest == null || candidate.timeMillis >= latest.timeMillis) latestCausalSample = candidate
+        }
+        val causalSample = latestCausalSample ?: return null
 
-        if (isOlderThan(latestCausalSample.timeMillis, frameTimeMillis)) return null
+        if (isOlderThan(causalSample.timeMillis, frameTimeMillis)) return null
 
-        val expiredMetrics = latestCausalSample.expiresAtMillis
+        val expiredMetrics = causalSample.expiresAtMillis
             .filter { (_, expiresAtMillis) -> expiresAtMillis < frameTimeMillis }
             .keys
-            .filter { metric -> latestCausalSample.readings[metric]?.let { it != VideoReading(null) } == true }
-        if (expiredMetrics.isEmpty()) return latestCausalSample
+            .filter { metric -> causalSample.readings[metric]?.let { it != VideoReading(null) } == true }
+        if (expiredMetrics.isEmpty()) return causalSample
 
-        val readings = latestCausalSample.readings.toMutableMap()
+        val readings = causalSample.readings.toMutableMap()
         expiredMetrics.forEach { metric -> readings[metric] = VideoReading(value = null) }
-        return latestCausalSample.copy(readings = readings)
+        return causalSample.copy(readings = readings)
+    }
+
+    /**
+     * Numeric telemetry at a delayed video-frame time. Samples are linearly interpolated between the adjacent readings
+     * that bracket `frameTimeMillis - delayMillis`; if the buffer has no upper sample yet, the newest causal sample is
+     * held. A first sample is never moved back to a time before it was recorded.
+     *
+     * The unshifted frame time remains the authority for link freshness and every endpoint expiry. The latest raw
+     * sample must also still know each metric, so an unknown reading clears immediately instead of being filled from
+     * values still present in the interpolation buffer. Counters belong to the trip clock and are omitted.
+     */
+    fun interpolatedValues(frameMillis: Long, delayMillis: Long = DEFAULT_INTERPOLATION_DELAY_MILLIS): Map<VideoMetric, Double> {
+        val raw = sample(frameMillis) ?: return emptyMap()
+        val currentVehicle = vehicleId ?: return emptyMap()
+        val targetMillis = delayedFrameTime(frameMillis, delayMillis)
+        var before: VideoSnapshot? = null
+        var after: VideoSnapshot? = null
+        for (candidate in snapshots) {
+            if (candidate.vehicleId != currentVehicle || candidate.timeMillis > frameMillis) continue
+            if (candidate.timeMillis <= targetMillis) {
+                val previous = before
+                if (previous == null || candidate.timeMillis >= previous.timeMillis) before = candidate
+            } else {
+                val next = after
+                if (next == null || candidate.timeMillis <= next.timeMillis) after = candidate
+            }
+        }
+        val lower = before ?: return emptyMap()
+        val upper = after
+        val result = linkedMapOf<VideoMetric, Double>()
+
+        for (metric in VideoMetric.entries) {
+            if (metric == VideoMetric.ELAPSED || metric == VideoMetric.DISTANCE) continue
+            if (raw.readings[metric]?.value?.isFinite() != true) continue
+            val beforeValue = lower.freshValue(metric, frameMillis) ?: continue
+            var shown = beforeValue
+
+            if (upper != null) {
+                val afterValue = upper.freshValue(metric, frameMillis) ?: continue
+                val gapMillis = upper.timeMillis - lower.timeMillis
+                if (gapMillis in 1L..MAX_INTERPOLATION_GAP_MILLIS) {
+                    val fraction = (targetMillis - lower.timeMillis).toDouble() / gapMillis
+                    shown = interpolate(beforeValue, afterValue, fraction)
+                }
+            }
+
+            // Raw presence above proves that the current stream still knows this metric, even when the delayed
+            // endpoints would otherwise offer an older number.
+            result[metric] = shown
+        }
+        return result
+    }
+
+    private fun VideoSnapshot.freshValue(metric: VideoMetric, frameMillis: Long): Double? {
+        if (isOlderThan(timeMillis, frameMillis)) return null
+        if (expiresAtMillis[metric]?.let { it < frameMillis } == true) return null
+        return readings[metric]?.value?.takeIf(Double::isFinite)
+    }
+
+    private fun interpolate(before: Double, after: Double, fraction: Double): Double =
+        (before * (1.0 - fraction) + after * fraction)
+            .coerceIn(minOf(before, after), maxOf(before, after))
+
+    private fun delayedFrameTime(frameMillis: Long, delayMillis: Long): Long {
+        val delay = delayMillis.coerceAtLeast(0L)
+        return if (frameMillis < Long.MIN_VALUE + delay) Long.MIN_VALUE else frameMillis - delay
     }
 
     fun clear() {
@@ -294,6 +363,11 @@ class VideoTimeline(
             frameTimeMillis - maxAgeMillis
         }
         return sampleTimeMillis < oldestAllowed
+    }
+
+    private companion object {
+        const val DEFAULT_INTERPOLATION_DELAY_MILLIS = 80L
+        const val MAX_INTERPOLATION_GAP_MILLIS = 2_000L
     }
 }
 

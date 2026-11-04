@@ -9,7 +9,7 @@ val OVERLAY_SPEED_RUNGS: List<Float> = listOf(30f, 40f, 60f, 80f, 100f, 120f, 15
 
 private fun rungsFor(metric: VideoMetric): List<Float>? = when (metric) {
     VideoMetric.SPEED -> OVERLAY_SPEED_RUNGS
-    VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.BATTERY_CURRENT -> GaugeScale.CURRENT_RUNGS_A
+    VideoMetric.MOTOR_CURRENT, VideoMetric.CONTROLLER_CURRENT, VideoMetric.INPUT_CURRENT, VideoMetric.BATTERY_CURRENT -> GaugeScale.CURRENT_RUNGS_A
     VideoMetric.CONTROLLER_POWER, VideoMetric.BATTERY_POWER -> GaugeScale.POWER_RUNGS_W
     else -> null
 }

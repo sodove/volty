@@ -8,6 +8,7 @@ import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.stats.BmsReadings
 import ru.sodovaya.volty.domain.stats.MotionReadings
+import ru.sodovaya.volty.domain.stats.batteryInputCurrent
 import ru.sodovaya.volty.domain.video.VideoMetric
 import ru.sodovaya.volty.domain.video.VideoReading
 import ru.sodovaya.volty.domain.video.VideoSnapshot
@@ -18,7 +19,8 @@ private const val MAX_SOURCE_AGE_MILLIS = 2_000L
 /**
  * Makes one frame-time snapshot from the current vehicle fold. Controller
  * metrics come only from [VehicleData.motion], and battery metrics only from
- * [VehicleData.aggregate]. The receipt time remains on the camera's elapsed-
+ * [VehicleData.aggregate]. INPUT_CURRENT explicitly selects real BMS first, with controller fallback.
+ * The receipt time remains on the camera's elapsed-
  * realtime clock; epoch time is used separately to reject stale source data.
  */
 @OptIn(ExperimentalTime::class)
@@ -122,6 +124,19 @@ fun videoTelemetrySnapshot(
             batteryAgeMillis,
         )
     }
+
+    // The aggregate timestamp is the newest pack's: it cannot certify the other current contributors as fresh.
+    val contributors = data.packs.filter { it.isOnline && it.data.hasCurrent }
+    val packCurrentAvailable = data.packs.isEmpty() || (contributors.isNotEmpty() && contributors.all {
+        it.data.isConnected && sourceAgeMillis(it.data.timestamp.toEpochMilliseconds(), nowEpochMillis) != null
+    })
+    val currentBattery = contributors.minByOrNull { it.data.timestamp }?.let {
+        battery.copy(timestamp = it.data.timestamp)
+    } ?: battery
+    val inputCurrent = batteryInputCurrent(motion, currentBattery, nowEpochMillis,
+        motionAvailable = motionAvailable, batteryAvailable = batteryAvailable && packCurrentAvailable)
+    put(VideoMetric.INPUT_CURRENT, inputCurrent?.dischargePositiveAmps,
+        inputCurrent?.let { sourceAgeMillis(it.sampleEpochMillis, nowEpochMillis) })
 
     return VideoSnapshot(
         timeMillis = receivedAtMillis,

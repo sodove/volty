@@ -1728,4 +1728,9 @@
     <string name="db_gate_clearing_title">Удаляем историю поездок…</string>
     <string name="db_gate_clearing_body">Это может занять до минуты. Если приложение закроется, удаление отменится и ничего не пропадёт.</string>
     <string name="db_gate_resetting_title">Создаём чистую базу…</string>
+    <string name="video_frame_rate">Частота кадров</string>
+    <string name="video_stabilization_active">Камера включила стабилизацию</string>
+    <string name="video_stabilization_unavailable">На этой камере стабилизация недоступна</string>
+    <string name="video_stabilization_requested">Стабилизация запрошена; доступность зависит от режима записи</string>
+    <string name="video_stabilization_inactive">Камера не включила стабилизацию в этом режиме</string>
 </resources>

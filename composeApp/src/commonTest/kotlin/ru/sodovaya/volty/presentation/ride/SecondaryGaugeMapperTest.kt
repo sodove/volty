@@ -17,7 +17,8 @@ class SecondaryGaugeMapperTest {
         inputVoltageV = 78.2f, powerW = 4098f, escTempC = 52f, motorTempC = 68f, hasMotorTemp = true,
         consumedWh = 980f, tripKm = 58f, isConnected = true
     )
-    private val battery = BmsData(voltage = 78.2f, soc = 84f, socKnown = true, isConnected = true)
+    // These controller-gauge fixtures supply no measured BMS current. A real BMS zero deliberately wins instead.
+    private val battery = BmsData(voltage = 78.2f, hasCurrent = false, soc = 84f, socKnown = true, isConnected = true)
 
     @Test fun duty_maps_to_percent_and_carries_its_severity() {
         val r = SecondaryGaugeMapper.map(SecondaryGauge.DUTY, motion, battery, UnitSystem.METRIC)

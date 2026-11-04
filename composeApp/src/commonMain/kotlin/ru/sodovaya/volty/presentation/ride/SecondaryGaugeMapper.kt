@@ -112,7 +112,7 @@ object SecondaryGaugeMapper {
             )
         }
         SecondaryGauge.CURRENT -> {
-            val current = MotionReadings.batteryCurrentA(motion)
+            val current = ru.sodovaya.volty.domain.stats.batteryInputCurrent(motion, battery)?.dischargePositiveAmps
             SecondaryReadout(
                 labels.current, current.readoutOr { it.roundToInt().toString() }, "A",
                 current?.let { frac(abs(it), currentRangeA) } ?: 0f, DutyLevel.NORMAL

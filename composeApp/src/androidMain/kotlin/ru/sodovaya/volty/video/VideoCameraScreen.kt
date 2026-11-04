@@ -28,6 +28,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import android.os.SystemClock
 import android.os.VibrationEffect
@@ -82,6 +83,7 @@ internal fun VideoCameraScreen(
             VideoMetric.SOC to stringResource(Res.string.video_label_soc),
             VideoMetric.VOLTAGE to stringResource(Res.string.video_label_voltage),
             VideoMetric.BATTERY_CURRENT to stringResource(Res.string.video_label_battery_current),
+            VideoMetric.INPUT_CURRENT to stringResource(Res.string.video_label_input_current),
             VideoMetric.BATTERY_POWER to stringResource(Res.string.video_label_battery_power),
             VideoMetric.BATTERY_TEMPERATURE to stringResource(Res.string.video_label_battery_temperature),
             VideoMetric.ELAPSED to stringResource(Res.string.video_label_elapsed),
@@ -160,7 +162,6 @@ internal fun VideoCameraScreen(
             VideoBackAction.CLOSE_EDITOR -> editing = false
             VideoBackAction.CONFIRM_STOP -> confirmStop = true
             VideoBackAction.CLOSE_SCREEN -> onClose()
-            VideoBackAction.IGNORE -> Unit
         }
     }
     BackHandler { requestBack() }
@@ -292,6 +293,7 @@ internal fun VideoCameraScreen(
                 VideoSheetKind.QUALITY -> VideoQualitySheet(
                     state, audio,
                     onQuality = camera::setQuality,
+                    onFrameRate = camera::setFrameRate,
                     onAudio = { enabled ->
                         if (!enabled) audio = false else if (granted(Manifest.permission.RECORD_AUDIO)) audio = true
                         else audioRequest.launch(Manifest.permission.RECORD_AUDIO)
@@ -348,18 +350,22 @@ private enum class VideoSheetKind { NONE, QUALITY, OVERLAY }
 @Composable
 private fun PreviewOverlay(camera: VideoCameraController, aspect: Float, modifier: Modifier) {
     val context = LocalContext.current
+    val owner = LocalLifecycleOwner.current
     val drawer = remember { OverlayCanvasDrawer(OverlayFonts(context)) }
-    val now by produceState(SystemClock.elapsedRealtime()) {
-        while (true) {
-            value = SystemClock.elapsedRealtime()
-            delay(VIDEO_PREVIEW_OVERLAY_MILLIS)
+    val contentMotion = remember { OverlayContentMotion() }
+    val now by produceState(SystemClock.elapsedRealtime(), owner) {
+        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            while (true) {
+                withFrameNanos { value = SystemClock.elapsedRealtime() }
+            }
         }
     }
     // Clipped: the scrim is drawn wider than its frame (OverlayCanvasDrawer), harmless on a camera surface but it
     // spilled across the letterbox in the view tree (emulator check 2026-11-03).
     Canvas(modifier.aspectRatio(aspect).fillMaxSize().clipToBounds()) {
         val input = camera.previewInput(size.width.toInt(), size.height.toInt(), now) ?: return@Canvas
-        val scene = buildOverlayScene(input, drawer)
+        contentMotion.beginFrame(listOf(input.preset, input.width, input.height, input.snapshot?.vehicleId, input.strings, input.system), now)
+        val scene = buildOverlayScene(input.copy(contentPosition = contentMotion), drawer)
         drawIntoCanvas { drawer.draw(it.nativeCanvas, scene) }
     }
 }

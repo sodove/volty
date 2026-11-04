@@ -525,6 +525,7 @@ private fun videoBurnedLabel(metric: VideoMetric): String = stringResource(when 
     VideoMetric.MOTOR_TEMPERATURE -> Res.string.video_label_motor_temperature
     VideoMetric.MOTOR_CURRENT -> Res.string.video_label_motor_current
     VideoMetric.CONTROLLER_CURRENT -> Res.string.video_label_controller_current
+    VideoMetric.INPUT_CURRENT -> Res.string.video_label_input_current
     VideoMetric.CONTROLLER_POWER -> Res.string.video_label_controller_power
     VideoMetric.SOC -> Res.string.video_label_soc
     VideoMetric.VOLTAGE -> Res.string.video_label_voltage
@@ -820,6 +821,7 @@ internal fun videoMetricLabel(metric: VideoMetric): String = stringResource(when
     VideoMetric.MOTOR_TEMPERATURE -> Res.string.video_editor_metric_motor_temperature
     VideoMetric.MOTOR_CURRENT -> Res.string.video_editor_metric_motor_current
     VideoMetric.CONTROLLER_CURRENT -> Res.string.video_editor_metric_controller_current
+    VideoMetric.INPUT_CURRENT -> Res.string.video_editor_metric_input_current
     VideoMetric.CONTROLLER_POWER -> Res.string.video_editor_metric_controller_power
     VideoMetric.SOC -> Res.string.video_editor_metric_soc
     VideoMetric.VOLTAGE -> Res.string.video_editor_metric_voltage

@@ -6,6 +6,7 @@
     <string name="video_label_motor_temperature">Мотор</string>
     <string name="video_label_motor_current">Ток мотора</string>
     <string name="video_label_controller_current">Ток контр.</string>
+    <string name="video_label_input_current">Входной ток</string>
     <string name="video_label_controller_power">Мощн. контр.</string>
     <string name="video_label_soc">Заряд</string>
     <string name="video_label_voltage">Напряжение</string>

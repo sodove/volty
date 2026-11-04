@@ -28,7 +28,6 @@ class VideoCapturePolicyTest {
         assertEquals(3f / 4f, videoPreviewDisplayedAspect(3f / 4f, windowLandscape = false), 1e-6f)
         assertEquals(9f / 16f, videoPreviewDisplayedAspect(Float.NaN, windowLandscape = false), 1e-6f)
         // The preview overlay never repaints faster than the file's own overlay.
-        assertEquals(1000L / MAX_RECORDED_REPAINT_HZ, VIDEO_PREVIEW_OVERLAY_MILLIS)
     }
 
     @Test
@@ -179,30 +178,6 @@ class VideoCapturePolicyTest {
         assertEquals(VideoShutterAction.NONE, videoShutterAction(idle, ready = true, blocked = true))
         assertEquals(VideoShutterAction.STOP, videoShutterAction(recording, ready = true, blocked = true))
         assertEquals(VideoVolumeKey.PASS, videoVolumeKey(idle, ready = true, editing = true, repeatCount = 0))
-    }
-
-    @Test
-    fun recordedRepaintsAreCappedAtFifteenAndThePreviewIsNot() {
-        val limiter = OverlayRepaintLimiter()
-        val frames = (0 until 60).map { it * 33L / 1 }
-        val drawn = frames.count { limiter.allow(it, limited = true) }
-        assertTrue(drawn <= 15 * 2 + 1, "60 frames over ~2 s drew $drawn")
-        assertTrue(drawn >= 14, "a change is held back, never dropped: $drawn")
-
-        val free = OverlayRepaintLimiter()
-        assertEquals(60, frames.count { free.allow(it, limited = false) })
-    }
-
-    @Test
-    fun theCapNeverStarvesAndAResetAllowsAtOnce() {
-        val limiter = OverlayRepaintLimiter(66)
-        assertTrue(limiter.allow(1_000, true))
-        assertFalse(limiter.allow(1_033, true))
-        assertTrue(limiter.allow(1_066, true))
-        limiter.reset()
-        assertTrue(limiter.allow(1_070, true))
-        // A clock that steps back is not a reason to stop drawing.
-        assertTrue(limiter.allow(500, true))
     }
 
     @Test

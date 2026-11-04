@@ -106,8 +106,8 @@ object LightDashboardMapper {
     fun speedKmh(motion: ControllerData, gpsSpeedKmh: Float?): Float? = RideSpeed.kmh(motion, gpsSpeedKmh)
 
     fun batteryCurrentA(motion: ControllerData, battery: BmsData): Float? =
-        MotionReadings.batteryCurrentA(motion)?.takeIf { motion.isConnected }
-            ?: BmsReadings.current(battery)?.takeIf { battery.isConnected }
+        // Retraction (2026-11-05): controller-first both overrode the smart BMS and mixed current sign conventions.
+        ru.sodovaya.volty.domain.stats.batteryInputCurrent(motion, battery)?.dischargePositiveAmps
 
     fun speedFraction(motion: ControllerData, maxSpeedKmh: Float, gpsSpeedKmh: Float? = null): Float =
         RideSpeed.fraction(motion, maxSpeedKmh, gpsSpeedKmh)

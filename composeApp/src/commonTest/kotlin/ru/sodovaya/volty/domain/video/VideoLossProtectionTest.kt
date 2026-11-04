@@ -17,7 +17,7 @@ class VideoLossProtectionTest {
         assertEquals(VideoBackAction.CONFIRM_STOP, videoBackAction(editing = false, phase = VideoRecordingPhase.RECORDING))
         assertEquals(VideoBackAction.CONFIRM_STOP, videoBackAction(editing = false, phase = VideoRecordingPhase.STARTING))
         assertEquals(VideoBackAction.CLOSE_SCREEN, videoBackAction(editing = false, phase = VideoRecordingPhase.IDLE))
-        assertEquals(VideoBackAction.IGNORE, videoBackAction(editing = false, phase = VideoRecordingPhase.STOPPING))
+        assertEquals(VideoBackAction.CLOSE_SCREEN, videoBackAction(editing = false, phase = VideoRecordingPhase.STOPPING))
         assertEquals(VideoBackAction.CLOSE_EDITOR, videoBackAction(editing = true, phase = VideoRecordingPhase.IDLE))
         // Deliberately incoherent: "editing" while recording is impossible in the UI, and must still not end it.
         assertEquals(VideoBackAction.CLOSE_EDITOR, videoBackAction(editing = true, phase = VideoRecordingPhase.RECORDING))

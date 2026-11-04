@@ -6,6 +6,7 @@
     <string name="video_label_motor_temperature">Motor</string>
     <string name="video_label_motor_current">Motor current</string>
     <string name="video_label_controller_current">ESC current</string>
+    <string name="video_label_input_current">Input current</string>
     <string name="video_label_controller_power">ESC power</string>
     <string name="video_label_soc">Charge</string>
     <string name="video_label_voltage">Voltage</string>

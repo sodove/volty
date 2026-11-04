@@ -11,6 +11,7 @@
     <string name="video_editor_metric_motor_temperature">Температура мотора</string>
     <string name="video_editor_metric_motor_current">Ток мотора · контроллер</string>
     <string name="video_editor_metric_controller_current">Ток батареи · контроллер</string>
+    <string name="video_editor_metric_input_current">Входной ток батареи</string>
     <string name="video_editor_metric_controller_power">Мощность · контроллер</string>
     <string name="video_editor_metric_soc">Заряд · батарея</string>
     <string name="video_editor_metric_voltage">Напряжение · батарея</string>

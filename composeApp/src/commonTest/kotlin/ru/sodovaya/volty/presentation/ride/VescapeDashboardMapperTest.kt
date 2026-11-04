@@ -80,6 +80,7 @@ class LightDashboardMapperTest {
             ),
             battery = BmsData(
                 voltage = 82.4f,
+                hasCurrent = false,
                 soc = 76f,
                 socKnown = true,
                 isConnected = true
@@ -119,12 +120,12 @@ class LightDashboardMapperTest {
 
         assertEquals("24", readouts.speed.value)
         assertEquals("km/h", readouts.speed.unit)
-        assertEquals("-12.4", readouts.batteryCurrent.value)
+        assertEquals("+12.4", readouts.batteryCurrent.value)
         assertEquals("A", readouts.batteryCurrent.unit)
     }
 
     @Test
-    fun controller_speed_and_current_win_over_gps_and_bms_fallbacks() {
+    fun controller_speed_wins_over_gps_but_real_bms_current_wins_over_controller() {
         val readouts = LightDashboardMapper.map(
             motion = ControllerData(
                 speedKmh = 11f,
@@ -139,6 +140,6 @@ class LightDashboardMapperTest {
         )
 
         assertEquals("11", readouts.speed.value)
-        assertEquals("-4.0", readouts.batteryCurrent.value)
+        assertEquals("+12.4", readouts.batteryCurrent.value)
     }
 }

@@ -6,6 +6,8 @@ import android.graphics.Color
 import android.graphics.PorterDuff
 import androidx.camera.effects.Frame
 import ru.sodovaya.volty.domain.video.OverlayPreset
+import ru.sodovaya.volty.domain.video.OverlayScene
+import ru.sodovaya.volty.domain.video.OverlayContentPosition
 import ru.sodovaya.volty.domain.video.OverlaySceneInput
 import ru.sodovaya.volty.domain.video.OverlayTrip
 import ru.sodovaya.volty.domain.video.VideoMetric
@@ -21,16 +23,22 @@ import ru.sodovaya.volty.util.UnitSystem
 internal class VideoOverlayRenderer(context: Context) {
     private val drawer = OverlayCanvasDrawer(OverlayFonts(context))
 
+    fun scene(frame: Frame, preset: OverlayPreset, snapshot: VideoSnapshot?, strings: VideoOverlayStrings,
+        system: UnitSystem, trip: OverlayTrip, scales: Map<VideoMetric, Float>, dials: Map<VideoMetric, Double>,
+        contentPosition: OverlayContentPosition,
+    ): OverlayScene {
+        val crop = frame.cropRect
+        val rotated = frame.rotationDegrees % 180 != 0
+        val width = if (rotated) crop.height() else crop.width()
+        val height = if (rotated) crop.width() else crop.height()
+        return buildOverlayScene(OverlaySceneInput(preset, snapshot, strings, system, width, height, trip, scales, dials,
+            contentPosition), drawer)
+    }
+
     fun draw(
         frame: Frame,
         canvas: Canvas,
-        preset: OverlayPreset,
-        snapshot: VideoSnapshot?,
-        strings: VideoOverlayStrings,
-        system: UnitSystem,
-        trip: OverlayTrip,
-        scales: Map<VideoMetric, Float>,
-        dials: Map<VideoMetric, Double>,
+        scene: OverlayScene,
     ) {
         clear(canvas)
         val crop = frame.cropRect
@@ -48,7 +56,7 @@ internal class VideoOverlayRenderer(context: Context) {
         }
         // Invert the output's mirror so text remains readable on the front camera too.
         if (frame.isMirroring) { canvas.translate(width.toFloat(), 0f); canvas.scale(-1f, 1f) }
-        drawer.draw(canvas, buildOverlayScene(OverlaySceneInput(preset, snapshot, strings, system, width, height, trip, scales, dials), drawer))
+        drawer.draw(canvas, scene)
         canvas.restore()
     }
 

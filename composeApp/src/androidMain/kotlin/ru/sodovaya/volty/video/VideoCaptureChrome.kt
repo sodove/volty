@@ -432,6 +432,7 @@ internal fun VideoQualitySheet(
     state: VideoCameraState,
     audio: Boolean,
     onQuality: (Quality) -> Unit,
+    onFrameRate: (Int) -> Unit,
     onAudio: (Boolean) -> Unit,
     onSegments: (Int) -> Unit,
     onDismiss: () -> Unit,
@@ -439,6 +440,16 @@ internal fun VideoQualitySheet(
     VideoSheet(onDismiss) {
         SheetTitle(stringResource(Res.string.video_sheet_quality))
         SheetChoices(state.qualities, state.quality, { videoQualityText(it) }, onQuality)
+        if (state.frameRateChoices.isNotEmpty()) {
+            SheetLabel(stringResource(Res.string.video_frame_rate))
+            SheetChoices(state.frameRateChoices, state.targetFrameRate, { "$it FPS" }, onFrameRate)
+        }
+        Text(stringResource(when {
+            !state.stabilizationAvailable -> Res.string.video_stabilization_unavailable
+            state.stabilizationActive == true -> Res.string.video_stabilization_active
+            state.stabilizationActive == false -> Res.string.video_stabilization_inactive
+            else -> Res.string.video_stabilization_requested
+        }), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(Res.string.video_audio), style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
             Switch(checked = audio, onCheckedChange = onAudio)

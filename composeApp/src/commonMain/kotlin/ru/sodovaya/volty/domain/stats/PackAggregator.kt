@@ -108,6 +108,8 @@ object PackAggregator {
             voltage = voltage,
             current = current,
             hasCurrent = hasCurrent,
+            currentSource = measuredCurrent.map { it.currentSource }.distinct().singleOrNull()
+                ?: ru.sodovaya.volty.domain.model.BmsCurrentSource.MIXED,
             power = power,
             hasPower = hasPower,
             soc = soc,

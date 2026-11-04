@@ -337,6 +337,7 @@ internal fun derivedBatteryFrom(m: ControllerData): BmsData {
         voltage = m.inputVoltageV,
         current = -m.batteryCurrentA,
         hasCurrent = m.hasBatteryCurrent,
+        currentSource = ru.sodovaya.volty.domain.model.BmsCurrentSource.CONTROLLER,
         power = -m.powerW,
         hasPower = m.hasPower,
         soc = if (known) level * 100f else 0f,

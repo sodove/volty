@@ -11,6 +11,7 @@
     <string name="video_editor_metric_motor_temperature">Motor temperature · controller</string>
     <string name="video_editor_metric_motor_current">Motor current · controller</string>
     <string name="video_editor_metric_controller_current">Battery current · controller</string>
+    <string name="video_editor_metric_input_current">Battery input current</string>
     <string name="video_editor_metric_controller_power">Power · controller</string>
     <string name="video_editor_metric_soc">Charge · battery</string>
     <string name="video_editor_metric_voltage">Voltage · battery</string>
