@@ -77,6 +77,11 @@ import ru.sodovaya.volty.presentation.root.nearby.nearbyChannelMarkers
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
 import ru.sodovaya.volty.presentation.map.rideMapHostState
+import ru.sodovaya.volty.presentation.map.rideControllerSpeedSeen
+import ru.sodovaya.volty.presentation.map.rideGpsSpeedDemand
+import ru.sodovaya.volty.presentation.ride.RideSpeed
+import ru.sodovaya.volty.domain.model.hasControllers
+import androidx.compose.runtime.mutableIntStateOf
 import ru.sodovaya.volty.presentation.map.rideMapRenderActive
 import ru.sodovaya.volty.presentation.map.rideHudMapBacked
 import ru.sodovaya.volty.presentation.map.RIDE_MAP_FADE_MILLIS
@@ -115,6 +120,7 @@ import volty.composeapp.generated.resources.settings_offline_metered_later
 import volty.composeapp.generated.resources.settings_offline_metered_text
 import volty.composeapp.generated.resources.settings_offline_metered_title
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import org.koin.compose.koinInject
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -183,11 +189,30 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             conversationDetailsVisible = true
     }
     val ownFix = (locationState.status as? RideLocationStatus.Available)?.fix
-    val freshGpsSpeedKmh = ownFix
-        ?.takeIf { navigationState.locationStatus == ru.sodovaya.volty.presentation.navigation.LocationUiStatus.FRESH }
-        ?.speedMetersPerSecond
-        ?.times(3.6)
-        ?.toFloat()
+    // Recompose once the newest fix has aged out: FRESH is decided only when the repository emits, so a stream that
+    // stops would otherwise keep its last speed on screen. The rule itself is RideSpeed.freshGpsSpeedKmh (tested).
+    var gpsSpeedExpiries by remember { mutableIntStateOf(0) }
+    LaunchedEffect(ownFix?.capturedAtEpochMillis) {
+        val fix = ownFix ?: return@LaunchedEffect
+        delay(RideSpeed.gpsExpiresInMillis(fix.capturedAtEpochMillis, kotlin.time.Clock.System.now().toEpochMilliseconds()))
+        gpsSpeedExpiries++
+    }
+    val freshGpsSpeedKmh = gpsSpeedExpiries.let {
+        RideSpeed.freshGpsSpeedKmh(navigationState.locationStatus, ownFix, kotlin.time.Clock.System.now().toEpochMilliseconds())
+    }
+    // Battery-only vehicles (and a controller that dropped out) want GPS speed on Classic/Clean too, where no map
+    // holds the location demand: rideGpsSpeedDemand decides, the permission prompt below stays Light-only.
+    val rideControllerSpeedKnown = activeRideState?.motion?.let { RideSpeed.controllerSpeedKnown(it) } == true
+    var rideControllerSpeedWasSeen by remember(activeRideState?.vehicle?.id) { mutableStateOf(false) }
+    LaunchedEffect(rideControllerSpeedKnown, activeRideState?.vehicle?.id) {
+        rideControllerSpeedWasSeen = rideControllerSpeedSeen(rideControllerSpeedWasSeen, rideControllerSpeedKnown)
+    }
+    val rideLocationWanted = rideMapVisible || rideGpsSpeedDemand(
+        rideScreenActive = active is RootComponent.Child.Ride && rideAvailable && activeRideState?.vehicle != null,
+        vehicleHasController = activeRideState?.vehicle?.hasControllers == true,
+        controllerSpeedKnown = rideControllerSpeedKnown,
+        controllerSpeedSeen = rideControllerSpeedWasSeen,
+    )
     val trail = remember(activeRideState?.vehicle?.id) { mutableStateListOf<NavigationTrailPoint>() }
     LaunchedEffect(rideMapVisible, activeRideState?.vehicle?.id, ownFix?.capturedAtEpochMillis) {
         if (rideMapVisible && ownFix != null && trail.lastOrNull()?.sample?.timestampMillis != ownFix.capturedAtEpochMillis) {
@@ -231,8 +256,10 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         }
     }
     val locationPermissionRequired = locationState.status is RideLocationStatus.PermissionRequired
-    LaunchedEffect(rideMapVisible) {
-        component.navigation.onMapVisibilityChanged(rideMapVisible)
+    // The MAP consumer now also carries the dashboards' GPS speed (rideLocationWanted); the map-only effects
+    // (trail, offline preparation) and the permission prompt stay keyed on rideMapVisible.
+    LaunchedEffect(rideLocationWanted) {
+        component.navigation.onMapVisibilityChanged(rideLocationWanted)
     }
     LaunchedEffect(groupMapVisible, channelMap.operation, channelMap.session, channelMarkers.size) {
         // The channel audience can arrive after opening the map. Re-fit when the

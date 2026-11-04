@@ -102,18 +102,15 @@ object LightDashboardMapper {
         rangeText = rangeLabel?.takeIf { battery.isConnected && battery.socKnown }?.let { "$it · " },
     )
 
-    fun speedKmh(motion: ControllerData, gpsSpeedKmh: Float?): Float? =
-        MotionReadings.speedKmh(motion)?.takeIf { motion.isConnected }
-            ?: gpsSpeedKmh?.takeIf { it.isFinite() && it >= 0f }
+    /** The rule all three renderers share, [RideSpeed.kmh]; kept here for Light's existing callers. */
+    fun speedKmh(motion: ControllerData, gpsSpeedKmh: Float?): Float? = RideSpeed.kmh(motion, gpsSpeedKmh)
 
     fun batteryCurrentA(motion: ControllerData, battery: BmsData): Float? =
         MotionReadings.batteryCurrentA(motion)?.takeIf { motion.isConnected }
             ?: BmsReadings.current(battery)?.takeIf { battery.isConnected }
 
-    fun speedFraction(motion: ControllerData, maxSpeedKmh: Float, gpsSpeedKmh: Float? = null): Float {
-        val speed = speedKmh(motion, gpsSpeedKmh) ?: return 0f
-        return if (maxSpeedKmh > 0f) (speed / maxSpeedKmh).coerceIn(0f, 1f) else 0f
-    }
+    fun speedFraction(motion: ControllerData, maxSpeedKmh: Float, gpsSpeedKmh: Float? = null): Float =
+        RideSpeed.fraction(motion, maxSpeedKmh, gpsSpeedKmh)
 
     /** The graph's peak caption; an estimated peak keeps the "~" so the graph cannot read as a measurement. */
     fun dutyPeakLabel(peakPercent: Float, estimated: Boolean, atCeiling: Boolean = false): String =

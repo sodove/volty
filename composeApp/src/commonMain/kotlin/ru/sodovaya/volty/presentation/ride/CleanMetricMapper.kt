@@ -55,9 +55,14 @@ object CleanMetricMapper {
         UNKNOWN("ride_speed_reason_unknown")
     }
 
-    /** Known speed has no explanatory line; an untyped legacy absence stays generic. */
-    fun speedUnknownReasonKey(motion: ControllerData): SpeedUnknownReasonKey? {
+    /**
+     * Known speed has no explanatory line; an untyped legacy absence stays generic. Nor does a speed the dashboard
+     * shows from GPS ([gpsSpeedKmh], [RideSpeed.reading]): "No wheel geometry configured" under a live GPS number
+     * would read as an excuse for a reading that is on screen.
+     */
+    fun speedUnknownReasonKey(motion: ControllerData, gpsSpeedKmh: Float? = null): SpeedUnknownReasonKey? {
         if (motion.speedKnown) return null
+        if (RideSpeed.reading(motion, gpsSpeedKmh) != null) return null
         return when (MotionReadings.speedUnknownReason(motion)) {
             SpeedUnknownReason.NO_WHEEL_GEOMETRY -> SpeedUnknownReasonKey.NO_WHEEL_GEOMETRY
             SpeedUnknownReason.FIRMWARE_DID_NOT_REPORT -> SpeedUnknownReasonKey.FIRMWARE_DID_NOT_REPORT
@@ -91,11 +96,19 @@ object CleanMetricMapper {
      * [SecondaryGaugeMapper]'s own `frac` is: a fraction of `x / 0` is a NaN, and
      * a NaN sweep angle draws nothing while quietly poisoning the animation.
      */
-    fun heroSpeedFraction(motion: ControllerData, maxSpeedKmh: Float): Float {
-        val speed = MotionReadings.speedKmh(motion) ?: return 0f
-        if (maxSpeedKmh <= 0f) return 0f
-        return (speed / maxSpeedKmh).coerceIn(0f, 1f)
-    }
+    fun heroSpeedFraction(motion: ControllerData, maxSpeedKmh: Float, gpsSpeedKmh: Float? = null): Float =
+        RideSpeed.fraction(motion, maxSpeedKmh, gpsSpeedKmh)
+
+    /**
+     * The speed the hero shows and where it came from ([RideSpeed.reading], the rule Light uses): the controller's
+     * while it is connected and knows it, else a fresh GPS speed, else null. The hero's ring, number and unit caption
+     * all follow this one value, so a GPS number never sits under a "SPEED UNKNOWN" caption or beside an empty ring.
+     *
+     * Retraction: the hero read `MotionReadings.speedKmh(motion)` only and its caption keyed on `motion.speedKnown`,
+     * so a battery-only vehicle showed `—` on Clean although RootScreen handed the screen a GPS speed (2026-11-04).
+     */
+    fun heroSpeed(motion: ControllerData, gpsSpeedKmh: Float? = null): RideSpeedReading? =
+        RideSpeed.reading(motion, gpsSpeedKmh)
 
     /**
      * The hero's big number: the speed in the rider's units, or
@@ -108,8 +121,8 @@ object CleanMetricMapper {
      * caption above it stays in the composable — it swaps for a localized
      * `ride_speed_unknown` string, which needs a resource resolver.
      */
-    fun heroSpeedValue(motion: ControllerData, units: UnitSystem): String =
-        MotionReadings.speedKmh(motion).readoutOr { UnitFormatter.speed(it, units) }
+    fun heroSpeedValue(motion: ControllerData, units: UnitSystem, gpsSpeedKmh: Float? = null): String =
+        RideSpeed.kmh(motion, gpsSpeedKmh).readoutOr { UnitFormatter.speed(it, units) }
 
     /**
      * The POWER card's headline: kilowatts to one decimal, or [UNKNOWN_READOUT]

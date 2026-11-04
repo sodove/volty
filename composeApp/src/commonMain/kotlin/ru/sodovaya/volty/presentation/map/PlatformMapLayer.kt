@@ -27,6 +27,8 @@ expect fun PlatformRideMapLayer(
     requestLocationPermission: Boolean = false,
     vehicleSpeedKmh: Float? = null,
     recenterRequest: Long = 0L,
-    onGpsSpeedKmhChanged: (Float?) -> Unit = {},
+    // Retraction: an `onGpsSpeedKmhChanged: (Float?) -> Unit` callback sat here. The android actual never called it
+    // and no caller passed it; the dashboards get GPS speed from RootScreen (RideSpeed.freshGpsSpeedKmh). Removed
+    // 2026-11-04 so nobody wires a speed path that cannot fire. This whole overload has no caller either.
     modifier: Modifier = Modifier,
 )

@@ -28,6 +28,7 @@ import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.ride_battery
 import volty.composeapp.generated.resources.ride_consumption
 import volty.composeapp.generated.resources.ride_dial_speed
+import volty.composeapp.generated.resources.ride_speed_gps_tag
 import volty.composeapp.generated.resources.ride_esc_temp
 import volty.composeapp.generated.resources.ride_motor_temp
 import volty.composeapp.generated.resources.ride_power
@@ -66,7 +67,9 @@ import volty.composeapp.generated.resources.unit_wh_per_mi
 fun ClassicRideCluster(
     state: RideDashboardComponent.State,
     maxSpeedKmh: Float,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    /** A fresh GPS speed from RootScreen; the SPEED dial falls back to it ([RideSpeed.reading]). */
+    gpsSpeedKmh: Float? = null
 ) {
     val labels = ClassicDialLabels(
         current = stringResource(Res.string.secondary_gauge_current).uppercase(),
@@ -77,6 +80,7 @@ fun ClassicRideCluster(
         esc = stringResource(Res.string.ride_esc_temp).uppercase(),
         consumption = stringResource(Res.string.ride_consumption).uppercase(),
         motor = stringResource(Res.string.ride_motor_temp).uppercase(),
+        gpsTag = stringResource(Res.string.ride_speed_gps_tag),
         consumptionUnit = stringResource(
             if (state.units == UnitSystem.IMPERIAL) Res.string.unit_wh_per_mi else Res.string.unit_wh_per_km
         )
@@ -93,7 +97,8 @@ fun ClassicRideCluster(
         // tracker on the screen above it. Two parameters became none.
         currentRangeA = state.currentRangeA,
         powerRangeW = state.powerRangeW,
-        rangeLabel = localizedRangeLabel(state.range, state.units)
+        rangeLabel = localizedRangeLabel(state.range, state.units),
+        gpsSpeedKmh = gpsSpeedKmh
     )
 
     Column(modifier = modifier) {
@@ -131,7 +136,7 @@ fun ClassicRideCluster(
             }
         }
         }
-        SpeedUnknownReasonLine(state.motion)
+        SpeedUnknownReasonLine(state.motion, gpsSpeedKmh)
     }
 }
 

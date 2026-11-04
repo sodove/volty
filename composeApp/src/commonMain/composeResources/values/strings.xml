@@ -149,6 +149,7 @@
     <string name="ride_speed_reason_no_firmware_speed">The firmware did not report speed</string>
     <string name="ride_speed_reason_mixed">Speed sources disagree</string>
     <string name="ride_speed_reason_unknown">Speed source is unavailable</string>
+    <string name="ride_speed_gps_tag">GPS</string>
     <string name="ride_faults_title">VEHICLE FAULTS</string>
     <!-- The app's own alerts in the ride banner (rider alerts, Task 4). %1$s is the episode's worst reading. -->
     <string name="ride_alerts_title">ALERTS</string>

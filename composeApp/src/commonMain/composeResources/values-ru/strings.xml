@@ -149,6 +149,7 @@
     <string name="ride_speed_reason_no_firmware_speed">Прошивка не передаёт скорость</string>
     <string name="ride_speed_reason_mixed">Источники скорости расходятся</string>
     <string name="ride_speed_reason_unknown">Источник скорости недоступен</string>
+    <string name="ride_speed_gps_tag">GPS</string>
     <string name="ride_faults_title">ОШИБКИ ТРАНСПОРТА</string>
     <!-- Собственные предупреждения приложения в баннере поездки. %1$s - худшее значение эпизода. -->
     <string name="ride_alerts_title">ПРЕДУПРЕЖДЕНИЯ</string>

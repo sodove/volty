@@ -168,7 +168,7 @@ actual fun PlatformRideMapLayer(
     requestLocationPermission: Boolean,
     vehicleSpeedKmh: Float?,
     recenterRequest: Long,
-    onGpsSpeedKmhChanged: (Float?) -> Unit,
+    // Retraction: the ignored `onGpsSpeedKmhChanged` parameter went with the expect declaration's (2026-11-04).
     modifier: Modifier,
 ) {
     AndroidMapLibreView(

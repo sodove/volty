@@ -74,6 +74,8 @@ data class ClassicDialLabels(
     val esc: String = "TEMP ESC",
     val consumption: String = "CONSUMP.",
     val motor: String = "TEMP MOTOR",
+    /** Second caption line of the SPEED dial while it shows a GPS speed, not the controller's. */
+    val gpsTag: String = "GPS",
     /**
      * The consumption dial's UNIT, resolved by the caller because — alone among the eight units on
      * this cluster — it is spelled rather than symbolic, and Russian spells it `Вт·ч/км`. (`A`,
@@ -455,7 +457,13 @@ object ClassicDialSpecs {
         /** The POWER dial's `±max` in WATTS, likewise a [GaugeScale.POWER_RUNGS_W] rung. */
         powerRangeW: Float = GaugeScale.POWER_RUNGS_W.first(),
         /** The range readout from [rangeLabel]; only the BATTERY dial carries it. */
-        rangeLabel: String? = null
+        rangeLabel: String? = null,
+        /**
+         * A fresh GPS speed, km/h, or null. The SPEED dial follows [RideSpeed.reading], the rule Light uses: the
+         * controller's speed while it is connected and knows it, else this, else `—`. A GPS reading is captioned with
+         * [ClassicDialLabels.gpsTag] so it never passes for the controller's.
+         */
+        gpsSpeedKmh: Float? = null
     ): List<VescDialSpec> {
         val heroMax = heroDisplayMax(maxSpeedKmh, units)
         val currentMax = currentRangeA.toDouble()
@@ -472,7 +480,10 @@ object ClassicDialSpecs {
         val duty = MotionReadings.dutyPercent(motion)
         val batteryCurrent = MotionReadings.batteryCurrentA(motion)
         val power = MotionReadings.powerW(motion)
-        val speed = MotionReadings.speedKmh(motion)
+        // Retraction: this read `MotionReadings.speedKmh(motion)` alone, so a battery-only vehicle's dial showed `—`
+        // although the screen had a GPS speed (2026-11-04), and it skipped the `isConnected` gate Light applies.
+        val speedReading = RideSpeed.reading(motion, gpsSpeedKmh)
+        val speed = speedReading?.kmh
         val escTemp = MotionReadings.escTempC(motion)
         val motorTemp = MotionReadings.motorTempC(motion)
 
@@ -557,7 +568,8 @@ object ClassicDialSpecs {
                 // Value AND scale both in display units — the shipped defect was converting only
                 // the readout, leaving an mph number over a km/h-labelled ring.
                 value = speed?.let { UnitFormatter.speedValue(it, units) } ?: 0f,
-                caption = labels.speed,
+                caption = if (speedReading?.source == RideSpeedSource.GPS) "${labels.speed}\n${labels.gpsTag}"
+                    else labels.speed,
                 unit = UnitFormatter.speedUnit(units), // QML :141
                 valueTextOverride = if (speed == null) UNKNOWN else null
             ),

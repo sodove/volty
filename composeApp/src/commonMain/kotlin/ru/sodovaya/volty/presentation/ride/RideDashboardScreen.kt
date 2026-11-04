@@ -84,6 +84,7 @@ import volty.composeapp.generated.resources.ride_sample_rate_no_data
 import volty.composeapp.generated.resources.ride_sample_rate_steady
 import volty.composeapp.generated.resources.ride_sample_rate_warmup
 import volty.composeapp.generated.resources.ride_speed_unknown
+import volty.composeapp.generated.resources.ride_speed_gps_tag
 import volty.composeapp.generated.resources.ride_speed_reason_mixed
 import volty.composeapp.generated.resources.ride_speed_reason_no_firmware_speed
 import volty.composeapp.generated.resources.ride_speed_reason_no_geometry
@@ -293,6 +294,7 @@ fun RideDashboardScreen(
                             RideHero(
                                 state = state,
                                 vehicleMaxSpeed = vehicleMaxSpeed,
+                                gpsSpeedKmh = gpsSpeedKmh,
                                 modifier = Modifier.weight(1f)
                             )
                             Column(
@@ -309,7 +311,7 @@ fun RideDashboardScreen(
                             }
                         }
                     } else {
-                        RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed)
+                        RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed, gpsSpeedKmh = gpsSpeedKmh)
                         MetricCluster(motion = motion, battery = state.battery, state = state)
                         ConsumptionCard(
                             motion = motion,
@@ -322,7 +324,8 @@ fun RideDashboardScreen(
                 DashboardStyle.CLASSIC -> ClassicRideCluster(
                     state = state,
                     maxSpeedKmh = vehicleMaxSpeed,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier.fillMaxWidth(),
+                    gpsSpeedKmh = gpsSpeedKmh
                 )
                 DashboardStyle.LIGHT -> LightRideDashboard(
                     component = component,
@@ -499,7 +502,8 @@ internal fun severityColor(level: DutyLevel): Color = when (level) {
 private fun RideHero(
     state: RideDashboardComponent.State,
     vehicleMaxSpeed: Float,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    gpsSpeedKmh: Float? = null
 ) {
     val motion = state.motion
     // Defect 1 fix: state.secondaryReadout (computed by RideDashboardComponent, which is not
@@ -529,7 +533,8 @@ private fun RideHero(
     // Through the mapper, not `motion.speedKmh / vehicleMaxSpeed`: an unobserved
     // speed is 0f in the field, so the raw division drew a confident empty ring
     // beside the `—` the readout below already showed (`G §9`, Part I Task 6).
-    val speedFraction = CleanMetricMapper.heroSpeedFraction(motion, vehicleMaxSpeed)
+    val speedFraction = CleanMetricMapper.heroSpeedFraction(motion, vehicleMaxSpeed, gpsSpeedKmh)
+    val heroSpeed = CleanMetricMapper.heroSpeed(motion, gpsSpeedKmh)
     val secondaryColor = severityColor(secondary.severity)
 
     Column(
@@ -550,7 +555,8 @@ private fun RideHero(
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = if (motion.speedKnown) UnitFormatter.speedUnit(state.units).uppercase()
+                        text = if (heroSpeed != null) UnitFormatter.speedUnit(state.units).uppercase() +
+                            (if (heroSpeed.source == RideSpeedSource.GPS) " · " + stringResource(Res.string.ride_speed_gps_tag) else "")
                         else stringResource(Res.string.ride_speed_unknown),
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold,
@@ -558,7 +564,7 @@ private fun RideHero(
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
                     Text(
-                        text = CleanMetricMapper.heroSpeedValue(motion, state.units),
+                        text = CleanMetricMapper.heroSpeedValue(motion, state.units, gpsSpeedKmh),
                         style = MaterialTheme.typography.displayLarge.copy(
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold
@@ -597,13 +603,13 @@ private fun RideHero(
                 }
             }
         }
-        SpeedUnknownReasonLine(motion)
+        SpeedUnknownReasonLine(motion, gpsSpeedKmh)
     }
 }
 
 @Composable
-internal fun SpeedUnknownReasonLine(motion: ControllerData) {
-    val key = CleanMetricMapper.speedUnknownReasonKey(motion) ?: return
+internal fun SpeedUnknownReasonLine(motion: ControllerData, gpsSpeedKmh: Float? = null) {
+    val key = CleanMetricMapper.speedUnknownReasonKey(motion, gpsSpeedKmh) ?: return
     val text = when (key) {
         CleanMetricMapper.SpeedUnknownReasonKey.NO_WHEEL_GEOMETRY -> stringResource(Res.string.ride_speed_reason_no_geometry)
         CleanMetricMapper.SpeedUnknownReasonKey.FIRMWARE_DID_NOT_REPORT -> stringResource(Res.string.ride_speed_reason_no_firmware_speed)
