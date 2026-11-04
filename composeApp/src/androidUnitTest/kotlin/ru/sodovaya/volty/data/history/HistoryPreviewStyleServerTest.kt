@@ -39,7 +39,11 @@ class HistoryPreviewStyleServerTest {
     @Test fun closeRetiresTheListenerAndRejectsNewRegistrations() {
         val server=HistoryPreviewStyleServer();val url=server.register("a".repeat(64),byteArrayOf(1))
         server.close()
-        assertFails{request(url)}
+        assertFalse(server.isListening)
+        // The freed ephemeral port may be re-bound by another process (parallel builds), so a refused
+        // connection is not guaranteed: what must hold is that our style is no longer served there.
+        val after=runCatching{request(url)}.getOrNull()
+        assertTrue(after==null || after.first!=200 || after.second.toByteArray().contentEquals(byteArrayOf(1)).not())
         assertFailsWith<IllegalStateException>{server.register("b".repeat(64),byteArrayOf(2))}
     }
 }

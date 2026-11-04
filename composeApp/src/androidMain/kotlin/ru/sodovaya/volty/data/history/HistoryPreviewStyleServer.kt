@@ -61,6 +61,9 @@ class HistoryPreviewStyleServer : Closeable {
             "Content-Length: ${body.size}\r\nConnection: close\r\n\r\n").toByteArray(Charsets.US_ASCII))
         output.write(body);output.flush()
     }
+    /** Test seam: true while a listener socket is bound. A closed server must report false. */
+    internal val isListening: Boolean @Synchronized get() = socket?.isClosed == false
+
     @Synchronized override fun close() {
         closed=true;socket?.close();socket=null;styles.clear();executor.shutdownNow()
     }
