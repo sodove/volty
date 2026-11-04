@@ -15,7 +15,9 @@ enum class HistoryTotalKind {
  * not a measurement; the tile marks it with a tilde ([historyTotalPrefix]). Distinct from [approximate]: that is "the
  * measurement may be off", this is "nothing was measured".
  */
-data class HistoryTotal(val kind: HistoryTotalKind, val value: Double, val approximate: Boolean = false, val estimated: Boolean = false)
+/** [gps]: the value is the phone's GPS speed (a ride with no motion source), not a controller's; the tile says so (review M6). */
+data class HistoryTotal(val kind: HistoryTotalKind, val value: Double, val approximate: Boolean = false, val estimated: Boolean = false,
+    val gps: Boolean = false)
 
 /** The prefix a tile prints before the value: a tilde for an estimate, an approximation sign for an incomplete measurement. */
 fun historyTotalPrefix(total: HistoryTotal): String =
@@ -95,12 +97,20 @@ internal fun historySpeedKeys(sources: List<HistorySource>): List<HistorySeriesK
  */
 fun historyDefaultMetrics(sources: List<HistorySource>, packPowerHasValue: (HistorySeriesKey) -> Boolean = { true }): List<HistorySeriesKey> {
     // A battery-only ride's speed chart is its GPS speed series (historySpeedKeys), labelled as GPS by the drawer.
+    // Review M7: a GPS speed series that never got a value (a ride without location permission) is left out, the same
+    // question asked of the pack power, so the default chart does not lead with an empty "GPS speed".
     val speed = historySpeedKeys(sources).firstOrNull()
+        ?.takeUnless { it.metricId == HISTORY_GPS_SPEED_METRIC && !packPowerHasValue(it) }
     val controller = tier(sources, motionTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "controller_power_w") }
     val pack = historyDefaultPackPowerKey(sources)
     val power = if (pack != null && (controller == null || packPowerHasValue(pack))) pack else controller
     return listOfNotNull(speed, power)
 }
+
+/** Every series whose place in [historyDefaultMetrics] depends on holding a value: the pack power and a GPS speed. */
+fun historyDefaultValueProbes(sources: List<HistorySource>): List<HistorySeriesKey> =
+    listOfNotNull(historyDefaultPackPowerKey(sources),
+        historySpeedKeys(sources).firstOrNull()?.takeIf { it.metricId == HISTORY_GPS_SPEED_METRIC })
 
 /** The pack power series [historyDefaultMetrics] would prefer; the caller asks whether it has a value. */
 fun historyDefaultPackPowerKey(sources: List<HistorySource>): HistorySeriesKey? =
@@ -160,7 +170,7 @@ fun historyRideTotals(
     moving?.let { result += HistoryTotal(HistoryTotalKind.MOVING_MILLIS, it.millis.toDouble(), it.approximate) }
     // Without a motion source the top speed is the GPS speed series' (historySpeedKeys); with one, never GPS.
     val topSpeed = if (motion.isNotEmpty()) peak(motion, "speed_kmh")
-        else peak(sources.filter { it.kind == HistorySourceKind.GPS }, HISTORY_GPS_SPEED_METRIC)
+        else peak(sources.filter { it.kind == HistorySourceKind.GPS }, HISTORY_GPS_SPEED_METRIC)?.copy(gps = true)
     if (distanceTotal != null && moving != null) {
         if (moving.millis > 0) {
             val perMoving = distanceTotal.value / (moving.millis / 3_600_000.0)

@@ -60,7 +60,9 @@ internal fun HistoryTotal.text(): String {
             if (minutes >= 60) stringResource(Res.string.history_duration_hours, (minutes / 60).toInt(), (minutes % 60).toInt())
             else stringResource(Res.string.history_duration_minutes, minutes.toInt())
         }
-        HistoryTotalKind.AVERAGE_KMH, HistoryTotalKind.MAX_KMH -> "${formatFixed(v, 1)} ${stringResource(Res.string.unit_kmh)}"
+        HistoryTotalKind.AVERAGE_KMH, HistoryTotalKind.MAX_KMH -> "${formatFixed(v, 1)} ${stringResource(Res.string.unit_kmh)}" +
+            // Review M6: a top speed from the phone's GPS says so ([HistoryTotal.gps]).
+            (if (gps) " · " + stringResource(Res.string.ride_speed_gps_tag) else "")
         HistoryTotalKind.ENERGY_WH -> "${formatFixed(v, 0)} ${stringResource(Res.string.history_unit_wh)}"
         HistoryTotalKind.WH_PER_KM -> "${formatFixed(v, 1)} ${stringResource(Res.string.history_unit_wh_per_km)}"
         HistoryTotalKind.BATTERY_USED_PERCENT -> "${historyBatteryUsedSign(value)}${historyBatteryUsedDigit(value)} ${stringResource(Res.string.unit_percent)}"

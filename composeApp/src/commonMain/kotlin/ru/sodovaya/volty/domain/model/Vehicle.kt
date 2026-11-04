@@ -123,6 +123,22 @@ fun Vehicle.notifies(kind: NotifyKind): Boolean = kind in effectiveNotifyKinds
 val Vehicle.hasControllers: Boolean get() = controllers.isNotEmpty()
 
 /**
+ * Pack types whose own protocol is a whole wheel and decodes a CONTROLLER source off the battery's link (the decoder
+ * plan `batteryDecoderPlan` gives BEGODE and LEAPERKIM the full wheel plan). `VehicleMotionSourceTest` pins this set
+ * against that plan for every [BmsType], so the two cannot drift.
+ */
+val BmsType.decodesMotion: Boolean get() = this == BmsType.BEGODE || this == BmsType.LEAPERKIM
+
+/**
+ * Whether this vehicle produces a motion (speed) source: a configured controller, or a wheel configured as a battery
+ * pack. Review I2 (2026-11-04): the dashboard's GPS-speed demand used [hasControllers], the recorder the source
+ * registry, so a Begode added as a BATTERY (no controllers, yet decoded with a CONTROLLER source) was "battery-only" to
+ * one and not the other, and held GPS for its whole Ride screen. This is the dashboard's rule now; it agrees with the
+ * recorder's registry by test (`VehicleMotionSourceTest`).
+ */
+val Vehicle.hasMotionSource: Boolean get() = hasControllers || packs.any { it.bmsType.decodesMotion }
+
+/**
  * The three-valued [Vehicle.yieldBmsToHeadUnit] resolved: unset (null) follows
  * the default, which is ON. Only an explicit opt-OUT switches the handoff off —
  * see the field's doc for why "on by default" is safe to state unconditionally.

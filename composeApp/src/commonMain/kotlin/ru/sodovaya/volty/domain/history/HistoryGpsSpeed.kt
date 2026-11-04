@@ -18,11 +18,15 @@ package ru.sodovaya.volty.domain.history
  *    is held, released and dropped with the GPS track across a BLE dropout, never on its own.
  *  - **No schema change.** Source kinds are stored by name (`HistorySourceV2.kind TEXT`) and the compact series key
  *    is (ride, source, metric, cell) text, so a new kind and a new metric are rows, not columns. An app version
- *    before this one cannot read such a ride (`HistorySourceKind.valueOf("GPS")` throws); downgrades are not
- *    supported here, stated rather than hidden.
+ *    before this one cannot read such a ride (`HistorySourceKind.valueOf("GPS")` throws); downgrades to those are
+ *    not supported, stated rather than hidden. From this build on, readers skip a kind they do not know
+ *    (`HistoryTolerantParsing.kt`, review I1), so the NEXT new kind does not repeat the trap.
  */
 const val HISTORY_GPS_SPEED_SOURCE_ID = "gps-speed-v1"
 const val HISTORY_GPS_SPEED_METRIC = "gps_speed_kmh"
+
+/** A fix less accurate than this records no speed: the dashboard's and the distance fill's 50 m bound. */
+const val HISTORY_GPS_SPEED_MAX_ACCURACY_METERS = 50.0
 
 /** The stored label is not shown to the rider (the UI labels a GPS source by its kind); it is fixed text. */
 val historyGpsSpeedSource = HistorySource(HISTORY_GPS_SPEED_SOURCE_ID, HistorySourceKind.GPS, "GPS")
@@ -50,6 +54,10 @@ fun historyGpsSpeedSample(fix: HistoryGpsFix, speedMetersPerSecond: Double?): Hi
     val key = HistorySeriesKey(HISTORY_GPS_SPEED_SOURCE_ID, HISTORY_GPS_SPEED_METRIC)
     return when {
         speedMetersPerSecond == null -> HistorySample(fix.tick, key, null, HistoryUnknownReason.UNAVAILABLE)
+        // Review M2: the dashboard refuses a fix worse than 50 m (RideSpeed) and the distance fill does too, so a run
+        // of coarse network fixes must not feed top speed and moving time here either. Not a usable reading: UNAVAILABLE.
+        !(fix.accuracyMeters <= HISTORY_GPS_SPEED_MAX_ACCURACY_METERS) ->
+            HistorySample(fix.tick, key, null, HistoryUnknownReason.UNAVAILABLE)
         !speedMetersPerSecond.isFinite() || speedMetersPerSecond < 0.0 ->
             HistorySample(fix.tick, key, null, HistoryUnknownReason.INVALID_VALUE)
         else -> HistorySample(fix.tick, key, speedMetersPerSecond * 3.6)

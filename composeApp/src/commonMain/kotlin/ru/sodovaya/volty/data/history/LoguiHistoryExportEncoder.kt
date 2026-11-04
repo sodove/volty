@@ -46,8 +46,10 @@ import kotlin.math.floor
  *   `gnss_h_acc > 0` (`pageloganalysis.cpp:759-771`), which is what keeps held coordinates and the
  *   reader's 0.0 before the first fix off the map.
  * - GNSS keys `gnss_lat`, `gnss_lon` (deg, 7), `gnss_h_acc` (m, 2) are the ones VESC Tool looks for
- *   (`pageloganalysis.h:155-160`; `log.c:448-480`). Volty records neither altitude nor GNSS speed,
- *   so `gnss_alt` and `gnss_h_vel` are absent rather than invented; VESC Tool treats a missing
+ *   (`pageloganalysis.h:155-160`; `log.c:448-480`). Volty records no altitude, so `gnss_alt`
+ *   is absent rather than invented. Retraction (2026-11-04): this said Volty records no GNSS speed either; a ride with
+ *   no motion source now records the fix's speed (`gps_speed_kmh`), written as VESC Tool's own `kmh_gnss` column
+ *   (`pageloganalysis.cpp:504`), not as logui's `gnss_h_vel`, which VESC Tool does not index either; VESC Tool treats a missing
  *   `gnss_alt` as 0 (`pageloganalysis.cpp:783-787`). The fix heading has no logui key and goes in
  *   its own `gnss_heading` column.
  *

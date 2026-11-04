@@ -28,7 +28,9 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         val empty = HistoryRecordedKeys(emptyList(), false)
         if (origin(rideId) == null) return empty
         val source = database.rideHistorySourceQueries.sourceForRide(rideId, sourceId).executeAsOneOrNull() ?: return empty
-        val allowed = HistoryMetricRegistry.forSource(HistorySourceKind.valueOf(source.kind))
+        // Review I1: a source of a kind this build does not know has no keys it could show; was `valueOf` (throws).
+        val kind = historySourceKindOrNull(source.kind) ?: return empty.also { historySkipped("recorded keys: source of unknown kind '${source.kind}'") }
+        val allowed = HistoryMetricRegistry.forSource(kind)
         val scalar = allowed.filterNot { it.indexedByCell }.map { it.id }
         val indexed = allowed.filter { it.indexedByCell }.map { it.id }
         val rideNo = compact.rideNo(rideId) ?: return empty

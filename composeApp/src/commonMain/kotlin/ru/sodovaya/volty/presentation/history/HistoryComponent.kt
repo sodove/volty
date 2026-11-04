@@ -289,9 +289,11 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
         if (defaultMetrics && pendingRestoration == null && ride != null && !next.loading && next.error == null &&
             next.selectedKeys.isEmpty() && defaultsAppliedTo !== captured) {
             defaultsAppliedTo = captured
-            val packKey = historyDefaultPackPowerKey(next.sources)
+            // The series whose defaults depend on holding a value: the pack's power, and (review M7) a GPS speed series,
+            // which a ride recorded without location permission has but never filled.
+            val probes = historyDefaultValueProbes(next.sources)
             val whole = next.availableRange ?: range
-            if (packKey == null || whole == null) {
+            if (probes.isEmpty() || whole == null) {
                 historyDefaultMetrics(next.sources).takeIf { it.isNotEmpty() }?.let { keys ->
                     detail.replaceMetrics(keys)
                     if (!lifetime.isActive || selection !== captured) return
@@ -300,11 +302,13 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                 // The pack's power may hold no value (a Begode T4's placeholder BMS): ask the stats the tiles use.
                 val sources = next.sources
                 scope.launch {
-                    val known = try { repository.hasKnownValue(ride.id, packKey, whole) }
-                    catch (e: CancellationException) { throw e } catch (e: Exception) { false }
+                    val known = probes.filter { key ->
+                        try { repository.hasKnownValue(ride.id, key, whole) }
+                        catch (e: CancellationException) { throw e } catch (e: Exception) { false }
+                    }.toSet()
                     if (lifetime.isActive && selection === captured && detail.state.value.selectedKeys.isEmpty() &&
                         pendingRestoration == null)
-                        historyDefaultMetrics(sources) { known }.takeIf { it.isNotEmpty() }?.let(detail::replaceMetrics)
+                        historyDefaultMetrics(sources) { it in known }.takeIf { it.isNotEmpty() }?.let(detail::replaceMetrics)
                 }
             }
         }

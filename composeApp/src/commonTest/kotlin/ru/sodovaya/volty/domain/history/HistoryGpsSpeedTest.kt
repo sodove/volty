@@ -55,4 +55,11 @@ class HistoryGpsSpeedTest {
             assertNull(s.value, "$bad"); assertEquals(HistoryUnknownReason.INVALID_VALUE, s.unknown, "$bad")
         }
     }
+
+    @Test fun a_fix_coarser_than_fifty_metres_records_no_speed() {
+        // Review M2: the dashboard's 50 m bound. Incoherent on purpose: a coarse fix that claims a speed.
+        val coarse = historyGpsSpeedSample(fix.copy(accuracyMeters = 50.1), 10.0)
+        assertNull(coarse.value); assertEquals(HistoryUnknownReason.UNAVAILABLE, coarse.unknown)
+        assertEquals(36.0, historyGpsSpeedSample(fix.copy(accuracyMeters = 50.0), 10.0).value!!, 1e-9)
+    }
 }

@@ -145,9 +145,8 @@ class SqlDelightHistoryStore(
         reader.rides(before, limit)
     }
     override suspend fun sources(rideId: String): List<HistorySource> = withContext(dispatcher) {
-        sourceQueries.sourcesForRide(rideId).executeAsList().map {
-            HistorySource(it.id, HistorySourceKind.valueOf(it.kind), it.label)
-        }
+        // Review I1: a kind written by a newer build is skipped (and logged), so the ride still opens; was `valueOf`.
+        historyKnownSources(sourceQueries.sourcesForRide(rideId).executeAsList(), { it.id }, { it.kind }, { it.label }, "store")
     }
     override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistorySample> = withContext(dispatcher) {
         // A page reads a carried run and the rows after it: one snapshot, so a concurrent append cannot land between.

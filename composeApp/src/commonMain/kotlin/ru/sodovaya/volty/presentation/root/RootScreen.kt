@@ -77,10 +77,9 @@ import ru.sodovaya.volty.presentation.root.nearby.nearbyChannelMarkers
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
 import ru.sodovaya.volty.presentation.map.rideMapHostState
-import ru.sodovaya.volty.presentation.map.rideControllerSpeedSeen
-import ru.sodovaya.volty.presentation.map.rideGpsSpeedDemand
+import ru.sodovaya.volty.presentation.map.RideGpsSpeedLatch
+import ru.sodovaya.volty.presentation.map.rideGpsSpeedWanted
 import ru.sodovaya.volty.presentation.ride.RideSpeed
-import ru.sodovaya.volty.domain.model.hasControllers
 import androidx.compose.runtime.mutableIntStateOf
 import ru.sodovaya.volty.presentation.map.rideMapRenderActive
 import ru.sodovaya.volty.presentation.map.rideHudMapBacked
@@ -201,17 +200,18 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         RideSpeed.freshGpsSpeedKmh(navigationState.locationStatus, ownFix, kotlin.time.Clock.System.now().toEpochMilliseconds())
     }
     // Battery-only vehicles (and a controller that dropped out) want GPS speed on Classic/Clean too, where no map
-    // holds the location demand: rideGpsSpeedDemand decides, the permission prompt below stays Light-only.
-    val rideControllerSpeedKnown = activeRideState?.motion?.let { RideSpeed.controllerSpeedKnown(it) } == true
-    var rideControllerSpeedWasSeen by remember(activeRideState?.vehicle?.id) { mutableStateOf(false) }
-    LaunchedEffect(rideControllerSpeedKnown, activeRideState?.vehicle?.id) {
-        rideControllerSpeedWasSeen = rideControllerSpeedSeen(rideControllerSpeedWasSeen, rideControllerSpeedKnown)
+    // holds the location demand. The whole decision is the pure rideGpsSpeedWanted (tested); the composable only keeps
+    // the latch, and the permission prompt below stays Light-only.
+    var rideGpsLatch by remember { mutableStateOf(RideGpsSpeedLatch()) }
+    LaunchedEffect(activeRideState?.vehicle?.id, activeRideState?.motion) {
+        rideGpsLatch = rideGpsLatch.next(activeRideState?.vehicle?.id, activeRideState?.motion)
     }
-    val rideLocationWanted = rideMapVisible || rideGpsSpeedDemand(
-        rideScreenActive = active is RootComponent.Child.Ride && rideAvailable && activeRideState?.vehicle != null,
-        vehicleHasController = activeRideState?.vehicle?.hasControllers == true,
-        controllerSpeedKnown = rideControllerSpeedKnown,
-        controllerSpeedSeen = rideControllerSpeedWasSeen,
+    val rideLocationWanted = rideMapVisible || rideGpsSpeedWanted(
+        rideScreenShown = active is RootComponent.Child.Ride,
+        rideAvailable = rideAvailable,
+        vehicle = activeRideState?.vehicle,
+        motion = activeRideState?.motion,
+        latch = rideGpsLatch,
     )
     val trail = remember(activeRideState?.vehicle?.id) { mutableStateListOf<NavigationTrailPoint>() }
     LaunchedEffect(rideMapVisible, activeRideState?.vehicle?.id, ownFix?.capturedAtEpochMillis) {

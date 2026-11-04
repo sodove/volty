@@ -46,11 +46,17 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
             // transaction is held while encoding or waiting for the file sink.
             val id = snapshot.metadata.ride.id
             var sampleRows = 0L
+            val visibleKinds = snapshot.metadata.sources.associate { it.id to it.kind }
+            val skippedSeries = HashSet<HistorySeriesKey>()
             if (request.format != HistoryExportFormat.GPX) {
                 emitCompactSamples(snapshot, snapshot.rideNo) { record ->
                     sampleRows++
                     if (sampleRows > snapshot.shape.sampleCount) fail(HistoryExportFailure.SOURCE_CHANGED)
-                    emit(record)
+                    // Counted for the shape check, but a series of a skipped source or of a metric this build does not
+                    // register for that kind is not written (review I1): the encoders would refuse it as INVALID_DATA.
+                    val kind = visibleKinds[record.sample.key.sourceId]
+                    if (kind != null && historyMetricKnownFor(kind, record.sample.key)) emit(record)
+                    else if (skippedSeries.add(record.sample.key)) historySkipped("export: series '${record.sample.key.metricId}'")
                 }
             }
             var gpsRows = 0L; var markerRows = 0L
@@ -175,7 +181,8 @@ class SqlDelightHistoryExportSource(provider: VoltyDatabaseProvider,
     private fun sources(id: String): List<HistorySource> {
         val rows = queries.exportSources(id).executeAsList()
         if (rows.size > 2048) fail(HistoryExportFailure.LIMIT)
-        return rows.map { HistorySource(it.id, HistorySourceKind.valueOf(it.kind), it.label) }
+        // Review I1: a source of a kind this build does not know is left out of the export (logged), not a failure.
+        return historyKnownSources(rows, { it.id }, { it.kind }, { it.label }, "export")
     }
     private fun cell(value: Long): Int? {
         if (value !in -1L..Int.MAX_VALUE.toLong()) fail(HistoryExportFailure.INVALID_DATA)

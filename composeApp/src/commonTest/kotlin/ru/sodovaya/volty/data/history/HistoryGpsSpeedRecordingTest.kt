@@ -110,4 +110,28 @@ class HistoryGpsSpeedRecordingTest {
         val values = lines.drop(1).map { it.split(';')[column] }.filter { it.isNotEmpty() }
         assertEquals(listOf("18", "21.6", "27", "0"), values, "unknowns are empty cells, never a held or zero value")
     }
+
+    @Test fun gnss_clock_jitter_fragments_the_unknown_run_but_loses_no_sample() = runTest {
+        // Review M1: on a device a fix's epoch is GNSS time and its elapsed is the phone's monotonic clock, so their
+        // difference jitters by more than the 15 ms run tolerance. Deliberately incoherent clocks, +-20 ms per fix.
+        // Pinned behaviour: the three speedless fixes are stored as three rows (no run), every value reads back.
+        val r = rig()
+        val jitter = listOf(0L, 20L, -20L, 20L, -20L, 0L, 20L)
+        r.controller.execute(RecordingInput.Connected("bike", 7, tick(0)), listOf(pack))
+        speeds.forEachIndexed { i, speed ->
+            val t = tick(1_000L * (i + 1))
+            val f = HistoryGpsFix(t.copy(epochMillis = t.epochMillis + jitter[i]), 56.0, 60.0, 4.0, null, HistoryGpsProvider.GPS)
+            assertEquals(HistoryOffer.ACCEPTED, r.controller.offerGps("ride", f, speed))
+        }
+        r.controller.execute(RecordingInput.Stop(tick(8_000), 7, "ride"))
+        r.writer.close()
+        val range = HistoryRange(tick(0).epochMillis, tick(8_100).epochMillis)
+        val samples = r.store.samples("ride", gpsKey, range, null).items
+        assertEquals(listOf(18.0, 21.6, null, null, null, 27.0, 0.0), samples.map { it.value?.let { v -> Math.round(v * 1e6) / 1e6 } })
+        assertEquals(jitter.mapIndexed { i, j -> tick(1_000L * (i + 1)).epochMillis + j }, samples.map { it.tick.epochMillis },
+            "each fix keeps its own GNSS epoch exactly")
+        assertEquals(0L, r.count("SELECT COUNT(*) FROM HistorySampleV3 WHERE runCount IS NOT NULL"))
+        assertEquals(7L, r.count("SELECT COUNT(*) FROM HistorySampleV3"))
+        assertEquals(27.0, assertNotNull(r.store.stats("ride", gpsKey, range).maximum), 1e-9)
+    }
 }

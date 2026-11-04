@@ -103,6 +103,7 @@ import volty.composeapp.generated.resources.dashboard_light_group_ride
 import volty.composeapp.generated.resources.dashboard_light_motor
 import volty.composeapp.generated.resources.dashboard_light_motor_current
 import volty.composeapp.generated.resources.dashboard_light_speed
+import volty.composeapp.generated.resources.ride_speed_gps_tag
 import volty.composeapp.generated.resources.no_battery
 import volty.composeapp.generated.resources.navigation_open
 import volty.composeapp.generated.resources.navigation_recenter
@@ -315,7 +316,10 @@ internal fun LightRideDashboard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         LightGauge(
-                            label = stringResource(Res.string.dashboard_light_speed),
+                            // Review M6: a GPS speed is labelled as such here too, as on Classic and Clean.
+                            label = stringResource(Res.string.dashboard_light_speed) +
+                                (if (RideSpeed.reading(state.motion, gpsSpeedKmh)?.source == RideSpeedSource.GPS)
+                                    " · " + stringResource(Res.string.ride_speed_gps_tag) else ""),
                             readout = readouts.speed,
                             fraction = (displayedTelemetry.speedKmh?.div(maxSpeedKmh) ?: 0f)
                                 .coerceIn(0f, 1f),

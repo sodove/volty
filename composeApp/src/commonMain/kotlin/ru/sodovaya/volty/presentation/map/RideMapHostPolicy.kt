@@ -1,6 +1,10 @@
 package ru.sodovaya.volty.presentation.map
 
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.hasMotionSource
+import ru.sodovaya.volty.presentation.ride.RideSpeed
 
 internal enum class RideMapScreen {
     RIDE,
@@ -71,6 +75,37 @@ internal fun rideGpsSpeedDemand(
 
 /** The latch behind [rideGpsSpeedDemand]'s dropout exception: once a controller speed was seen it stays seen. */
 internal fun rideControllerSpeedSeen(seen: Boolean, controllerSpeedKnown: Boolean): Boolean = seen || controllerSpeedKnown
+
+/**
+ * The dropout latch of [rideGpsSpeedDemand], keyed by the vehicle it was earned on: switching vehicles starts it fresh,
+ * so a speed seen on one vehicle never arms the exception for the next.
+ */
+internal data class RideGpsSpeedLatch(val vehicleId: String? = null, val seen: Boolean = false) {
+    fun next(vehicleId: String?, motion: ControllerData?): RideGpsSpeedLatch {
+        val known = motion != null && RideSpeed.controllerSpeedKnown(motion)
+        return if (vehicleId != this.vehicleId) RideGpsSpeedLatch(vehicleId, known)
+        else copy(seen = rideControllerSpeedSeen(seen, known))
+    }
+}
+
+/**
+ * RootScreen's whole GPS-speed demand decision from its raw inputs (review I2: the inputs were wired in the composable
+ * and untested). "Has a controller" is [hasMotionSource], the rule the history recorder's source registry follows, so a
+ * Begode or Leaperkim configured as a battery pack (it decodes a CONTROLLER source) is never treated as battery-only.
+ * A latch from another vehicle counts as not seen.
+ */
+internal fun rideGpsSpeedWanted(
+    rideScreenShown: Boolean,
+    rideAvailable: Boolean,
+    vehicle: Vehicle?,
+    motion: ControllerData?,
+    latch: RideGpsSpeedLatch,
+): Boolean = rideGpsSpeedDemand(
+    rideScreenActive = rideScreenShown && rideAvailable && vehicle != null,
+    vehicleHasController = vehicle?.hasMotionSource == true,
+    controllerSpeedKnown = motion != null && RideSpeed.controllerSpeedKnown(motion),
+    controllerSpeedSeen = latch.vehicleId == vehicle?.id && latch.seen,
+)
 
 /**
  * The native map must outlive the active Decompose child. Hiding it keeps the

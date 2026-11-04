@@ -40,4 +40,18 @@ class HistoryGpsSpeedTotalsTest {
         assertTrue(historySpeedKeys(listOf(pack)).isEmpty())
         assertNull(totals(listOf(pack), emptyMap())[HistoryTotalKind.MAX_KMH])
     }
+
+    @Test fun the_gps_top_speed_is_marked_gps_and_a_controller_one_is_not() {
+        assertTrue(totals(listOf(pack, gps), mapOf(gpsKey to stats(0.0, 27.0))).getValue(HistoryTotalKind.MAX_KMH).gps)
+        assertFalse(totals(listOf(esc, pack), mapOf(escKey to stats(0.0, 41.0))).getValue(HistoryTotalKind.MAX_KMH).gps)
+    }
+
+    @Test fun an_empty_gps_speed_series_is_left_out_of_the_default_chart() {
+        // Review M7: a ride recorded without location permission has the source and no value.
+        assertEquals(listOf(HistorySeriesKey("pack", "power_w"), gpsKey), historyDefaultValueProbes(listOf(pack, gps)))
+        assertEquals(listOf(HistorySeriesKey("pack", "power_w")), historyDefaultMetrics(listOf(pack, gps)) { it != gpsKey })
+        assertEquals(listOf(gpsKey, HistorySeriesKey("pack", "power_w")), historyDefaultMetrics(listOf(pack, gps)) { true })
+        // A controller ride probes only its pack, as before.
+        assertEquals(listOf(HistorySeriesKey("pack", "power_w")), historyDefaultValueProbes(listOf(esc, pack, gps)))
+    }
 }
