@@ -11,6 +11,18 @@ import kotlin.test.assertTrue
 
 /** When Classic/Clean raise the location demand for GPS speed although no map is mounted (2026-11-04). */
 class RideGpsSpeedDemandTest {
+    @Test fun neitherDemoProfileRequestsGpsEvenDuringControllerDropout() {
+        for (profile in ru.sodovaya.volty.domain.model.DemoProfile.entries) {
+            val vehicle = ru.sodovaya.volty.data.ble.KableBmsRepository.demoVehicleFor(profile)
+            assertFalse(rideGpsSpeedWanted(
+                rideScreenShown = true,
+                rideAvailable = true,
+                vehicle = vehicle,
+                motion = ControllerData(),
+                latch = RideGpsSpeedLatch(vehicle.id, seen = true),
+            ))
+        }
+    }
 
     @Test
     fun a_battery_only_vehicle_wants_gps_on_its_ride_screen_whatever_the_style() {

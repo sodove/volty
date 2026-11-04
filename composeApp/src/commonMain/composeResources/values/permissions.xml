@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="permission_step_bluetooth">Vehicle connection</string>
+    <string name="permission_step_notifications">Notifications</string>
+    <string name="permission_bluetooth_title">Allow Bluetooth access</string>
+    <string name="permission_bluetooth_body">Android will ask for access to nearby devices. Volty needs it to connect to your vehicle.</string>
+    <string name="permission_legacy_title">Allow vehicle discovery</string>
+    <string name="permission_legacy_body">On Android 11 and earlier, finding Bluetooth devices requires location access. This lets Volty find your vehicle.</string>
+    <string name="permission_find_transport">Find a wheel, scooter, or bicycle nearby.</string>
+    <string name="permission_receive_data">Get charge, speed, and temperature readings.</string>
+    <string name="permission_bluetooth_note">We’ll offer notifications separately. For now, you can try Volty in demo mode.</string>
+    <string name="permission_bluetooth_note_only">You can skip this step and try Volty in demo mode without granting access.</string>
+    <string name="permission_bluetooth_action">Allow and find vehicles</string>
+    <string name="permission_notifications_title">Get alerts while you ride?</string>
+    <string name="permission_notifications_body">Allow notifications to see connection status and warnings while Volty is in the background.</string>
+    <string name="permission_notification_status">See connection status in notifications.</string>
+    <string name="permission_notification_warnings">Get warnings about your vehicle’s charge and condition.</string>
+    <string name="permission_notifications_note">This access is optional. You can connect your vehicle and use the app without it.</string>
+    <string name="permission_notifications_action">Enable notifications</string>
+    <string name="permission_skip_notifications">Skip for now</string>
+    <string name="permission_demo_action">I’ll try the demo first</string>
+    <string name="permission_demo_title">What would you like to ride?</string>
+    <string name="permission_demo_body">Virtual vehicles with sample data. Bluetooth and location access aren’t needed.</string>
+    <string name="permission_demo_scooter">Scooter</string>
+    <string name="permission_demo_wheel">Unicycle</string>
+    <string name="permission_demo_starting">Opening demo mode…</string>
+    <string name="permission_demo_error">Couldn’t start demo mode. Please try again.</string>
+    <string name="permission_bluetooth_denied">Without this access, Volty can’t connect to your vehicle. You can try again or use demo mode.</string>
+    <string name="permission_bluetooth_settings">Android has blocked this access. Allow it in app settings, or try demo mode.</string>
+    <string name="permission_open_settings">Open settings</string>
+    <string name="permission_retry">Try again</string>
+    <string name="permission_cancel">Back</string>
+    <string name="permission_step_count">Step %1$d of %2$d</string>
+</resources>

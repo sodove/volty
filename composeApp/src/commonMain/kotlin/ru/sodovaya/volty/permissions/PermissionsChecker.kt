@@ -4,6 +4,6 @@ expect class PermissionsChecker {
     /** Returns the list of BLE+notification permissions still missing. Empty list = all granted. */
     fun missingPermissions(): List<String>
 
-    /** Required permissions for this app (constant per platform). */
+    /** Monitoring permissions available on this platform; notifications are optional. */
     fun requiredPermissions(): List<String>
 }

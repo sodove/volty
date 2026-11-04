@@ -1182,7 +1182,7 @@ class KableBmsRepository private constructor(
         return try {
             // Detach under the lock, then join outside: session callbacks/queued
             // history must be able to acquire sessionLock while teardown waits.
-            val outgoingHistory = sessionLock.withLock {
+            val (outgoingHistory, releaseBleService) = sessionLock.withLock {
                 ensureConnectionAllowed()
                 if (connectionIntent !== intent) return Result.failure(IllegalStateException("Connection request superseded"))
                 val outgoing = links.mapNotNull { it.session }
@@ -1226,7 +1226,7 @@ class KableBmsRepository private constructor(
                 // No real link to resurrect on resume — there is no
                 // ConnectionSession behind a demo connection.
                 lastConnectionTarget = null
-                outgoing
+                outgoing to (_activeVehicle.value?.isDemo == false)
             }
             tearDownRemovedSessionsWithHistory(outgoingHistory)
             currentCoroutineContext().ensureActive()
@@ -1251,9 +1251,11 @@ class KableBmsRepository private constructor(
                 ringBuffer.clear()
                 motionRingBuffer.clear()
                 _connectionState.value = ConnectionState.Connected(demoVehicle)
-                // Show the foreground notification too, so reviewers see the full
-                // monitoring experience (the service feeds off activeData/activeVehicle).
-                serviceStart()
+                // Retraction: demo used to start the connected-device foreground
+                // service for a fuller preview. A permission-free simulator must
+                // not acquire physical monitoring's native service demand. Release
+                // an outgoing real BLE demand; recording/location retain their own.
+                if (releaseBleService) serviceStop()
                 demoJob = scope.launch {
                     DemoBmsSimulator(profile = profile).run { tick ->
                         // One PackState per pack of the demo vehicle, positionally

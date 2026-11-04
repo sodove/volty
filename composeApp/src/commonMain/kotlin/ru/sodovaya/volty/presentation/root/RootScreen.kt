@@ -92,6 +92,7 @@ import ru.sodovaya.volty.presentation.map.RideMapTrailSample
 import ru.sodovaya.volty.presentation.map.ChannelMapScreen
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.location.RideLocationStatus
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
@@ -206,7 +207,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     LaunchedEffect(activeRideState?.vehicle?.id, activeRideState?.motion) {
         rideGpsLatch = rideGpsLatch.next(activeRideState?.vehicle?.id, activeRideState?.motion)
     }
-    val rideLocationWanted = rideMapVisible || rideGpsSpeedWanted(
+    val gpsSpeedWanted = rideGpsSpeedWanted(
         rideScreenShown = active is RootComponent.Child.Ride,
         rideAvailable = rideAvailable,
         vehicle = activeRideState?.vehicle,
@@ -240,7 +241,10 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             else -> RideMapScreen.OTHER
         },
         activeStyle = activeRideState?.style,
+        demoMode = activeRideState?.vehicle?.isDemo == true,
     )
+    // A demo may display the Light map, but opening it never asks for the user's location.
+    val rideLocationWanted = mapHost.requestLocationPermission || gpsSpeedWanted
     val locationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
     ) { grants ->

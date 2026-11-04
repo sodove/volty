@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.hasMotionSource
+import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.presentation.ride.RideSpeed
 
 internal enum class RideMapScreen {
@@ -101,7 +102,7 @@ internal fun rideGpsSpeedWanted(
     motion: ControllerData?,
     latch: RideGpsSpeedLatch,
 ): Boolean = rideGpsSpeedDemand(
-    rideScreenActive = rideScreenShown && rideAvailable && vehicle != null,
+    rideScreenActive = rideScreenShown && rideAvailable && vehicle != null && !vehicle.isDemo,
     vehicleHasController = vehicle?.hasMotionSource == true,
     controllerSpeedKnown = motion != null && RideSpeed.controllerSpeedKnown(motion),
     controllerSpeedSeen = latch.vehicleId == vehicle?.id && latch.seen,
@@ -115,6 +116,7 @@ internal fun rideMapHostState(
     rideAvailable: Boolean,
     activeScreen: RideMapScreen,
     activeStyle: DashboardStyle?,
+    demoMode: Boolean = false,
 ): RideMapHostState {
     val rideMapVisible = rideAvailable &&
         activeScreen == RideMapScreen.RIDE &&
@@ -129,6 +131,6 @@ internal fun rideMapHostState(
         visible = rideMapVisible || nearbyMapVisible || historyMapVisible,
         // Nearby may render remote markers, but opening it must never ask for
         // or start the user's own location stream.
-        requestLocationPermission = rideMapVisible,
+        requestLocationPermission = rideMapVisible && !demoMode,
     )
 }

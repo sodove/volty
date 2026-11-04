@@ -8,6 +8,8 @@ import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.domain.location.RideLocationState
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.*
 import kotlin.test.*
 import kotlin.time.ExperimentalTime
@@ -193,28 +195,39 @@ class HistoryRecorderStartupTest {
         assertEquals(beforeClose, repo.connectionState.value)
     }
 
-    @Test fun ordinaryServiceFailureAfterRepoCloseCannotPublishLateFailed() {
+    // Retraction: these used demo serviceStart as their fault driver. Demo no
+    // longer starts a BLE service. Seed an outgoing physical link and fail the
+    // real service-demand release when replacing it with demo instead.
+    private fun installOutgoingPhysicalLink(repo: KableBmsRepository) {
+        val vehicle = singlePackVehicle("physical", "Outgoing battery", "battery", BmsType.ANT_BMS, "AA",
+            Chemistry.LI_ION_NMC, createdAt = kotlin.time.Instant.fromEpochMilliseconds(0))
+        repo.installLinksForTest(vehicle, "AA", BmsType.ANT_BMS)
+    }
+
+    @Test fun ordinaryServiceReleaseFailureAfterRepoCloseCannotPublishLateFailed() {
         var repository: KableBmsRepository? = null
         var atClose: ConnectionState? = null
-        bleRepositoryTest(historyStartup = { ingress() }, serviceStart = {
+        bleRepositoryTest(historyStartup = { ingress() }, serviceStop = {
             val repo = assertNotNull(repository)
             atClose = assertIs<ConnectionState.Connected>(repo.connectionState.value)
             repo.close()
             error("service failed after close")
         }) { repo ->
             repository = repo
+            installOutgoingPhysicalLink(repo)
             assertTrue(repo.connectDemo().isFailure)
             assertNotNull(atClose)
             assertEquals(atClose, repo.connectionState.value)
         }
     }
 
-    @Test fun ordinaryServiceFailureStillPublishesFailureForCurrentLiveRequest() =
-        bleRepositoryTest(historyStartup = { ingress() }, serviceStart = { error("service unavailable") }) { repo ->
+    @Test fun ordinaryServiceReleaseFailureStillPublishesFailureForCurrentLiveRequest() =
+        bleRepositoryTest(historyStartup = { ingress() }, serviceStop = { error("service unavailable") }) { repo ->
+            installOutgoingPhysicalLink(repo)
             try {
                 assertTrue(repo.connectDemo().isFailure)
                 assertIs<ConnectionState.Failed>(repo.connectionState.value)
-            } finally { repo.disconnect(); runCurrent() }
+            } finally { runCatching { repo.disconnect() }; runCurrent() }
         }
 
     @Test fun runtimeOwnedChoiceCannotBeOverriddenDuringPreparation() {

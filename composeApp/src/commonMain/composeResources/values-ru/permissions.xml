@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="permission_step_bluetooth">Подключение транспорта</string>
+    <string name="permission_step_notifications">Уведомления</string>
+    <string name="permission_bluetooth_title">Разрешите Bluetooth-доступ</string>
+    <string name="permission_bluetooth_body">Android попросит доступ к устройствам поблизости. Он нужен для связи с вашим транспортом.</string>
+    <string name="permission_legacy_title">Разрешите поиск транспорта</string>
+    <string name="permission_legacy_body">На Android 11 и старше поиск Bluetooth-устройств требует доступа к геолокации. Это нужно, чтобы найти ваш транспорт.</string>
+    <string name="permission_find_transport">Найти колесо, самокат или велосипед рядом.</string>
+    <string name="permission_receive_data">Получать заряд, скорость и температуру.</string>
+    <string name="permission_bluetooth_note">Уведомления предложим отдельно. А сейчас можно попробовать Volty в деморежиме.</string>
+    <string name="permission_bluetooth_note_only">Можно пропустить этот шаг и попробовать Volty в деморежиме, не выдавая доступ.</string>
+    <string name="permission_bluetooth_action">Разрешить и найти транспорт</string>
+    <string name="permission_notifications_title">Предупреждать в пути?</string>
+    <string name="permission_notifications_body">Разрешите уведомления, чтобы видеть состояние подключения и предупреждения, когда Volty свёрнут.</string>
+    <string name="permission_notification_status">Видеть состояние подключения в уведомлениях.</string>
+    <string name="permission_notification_warnings">Получать предупреждения о заряде и состоянии транспорта.</string>
+    <string name="permission_notifications_note">Этот доступ необязателен. Без него можно подключить транспорт и пользоваться приложением.</string>
+    <string name="permission_notifications_action">Включить уведомления</string>
+    <string name="permission_skip_notifications">Сейчас пропустить</string>
+    <string name="permission_demo_action">Сначала попробую демо</string>
+    <string name="permission_demo_title">На чём прокатимся?</string>
+    <string name="permission_demo_body">Виртуальный транспорт и демонстрационные данные. Bluetooth и геолокация не нужны.</string>
+    <string name="permission_demo_scooter">Самокат</string>
+    <string name="permission_demo_wheel">Моноколесо</string>
+    <string name="permission_demo_starting">Открываем деморежим…</string>
+    <string name="permission_demo_error">Не удалось запустить деморежим. Попробуйте ещё раз.</string>
+    <string name="permission_bluetooth_denied">Без этого доступа Volty не подключится к транспорту. Можно повторить запрос или попробовать деморежим.</string>
+    <string name="permission_bluetooth_settings">Android заблокировал доступ. Разрешите его в настройках приложения или попробуйте деморежим.</string>
+    <string name="permission_open_settings">Открыть настройки</string>
+    <string name="permission_retry">Повторить запрос</string>
+    <string name="permission_cancel">Назад</string>
+    <string name="permission_step_count">Шаг %1$d из %2$d</string>
+</resources>

@@ -606,7 +606,8 @@ class DefaultRootComponent(
      * no existing route changes shape.
      */
     private fun goTo(config: Config) {
-        nav.navigate { stack -> stackAfterGoTo(stack, config) }
+        val destination = permissionGatedConfig(config, permissionsChecker.missingPermissions())
+        nav.navigate { stack -> stackAfterGoTo(stack, destination) }
     }
 
     /** Every root stack replacement passes through the buried-composer guard. */
@@ -615,7 +616,7 @@ class DefaultRootComponent(
         guardComposerDestruction(
             children = entries.map { it.instance },
             revealComposerAt = { index -> goTo(entries[index].configuration as Config) },
-            destroyStack = { nav.replaceAll(config) }
+            destroyStack = { nav.replaceAll(permissionGatedConfig(config, permissionsChecker.missingPermissions())) }
         )
     }
 
@@ -663,7 +664,7 @@ class DefaultRootComponent(
     }
 
     override fun onTab(tab: RootComponent.Tab) {
-        nav.bringToFront(configForTab(tab))
+        nav.bringToFront(permissionGatedConfig(configForTab(tab), permissionsChecker.missingPermissions()))
     }
 
     override fun onOpenHistory() { goTo(Config.History()) }
@@ -685,8 +686,9 @@ class DefaultRootComponent(
      * completes we render [Config.Loading] (a tiny splash).
      */
     private fun computeInitialConfigSync(): Config {
-        if (permissionsChecker.missingPermissions().isNotEmpty()) return Config.Permissions
-        return Config.Loading
+        // Retraction: notifications used to block the entire app, even demo mode.
+        // Only Bluetooth access gates device discovery; notifications are optional.
+        return permissionGatedConfig(Config.Loading, permissionsChecker.missingPermissions())
     }
 
     private suspend fun resolveStartDestination() {
@@ -702,10 +704,12 @@ class DefaultRootComponent(
      */
     private fun startDemo(profile: DemoProfile) {
         scope.launch {
-            bmsRepository.connectDemo(profile)
-            replaceAll(homeConfig())
+            connectDemo(profile)
         }
     }
+
+    private suspend fun connectDemo(profile: DemoProfile): Result<Unit> =
+        bmsRepository.connectDemo(profile).onSuccess { replaceAll(homeConfig()) }
 
     private fun onPermissionsGranted() {
         // After permissions are granted, recompute the post-permissions route
@@ -735,8 +739,10 @@ class DefaultRootComponent(
             is Config.Permissions -> RootComponent.Child.Permissions(
                 DefaultPermissionsGateComponent(
                     componentContext = context,
-                    checker = get<PermissionsChecker>(),
-                    onAllGrantedRequested = { onPermissionsGranted() }
+                    requiredPermissions = permissionsChecker.requiredPermissions(),
+                    missingPermissions = permissionsChecker::missingPermissions,
+                    onContinueRequested = { onPermissionsGranted() },
+                    startDemo = ::connectDemo,
                 )
             )
             is Config.Scanning -> RootComponent.Child.Scanning(

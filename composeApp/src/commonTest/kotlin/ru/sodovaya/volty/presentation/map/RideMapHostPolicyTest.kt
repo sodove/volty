@@ -6,6 +6,12 @@ import kotlin.test.assertTrue
 import ru.sodovaya.volty.domain.model.DashboardStyle
 
 class RideMapHostPolicyTest {
+    @Test fun demoRetainsTheLightMapWithoutRequestingLocation() {
+        assertEquals(
+            RideMapHostState(true, true, false),
+            rideMapHostState(true, RideMapScreen.RIDE, DashboardStyle.LIGHT, demoMode = true),
+        )
+    }
     @Test fun historyUsesRootMapWithoutAnActiveVehicleOrLiveLocationPermission() {
         assertEquals(RideMapHostState(true, true, false), rideMapHostState(false, RideMapScreen.HISTORY, null))
         assertEquals(RideMapHostState(true, true, false), rideMapHostState(true, RideMapScreen.HISTORY, DashboardStyle.LIGHT))

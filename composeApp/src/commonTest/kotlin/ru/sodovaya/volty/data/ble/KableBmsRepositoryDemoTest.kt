@@ -29,7 +29,7 @@ import kotlin.time.Instant
 /**
  * Verifies the "Try demo" lifecycle on [KableBmsRepository]: connectDemo brings
  * up a simulated session (active vehicle flagged [Vehicle.isDemo], state
- * Connected, foreground service started, samples flowing) and disconnect tears
+ * Connected, samples flowing) and disconnect tears
  * it down completely with no persistence side-effects.
  */
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
@@ -64,7 +64,7 @@ class KableBmsRepositoryDemoTest {
     )
 
     @Test
-    fun `connectDemo sets demo vehicle connected and starts service`() = repoTest { repo ->
+    fun `connectDemo publishes live samples without starting a permission gated service`() = repoTest { repo ->
 
         val result = repo.connectDemo()
         runCurrent()
@@ -73,7 +73,8 @@ class KableBmsRepositoryDemoTest {
         val active = repo.activeVehicle.value
         assertTrue(active != null && active.isDemo, "active vehicle must be the demo vehicle")
         assertTrue(repo.connectionState.value is ConnectionState.Connected)
-        assertEquals(1, starts.size, "foreground service should start for demo")
+        assertEquals(0, starts.size, "demo must not require Bluetooth foreground-service permission")
+        assertEquals(0, stops.size, "fresh demo has no physical BLE demand to release")
 
         // The simulator should feed at least one synthetic sample once virtual
         // time advances one tick interval.
@@ -108,7 +109,7 @@ class KableBmsRepositoryDemoTest {
         assertEquals(ConnectionState.Disconnected, repo.connectionState.value)
         assertNull(repo.activeVehicle.value, "active vehicle cleared after disconnect")
         assertFalse(repo.activeData.value.isConnected, "activeData reset after disconnect")
-        assertEquals(1, stops.size, "service stop invoked once")
+        assertEquals(1, stops.size, "disconnect releases the service demand once")
     }
 
     /**
