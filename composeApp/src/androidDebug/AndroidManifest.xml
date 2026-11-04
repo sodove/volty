@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application>
+        <!-- Native acceptance: confirm built-in Performance traces without
+             enabling HTTP bytecode instrumentation or release log verbosity. -->
+        <meta-data android:name="firebase_performance_logcat_enabled" android:value="true" />
         <activity android:name=".debug.HistoryUiProbeActivity" android:exported="true"
             android:windowSoftInputMode="adjustResize" />
         <activity android:name=".debug.RnnoiseProbeActivity" android:exported="true" />

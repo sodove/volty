@@ -93,8 +93,8 @@ abstract class VerifyProductionReleaseTask : DefaultTask() {
     }
 }
 
-val appVersionCode = 90
-val appVersionName = "0.7.67"
+val appVersionCode = 91
+val appVersionName = "0.7.68"
 val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
     value.toBooleanStrictOrNull()
         ?: error("voltyProductionRelease must be true or false")
@@ -112,6 +112,14 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.sqldelight)
     id("com.mikepenz.aboutlibraries.plugin") version "13.2.1"
+}
+
+// Retraction: manual resValues were sufficient for FCM, but monitoring also
+// needs the official Crashlytics build-ID / R8 mapping task integration.
+// The ignored project config remains optional for config-less debug checkouts.
+if (file("google-services.json").isFile) {
+    apply(plugin = "com.google.gms.google-services")
+    apply(plugin = "com.google.firebase.crashlytics")
 }
 
 apply(from = rootProject.file("gradle/credits.gradle.kts"))
@@ -180,6 +188,11 @@ kotlin {
             implementation("androidx.camera:camera-effects:1.5.3")
             implementation(project.dependencies.platform(libs.firebase.bom))
             implementation(libs.firebase.messaging)
+            implementation(libs.firebase.analytics)
+            implementation(libs.firebase.crashlytics)
+            // SDK lifecycle/startup metrics only. No Performance Gradle plugin:
+            // automatic HTTP instrumentation could capture route URL coordinates.
+            implementation(libs.firebase.performance)
             implementation(libs.workmanager.runtime)
             implementation(libs.activity.compose)
             implementation(libs.koin.android)
@@ -320,13 +333,12 @@ android {
                 arguments += "-DRNNOISE_MODEL_DIR=${layout.buildDirectory.dir("rnnoise-model").get().asFile.invariantSeparatorsPath}"
             }
         }
-        // Firebase documents direct string resources as an alternative to the
-        // Google-services plugin. Only the matching Android client's fields are used.
+        // Validate the config before the official Google Services task consumes it.
         val firebaseConfig = file("google-services.json")
         // 0.7.29 shipped without this git-ignored file: no FCM token, so incoming
         // call pushes silently never registered. A production release must carry it.
         require(!productionReleaseGate || firebaseConfig.isFile) {
-            "Production release requires composeApp/google-services.json (FCM call pushes)"
+            "Production release requires composeApp/google-services.json (Firebase monitoring and call pushes)"
         }
         if (firebaseConfig.isFile) {
             val config = JsonSlurper().parse(firebaseConfig) as Map<*, *>
@@ -349,7 +361,6 @@ android {
             resources.forEach {(name, raw) ->
                 val value = raw as? String
                 require(value != null && value.matches(Regex("[A-Za-z0-9_:.-]+"))) {"Invalid Firebase configuration field: $name"}
-                resValue("string", name, value)
             }
         }
         minSdk = 26

@@ -160,6 +160,18 @@
       "website": "https://developer.android.com/jetpack/androidx/releases/customview#1.0.0"
     },
     {
+      "id": "androidx.privacysandbox.ads:ads-adservices-java",
+      "name": "androidx.privacysandbox.ads:ads-adservices-java",
+      "version": "1.1.0-beta11",
+      "authors": [
+        "The Android Open Source Project"
+      ],
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "website": "https://developer.android.com/jetpack/androidx/releases/privacysandbox-ads#1.1.0-beta11"
+    },
+    {
       "id": "androidx.annotation:annotation-jvm",
       "name": "Annotation",
       "version": "1.9.1",
@@ -339,6 +351,19 @@
       "website": "https://developer.android.com/jetpack/androidx/releases/camera#1.5.3"
     },
     {
+      "id": "org.checkerframework:checker-qual",
+      "name": "Checker Qual",
+      "version": "3.12.0",
+      "authors": [
+        "Michael Ernst",
+        "Suzanne Millstein"
+      ],
+      "licenseIds": [
+        "MIT"
+      ],
+      "website": "https://checkerframework.org"
+    },
+    {
       "id": "androidx.collection:collection-jvm",
       "name": "collections",
       "version": "1.5.0",
@@ -390,6 +415,15 @@
       ]
     },
     {
+      "id": "com.google.firebase:firebase-abt",
+      "name": "com.google.firebase:firebase-abt",
+      "version": "24.0.0",
+      "authors": [],
+      "licenseIds": [
+        "Apache-2.0"
+      ]
+    },
+    {
       "id": "com.google.firebase:firebase-annotations",
       "name": "com.google.firebase:firebase-annotations",
       "version": "18.0.0",
@@ -411,6 +445,33 @@
       "id": "com.google.firebase:firebase-components",
       "name": "com.google.firebase:firebase-components",
       "version": "20.0.0",
+      "authors": [],
+      "licenseIds": [
+        "Apache-2.0"
+      ]
+    },
+    {
+      "id": "com.google.firebase:firebase-config",
+      "name": "com.google.firebase:firebase-config",
+      "version": "24.0.0",
+      "authors": [],
+      "licenseIds": [
+        "Apache-2.0"
+      ]
+    },
+    {
+      "id": "com.google.firebase:firebase-config-interop",
+      "name": "com.google.firebase:firebase-config-interop",
+      "version": "17.0.0",
+      "authors": [],
+      "licenseIds": [
+        "Apache-2.0"
+      ]
+    },
+    {
+      "id": "com.google.firebase:firebase-crashlytics",
+      "name": "com.google.firebase:firebase-crashlytics",
+      "version": "21.0.0",
       "authors": [],
       "licenseIds": [
         "Apache-2.0"
@@ -474,6 +535,24 @@
       "id": "com.google.firebase:firebase-messaging",
       "name": "com.google.firebase:firebase-messaging",
       "version": "26.0.0",
+      "authors": [],
+      "licenseIds": [
+        "Apache-2.0"
+      ]
+    },
+    {
+      "id": "com.google.firebase:firebase-perf",
+      "name": "com.google.firebase:firebase-perf",
+      "version": "23.0.0",
+      "authors": [],
+      "licenseIds": [
+        "Apache-2.0"
+      ]
+    },
+    {
+      "id": "com.google.firebase:firebase-sessions",
+      "name": "com.google.firebase:firebase-sessions",
+      "version": "4.0.0",
       "authors": [],
       "licenseIds": [
         "Apache-2.0"
@@ -746,7 +825,7 @@
     {
       "id": "com.google.dagger:dagger",
       "name": "Dagger",
-      "version": "2.46",
+      "version": "2.57.2",
       "authors": [
         "Google, Inc."
       ],
@@ -937,6 +1016,24 @@
       "website": "https://developer.android.com/jetpack/androidx/releases/annotation#1.4.1"
     },
     {
+      "id": "com.google.code.findbugs:jsr305",
+      "name": "FindBugs-jsr305",
+      "version": "3.0.2",
+      "authors": [],
+      "licenseIds": [
+        "Apache-2.0"
+      ]
+    },
+    {
+      "id": "com.google.firebase:firebase-analytics",
+      "name": "firebase-analytics",
+      "version": "24.0.0",
+      "authors": [],
+      "licenseIds": [
+        "ASDKL"
+      ]
+    },
+    {
       "id": "com.google.firebase:firebase-iid-interop",
       "name": "firebase-iid-interop",
       "version": "17.1.0",
@@ -948,7 +1045,7 @@
     {
       "id": "com.google.firebase:firebase-measurement-connector",
       "name": "firebase-measurement-connector",
-      "version": "19.0.0",
+      "version": "20.0.1",
       "authors": [],
       "licenseIds": [
         "ASDKL"
@@ -1014,9 +1111,21 @@
       "website": "https://github.com/google/gson/gson"
     },
     {
+      "id": "com.google.guava:failureaccess",
+      "name": "Guava InternalFutureFailureAccess and InternalFutures",
+      "version": "1.0.1",
+      "authors": [
+        "Kevin Bourrillion"
+      ],
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "website": "https://github.com/google/guava/failureaccess"
+    },
+    {
       "id": "com.google.guava:listenablefuture",
       "name": "Guava ListenableFuture only",
-      "version": "1.0",
+      "version": "9999.0-empty-to-avoid-conflict-with-guava",
       "authors": [
         "Kevin Bourrillion"
       ],
@@ -1024,6 +1133,18 @@
         "Apache-2.0"
       ],
       "website": "https://github.com/google/guava/listenablefuture"
+    },
+    {
+      "id": "com.google.guava:guava",
+      "name": "Guava: Google Core Libraries for Java",
+      "version": "31.1-android",
+      "authors": [
+        "Kevin Bourrillion"
+      ],
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "website": "https://github.com/google/guava"
     },
     {
       "id": "dev.chrisbanes.haze:haze-android",
@@ -1036,6 +1157,32 @@
         "Apache-2.0"
       ],
       "website": "https://github.com/chrisbanes/haze/"
+    },
+    {
+      "id": "com.google.j2objc:j2objc-annotations",
+      "name": "J2ObjC Annotations",
+      "version": "1.3",
+      "authors": [],
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "website": "https://github.com/google/j2objc/"
+    },
+    {
+      "id": "jakarta.inject:jakarta.inject-api",
+      "name": "Jakarta Dependency Injection",
+      "version": "2.0.1",
+      "authors": [
+        "Antoine Sabot-Durand",
+        "Eclipse Foundation",
+        "Martin Kouba",
+        "Matej Novotny",
+        "Tomas Remes"
+      ],
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "website": "https://github.com/eclipse-ee4j/injection-api"
     },
     {
       "id": "javax.inject:javax.inject",
@@ -1869,6 +2016,15 @@
       "website": "https://kotlinlang.org/"
     },
     {
+      "id": "com.google.android.gms:play-services-ads-identifier",
+      "name": "play-services-ads-identifier",
+      "version": "18.0.0",
+      "authors": [],
+      "licenseIds": [
+        "ASDKL"
+      ]
+    },
+    {
       "id": "com.google.android.gms:play-services-base",
       "name": "play-services-base",
       "version": "18.9.0",
@@ -1890,6 +2046,60 @@
       "id": "com.google.android.gms:play-services-cloud-messaging",
       "name": "play-services-cloud-messaging",
       "version": "17.4.0",
+      "authors": [],
+      "licenseIds": [
+        "ASDKL"
+      ]
+    },
+    {
+      "id": "com.google.android.gms:play-services-measurement",
+      "name": "play-services-measurement",
+      "version": "24.0.0",
+      "authors": [],
+      "licenseIds": [
+        "ASDKL"
+      ]
+    },
+    {
+      "id": "com.google.android.gms:play-services-measurement-api",
+      "name": "play-services-measurement-api",
+      "version": "24.0.0",
+      "authors": [],
+      "licenseIds": [
+        "ASDKL"
+      ]
+    },
+    {
+      "id": "com.google.android.gms:play-services-measurement-base",
+      "name": "play-services-measurement-base",
+      "version": "24.0.0",
+      "authors": [],
+      "licenseIds": [
+        "ASDKL"
+      ]
+    },
+    {
+      "id": "com.google.android.gms:play-services-measurement-impl",
+      "name": "play-services-measurement-impl",
+      "version": "24.0.0",
+      "authors": [],
+      "licenseIds": [
+        "ASDKL"
+      ]
+    },
+    {
+      "id": "com.google.android.gms:play-services-measurement-sdk",
+      "name": "play-services-measurement-sdk",
+      "version": "24.0.0",
+      "authors": [],
+      "licenseIds": [
+        "ASDKL"
+      ]
+    },
+    {
+      "id": "com.google.android.gms:play-services-measurement-sdk-api",
+      "name": "play-services-measurement-sdk-api",
+      "version": "24.0.0",
       "authors": [],
       "licenseIds": [
         "ASDKL"
@@ -1974,6 +2184,18 @@
       "website": "https://developer.android.com/jetpack/androidx/releases/datastore#1.1.7"
     },
     {
+      "id": "androidx.privacysandbox.ads:ads-adservices",
+      "name": "Privacy Sandbox for Ad Services",
+      "version": "1.1.0-beta11",
+      "authors": [
+        "The Android Open Source Project"
+      ],
+      "licenseIds": [
+        "Apache-2.0"
+      ],
+      "website": "https://developer.android.com/jetpack/androidx/releases/privacysandbox-ads#1.1.0-beta11"
+    },
+    {
       "id": "androidx.profileinstaller:profileinstaller",
       "name": "Profile Installer",
       "version": "1.4.0",
@@ -1988,7 +2210,7 @@
     {
       "id": "com.google.protobuf:protobuf-javalite",
       "name": "Protocol Buffers [Lite]",
-      "version": "3.22.0",
+      "version": "4.36.1",
       "authors": [
         "Protocol Buffers"
       ],
@@ -2766,6 +2988,8 @@
       "androidx.navigationevent:navigationevent-android:1.0.2",
       "androidx.navigationevent:navigationevent-compose-android:1.0.2",
       "androidx.print:print:1.0.0",
+      "androidx.privacysandbox.ads:ads-adservices-java:1.1.0-beta11",
+      "androidx.privacysandbox.ads:ads-adservices:1.1.0-beta11",
       "androidx.profileinstaller:profileinstaller:1.4.0",
       "androidx.resourceinspection:resourceinspection-annotation:1.0.1",
       "androidx.room:room-common-jvm:2.7.0",
@@ -2805,18 +3029,31 @@
       "com.google.android.datatransport:transport-api:5.0.0",
       "com.google.android.datatransport:transport-backend-cct:5.0.0",
       "com.google.android.datatransport:transport-runtime:5.0.0",
+      "com.google.android.gms:play-services-ads-identifier:18.0.0",
       "com.google.android.gms:play-services-base:18.9.0",
       "com.google.android.gms:play-services-basement:18.9.0",
       "com.google.android.gms:play-services-cloud-messaging:17.4.0",
+      "com.google.android.gms:play-services-measurement-api:24.0.0",
+      "com.google.android.gms:play-services-measurement-base:24.0.0",
+      "com.google.android.gms:play-services-measurement-impl:24.0.0",
+      "com.google.android.gms:play-services-measurement-sdk-api:24.0.0",
+      "com.google.android.gms:play-services-measurement-sdk:24.0.0",
+      "com.google.android.gms:play-services-measurement:24.0.0",
       "com.google.android.gms:play-services-stats:17.0.2",
       "com.google.android.gms:play-services-tasks:18.4.0",
       "com.google.auto.value:auto-value-annotations:1.6.3",
+      "com.google.code.findbugs:jsr305:3.0.2",
       "com.google.code.gson:gson:2.10.1",
-      "com.google.dagger:dagger:2.46",
+      "com.google.dagger:dagger:2.57.2",
       "com.google.errorprone:error_prone_annotations:2.26.0",
+      "com.google.firebase:firebase-abt:24.0.0",
+      "com.google.firebase:firebase-analytics:24.0.0",
       "com.google.firebase:firebase-annotations:18.0.0",
       "com.google.firebase:firebase-common:23.0.0",
       "com.google.firebase:firebase-components:20.0.0",
+      "com.google.firebase:firebase-config-interop:17.0.0",
+      "com.google.firebase:firebase-config:24.0.0",
+      "com.google.firebase:firebase-crashlytics:21.0.0",
       "com.google.firebase:firebase-datatransport:21.0.0",
       "com.google.firebase:firebase-encoders-json:19.0.0",
       "com.google.firebase:firebase-encoders-proto:17.0.0",
@@ -2824,10 +3061,15 @@
       "com.google.firebase:firebase-iid-interop:17.1.0",
       "com.google.firebase:firebase-installations-interop:18.0.0",
       "com.google.firebase:firebase-installations:20.0.0",
-      "com.google.firebase:firebase-measurement-connector:19.0.0",
+      "com.google.firebase:firebase-measurement-connector:20.0.1",
       "com.google.firebase:firebase-messaging:26.0.0",
-      "com.google.guava:listenablefuture:1.0",
-      "com.google.protobuf:protobuf-javalite:3.22.0",
+      "com.google.firebase:firebase-perf:23.0.0",
+      "com.google.firebase:firebase-sessions:4.0.0",
+      "com.google.guava:failureaccess:1.0.1",
+      "com.google.guava:guava:31.1-android",
+      "com.google.guava:listenablefuture:9999.0-empty-to-avoid-conflict-with-guava",
+      "com.google.j2objc:j2objc-annotations:1.3",
+      "com.google.protobuf:protobuf-javalite:4.36.1",
       "com.jakewharton.timber:timber:5.0.1",
       "com.juul.kable:kable-core-android:0.43.0",
       "com.juul.tuulbox:coroutines-android:8.1.0",
@@ -2868,9 +3110,11 @@
       "io.ktor:ktor-websocket-serialization-jvm:3.3.1",
       "io.ktor:ktor-websockets-jvm:3.3.1",
       "io.livekit:livekit-android:2.28.0",
+      "jakarta.inject:jakarta.inject-api:2.0.1",
       "javax.inject:javax.inject:1",
       "javax.sip:android-jain-sip-ri:1.3.0-91",
       "org.bouncycastle:bcprov-jdk18on:1.84",
+      "org.checkerframework:checker-qual:3.12.0",
       "org.jetbrains.compose.components:components-resources-android:1.11.0",
       "org.jetbrains.compose.ui:ui-backhandler-android:1.10.0-beta01",
       "org.jetbrains.kotlin:kotlin-parcelize-runtime:2.3.21",
