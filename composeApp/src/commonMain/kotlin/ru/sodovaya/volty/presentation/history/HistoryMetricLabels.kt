@@ -25,6 +25,7 @@ internal fun historyMetricText() = HistoryMetricText(
         "cell_delta_mv" to stringResource(Res.string.history_metric_cell_delta),
         "cell_v" to stringResource(Res.string.history_metric_cell),
         "speed_kmh" to stringResource(Res.string.history_metric_speed),
+        HISTORY_GPS_SPEED_METRIC to stringResource(Res.string.history_metric_gps_speed),
         "duty_percent" to stringResource(Res.string.history_metric_duty),
         "duty_estimated_percent" to stringResource(Res.string.history_metric_duty_estimated),
         "motor_current_a" to stringResource(Res.string.history_metric_motor_current),
@@ -47,6 +48,7 @@ internal fun historyMetricText() = HistoryMetricText(
         HistorySourceKind.CONTROLLER to stringResource(Res.string.history_source_controller),
         HistorySourceKind.BATTERY_ASSEMBLY to stringResource(Res.string.history_source_assembly),
         HistorySourceKind.DERIVED_BATTERY to stringResource(Res.string.history_source_derived),
-        HistorySourceKind.REPORTED_CAN to stringResource(Res.string.history_source_reported_can)),
+        HistorySourceKind.REPORTED_CAN to stringResource(Res.string.history_source_reported_can),
+        HistorySourceKind.GPS to stringResource(Res.string.history_source_gps)),
     unknown = stringResource(Res.string.history_metric_unknown), other = stringResource(Res.string.history_group_other),
 )

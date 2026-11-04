@@ -202,7 +202,7 @@ class HistoryRecorderShutdownTest {
             repo.installLinksForTest(vehicle, "AA", BmsType.ANT_BMS); repo.prepareInstalledHistoryForTest()
             assertTrue(assertNotNull(repo.historyTelemetryCaptureForTest(Protocol(), "AA", SampleSessionOwnership { true })).prepareForObservation())
             val controller = assertNotNull(binding).controller
-            val owner = assertNotNull(controller.captureTelemetryRecording()); val source = writer.sources.single()
+            val owner = assertNotNull(controller.captureTelemetryRecording()); val source = writer.sources.physical().single()
             val tick = HistoryTick(100, 10, 1)
             val queued = assertNotNull(controller.reserveQueuedTelemetry(owner, tick, source.id))
             val observed = ReceivedTelemetry(TelemetryReceipt("receipt", 1, TelemetryReceiptTime(100, 10)),

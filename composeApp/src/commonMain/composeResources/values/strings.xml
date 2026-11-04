@@ -1170,6 +1170,7 @@
     <string name="history_metric_cell_delta">Cell voltage spread</string>
     <string name="history_metric_cell">Cell</string>
     <string name="history_metric_speed">Speed</string>
+    <string name="history_metric_gps_speed">GPS speed</string>
     <string name="history_metric_duty">Duty cycle</string>
     <string name="history_metric_duty_estimated">Duty cycle (estimate)</string>
     <string name="history_metric_motor_current">Motor current</string>
@@ -1194,6 +1195,7 @@
     <string name="history_source_assembly">Battery assembly</string>
     <string name="history_source_derived">Controller battery estimate</string>
     <string name="history_source_reported_can">Reported CAN totals</string>
+    <string name="history_source_gps">Phone GPS</string>
     <string name="history_presets_title">Metric layouts</string>
     <string name="history_presets_hint">Layouts belong to this vehicle. Missing sources stay unavailable. Saving the same name updates its layout.</string>
     <string name="history_presets_read_error">Could not read saved layouts.</string>

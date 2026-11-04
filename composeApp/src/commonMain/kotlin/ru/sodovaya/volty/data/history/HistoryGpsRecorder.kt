@@ -79,7 +79,8 @@ internal class HistoryGpsRecorder(
                         if (fix != previous) {
                             // Input projection can be overtaken by native revocation. Serialize
                             // the nonblocking offer with that exact recording's capture fence.
-                            if (foreground.offer(captured) { controller.offerGps(ride.id, fix) } != HistoryOffer.ACCEPTED) return@location
+                            // A fix unequal to [previous] was built from [raw], so raw's speed belongs to it.
+                            if (foreground.offer(captured) { controller.offerGps(ride.id, fix, raw?.speedMetersPerSecond) } != HistoryOffer.ACCEPTED) return@location
                             lastFix = fix
                             gap = null
                         }

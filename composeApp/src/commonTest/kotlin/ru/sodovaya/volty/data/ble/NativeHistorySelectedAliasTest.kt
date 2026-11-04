@@ -129,7 +129,7 @@ class NativeHistorySelectedAliasTest {
             f.assertDashboardEmpty()
             assertTrue(next.processNotification(byteArrayOf(1))); f.assertDashboardEmpty()
             assertEquals(2, f.writer.begins.size); assertEquals(listOf<String?>("ride-1"), f.writer.finishes)
-            val oldSource = f.writer.begins[0].second.single().id
+            val oldSource = f.writer.begins[0].second.physical().single().id
             val cacheSource = f.writer.begins[1].second.single { it.kind == HistorySourceKind.BATTERY }.id
             assertNotEquals(oldSource, cacheSource)
             val samples = f.writer.batches.flatMap { it.samples }
@@ -185,8 +185,8 @@ class NativeHistorySelectedAliasTest {
             assertTrue(restored.processNotification(byteArrayOf(14))); f.assertDashboardEmpty()
             assertEquals(3, f.writer.begins.size)
             assertEquals(listOf<String?>("ride-1", "ride-2"), f.writer.finishes)
-            val firstSource = f.writer.begins[0].second.single().id
-            assertEquals(firstSource, f.writer.begins[2].second.single().id)
+            val firstSource = f.writer.begins[0].second.physical().single().id
+            assertEquals(firstSource, f.writer.begins[2].second.physical().single().id)
             val samples = f.writer.batches.flatMap { it.samples }
             assertEquals(listOf<Double?>(11.0, null, 14.0), samples.map { it.value })
             assertEquals(listOf(firstSource, f.writer.begins[1].second.single { it.kind == HistorySourceKind.BATTERY }.id, firstSource),
@@ -254,7 +254,7 @@ class NativeHistorySelectedAliasTest {
                 f.install(link, profile)
                 val capture = assertNotNull(f.capture(link, profile)); assertTrue(capture.prepareForObservation())
                 assertTrue(capture.processNotification(byteArrayOf(10))); f.assertDashboardEmpty()
-                val source = f.writer.begins.single().second.single()
+                val source = f.writer.begins.single().second.physical().single()
                 assertEquals(HistorySourceKind.BATTERY, source.kind)
                 assertEquals(source.id, f.writer.batches.flatMap { it.samples }.single().key.sourceId)
                 assertEquals(0L, f.ingress.diagnostics.value.setupFailures)
@@ -335,7 +335,7 @@ class NativeHistorySelectedAliasTest {
             val f = Fixture(); val link = spec(pack)
             try {
                 f.install(link, profile); assertTrue(assertNotNull(f.capture(link, profile)).prepareForObservation())
-                return f.writer.begins.single().second.single().id
+                return f.writer.begins.single().second.physical().single().id
             } finally { f.channel.cancel() }
         }
         val original = source(vehicle(), a)
@@ -353,7 +353,7 @@ class NativeHistorySelectedAliasTest {
             f.install(first, profile); assertTrue(assertNotNull(f.capture(first, profile)).prepareForObservation())
             f.install(second, profile); assertTrue(assertNotNull(f.capture(second, profile)).prepareForObservation())
             assertEquals(2, f.writer.begins.size); assertEquals(listOf<String?>("ride-1"), f.writer.finishes)
-            assertNotEquals(f.writer.begins[0].second.single().id, f.writer.begins[1].second.single().id)
+            assertNotEquals(f.writer.begins[0].second.physical().single().id, f.writer.begins[1].second.physical().single().id)
             assertTrue(f.writer.batches.flatMap { it.markers }.any { it.kind == HistoryMarkerKind.SOURCE_CHANGE })
         } finally { f.channel.cancel() }
     }
@@ -366,7 +366,7 @@ class NativeHistorySelectedAliasTest {
                 val selected = assertNotNull(f.capture(first, profile)); assertTrue(selected.prepareForObservation())
                 assertNull(f.capture(second, profile))
                 assertTrue(selected.processNotification(byteArrayOf(11))); f.assertDashboardEmpty()
-                assertEquals(1, f.writer.begins.single().second.size)
+                assertEquals(1, f.writer.begins.single().second.physical().size)
                 assertEquals(11.0, f.writer.batches.flatMap { it.samples }.single().value)
                 assertEquals(0L, f.ingress.diagnostics.value.setupFailures)
             } finally { f.channel.cancel() }

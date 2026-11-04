@@ -11,7 +11,8 @@ data class HistoryTick(
     }
 }
 
-enum class HistorySourceKind { VEHICLE_BATTERY, VEHICLE_MOTION, BATTERY, CONTROLLER, BATTERY_ASSEMBLY, DERIVED_BATTERY, REPORTED_CAN }
+/** Stored by NAME (`HistorySourceV2.kind`), so the order is free; [GPS] is the phone's own receiver (`HistoryGpsSpeed.kt`). */
+enum class HistorySourceKind { VEHICLE_BATTERY, VEHICLE_MOTION, BATTERY, CONTROLLER, BATTERY_ASSEMBLY, DERIVED_BATTERY, REPORTED_CAN, GPS }
 
 data class HistorySeriesKey(
     val sourceId: String,

@@ -43,4 +43,6 @@ fun historyExportFileName(format: HistoryExportFormat, vehicle: String?, startEp
 
 /** The vehicle part of [historyExportFileName]: the rider's name for it, else the first source's label. */
 fun historyExportVehicleName(metadata: HistoryExportMetadata): String? =
-    metadata.vehicleName?.takeIf { it.isNotBlank() } ?: metadata.sources.firstOrNull()?.label
+    metadata.vehicleName?.takeIf { it.isNotBlank() }
+        // The GPS speed source is the phone, not the vehicle; its fixed label would name a file "GPS".
+        ?: metadata.sources.firstOrNull { it.kind != ru.sodovaya.volty.domain.history.HistorySourceKind.GPS }?.label

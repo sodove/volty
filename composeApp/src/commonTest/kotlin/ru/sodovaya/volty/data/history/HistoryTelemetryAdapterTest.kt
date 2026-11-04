@@ -87,7 +87,12 @@ class HistoryTelemetryAdapterTest {
     }
 
     @Test fun canonicalVocabularyCoversRegistryWithoutSignOrUnitConversion() {
-        assertEquals(HistoryMetricRegistry.descriptors.map { it.id }.toSet(), TelemetryMetric.entries.map { it.id }.toSet())
+        // Every metric a DECODER can feed. `gps_speed_kmh` (HistorySourceKind.GPS only) is the phone's receiver, written by
+        // the GPS recorder and never by a BLE decoder, so it is deliberately outside the telemetry vocabulary (2026-11-04).
+        assertEquals(HistoryMetricRegistry.descriptors.filterNot { HistorySourceKind.GPS in it.sourceKinds }.map { it.id }.toSet(),
+            TelemetryMetric.entries.map { it.id }.toSet())
+        assertEquals(listOf(HISTORY_GPS_SPEED_METRIC),
+            HistoryMetricRegistry.descriptors.filter { HistorySourceKind.GPS in it.sourceKinds }.map { it.id })
         val readings = listOf(TelemetryReading.measured(TelemetryMetric.POWER, -100.0),
             TelemetryReading.measured(TelemetryMetric.CELL_DELTA, 12.0),
             TelemetryReading(TelemetryMetric.CELL_MIN, null, TelemetryUnknown.PARTIAL_SOURCE))

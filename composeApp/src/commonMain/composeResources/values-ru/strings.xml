@@ -1168,6 +1168,7 @@
     <string name="history_metric_cell_delta">Разброс напряжений ячеек</string>
     <string name="history_metric_cell">Ячейка</string>
     <string name="history_metric_speed">Скорость</string>
+    <string name="history_metric_gps_speed">Скорость GPS</string>
     <string name="history_metric_duty">Заполнение ШИМ</string>
     <string name="history_metric_duty_estimated">Заполнение ШИМ (оценка)</string>
     <string name="history_metric_motor_current">Ток мотора</string>
@@ -1192,6 +1193,7 @@
     <string name="history_source_assembly">Сборка батареи</string>
     <string name="history_source_derived">Оценка батареи контроллером</string>
     <string name="history_source_reported_can">Суммы CAN со слов контроллера</string>
+    <string name="history_source_gps">GPS телефона</string>
     <string name="history_presets_title">Наборы метрик</string>
     <string name="history_presets_hint">Наборы привязаны к этому транспорту. Отсутствующие источники остаются недоступными. Сохранение с тем же именем обновляет набор.</string>
     <string name="history_presets_read_error">Не удалось прочитать сохранённые наборы.</string>

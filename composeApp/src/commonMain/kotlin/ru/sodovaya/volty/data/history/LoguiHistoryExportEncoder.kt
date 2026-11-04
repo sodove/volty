@@ -396,6 +396,9 @@ internal fun loguiField(metricId: String, cellIndex: Int?): LoguiField {
         "esc_temperature_c" -> same("Temp Fet")
         "motor_temperature_c" -> same("Temp Motor")
         "speed_kmh" -> same("kmh_vesc", "Speed")
+        // VESC Tool's own GNSS speed column (`pageloganalysis.cpp:504`, `kmh_gnss`, "Speed GNSS", km/h): the phone's GPS
+        // speed of a battery-only ride, never written as `kmh_vesc`.
+        HISTORY_GPS_SPEED_METRIC -> same("kmh_gnss", "Speed GNSS")
         "trip_distance_km" -> LoguiField("trip_vesc", "Trip", "m", 1, scale = 1000.0, distanceSinceStart = true)
         "odometer_km" -> same("odometer", "Odometer")
         "controller_power_w" -> same("power", "Power")
@@ -454,7 +457,9 @@ internal fun loguiSourcePrefixes(sources: List<HistorySource>, withData: Set<Str
     val master = first(HistorySourceKind.VEHICLE_MOTION)
         ?: sources.firstOrNull { it.kind == HistorySourceKind.CONTROLLER && it.id in withData && historySourceCanId(it.id) == null }
         ?: first(HistorySourceKind.CONTROLLER)
-    val bare = setOfNotNull(master?.id, first(HistorySourceKind.VEHICLE_BATTERY, HistorySourceKind.BATTERY)?.id)
+    val bare = setOfNotNull(master?.id, first(HistorySourceKind.VEHICLE_BATTERY, HistorySourceKind.BATTERY)?.id,
+        // The GPS speed source feeds one column whose key no other source writes, so it needs no prefix.
+        first(HistorySourceKind.GPS)?.id)
     val ordinal = HashMap<HistorySourceKind, Int>()
     return sources.associate { source ->
         val number = (ordinal[source.kind] ?: 0) + 1
@@ -473,7 +478,7 @@ private fun loguiKindLetter(kind: HistorySourceKind) = when (kind) {
     HistorySourceKind.CONTROLLER -> "C"; HistorySourceKind.VEHICLE_MOTION -> "M"
     HistorySourceKind.BATTERY -> "B"; HistorySourceKind.VEHICLE_BATTERY -> "P"
     HistorySourceKind.BATTERY_ASSEMBLY -> "A"; HistorySourceKind.DERIVED_BATTERY -> "D"
-    HistorySourceKind.REPORTED_CAN -> "R"
+    HistorySourceKind.REPORTED_CAN -> "R"; HistorySourceKind.GPS -> "G"
 }
 
 /** Bare-key sources first (motion, then battery), then the rest in metadata order. */

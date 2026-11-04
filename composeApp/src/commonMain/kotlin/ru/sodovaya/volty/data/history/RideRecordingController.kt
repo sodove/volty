@@ -153,7 +153,10 @@ class RideRecordingController(
             transition.begin?.let { ride ->
                 check(nextGeneration < Long.MAX_VALUE) { "Recording generation exhausted" }
                 val generation = ++nextGeneration
-                val recordedSources = sourceSnapshot ?: emptyList()
+                // A ride with no motion source also records the phone's GPS speed under a source of its own
+                // (HistoryGpsSpeed.kt). Added here, after the plan comparison, so it never takes part in deciding
+                // whether a later registry is the same vehicle.
+                val recordedSources = historyRecordedSources(sourceSnapshot ?: emptyList())
                 writer.begin(generation, ride, recordedSources)
                 owned = Owner(generation, transition.intent, recordedSources.map { it.id }.toSet(), ride.started)
                 mutableTelemetryFailure.value = null
@@ -195,7 +198,7 @@ class RideRecordingController(
         val owner = admission.value ?: return null
         val ride = owner.intent.ride ?: return null
         if (context.gate !== owner.gate || context.generation != owner.generation || context.rideId != ride.id ||
-            sourceId !in owner.sources || !acceptsRecordingTick(owner.intent, context.connectionGeneration, tick) ||
+            sourceId !in owner.sources || sourceId == HISTORY_GPS_SPEED_SOURCE_ID || !acceptsRecordingTick(owner.intent, context.connectionGeneration, tick) ||
             historyAxisEpochMillis(ride.started, tick) == null) return null
         val reservation = owner.gate.reserveTelemetry(tick, setOf(sourceId)) ?: return null
         return QueuedHistoryTelemetry(onOffer = { batch ->
@@ -247,7 +250,7 @@ class RideRecordingController(
         // validated owner's existing admission bound for the failure verdict.
         val tick = receiptTick ?: owner.last
         val targetMatches = if (sourceId != null) sourceId in owner.sources
-            else vehicleId == ride.vehicleId && owner.sources.isNotEmpty()
+            else vehicleId == ride.vehicleId && owner.sources.any { it != HISTORY_GPS_SPEED_SOURCE_ID }
         if (context.gate !== owner.gate || context.generation != owner.generation ||
             context.rideId != ride.id || !targetMatches ||
             !acceptsRecordingTick(owner.intent, context.connectionGeneration, tick) ||
@@ -271,7 +274,7 @@ class RideRecordingController(
     private fun offerTelemetry(owner: Owner, connectionGeneration: Long, batch: HistoryBatch): HistoryOffer {
         val ride = owner.intent.ride ?: return HistoryOffer.RETIRED
         if (batch.rideId != ride.id || batch.gps.isNotEmpty() || batch.markers.isNotEmpty() || batch.buckets.isNotEmpty()) return HistoryOffer.RETIRED
-        if (batch.samples.any { it.key.sourceId !in owner.sources ||
+        if (batch.samples.any { it.key.sourceId !in owner.sources || it.key.sourceId == HISTORY_GPS_SPEED_SOURCE_ID ||
                 !acceptsRecordingTick(owner.intent, connectionGeneration, it.tick) ||
                 historyAxisEpochMillis(ride.started, it.tick) == null }) return HistoryOffer.RETIRED
         if (!owner.intent.linkConnected || connectionGeneration != owner.intent.connectionGeneration) return HistoryOffer.RETIRED
@@ -318,12 +321,18 @@ class RideRecordingController(
         finally { owner.gate.release() }
     }
 
-    /** GPS keeps participating while BLE is reconnecting; the observer stamps the ride it captured. */
-    fun offerGps(rideId: String, fix: HistoryGpsFix): HistoryOffer {
+    /** GPS keeps participating while BLE is reconnecting; the observer stamps the ride it captured.
+     * [speedMetersPerSecond] is the provider's speed for [fix] (null: the fix reported none). It is stored only for a
+     * ride that registered the GPS speed source ([historyRecordedSources]), in the fix's own batch and at its tick, so
+     * it is held, released and dropped with the track across a BLE dropout, never on its own.
+     */
+    fun offerGps(rideId: String, fix: HistoryGpsFix, speedMetersPerSecond: Double? = null): HistoryOffer {
         val owner = admission.value ?: return HistoryOffer.RETIRED
         val ride = owner.intent.ride ?: return HistoryOffer.RETIRED
         if (rideId != ride.id || historyAxisEpochMillis(ride.started, fix.tick) == null) return HistoryOffer.RETIRED
-        val batch = HistoryBatch(ride.id, emptyList(), listOf(fix), emptyList())
+        val speed = if (HISTORY_GPS_SPEED_SOURCE_ID in owner.sources) listOf(historyGpsSpeedSample(fix, speedMetersPerSecond))
+            else emptyList()
+        val batch = HistoryBatch(ride.id, speed, listOf(fix), emptyList())
         if (!owner.intent.linkConnected) return holdGps(batch)
         return offerGpsBatch(owner, fix.tick, batch)
     }

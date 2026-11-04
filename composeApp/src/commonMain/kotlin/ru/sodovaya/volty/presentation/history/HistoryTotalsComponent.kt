@@ -202,6 +202,7 @@ private suspend fun readRobustPeaks(sources: List<HistorySource>,
     detail: suspend (HistorySeriesKey) -> HistoryDetailRead?): Pair<HistoryRobustPeaks, Boolean> {
     val keys = (tier(sources, motionTiers).flatMap { s -> listOf("speed_kmh", "motor_temperature_c", "esc_temperature_c",
             "controller_power_w", "duty_percent", "duty_estimated_percent").map { HistorySeriesKey(s.id, it) } } +
+        historySpeedKeys(sources) +
         tier(sources, batteryTiers).map { HistorySeriesKey(it.id, "power_w") } +
         tier(sources, batteryTemperatureTiers).map { HistorySeriesKey(it.id, "battery_temperature_c") }).distinct()
     val peaks = HashMap<HistorySeriesKey, RobustPeak>()
@@ -229,8 +230,9 @@ private suspend fun readRobustPeaks(sources: List<HistorySource>,
  */
 private suspend fun readMovingTime(sources: List<HistorySource>,
     detail: suspend (HistorySeriesKey) -> HistoryDetailRead?, gps: List<HistoryGpsFix>, origin: HistoryTick?): HistoryMovingTime? {
-    for (source in tier(sources, motionTiers)) {
-        val read = detail(HistorySeriesKey(source.id, "speed_kmh")) ?: return null
+    // historySpeedKeys: the motion tier's speed, else (a battery-only ride, 2026-11-04) its recorded GPS speed series.
+    for (key in historySpeedKeys(sources)) {
+        val read = detail(key) ?: return null
         if (!read.complete) return null
         if (read.samples.any { it.value != null }) return historyMovingMillis(read.samples, gps, origin)
     }

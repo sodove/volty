@@ -72,6 +72,17 @@ internal fun tier(sources: List<HistorySource>, tiers: List<Set<HistorySourceKin
     tiers.firstNotNullOfOrNull { kinds -> sources.filter { it.kind in kinds }.takeIf { it.isNotEmpty() } }.orEmpty()
 
 /**
+ * The ride's speed series: the motion tier's `speed_kmh`; only when the ride has no motion source at all, the phone's
+ * GPS speed series (`gps_speed_kmh`, HistoryGpsSpeed.kt). Never both and never merged: the recorder registers the GPS
+ * speed source only for a ride without a motion source, and this tie-break holds even for a ride that somehow has both.
+ */
+internal fun historySpeedKeys(sources: List<HistorySource>): List<HistorySeriesKey> {
+    val motion = tier(sources, motionTiers)
+    return if (motion.isNotEmpty()) motion.map { HistorySeriesKey(it.id, "speed_kmh") }
+    else sources.filter { it.kind == HistorySourceKind.GPS }.map { HistorySeriesKey(it.id, HISTORY_GPS_SPEED_METRIC) }
+}
+
+/**
  * What a ride shows when the rider has chosen nothing: speed from the motion source, power from the
  * battery when it holds a value (the controller's otherwise). One tier each, so an aggregate and its
  * contributors never both appear.
@@ -83,7 +94,8 @@ internal fun tier(sources: List<HistorySource>, tiers: List<Set<HistorySourceKin
  * controller to fall back to, the pack series stays: an empty chart is then the honest answer, not another series.
  */
 fun historyDefaultMetrics(sources: List<HistorySource>, packPowerHasValue: (HistorySeriesKey) -> Boolean = { true }): List<HistorySeriesKey> {
-    val speed = tier(sources, motionTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "speed_kmh") }
+    // A battery-only ride's speed chart is its GPS speed series (historySpeedKeys), labelled as GPS by the drawer.
+    val speed = historySpeedKeys(sources).firstOrNull()
     val controller = tier(sources, motionTiers).firstOrNull()?.let { HistorySeriesKey(it.id, "controller_power_w") }
     val pack = historyDefaultPackPowerKey(sources)
     val power = if (pack != null && (controller == null || packPowerHasValue(pack))) pack else controller
@@ -99,7 +111,7 @@ fun historyTotalsKeys(sources: List<HistorySource>): List<HistorySeriesKey> {
     val motion = tier(sources, motionTiers).flatMap { source -> motionMetrics.map { HistorySeriesKey(source.id, it) } }
     val battery = tier(sources, batteryTiers).flatMap { source -> batteryMetrics.map { HistorySeriesKey(source.id, it) } }
     val temperature = tier(sources, batteryTemperatureTiers).map { HistorySeriesKey(it.id, "battery_temperature_c") }
-    return (motion + battery + temperature).distinct()
+    return (motion + historySpeedKeys(sources) + battery + temperature).distinct()
 }
 
 /**
@@ -146,7 +158,9 @@ fun historyRideTotals(
     val duration = durationMillis?.takeIf { it > 0 }
     duration?.let { result += HistoryTotal(HistoryTotalKind.DURATION_MILLIS, it.toDouble()) }
     moving?.let { result += HistoryTotal(HistoryTotalKind.MOVING_MILLIS, it.millis.toDouble(), it.approximate) }
-    val topSpeed = peak(motion, "speed_kmh")
+    // Without a motion source the top speed is the GPS speed series' (historySpeedKeys); with one, never GPS.
+    val topSpeed = if (motion.isNotEmpty()) peak(motion, "speed_kmh")
+        else peak(sources.filter { it.kind == HistorySourceKind.GPS }, HISTORY_GPS_SPEED_METRIC)
     if (distanceTotal != null && moving != null) {
         if (moving.millis > 0) {
             val perMoving = distanceTotal.value / (moving.millis / 3_600_000.0)

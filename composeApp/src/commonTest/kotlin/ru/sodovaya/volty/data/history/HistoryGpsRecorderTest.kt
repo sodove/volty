@@ -43,6 +43,20 @@ class HistoryGpsRecorderTest {
         fun gaps() = writer.offers.flatMap { it.markers }.filter { it.kind == HistoryMarkerKind.GPS_GAP }
     }
 
+    @Test fun theProviderSpeedOfEachRecordedFixReachesTheWriterBesideIt() = runTest {
+        // 2026-11-04: the battery-only fixture ride records GPS speed. Asserted on what the writer was OFFERED.
+        val f = Fixture(this)
+        fun moving(speed: Double?) = f.fix().copy(speedMetersPerSecond = speed)
+        f.status(RideLocationStatus.Available(moving(5.0))); f.start(); runCurrent()
+        advanceTimeBy(100)
+        f.status(RideLocationStatus.Available(moving(null))); runCurrent()
+        val issued = f.writer.offers.filter { it.gps.isNotEmpty() }
+        assertEquals(2, issued.size)
+        assertEquals(listOf(18.0, null), issued.map { b -> b.samples.single().value?.let { Math.round(it * 1e6) / 1e6 } })
+        assertEquals(issued.map { it.gps.single().tick }, issued.map { it.samples.single().tick })
+        assertEquals(HistoryUnknownReason.UNAVAILABLE, issued[1].samples.single().unknown)
+    }
+
     @Test fun captureRevokedBetweenQualifiedInputAndWriterOfferCannotIssueCoordinate() = runTest {
         val f = Fixture(this)
         f.status(RideLocationStatus.Searching); f.start(); runCurrent()

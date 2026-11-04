@@ -266,7 +266,7 @@ class KableBmsRepositoryHistoryFunnelTest {
             assertNull(c.captureTelemetryRecording()); assertTrue(ca.prepareForObservation())
             val first = assertNotNull(c.captureTelemetryRecording())
             assertTrue(cb.prepareForObservation()); assertEquals(2, plans)
-            assertEquals(setOf(source, other), writer.begins.single().second.toSet())
+            assertEquals(setOf(source, other), writer.begins.single().second.physical().toSet())
             assertSame(first.gate, assertNotNull(c.captureTelemetryRecording()).gate)
             now = tick(1); ingress.retireNativeAttempt(pa)
             cb.processNotification(byteArrayOf(9))

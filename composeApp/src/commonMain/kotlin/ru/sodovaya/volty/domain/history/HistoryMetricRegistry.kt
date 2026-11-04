@@ -41,6 +41,9 @@ object HistoryMetricRegistry {
         HistoryMetricDescriptor("motor_temperature_c", HistoryUnit.CELSIUS, HistoryMetricGroup.CONTROLLER, motionSources),
         HistoryMetricDescriptor("odometer_km", HistoryUnit.KM, HistoryMetricGroup.MOVEMENT, motionSources),
         HistoryMetricDescriptor("trip_distance_km", HistoryUnit.KM, HistoryMetricGroup.MOVEMENT, motionSources),
+        // The phone's GPS speed, recorded only for a ride with no motion source (HistoryGpsSpeed.kt). Its own id and
+        // its own source kind, so it can never be read as, or merged into, a controller's `speed_kmh`.
+        HistoryMetricDescriptor(HISTORY_GPS_SPEED_METRIC, HistoryUnit.KMH, HistoryMetricGroup.MOVEMENT, setOf(HistorySourceKind.GPS)),
     )
     private val byId = descriptors.associateBy { it.id }
     fun descriptor(id: String): HistoryMetricDescriptor? = byId[id]

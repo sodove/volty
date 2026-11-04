@@ -228,7 +228,8 @@ class RideRecordingControllerTest {
         assertEquals(listOf("begin:ride-1", "finish:ride-1", "begin:ride-2"), f.writer.calls)
         assertEquals(tick(30), f.writer.ends.single())
         assertEquals(tick(30), f.writer.begins.last().first.started)
-        assertEquals(replacement, f.writer.begins.last().second)
+        // Battery-only registries also record the phone's GPS speed (HistoryGpsSpeed.kt, 2026-11-04).
+        assertEquals(replacement + historyGpsSpeedSource, f.writer.begins.last().second)
         val terminal = f.writer.offers.map { it.second }.single { b -> b.markers.any { it.kind.name == "SOURCE_CHANGE" } }
         assertEquals("ride-1", terminal.rideId)
         assertEquals(tick(30), terminal.markers.single().tick)
@@ -247,7 +248,7 @@ class RideRecordingControllerTest {
         val changed = sources.map { it.copy(kind = HistorySourceKind.DERIVED_BATTERY) }
         c.execute(RecordingInput.Start("bike", 7, tick(10)), changed)
         assertEquals(listOf("begin:ride-1", "finish:ride-1", "begin:ride-2"), f.writer.calls)
-        assertEquals(changed, f.writer.begins.last().second)
+        assertEquals(changed + historyGpsSpeedSource, f.writer.begins.last().second)
         assertEquals(HistoryRideStatus.COMPLETED, f.writer.statuses.single())
         assertEquals(7L, c.state.value.intent.connectionGeneration)
     }
@@ -273,7 +274,8 @@ class RideRecordingControllerTest {
         assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(8, batch(delta = 3)))
         c.execute(RecordingInput.Connected("bike", 9, tick(4)), emptyList())
         assertEquals("ride-2", c.state.value.intent.ride?.id)
-        assertTrue(f.writer.begins.last().second.isEmpty())
+        // Retraction: this asserted an empty registry. A GPS-only segment now records the GPS speed source (2026-11-04).
+        assertEquals(listOf(historyGpsSpeedSource), f.writer.begins.last().second)
         assertEquals(HistoryOffer.RETIRED, c.offerTelemetry(9, batch("ride-2", 5)))
         assertEquals(HistoryOffer.ACCEPTED, c.offerGps("ride-2", HistoryGpsFix(tick(5), 56.0, 60.0, 5.0, null)))
     }
@@ -289,7 +291,8 @@ class RideRecordingControllerTest {
         c.execute(RecordingInput.Connected("bike", 8, tick(4)), changed)
         assertNull(c.state.value.intent.ride)
         c.execute(RecordingInput.Start("bike", 8, tick(5)))
-        assertTrue(f.writer.begins.last().second.isEmpty(), "Omission without an active ride must not reuse retired metadata")
+        assertEquals(listOf(historyGpsSpeedSource), f.writer.begins.last().second,
+            "Omission without an active ride must not reuse retired metadata (only the GPS speed source, 2026-11-04)")
     }
 
     @Test fun duplicateRegistryIsRejectedBeforeClosingCurrentAdmission() = runTest {
@@ -361,6 +364,68 @@ class RideRecordingControllerTest {
         assertEquals(listOf(HistoryRideStatus.INTERRUPTED, HistoryRideStatus.COMPLETED), a.writer.statuses)
         b.controller.execute(RecordingInput.Stop(tick(5), 7, "ride-1"))
         assertEquals(listOf(HistoryRideStatus.COMPLETED), b.writer.statuses)
+    }
+
+    // ---- GPS speed series of a battery-only ride (HistoryGpsSpeed.kt, 2026-11-04) ----
+
+    private val gpsSpeed = HistorySeriesKey(HISTORY_GPS_SPEED_SOURCE_ID, HISTORY_GPS_SPEED_METRIC)
+    private fun gpsFix(delta: Long) = HistoryGpsFix(tick(delta), 56.0, 60.0, 5.0, null)
+
+    @Test fun aBatteryOnlyRideIssuesTheFixSpeedInTheFixBatchAndAControllerRideNever() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        assertEquals(HistoryOffer.ACCEPTED, c.offerGps("ride-1", gpsFix(3), 10.0))
+        assertEquals(HistoryOffer.ACCEPTED, c.offerGps("ride-1", gpsFix(4), null))
+        val issued = f.writer.offers.map { it.second }.filter { it.gps.isNotEmpty() }
+        assertEquals(listOf(listOf(gpsSpeed), listOf(gpsSpeed)), issued.map { b -> b.samples.map { it.key } })
+        assertEquals(listOf(tick(3), tick(4)), issued.flatMap { b -> b.samples.map { it.tick } }, "a speed sits at its fix's tick")
+        assertEquals(36.0, issued[0].samples.single().value!!, 1e-9)
+        assertEquals(HistoryUnknownReason.UNAVAILABLE, issued[1].samples.single().unknown, "no speed reported is unknown, not 0")
+
+        val g = Fixture()
+        g.controller.execute(RecordingInput.Connected("bike", 7, tick()), sources + HistorySource("motor", HistorySourceKind.CONTROLLER, "M"))
+        assertEquals(HistoryOffer.ACCEPTED, g.controller.offerGps("ride-1", gpsFix(3), 10.0))
+        val fixes = g.writer.offers.map { it.second }.filter { it.gps.isNotEmpty() }
+        assertEquals(1, fixes.size, "the fix itself is still recorded")
+        assertTrue(fixes.single().samples.isEmpty(), "a ride with a controller records no GPS speed")
+    }
+
+    @Test fun theGpsSpeedOfADropoutIsHeldAndWrittenWithItsTrack() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        c.execute(RecordingInput.LinkLost(7, tick(2)))
+        val before = f.writer.offers.size
+        assertEquals(HistoryOffer.ACCEPTED, c.offerGps("ride-1", gpsFix(3), 4.0))
+        assertEquals(before, f.writer.offers.size, "held while the vehicle is away")
+        c.execute(RecordingInput.Connected("bike", 8, tick(5)), sources)
+        val written = f.writer.offers.drop(before).map { it.second }.single { it.gps.isNotEmpty() }
+        assertEquals(listOf(tick(3)), written.samples.map { it.tick })
+        assertEquals(14.4, written.samples.single().value!!, 1e-9)
+    }
+
+    @Test fun bleTelemetryCannotWriteIntoTheGpsSpeedSource() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val forged = HistoryBatch("ride-1", listOf(HistorySample(tick(1), gpsSpeed, 99.0)), emptyList(), emptyList())
+        val offered = f.writer.offers.size
+        assertEquals(HistoryOffer.RETIRED, c.offerTelemetry(7, forged))
+        assertEquals(HistoryOffer.RETIRED, c.offerTelemetry(assertNotNull(c.captureTelemetryRecording()), forged))
+        assertNull(c.reserveQueuedTelemetry(assertNotNull(c.captureTelemetryRecording()), tick(1), HISTORY_GPS_SPEED_SOURCE_ID))
+        assertEquals(offered, f.writer.offers.size)
+        // The genuine pack still records.
+        assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(7, batch(delta = 2)))
+    }
+
+    @Test fun aGpsOnlySegmentStillIgnoresALinkSetupFailureAsBefore() = runTest {
+        // Before the GPS speed source, an empty registry had no source a link setup failure could concern, so the
+        // failure was not latched. The added GPS source must not change that.
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), emptyList())
+        assertFalse(c.reportTelemetrySetupFailure(assertNotNull(c.captureTelemetryRecording()), "bike"))
+        assertNull(c.telemetryFailure.value)
+        val g = Fixture()
+        g.controller.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        assertTrue(g.controller.reportTelemetrySetupFailure(assertNotNull(g.controller.captureTelemetryRecording()), "bike"))
     }
 
     private class Writer : HistoryWriter {

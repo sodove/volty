@@ -95,7 +95,7 @@ class NativeHistoryPhysicalOwnershipTest {
             specs.forEach { assertNotNull(f.lifecycle.binding(it, Any()) { true }).prepare() }
             assertEquals(0, f.failures)
             assertEquals(specs.size, f.plannerCalls)
-            assertEquals(specs.sumOf { it.ownedPacks.size + it.ownedControllers.size }, f.writer.begins.single().size)
+            assertEquals(specs.sumOf { it.ownedPacks.size + it.ownedControllers.size }, f.writer.begins.single().physical().size)
             assertNotNull(f.controller.captureTelemetryRecording())
             assertNotNull(f.controller.captureGpsRecording())
             f.lifecycle.close()
