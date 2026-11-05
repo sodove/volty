@@ -1729,6 +1729,10 @@
     <string name="db_gate_clearing_body">Это может занять до минуты. Если приложение закроется, удаление отменится и ничего не пропадёт.</string>
     <string name="db_gate_resetting_title">Создаём чистую базу…</string>
     <string name="video_frame_rate">Частота кадров</string>
+    <string name="video_stabilization_mode">Режим стабилизации</string>
+    <string name="video_stabilization_off">Выключена</string>
+    <string name="video_stabilization_video">Видео</string>
+    <string name="video_stabilization_preview">Видео и предпросмотр</string>
     <string name="video_stabilization_active">Камера включила стабилизацию</string>
     <string name="video_stabilization_unavailable">На этой камере стабилизация недоступна</string>
     <string name="video_stabilization_requested">Стабилизация запрошена; доступность зависит от режима записи</string>

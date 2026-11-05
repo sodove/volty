@@ -36,6 +36,7 @@ class VideoDutyHold(private val maxHoldMillis: Long = DEFAULT_MAX_HOLD_MILLIS) {
         reading: VideoReading,
         receivedAtMillis: Long,
         sourceExpiryMillis: Long?,
+        sourceSampleMillis: Long = receivedAtMillis,
     ): Result {
         if (this.vehicleId != vehicleId) {
             this.vehicleId = vehicleId
@@ -47,9 +48,9 @@ class VideoDutyHold(private val maxHoldMillis: Long = DEFAULT_MAX_HOLD_MILLIS) {
         }
         if (fresh) {
             // A measured duty is as good as any other source value (its own expiry); only the HOLD is bounded tighter.
-            val measured = Held(reading, receivedAtMillis, holdExpiry(receivedAtMillis, sourceExpiryMillis))
+            val measured = Held(reading, sourceSampleMillis, holdExpiry(sourceSampleMillis, sourceExpiryMillis))
             held = measured
-            return Result(reading, sourceExpiryMillis ?: measured.expiresAtMillis)
+            return Result(reading, sourceExpiryMillis ?: measured.expiresAtMillis, measured.freshAtMillis)
         }
         val current = held ?: return Result(VideoReading(value = null), null)
         if (receivedAtMillis < current.freshAtMillis || receivedAtMillis > current.expiresAtMillis) {
@@ -58,7 +59,7 @@ class VideoDutyHold(private val maxHoldMillis: Long = DEFAULT_MAX_HOLD_MILLIS) {
         }
         // The republished value is the held one by construction; keep the held copy so the provenance flags
         // (estimated, ceiling) stay those of the frame that measured it.
-        return Result(current.reading, current.expiresAtMillis)
+        return Result(current.reading, current.expiresAtMillis, current.freshAtMillis)
     }
 
     /** Forget everything, e.g. when the vehicle disconnects. */
@@ -72,7 +73,7 @@ class VideoDutyHold(private val maxHoldMillis: Long = DEFAULT_MAX_HOLD_MILLIS) {
         return if (sourceExpiryMillis == null) bound else minOf(bound, sourceExpiryMillis)
     }
 
-    class Result(val reading: VideoReading, val expiresAtMillis: Long?)
+    class Result(val reading: VideoReading, val expiresAtMillis: Long?, val sampledAtMillis: Long? = null)
 
     private class Held(val reading: VideoReading, val freshAtMillis: Long, val expiresAtMillis: Long)
 

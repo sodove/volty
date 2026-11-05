@@ -232,6 +232,8 @@ data class VideoSnapshot(
     val readings: Map<VideoMetric, VideoReading>,
     val demo: Boolean = false,
     val expiresAtMillis: Map<VideoMetric, Long> = emptyMap(),
+    /** Measurement time on the receipt clock; repeated folds retain this timestamp. */
+    val sampledAtMillis: Map<VideoMetric, Long> = emptyMap(),
 )
 
 /**
@@ -272,9 +274,11 @@ class VideoTimeline(
 
         if (isOlderThan(causalSample.timeMillis, frameTimeMillis)) return null
 
-        val expiredMetrics = causalSample.expiresAtMillis
-            .filter { (_, expiresAtMillis) -> expiresAtMillis < frameTimeMillis }
-            .keys
+        val expiredMetrics = causalSample.readings.keys
+            .filter { metric ->
+                causalSample.expiresAtMillis[metric]?.let { it < frameTimeMillis } == true ||
+                    causalSample.sampledAtMillis[metric]?.let { isOlderThan(it, frameTimeMillis) || it > causalSample.timeMillis } == true
+            }
             .filter { metric -> causalSample.readings[metric]?.let { it != VideoReading(null) } == true }
         if (expiredMetrics.isEmpty()) return causalSample
 
@@ -293,49 +297,99 @@ class VideoTimeline(
      * values still present in the interpolation buffer. Counters belong to the trip clock and are omitted.
      */
     fun interpolatedValues(frameMillis: Long, delayMillis: Long = DEFAULT_INTERPOLATION_DELAY_MILLIS): Map<VideoMetric, Double> {
-        val raw = sample(frameMillis) ?: return emptyMap()
-        val currentVehicle = vehicleId ?: return emptyMap()
-        val targetMillis = delayedFrameTime(frameMillis, delayMillis)
-        var before: VideoSnapshot? = null
-        var after: VideoSnapshot? = null
-        for (candidate in snapshots) {
-            if (candidate.vehicleId != currentVehicle || candidate.timeMillis > frameMillis) continue
-            if (candidate.timeMillis <= targetMillis) {
-                val previous = before
-                if (previous == null || candidate.timeMillis >= previous.timeMillis) before = candidate
-            } else {
-                val next = after
-                if (next == null || candidate.timeMillis <= next.timeMillis) after = candidate
-            }
-        }
-        val lower = before ?: return emptyMap()
-        val upper = after
-        val result = linkedMapOf<VideoMetric, Double>()
+        return interpolatedValuesAt(delayedFrameTime(frameMillis, delayMillis), frameMillis, frameMillis)
+    }
 
+    /**
+     * A buffered camera frame keeps its capture time. Later samples may bracket that time only if they
+     * have arrived by [availableAtMillis]. Unlike a delayed live readout, a historical frame's presence
+     * and expiry are judged at capture, not when the encoder finally receives it.
+     */
+    fun interpolatedValuesAt(
+        frameMillis: Long,
+        availableAtMillis: Long,
+        authorityMillis: Long = frameMillis,
+    ): Map<VideoMetric, Double> {
+        if (availableAtMillis < frameMillis) return emptyMap()
+        val raw = sample(authorityMillis) ?: return emptyMap()
+        val result = linkedMapOf<VideoMetric, Double>()
         for (metric in VideoMetric.entries) {
             if (metric == VideoMetric.ELAPSED || metric == VideoMetric.DISTANCE) continue
             if (raw.readings[metric]?.value?.isFinite() != true) continue
-            val beforeValue = lower.freshValue(metric, frameMillis) ?: continue
+            val (lower, upper) = brackets(metric, frameMillis, availableAtMillis)
+            val beforeValue = lower?.freshValue(metric, authorityMillis) ?: continue
             var shown = beforeValue
-
             if (upper != null) {
-                val afterValue = upper.freshValue(metric, frameMillis) ?: continue
-                val gapMillis = upper.timeMillis - lower.timeMillis
-                if (gapMillis in 1L..MAX_INTERPOLATION_GAP_MILLIS) {
-                    val fraction = (targetMillis - lower.timeMillis).toDouble() / gapMillis
-                    shown = interpolate(beforeValue, afterValue, fraction)
+                val afterValue = upper.freshValue(metric, authorityMillis)
+                if (afterValue == null) {
+                    // At capture this value was known. A later unknown is a barrier, not a reason to
+                    // erase earlier history. Delayed live readouts retain their stricter reentry gate.
+                    if (authorityMillis != frameMillis) continue
+                } else {
+                    val gapMillis = upper.measuredAt(metric) - lower.measuredAt(metric)
+                    if (gapMillis in 1L..MAX_INTERPOLATION_GAP_MILLIS) {
+                        val fraction = (frameMillis - lower.measuredAt(metric)).toDouble() / gapMillis
+                        shown = interpolate(beforeValue, afterValue, fraction)
+                    }
                 }
             }
-
-            // Raw presence above proves that the current stream still knows this metric, even when the delayed
-            // endpoints would otherwise offer an older number.
             result[metric] = shown
         }
         return result
     }
 
+    /** Only used to release a GPU frame early; the 300 ms deadline always wins over missing telemetry. */
+    fun hasInterpolationBrackets(frameMillis: Long, availableAtMillis: Long, metrics: Set<VideoMetric>): Boolean {
+        val raw = sample(frameMillis) ?: return true
+        return metrics.filter { it != VideoMetric.ELAPSED && it != VideoMetric.DISTANCE }.all { metric ->
+            if (raw.readings[metric]?.value?.isFinite() != true) true
+            else {
+                val (before, after) = brackets(metric, frameMillis, availableAtMillis)
+                before?.freshValue(metric, frameMillis) != null && after != null
+            }
+        }
+    }
+
+    /** Recent source cadence, not cadence of repeated combined battery/controller folds. */
+    fun interpolationDelayMillis(): Long {
+        var largestGap = 0L
+        for (metric in VideoMetric.entries) {
+            if (metric == VideoMetric.ELAPSED || metric == VideoMetric.DISTANCE) continue
+            var previous: Long? = null
+            for (snapshot in snapshots.takeLast(32)) {
+                if (snapshot.readings[metric]?.value?.isFinite() != true) { previous = null; continue }
+                val stamp = snapshot.measuredAt(metric)
+                previous?.let { prior ->
+                    if (stamp > prior) largestGap = maxOf(largestGap, (stamp - prior).coerceAtMost(300))
+                }
+                previous = stamp
+            }
+        }
+        return (largestGap + 20).coerceIn(80, 300)
+    }
+
+    private fun brackets(metric: VideoMetric, targetMillis: Long, availableAtMillis: Long): Pair<VideoSnapshot?, VideoSnapshot?> {
+        var before: VideoSnapshot? = null
+        var after: VideoSnapshot? = null
+        for (candidate in snapshots) {
+            if (candidate.vehicleId != vehicleId || candidate.timeMillis > availableAtMillis) continue
+            val stamp = candidate.measuredAt(metric)
+            if (stamp > candidate.timeMillis) continue // An incoherent source cannot prove a future measurement.
+            if (stamp <= targetMillis) {
+                if (before == null || stamp >= before.measuredAt(metric)) before = candidate
+            } else {
+                if (after == null || stamp <= after.measuredAt(metric)) after = candidate
+            }
+        }
+        return before to after
+    }
+
+    private fun VideoSnapshot.measuredAt(metric: VideoMetric): Long =
+        if (readings[metric]?.value?.isFinite() != true) timeMillis else sampledAtMillis[metric] ?: timeMillis
+
     private fun VideoSnapshot.freshValue(metric: VideoMetric, frameMillis: Long): Double? {
         if (isOlderThan(timeMillis, frameMillis)) return null
+        if (isOlderThan(measuredAt(metric), frameMillis)) return null
         if (expiresAtMillis[metric]?.let { it < frameMillis } == true) return null
         return readings[metric]?.value?.takeIf(Double::isFinite)
     }

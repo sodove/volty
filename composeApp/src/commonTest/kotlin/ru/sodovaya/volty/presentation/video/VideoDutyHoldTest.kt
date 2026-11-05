@@ -87,7 +87,9 @@ class VideoDutyHoldTest {
             val republished = assertNotNull(wheel.latestMotion(0))
             assertFalse(republished.dutyFresh, "precondition: a live rebuild republishes, it does not measure")
             assertEquals(37f, republished.dutyPercent)
-            assertEquals(37.0, duty(map(republished, 1_200L + step * 100, hold)).value, "step $step")
+            val snapshot = map(republished, 1_200L + step * 100, hold)
+            assertEquals(37.0, duty(snapshot).value, "step $step")
+            assertEquals(1_100L, snapshot.sampledAtMillis[VideoMetric.DUTY], "held duty keeps its measurement time")
         }
 
         wheel.onNotification(motionFrame(41))

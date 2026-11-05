@@ -358,6 +358,8 @@ class VideoTelemetryMapperTest {
 
         assertEquals(receiptMillis + 10L, first.expiresAtMillis[VideoMetric.SPEED])
         assertEquals(receiptMillis + 2_000L, first.expiresAtMillis[VideoMetric.SOC])
+        assertEquals(receiptMillis - 1_990L, first.sampledAtMillis[VideoMetric.SPEED])
+        assertEquals(receiptMillis, first.sampledAtMillis[VideoMetric.SOC])
 
         // A BMS-only emission advances receipt/frame time and the BMS timestamp,
         // while the controller timestamp remains unchanged. Its absolute expiry
@@ -375,6 +377,8 @@ class VideoTelemetryMapperTest {
         )
 
         assertEquals(first.expiresAtMillis[VideoMetric.SPEED], next.expiresAtMillis[VideoMetric.SPEED])
+        assertEquals(first.sampledAtMillis[VideoMetric.SPEED], next.sampledAtMillis[VideoMetric.SPEED])
+        assertEquals(receiptMillis + 5L, next.sampledAtMillis[VideoMetric.SOC])
         assertEquals(receiptMillis + 5L + 2_000L, next.expiresAtMillis[VideoMetric.SOC])
     }
 

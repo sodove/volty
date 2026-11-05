@@ -294,6 +294,7 @@ internal fun VideoCameraScreen(
                     state, audio,
                     onQuality = camera::setQuality,
                     onFrameRate = camera::setFrameRate,
+                    onStabilization = camera::setStabilization,
                     onAudio = { enabled ->
                         if (!enabled) audio = false else if (granted(Manifest.permission.RECORD_AUDIO)) audio = true
                         else audioRequest.launch(Manifest.permission.RECORD_AUDIO)

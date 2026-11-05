@@ -433,6 +433,7 @@ internal fun VideoQualitySheet(
     audio: Boolean,
     onQuality: (Quality) -> Unit,
     onFrameRate: (Int) -> Unit,
+    onStabilization: (VideoStabilizationMode) -> Unit,
     onAudio: (Boolean) -> Unit,
     onSegments: (Int) -> Unit,
     onDismiss: () -> Unit,
@@ -443,6 +444,16 @@ internal fun VideoQualitySheet(
         if (state.frameRateChoices.isNotEmpty()) {
             SheetLabel(stringResource(Res.string.video_frame_rate))
             SheetChoices(state.frameRateChoices, state.targetFrameRate, { "$it FPS" }, onFrameRate)
+        }
+        if (state.stabilizationModes.size > 1) {
+            SheetLabel(stringResource(Res.string.video_stabilization_mode))
+            SheetChoices(state.stabilizationModes, state.stabilizationMode, { mode ->
+                stringResource(when (mode) {
+                    VideoStabilizationMode.OFF -> Res.string.video_stabilization_off
+                    VideoStabilizationMode.VIDEO -> Res.string.video_stabilization_video
+                    VideoStabilizationMode.PREVIEW -> Res.string.video_stabilization_preview
+                })
+            }, onStabilization)
         }
         Text(stringResource(when {
             !state.stabilizationAvailable -> Res.string.video_stabilization_unavailable

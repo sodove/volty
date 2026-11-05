@@ -73,6 +73,8 @@ internal data class VideoCameraState(
     /** Requested fixed session rate; [frameRate] remains a measurement, never this setting. */
     val targetFrameRate: Int? = null,
     val stabilizationAvailable: Boolean = false,
+    val stabilizationModes: List<VideoStabilizationMode> = emptyList(),
+    val stabilizationMode: VideoStabilizationMode = VideoStabilizationMode.OFF,
     /** Camera2's reported mode, not an inference from the request or device model. */
     val stabilizationActive: Boolean? = null,
     /** The current file's size and length so far, for the time-left estimate. */
@@ -101,7 +103,7 @@ internal class VideoCameraController(private val context: Context, private val o
     private var capture: VideoCapture<Recorder>? = null
     private var recording: Recording? = null
     private var current: Segment? = null
-    private var effects: List<OverlayEffect> = emptyList()
+    @Volatile private var bufferedOverlay: BufferedVideoOverlay? = null
     private var view: PreviewView? = null
     // The file's overlay has its own GL thread. The preview's is drawn in the view tree (see [previewInput]).
     private val overlayThread = HandlerThread("RideVideoOverlay").apply { start() }
@@ -111,6 +113,8 @@ internal class VideoCameraController(private val context: Context, private val o
     // The preview overlay's own trackers, main thread only: they must not share state with the GL thread's.
     private val previewScales = OverlayScaleTracker()
     private val previewTrips = VideoTripTracker()
+    private val previewClock = VideoPresentationClock()
+    private var previewVehicleId: String? = null
     private var storageStopRequested = false
     /** True while the editor takes a still, so the frame it gets has no old overlay burned into it. */
     @Volatile var overlayHidden = false
@@ -125,9 +129,10 @@ internal class VideoCameraController(private val context: Context, private val o
     /** Localized words and units; set from the screen, which owns the resources. */
     @Volatile var strings: VideoOverlayStrings = VideoOverlayStrings()
     @Volatile var unitSystem: UnitSystem = UnitSystem.METRIC
-    private var disposed = false
-    private var generation = 0
+    @Volatile private var disposed = false
+    @Volatile private var generation = 0
     private var preferredFrameRate = 60
+    private var preferredStabilization: VideoStabilizationMode? = null
     private val finalization = VideoFinalizationGate(requestStop = ::stop, release = ::releaseResources)
     private val sessionLifecycle = VideoCameraSessionLifecycle(
         busy = { finalization.hasPendingRecordings },
@@ -154,6 +159,10 @@ internal class VideoCameraController(private val context: Context, private val o
     }
 
     fun offer(snapshot: VideoSnapshot?) = synchronized(timeline) {
+        if (previewVehicleId != snapshot?.vehicleId) {
+            previewVehicleId = snapshot?.vehicleId
+            previewClock.reset()
+        }
         if (snapshot == null) timeline.clear() else timeline.offer(snapshot)
     }
 
@@ -212,6 +221,12 @@ internal class VideoCameraController(private val context: Context, private val o
     fun setFrameRate(fps: Int) {
         if (!canEditVideoOverlay(state.value.phase) || fps !in state.value.frameRateChoices) return
         preferredFrameRate = fps
+        bind()
+    }
+
+    fun setStabilization(mode: VideoStabilizationMode) {
+        if (!canEditVideoOverlay(state.value.phase) || mode !in state.value.stabilizationModes) return
+        preferredStabilization = mode
         bind()
     }
 
@@ -290,9 +305,7 @@ internal class VideoCameraController(private val context: Context, private val o
     private inner class OverlayPipeline(
         private val recorded: Boolean,
         private val renderer: VideoOverlayRenderer,
-        realtime: Boolean,
     ) {
-        private val clock = VideoFrameClock(realtime)
         private val gate = OverlayDrawGate()
         private val scales = OverlayScaleTracker()
         private val trips = VideoTripTracker()
@@ -309,24 +322,22 @@ internal class VideoCameraController(private val context: Context, private val o
          * recording, so nothing in here may throw. Returning true even after a failure keeps the frame flowing to
          * the encoder (false would DROP it): it just carries the previous overlay or none.
          */
-        fun onDraw(frame: Frame): Boolean {
-            val drawn = guard.attempt { draw(frame) }
+        fun onDraw(frame: Frame, time: Long, availableAtMillis: Long, clockMismatch: Boolean): Boolean {
+            val drawn = guard.attempt { draw(frame, time, availableAtMillis, clockMismatch) }
             if (!drawn) gate.invalidate()
             return true
         }
 
-        private fun draw(frame: Frame) {
+        private fun draw(frame: Frame, time: Long, availableAtMillis: Long, clockMismatch: Boolean) {
             if (recorded) meter.onFrame(frame.timestampNanos)?.let { rate ->
                 if (rate != state.value.frameRate) mutableState.update { it.copy(frameRate = rate) }
             }
-            val now = SystemClock.elapsedRealtime()
-            val time = clock.frameMillis(frame.timestampNanos, now)
-            if (clock.timebaseMismatch && !clockReported) {
+            if (clockMismatch && !clockReported) {
                 clockReported = true
                 Log.w(TAG, "Camera claims a REALTIME timebase but its frames disagree; estimating the offset instead")
                 mutableState.update { it.copy(clockMismatch = true) }
             }
-            val (snapshot, values) = synchronized(timeline) { timeline.sample(time) to timeline.interpolatedValues(time) }
+            val (snapshot, values) = synchronized(timeline) { timeline.sample(time) to timeline.interpolatedValuesAt(time, availableAtMillis) }
             if (overlayHidden) {
                 renderer.clear(frame.overlayCanvas)
                 gate.invalidate()
@@ -381,25 +392,32 @@ internal class VideoCameraController(private val context: Context, private val o
             require(qualities.isNotEmpty()) { "No supported video quality" }
             val quality = state.value.quality.takeIf { it in qualities } ?: qualities.first()
             cameraProvider.unbind(*listOfNotNull(preview, capture).toTypedArray())
-            effects.forEach { it.close() }
+            bufferedOverlay?.close()
+            bufferedOverlay = null
             val realtime = Camera2CameraInfo.from(info).getCameraCharacteristic(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE) ==
                 CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE_REALTIME
             val onError = { error: Throwable ->
                 ContextCompat.getMainExecutor(context).execute { if (token == generation && !disposed) failed(error) }
             }
-            // A new effect has a new, empty overlay surface: its own gate and guard, never the previous bind's.
-            val videoEffect = OverlayEffect(CameraEffect.VIDEO_CAPTURE, 0, handler, onError)
-            val videoPipeline = OverlayPipeline(recorded = true, renderer = videoRenderer, realtime = realtime)
-            videoEffect.setOnDrawListener(videoPipeline::onDraw)
-            effects = listOf(videoEffect)
+            val videoPipeline = OverlayPipeline(recorded = true, renderer = videoRenderer)
             val display = displayRotation()
             val previewBuilder = Preview.Builder().setTargetRotation(display).setTargetAspectRatio(AspectRatio.RATIO_16_9)
             val previewStabilization = Preview.getPreviewCapabilities(info).isStabilizationSupported
+            val stabilizationMode = selectVideoStabilizationMode(preferredStabilization,
+                capabilities.isStabilizationSupported, previewStabilization)
             // Leave the other use case UNSPECIFIED: explicitly setting it OFF disables stabilization for both.
-            if (previewStabilization) previewBuilder.setPreviewStabilizationEnabled(true)
+            if (stabilizationMode == VideoStabilizationMode.PREVIEW) previewBuilder.setPreviewStabilizationEnabled(true)
+            if (stabilizationMode == VideoStabilizationMode.OFF) previewBuilder.setPreviewStabilizationEnabled(false)
             Camera2Interop.Extender(previewBuilder).setSessionCaptureCallback(object : CameraCaptureSession.CaptureCallback() {
+                private var previousMode: Int? = null
                 override fun onCaptureCompleted(session: CameraCaptureSession, request: CaptureRequest, result: TotalCaptureResult) {
+                    if (token != generation || disposed) return
+                    result.get(CaptureResult.SENSOR_TIMESTAMP)?.let { bufferedOverlay?.captured(it, SystemClock.elapsedRealtime()) }
                     val mode = result.get(CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE)
+                    if (mode != previousMode) {
+                        Log.i(TAG, "Stabilization requested=$stabilizationMode actual=$mode ois=${result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)} fps=${result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)} crop=${result.get(CaptureResult.SCALER_CROP_REGION)}")
+                        previousMode = mode
+                    }
                     val active = mode?.let { it != CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE_OFF }
                     if (token != generation || disposed || (state.value.ready && state.value.stabilizationActive == active)) return
                     ContextCompat.getMainExecutor(context).execute {
@@ -416,16 +434,34 @@ internal class VideoCameraController(private val context: Context, private val o
             val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(quality)).build()
             val captureBuilder = VideoCapture.Builder(recorder).setTargetRotation(orientation.rotation ?: display)
                 .setMirrorMode(MirrorMode.MIRROR_MODE_ON_FRONT_ONLY)
-            if (!previewStabilization && capabilities.isStabilizationSupported) captureBuilder.setVideoStabilizationEnabled(true)
+            if (stabilizationMode == VideoStabilizationMode.VIDEO) captureBuilder.setVideoStabilizationEnabled(true)
             val nextCapture = captureBuilder.build()
             preview = nextPreview
             capture = nextCapture
             // Preview uses FIT_CENTER, so the whole encoded composition is visible in either aspect ratio.
-            val session = videoCameraSession(info, nextPreview, nextCapture, videoEffect, preferredFrameRate)
-            cameraProvider.bindToLifecycle(owner, selector, session.config)
+            // Query FPS before allocating GPU buffers; using 60-frame depth at 30 FPS doubles latency/memory.
+            val probeEffect = OverlayEffect(CameraEffect.VIDEO_CAPTURE, 0, handler, onError)
+            val session = try { videoCameraSession(info, nextPreview, nextCapture, probeEffect, preferredFrameRate) }
+                finally { probeEffect.close() }
+            val height = videoQualityHeight(quality)
+            val depth = videoFrameBufferDepth(height * 16 / 9, height, session.frameRate ?: 60)
+            lateinit var nextOverlay: BufferedVideoOverlay
+            nextOverlay = BufferedVideoOverlay(depth, handler, realtime,
+                hasUpperBracket = { frameTime, available -> synchronized(timeline) {
+                    timeline.hasInterpolationBrackets(frameTime, available, preset.widgets.map { it.metric }.toSet())
+                } },
+                onError = onError,
+                onDraw = { frame, time, available -> videoPipeline.onDraw(frame, time, available, nextOverlay.clock.timebaseMismatch) },
+            )
+            bufferedOverlay = nextOverlay
+            val bufferedSession = videoCameraSession(info, nextPreview, nextCapture, nextOverlay.effect, session.frameRate ?: preferredFrameRate)
+            cameraProvider.bindToLifecycle(owner, selector, bufferedSession.config)
+            Log.i(TAG, "Camera session quality=$quality fps=${bufferedSession.frameRate} frameQueue=$depth stabilization=$stabilizationMode")
             mutableState.update { it.copy(cameraFailed = false, qualities = qualities, quality = quality,
                 frameRateChoices = session.choices, targetFrameRate = session.frameRate,
                 stabilizationAvailable = previewStabilization || capabilities.isStabilizationSupported,
+                stabilizationModes = supportedVideoStabilizationModes(capabilities.isStabilizationSupported, previewStabilization),
+                stabilizationMode = stabilizationMode,
                 canSwitch = cameraProvider.hasCamera(CameraSelector.DEFAULT_BACK_CAMERA) && cameraProvider.hasCamera(CameraSelector.DEFAULT_FRONT_CAMERA)) }
         } catch (error: Exception) { failed(error) }
     }
@@ -443,7 +479,10 @@ internal class VideoCameraController(private val context: Context, private val o
      */
     fun previewInput(width: Int, height: Int, nowMillis: Long): OverlaySceneInput? {
         if (overlayHidden || width <= 0 || height <= 0) return null
-        val (snapshot, values) = synchronized(timeline) { timeline.sample(nowMillis) to timeline.interpolatedValues(nowMillis) }
+        val (snapshot, values) = synchronized(timeline) {
+            val target = previewClock.frameMillis(nowMillis, timeline.interpolationDelayMillis())
+            timeline.sample(nowMillis) to timeline.interpolatedValues(nowMillis, (nowMillis - target).coerceAtLeast(0))
+        }
         val preset = preset
         val trip = if (overlayUsesTrip(preset)) {
             previewTrips.trip(
@@ -495,9 +534,11 @@ internal class VideoCameraController(private val context: Context, private val o
         orientation.rotation?.let { capture?.targetRotation = it }
         mutableState.update { it.copy(phase = VideoRecordingPhase.STARTING, saved = null, savedParts = 0, interrupted = false, error = null, durationSeconds = 0, recordedBytes = 0, recordedNanos = 0, stopOutcome = null, stoppedForStorage = false) }
         finalization.recordingStarted()
+        bufferedOverlay?.setRecordingActive(true)
         try {
             launchSegment()
         } catch (error: Exception) {
+            bufferedOverlay?.setRecordingActive(false)
             finalization.finalized()
             failed(error)
         }
@@ -558,26 +599,39 @@ internal class VideoCameraController(private val context: Context, private val o
      */
     private fun rotate(old: Segment) {
         rotating = true
-        old.rotatedOut = true
-        old.recording?.stop()
-        ledger.nextPart()
-        finalization.segmentStarted()
-        try {
-            launchSegment()
-        } catch (error: Exception) {
-            // The ride ends with what the old file holds; make its Finalize an ordinary end again.
-            finalization.finalized()
-            old.rotatedOut = false
-            rotating = false
-            current = old
-            failed(error)
+        flushFrames {
+            // A manual stop may have superseded this queued rotation.
+            if (current !== old || state.value.phase != VideoRecordingPhase.RECORDING || disposed) {
+                rotating = false
+                return@flushFrames
+            }
+            old.rotatedOut = true
+            old.recording?.stop()
+            ledger.nextPart()
+            finalization.segmentStarted()
+            try {
+                launchSegment()
+            } catch (error: Exception) {
+                finalization.finalized()
+                old.rotatedOut = false
+                rotating = false
+                current = old
+                failed(error)
+            }
         }
     }
 
     fun stop() {
         if (state.value.phase == VideoRecordingPhase.IDLE || state.value.phase == VideoRecordingPhase.STOPPING) return
         mutableState.update { it.copy(phase = VideoRecordingPhase.STOPPING) }
-        recording?.stop()
+        val stopping = recording
+        flushFrames { if (recording === stopping) stopping?.stop() }
+    }
+
+    private fun flushFrames(completed: () -> Unit) {
+        val overlay = bufferedOverlay
+        if (overlay == null) completed()
+        else overlay.flush { ContextCompat.getMainExecutor(context).execute(completed) }
     }
 
     fun closeScreen(onClosed: () -> Unit) {
@@ -622,6 +676,7 @@ internal class VideoCameraController(private val context: Context, private val o
 
         recording = null
         current = null
+        bufferedOverlay?.setRecordingActive(false)
         overlayRecording = false
         recordedSeconds = 0
         val forStorage = storageStopRequested
@@ -671,7 +726,8 @@ internal class VideoCameraController(private val context: Context, private val o
         preview = null
         capture = null
         // close queues GL resource disposal onto the supplied handler before quitSafely.
-        effects.forEach { it.close() }; effects = emptyList()
+        bufferedOverlay?.close(); bufferedOverlay = null
+        previewClock.reset()
     }
 
     private companion object {

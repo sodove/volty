@@ -52,6 +52,9 @@ fun videoTelemetrySnapshot(
 
     val readings = VideoMetric.entries.associateWith { VideoReading(value = null) }.toMutableMap()
     val expiries = mutableMapOf<VideoMetric, Long>()
+    val measurementTimes = mutableMapOf<VideoMetric, Long>()
+    fun sourceTime(age: Long): Long =
+        if (receivedAtMillis < Long.MIN_VALUE + age) Long.MIN_VALUE else receivedAtMillis - age
 
     fun put(
         metric: VideoMetric,
@@ -60,6 +63,7 @@ fun videoTelemetrySnapshot(
         estimated: Boolean = false,
         atCeiling: Boolean = false,
         expiryOverrideMillis: Long? = null,
+        sampleTimeOverrideMillis: Long? = null,
     ) {
         val finite = value?.takeIf { it.isFinite() }?.toDouble()
         readings[metric] = VideoReading(
@@ -71,6 +75,8 @@ fun videoTelemetrySnapshot(
             val expiry = expiryOverrideMillis
                 ?: sourceAgeMillis?.let { expiryAtMillis(receivedAtMillis, it) }
             if (expiry != null) expiries[metric] = expiry
+            val measuredAt = sampleTimeOverrideMillis ?: sourceAgeMillis?.let(::sourceTime)
+            if (measuredAt != null) measurementTimes[metric] = measuredAt
         }
     }
 
@@ -89,6 +95,7 @@ fun videoTelemetrySnapshot(
             reading = VideoReading(dutyValue, isEstimatedDuty, isEstimatedDuty && motion.dutyAtCeiling),
             receivedAtMillis = receivedAtMillis,
             sourceExpiryMillis = motionAgeMillis?.let { expiryAtMillis(receivedAtMillis, it) },
+            sourceSampleMillis = sourceTime(motionAgeMillis!!),
         )
         put(
             VideoMetric.DUTY,
@@ -97,6 +104,7 @@ fun videoTelemetrySnapshot(
             estimated = duty.reading.estimated,
             atCeiling = duty.reading.atCeiling,
             expiryOverrideMillis = duty.expiresAtMillis,
+            sampleTimeOverrideMillis = duty.sampledAtMillis,
         )
 
         put(VideoMetric.ESC_TEMPERATURE, MotionReadings.escTempC(motion), motionAgeMillis)
@@ -144,6 +152,7 @@ fun videoTelemetrySnapshot(
         readings = readings,
         demo = vehicle.isDemo,
         expiresAtMillis = expiries,
+        sampledAtMillis = measurementTimes,
     )
 }
 

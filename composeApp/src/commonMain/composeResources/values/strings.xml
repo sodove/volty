@@ -1731,6 +1731,10 @@
     <string name="db_gate_clearing_body">This can take up to a minute. If the app closes, the deletion is undone and nothing is lost.</string>
     <string name="db_gate_resetting_title">Starting with an empty database…</string>
     <string name="video_frame_rate">Frame rate</string>
+    <string name="video_stabilization_mode">Stabilization mode</string>
+    <string name="video_stabilization_off">Off</string>
+    <string name="video_stabilization_video">Video</string>
+    <string name="video_stabilization_preview">Video and preview</string>
     <string name="video_stabilization_active">Stabilization enabled by the camera</string>
     <string name="video_stabilization_unavailable">Stabilization is unavailable on this camera</string>
     <string name="video_stabilization_requested">Stabilization requested; availability depends on the recording mode</string>
