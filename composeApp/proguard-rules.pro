@@ -71,6 +71,13 @@
 -keep, allowobfuscation, allowoptimization class * extends org.kodein.type.TypeReference
 -keep, allowobfuscation, allowoptimization class * extends org.kodein.type.JVMAbstractTypeToken$Companion$WrappingTest
 -keep class com.google.android.gms.measurement.internal.** { *; }
+# Protobuf Lite resolves generated message fields by their original names.
+# Without this, Firebase Performance crashes on app start in minified releases
+# (TraceMetric.name_ / AndroidApplicationInfo.packageName_ not found).
+# Upstream: https://github.com/protocolbuffers/protobuf/blob/main/java/lite/proguard.pgcfg
+-keepclassmembers class * extends com.google.protobuf.GeneratedMessageLite {
+    <fields>;
+}
 -keepclassmembers enum * {
     public static **[] values();
     public static ** valueOf(java.lang.String);
