@@ -3,6 +3,7 @@ package ru.sodovaya.volty.video
 import android.Manifest
 import android.content.ContentValues
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.hardware.SensorManager
 import android.hardware.camera2.CameraCharacteristics
@@ -95,8 +96,18 @@ internal data class VideoCameraState(
 
 /** Main-thread camera owner; only the overlay listener runs on its dedicated GL thread. */
 @OptIn(ExperimentalCamera2Interop::class, ExperimentalSessionConfig::class)
-internal class VideoCameraController(private val context: Context, private val owner: LifecycleOwner) {
-    private val mutableState = MutableStateFlow(VideoCameraState())
+internal class VideoCameraController(
+    private val context: Context,
+    private val owner: LifecycleOwner,
+    private val settings: SharedPreferences,
+) {
+    private var preferredQuality = when (settings.getInt(QUALITY_KEY, 1080)) {
+        2160 -> Quality.UHD
+        720 -> Quality.HD
+        480 -> Quality.SD
+        else -> Quality.FHD
+    }
+    private val mutableState = MutableStateFlow(VideoCameraState(quality = preferredQuality))
     val state = mutableState.asStateFlow()
     private var provider: ProcessCameraProvider? = null
     private var preview: Preview? = null
@@ -122,7 +133,7 @@ internal class VideoCameraController(private val context: Context, private val o
     @Volatile private var overlayRecording = false
     private val shutterGuard = VideoShutterGuard()
     /** The microphone choice, from the screen; the volume keys need it as much as the shutter does. */
-    @Volatile var audioWanted = false
+    val audioWanted: Boolean get() = settings.getBoolean(AUDIO_KEY, false)
     @Volatile var preset: OverlayPreset = OverlayTemplates.hud()
     /** C3's time and distance: per recording by default, a user setting. */
     @Volatile var tripScope: OverlayTripScope = OverlayTripScope.RECORDING
@@ -131,8 +142,10 @@ internal class VideoCameraController(private val context: Context, private val o
     @Volatile var unitSystem: UnitSystem = UnitSystem.METRIC
     @Volatile private var disposed = false
     @Volatile private var generation = 0
-    private var preferredFrameRate = 60
-    private var preferredStabilization: VideoStabilizationMode? = null
+    private var preferredFrameRate = settings.getInt(FPS_KEY, 60).takeIf { it == 30 || it == 60 } ?: 60
+    private var preferredStabilization = VideoStabilizationMode.entries.firstOrNull {
+        it.name == settings.getString(STABILIZATION_KEY, null)
+    }
     private val finalization = VideoFinalizationGate(requestStop = ::stop, release = ::releaseResources)
     private val sessionLifecycle = VideoCameraSessionLifecycle(
         busy = { finalization.hasPendingRecordings },
@@ -214,20 +227,27 @@ internal class VideoCameraController(private val context: Context, private val o
 
     fun setQuality(quality: Quality) {
         if (!canEditVideoOverlay(state.value.phase) || quality !in state.value.qualities) return
-        mutableState.value = state.value.copy(quality = quality)
+        preferredQuality = quality
+        settings.edit().putInt(QUALITY_KEY, videoQualityHeight(quality)).apply()
         bind()
     }
 
     fun setFrameRate(fps: Int) {
         if (!canEditVideoOverlay(state.value.phase) || fps !in state.value.frameRateChoices) return
         preferredFrameRate = fps
+        settings.edit().putInt(FPS_KEY, fps).apply()
         bind()
     }
 
     fun setStabilization(mode: VideoStabilizationMode) {
         if (!canEditVideoOverlay(state.value.phase) || mode !in state.value.stabilizationModes) return
         preferredStabilization = mode
+        settings.edit().putString(STABILIZATION_KEY, mode.name).apply()
         bind()
+    }
+
+    fun setAudioWanted(enabled: Boolean) {
+        settings.edit().putBoolean(AUDIO_KEY, enabled).apply()
     }
 
     /** The display rotation changed: only the preview follows it. The file's rotation comes from the sensor. */
@@ -390,7 +410,7 @@ internal class VideoCameraController(private val context: Context, private val o
             val capabilities = Recorder.getVideoCapabilities(info)
             val qualities = capabilities.getSupportedQualities(androidx.camera.core.DynamicRange.SDR)
             require(qualities.isNotEmpty()) { "No supported video quality" }
-            val quality = state.value.quality.takeIf { it in qualities } ?: qualities.first()
+            val quality = preferredQuality.takeIf { it in qualities } ?: qualities.first()
             cameraProvider.unbind(*listOfNotNull(preview, capture).toTypedArray())
             bufferedOverlay?.close()
             bufferedOverlay = null
@@ -501,7 +521,11 @@ internal class VideoCameraController(private val context: Context, private val o
     fun shutter() {
         val action = videoShutterAction(state.value.phase, state.value.ready, blocked = overlayHidden)
         if (action == VideoShutterAction.NONE || !shutterGuard.allow(SystemClock.elapsedRealtime())) return
-        if (action == VideoShutterAction.START) start(audioWanted) else stop()
+        if (action == VideoShutterAction.START) {
+            val microphoneGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
+                PackageManager.PERMISSION_GRANTED
+            start(audioWanted && microphoneGranted)
+        } else stop()
     }
 
     /** Free bytes where the video goes, or null when that cannot be read. */
@@ -732,5 +756,9 @@ internal class VideoCameraController(private val context: Context, private val o
 
     private companion object {
         const val TAG = "RideVideo"
+        const val AUDIO_KEY = "audio_enabled"
+        const val QUALITY_KEY = "quality_height"
+        const val FPS_KEY = "preferred_fps"
+        const val STABILIZATION_KEY = "stabilization_mode"
     }
 }

@@ -38,7 +38,7 @@ class RideVideoActivity : ComponentActivity() {
             OverlayCodec.decode(store.getString("document", "").orEmpty())) { document ->
             store.edit().putString("document", OverlayCodec.encode(document)).apply()
         }
-        camera = VideoCameraController(this, this)
+        camera = VideoCameraController(this, this, store)
         camera.setSegmentMinutes(store.getInt(SEGMENT_MINUTES_KEY, VideoSegmentPolicy.DEFAULT_SEGMENT_MINUTES))
         lifecycleScope.launch {
             appPrefs.unitSystem.collect { camera.unitSystem = it }

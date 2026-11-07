@@ -107,7 +107,13 @@ internal fun VideoCameraScreen(
     fun granted(permission: String) = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
     var allowed by remember { mutableStateOf(permissions.all(::granted)) }
     var requested by remember { mutableStateOf(false) }
-    var audio by remember { mutableStateOf(false) }
+    var audioWanted by remember(camera) { mutableStateOf(camera.audioWanted) }
+    var microphoneGranted by remember { mutableStateOf(granted(Manifest.permission.RECORD_AUDIO)) }
+    val audio = audioWanted && microphoneGranted
+    fun setAudio(enabled: Boolean) {
+        audioWanted = enabled
+        camera.setAudioWanted(enabled)
+    }
     var audioDenied by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
     var previewView by remember { mutableStateOf<PreviewView?>(null) }
@@ -118,11 +124,16 @@ internal fun VideoCameraScreen(
         requested = true; allowed = permissions.all(::granted)
     }
     val audioRequest = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
-        audio = it; audioDenied = !it
+        microphoneGranted = it
+        if (it) setAudio(true)
+        audioDenied = !it
     }
     DisposableEffect(owner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) { allowed = permissions.all(::granted); if (!granted(Manifest.permission.RECORD_AUDIO)) audio = false }
+            if (event == Lifecycle.Event.ON_RESUME) {
+                allowed = permissions.all(::granted)
+                microphoneGranted = granted(Manifest.permission.RECORD_AUDIO)
+            }
         }
         owner.lifecycle.addObserver(observer)
         onDispose { owner.lifecycle.removeObserver(observer) }
@@ -152,7 +163,7 @@ internal fun VideoCameraScreen(
         }
     }
     val vehicleName = vehicle.collectAsState().value?.name.orEmpty()
-    SideEffect { camera.audioWanted = audio; onEditing(editing || opening) }
+    SideEffect { onEditing(editing || opening) }
     // One policy for the system Back and the on-screen one: a live recording is never ended by a single tap.
     fun requestBack() {
         if (pendingPreset != null) { pendingPreset = null; return }
@@ -296,7 +307,7 @@ internal fun VideoCameraScreen(
                     onFrameRate = camera::setFrameRate,
                     onStabilization = camera::setStabilization,
                     onAudio = { enabled ->
-                        if (!enabled) audio = false else if (granted(Manifest.permission.RECORD_AUDIO)) audio = true
+                        if (!enabled) setAudio(false) else if (granted(Manifest.permission.RECORD_AUDIO)) setAudio(true)
                         else audioRequest.launch(Manifest.permission.RECORD_AUDIO)
                     },
                     onSegments = onSegmentMinutes,
