@@ -29,6 +29,9 @@ class AndroidDatabaseOpener(private val context: Context) : DatabaseOpener, Data
 
     override fun targetVersion(): Int = VoltyDatabase.Schema.version.toInt()
 
+    override fun defersHistoryConversion(storedVersion: Int, targetVersion: Int): Boolean =
+        storedVersion in 1 until CONVERSION_SCHEMA_VERSION && targetVersion == CONVERSION_SCHEMA_VERSION
+
     /**
      * `PRAGMA user_version` through a separate connection, closed before the driver opens the file: asking the driver would
      * open (and migrate) it on this thread. This connection runs no `onUpgrade` and, with [VERSION_PROBE_FLAGS], writes
@@ -139,6 +142,17 @@ class AndroidDatabaseOpener(private val context: Context) : DatabaseOpener, Data
      * mid-ride and leave a live connection open beside shareUnopened(). Not deleting is still the right call. DEVICE-ONLY.
      */
     private class KeepDatabaseCallback : AndroidSqliteDriver.Callback(VoltyDatabase.Schema) {
+        override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {
+            // 27.sqm prepares the compact tables. Skip the eager conversion in 28.sqm;
+            // retain the legacy sample table as staging until the background job drains it.
+            if (oldVersion in 1 until CONVERSION_SCHEMA_VERSION && newVersion == CONVERSION_SCHEMA_VERSION) {
+                val preparationVersion = CONVERSION_SCHEMA_VERSION - 1
+                if (oldVersion < preparationVersion) super.onUpgrade(db, oldVersion, preparationVersion)
+            } else {
+                super.onUpgrade(db, oldVersion, newVersion)
+            }
+        }
+
         override fun onCorruption(db: SupportSQLiteDatabase) {
             Log.e("VoltyDb", "SQLite reported corruption; the database file is left in place")
         }

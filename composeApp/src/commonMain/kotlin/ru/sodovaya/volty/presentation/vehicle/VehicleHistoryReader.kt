@@ -24,15 +24,34 @@ data class VehicleGlance(val ride: HistoryRide, val battery: VehicleBatterySnaps
 internal val vehicleBatteryMetrics = listOf("soc_percent", "voltage_v", "cell_min_v", "cell_max_v", "cell_delta_mv", "battery_temperature_c")
 
 /** The newest non-null value of each metric in a series window, signed for display. */
-internal fun vehicleBatterySnapshot(source: HistorySource, series: List<HistorySeries>, cells: List<Double> = emptyList()): VehicleBatterySnapshot? {
+internal fun vehicleBatterySnapshot(source: HistorySource, series: List<HistorySeries>, cells: List<Double> = emptyList(),
+    cellEpochMillis: Long? = null): VehicleBatterySnapshot? {
     val latest = series.mapNotNull { s ->
         val descriptor = HistoryMetricRegistry.descriptor(s.key.metricId) ?: return@mapNotNull null
         val sample = s.samples.lastOrNull { it.value != null && it.value.isFinite() } ?: return@mapNotNull null
         Triple(VehicleReading(s.key.metricId, sample.value!! * descriptor.displayMultiplier, descriptor.unit), sample.tick.epochMillis, s.key.metricId)
     }
-    if (latest.isEmpty()) return null
-    val ordered = latest.sortedBy { vehicleBatteryMetrics.indexOf(it.third) }
+    val recordedMetrics = latest.mapTo(mutableSetOf()) { it.third }
+    val derived = if (cellEpochMillis != null && recordedMetrics.none { it in cellSummaryMetrics }) {
+        recordedCellReadings(cells).map { Triple(it, cellEpochMillis, it.metricId) }
+    } else emptyList()
+    val ordered = (latest + derived).sortedBy { vehicleBatteryMetrics.indexOf(it.third) }
+    if (ordered.isEmpty()) return null
     return VehicleBatterySnapshot(source.label, ordered.map { it.first }, ordered.maxOf { it.second }, cells, source.id)
+}
+
+private val cellSummaryMetrics = setOf("cell_min_v", "cell_max_v", "cell_delta_mv")
+
+/** Summarizes the recorded cells used by the chart. Begode can record them in separate pages. */
+private fun recordedCellReadings(cells: List<Double>): List<VehicleReading> {
+    if (cells.size < 2) return emptyList()
+    val min = cells.min()
+    val max = cells.max()
+    return listOf(
+        VehicleReading("cell_min_v", min, HistoryUnit.VOLT),
+        VehicleReading("cell_max_v", max, HistoryUnit.VOLT),
+        VehicleReading("cell_delta_mv", (max - min) * 1_000, HistoryUnit.MILLIVOLT),
+    )
 }
 
 internal fun vehicleBatteryCards(snapshots: List<VehicleBatterySnapshot>): List<VehicleBatterySnapshot> {
@@ -85,18 +104,20 @@ class VehicleHistoryReader(
         val tail = HistoryRange(maxOf(range.startEpochMillis, range.endEpochMillis - LAST_STATE_WINDOW_MILLIS), range.endEpochMillis)
         return tier(recorded.sources, batteryTiers).mapNotNull { source ->
             val series = vehicleBatteryMetrics.mapNotNull { metric -> tolerant { history.series(rideId, HistorySeriesKey(source.id, metric), tail, LAST_STATE_POINTS) } }
-            val cells = if (!withCells) emptyList() else cellVolts(rideId, source, tail)
-            vehicleBatterySnapshot(source, series, cells)
+            val cells = if (withCells) cellSamples(rideId, source, tail) else emptyList()
+            vehicleBatterySnapshot(source, series, cells.mapNotNull { it.value }, cells.maxOfOrNull { it.tick.epochMillis })
         }
     }
 
-    private suspend fun cellVolts(rideId: String, source: HistorySource, tail: HistoryRange): List<Double> {
-        val keys = tolerant { history.recordedKeys(rideId, source.id) }?.keys.orEmpty()
-            .filter { it.metricId == "cell_v" && it.cellIndex != null }.sortedBy { it.cellIndex }.take(MAX_CELLS)
-        val volts = keys.map { key -> tolerant { history.series(rideId, key, tail, LAST_STATE_POINTS) }
-            ?.samples?.lastOrNull { it.value != null }?.value }
-        // A cell row with a hole is not a cell picture: show none rather than a misleading one.
-        return if (volts.isEmpty() || volts.any { it == null }) emptyList() else volts.map { it!! }
+    private suspend fun cellSamples(rideId: String, source: HistorySource, tail: HistoryRange): List<HistorySample> {
+        val recorded = tolerant { history.recordedKeys(rideId, source.id) } ?: return emptyList()
+        val keys = recorded.keys.filter { it.metricId == "cell_v" && it.cellIndex != null }.sortedBy { it.cellIndex }
+        if (recorded.truncated || keys.size > MAX_CELLS ||
+            keys.zipWithNext().any { (a, b) -> b.cellIndex != a.cellIndex!! + 1 }) return emptyList()
+        return keys.map { key ->
+            tolerant { history.series(rideId, key, tail, LAST_STATE_POINTS) }
+                ?.samples?.lastOrNull { it.value?.isFinite() == true } ?: return emptyList()
+        }
     }
 
     /** Whole-ride totals; the paging and walking run on [computeDispatcher], not the caller's (UI) dispatcher (final review I1). */
@@ -123,3 +144,14 @@ class VehicleHistoryReader(
         const val ROUTE_PAGES = 4
     }
 }
+
+/** Begode branches share a BLE endpoint. Other packs stay distinct even when their labels match. */
+internal fun vehicleBatteryGroups(snapshots: List<VehicleBatterySnapshot>): List<List<VehicleBatterySnapshot>> =
+    snapshots.groupBy { snapshot ->
+        begodeHistoryBranch.matchEntire(snapshot.sourceId)?.groupValues?.get(1)
+            ?.let { "begode:$it" } ?: snapshot.sourceId
+    }.values.toList()
+
+private val begodeHistoryBranch = Regex(
+    "native-history-v1:17:((?:[0-9A-F]{2}:){5}[0-9A-F]{2})6:BEGODE7:BATTERY1:[01]11:CONTRIBUTOR0:0:",
+)

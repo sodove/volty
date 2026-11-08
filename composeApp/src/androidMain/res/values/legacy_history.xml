@@ -1,0 +1,7 @@
+<resources>
+    <string name="legacy_history_title">Move ride history</string>
+    <string name="legacy_history_message">Rides left to move: %1$d. You can use Volty while the move runs in the background. Older ride details become available as each ride finishes.</string>
+    <string name="legacy_history_resume">Continue</string>
+    <string name="legacy_history_later">Later</string>
+    <string name="legacy_history_hide">Hide</string>
+</resources>

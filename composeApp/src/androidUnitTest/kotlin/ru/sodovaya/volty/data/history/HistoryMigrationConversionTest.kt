@@ -186,6 +186,49 @@ class HistoryMigrationConversionTest {
         assertEquals(emptyList(), query(driver, "SELECT name FROM sqlite_master WHERE name LIKE 'HistoryConversion%'") { it.getString(0)!! })
     }
 
+    @Test fun convertingOneRideIsIsolatedIdempotentAndRollsBackAtomically() {
+        val driver = v28()
+        val origin = HistoryTick(1_700_000_000_000, 5_000, 7)
+        ride(driver, "ride-1", origin)
+        ride(driver, "ride-2", origin.copy(epochMillis = origin.epochMillis + 10_000_000))
+        listOf("ride-1", "ride-2").forEach { rideId -> source(driver, rideId, "pack") }
+        val rideOneRows = listOf(
+            V2("ride-1", 0, "pack", "voltage_v", -1, origin.epochMillis, origin.elapsedMillis, origin.clockGeneration, 93.5, null),
+            V2("ride-1", 1, "pack", "current_a", -1, origin.epochMillis + 300, origin.elapsedMillis + 300, origin.clockGeneration, null, "UNAVAILABLE"),
+            V2("ride-1", 2, "pack", "current_a", -1, origin.epochMillis + 600, origin.elapsedMillis + 600, origin.clockGeneration, null, "UNAVAILABLE"),
+        )
+        val rideTwoRows = listOf(
+            V2("ride-2", 3, "pack", "voltage_v", -1, origin.epochMillis + 10_000_000, origin.elapsedMillis, origin.clockGeneration, 88.0, null),
+        )
+        bulk(driver) { (rideOneRows + rideTwoRows).forEach { insert(driver, it) } }
+        marker(driver, "ride-1", 3, origin.elapsedMillis + 600, HistoryMarkerKind.BLE_GAP, "pack")
+        val before = v2Rows(driver)
+
+        val database = VoltyDatabaseProvider(driver).database
+        database.transaction {
+            convertLegacyRide(driver, "ride-1")
+            rollback()
+        }
+        assertEquals(before, v2Rows(driver), "a rolled-back conversion keeps every legacy sample")
+        assertEquals(0L, long(driver, "SELECT COUNT(*) FROM HistoryRideKeyV3"), "the compact key rolls back with its samples")
+        assertEquals(0L, long(driver, "SELECT COUNT(*) FROM HistorySampleV3"))
+
+        database.transaction { convertLegacyRide(driver, "ride-1") }
+        val storedRideOne = compactRows(driver).filter { it.ride == "ride-1" }
+        assertRows(expected(rideOneRows, mapOf("ride-1" to listOf(
+            HistoryMarker(HistoryTick(origin.epochMillis + 600, origin.elapsedMillis + 600, origin.clockGeneration), HistoryMarkerKind.BLE_GAP, "pack"),
+        ))), storedRideOne)
+        assertEquals(rideTwoRows, v2Rows(driver), "the neighboring legacy ride remains available for a later batch")
+        assertEquals(1L, ru.sodovaya.volty.data.db.pendingLegacyRideCount(driver))
+        assertEquals("ride-2", ru.sodovaya.volty.data.db.nextLegacyRide(driver))
+        assertEquals(1L, long(driver, "SELECT COUNT(*) FROM HistoryRideKeyV3 WHERE rideId = 'ride-1'"))
+
+        database.transaction { convertLegacyRide(driver, "ride-1") }
+        assertEquals(storedRideOne, compactRows(driver).filter { it.ride == "ride-1" }, "retrying a committed ride is a no-op")
+        assertEquals(rideTwoRows, v2Rows(driver), "a retry does not consume neighboring legacy rows")
+        assertEquals(1L, long(driver, "SELECT COUNT(*) FROM HistoryRideKeyV3 WHERE rideId = 'ride-1'"))
+    }
+
     /**
      * Every boundary of the rule at its exact edge, in random order, with every marker kind: the SQL and the Kotlin fold must
      * agree row for row, and each cause must really have split something, or the fixture proves nothing about that clause.

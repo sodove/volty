@@ -5,6 +5,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.data.db.HistoryRideV2
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
+import ru.sodovaya.volty.data.db.hasLegacyHistory
 import ru.sodovaya.volty.domain.history.*
 
 /**
@@ -20,6 +21,7 @@ class SqlDelightHistoryStore(
     provider: VoltyDatabaseProvider,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) : HistoryStore {
+    private val driver = provider.driver
     private val database = provider.database
     private val rides = database.rideHistoryV2Queries
     private val sourceQueries = database.rideHistorySourceQueries
@@ -184,6 +186,9 @@ class SqlDelightHistoryStore(
                 "Recording is referenced by favorites"
             }
             // Application foreign_keys are OFF. Explicit child deletion must work on that path too.
+            if (hasLegacyHistory(driver)) {
+                driver.execute(null, "DELETE FROM HistorySampleV2 WHERE rideId = ?", 1) { bindString(0, rideId) }
+            }
             compact.delete(rideId)
             gpsQueries.deleteGps(rideId)
             markerQueries.deleteMarkers(rideId)

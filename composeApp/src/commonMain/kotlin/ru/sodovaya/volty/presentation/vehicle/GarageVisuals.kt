@@ -58,7 +58,7 @@ internal fun SocRing(percent: Double?, size: Dp = 92.dp, stroke: Dp = 9.dp, capt
                 Offset(inset, inset), arc, style = Stroke(s, cap = StrokeCap.Round))
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(percent?.let { "${formatFixed(it.toFloat(), 0)}%" } ?: "—",
+            Text(percent?.let { "${formatFixed(it.toFloat(), 0)}%" } ?: "â€”",
                 fontSize = if (size >= 80.dp) 22.sp else 15.sp, fontWeight = FontWeight.Bold)
             caption?.let { Text(it, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
@@ -109,6 +109,7 @@ internal fun whenText(epochMillis: Long, nowMillis: Long): String {
 internal fun RouteSketch(points: List<Pair<Double, Double>>, modifier: Modifier = Modifier) {
     val line = Color(0xFF1E9E86)
     val ground = MaterialTheme.colorScheme.surfaceVariant
+    val markerOutline = MaterialTheme.colorScheme.onSurface
     Canvas(modifier.clip(RoundedCornerShape(14.dp)).background(ground)) {
         if (points.size < 2) return@Canvas
         val midLat = points.sumOf { it.first } / points.size
@@ -118,13 +119,20 @@ internal fun RouteSketch(points: List<Pair<Double, Double>>, modifier: Modifier 
         val pad = 12.dp.toPx()
         val scale = minOf((size.width - 2 * pad) / w, (size.height - 2 * pad) / h)
         val ox = (size.width - w * scale) / 2; val oy = (size.height - h * scale) / 2
+        fun point(i: Int) = androidx.compose.ui.geometry.Offset(
+            (ox + (xs[i] - xs.min()) * scale).toFloat(),
+            (size.height - (oy + (ys[i] - ys.min()) * scale)).toFloat(),
+        )
         val path = Path()
-        points.forEachIndexed { i, _ ->
-            val x = (ox + (xs[i] - xs.min()) * scale).toFloat()
-            val y = (size.height - (oy + (ys[i] - ys.min()) * scale)).toFloat()
-            if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+        points.indices.forEach { i ->
+            val p = point(i)
+            if (i == 0) path.moveTo(p.x, p.y) else path.lineTo(p.x, p.y)
         }
         drawPath(path, line, style = Stroke(3.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
+        drawCircle(markerOutline, 5.dp.toPx(), point(points.lastIndex))
+        drawCircle(line, 3.dp.toPx(), point(points.lastIndex))
+        drawCircle(markerOutline, 4.dp.toPx(), point(0))
+        drawCircle(ground, 2.dp.toPx(), point(0))
     }
 }
 

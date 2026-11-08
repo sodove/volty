@@ -16,24 +16,20 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.Style
 import org.maplibre.android.snapshotter.MapSnapshotter
-import org.maplibre.android.style.layers.CircleLayer
-import org.maplibre.android.style.layers.LineLayer
-import org.maplibre.android.style.layers.PropertyFactory.circleColor
-import org.maplibre.android.style.layers.PropertyFactory.circleRadius
-import org.maplibre.android.style.layers.PropertyFactory.circleStrokeColor
-import org.maplibre.android.style.layers.PropertyFactory.circleStrokeWidth
-import org.maplibre.android.style.layers.PropertyFactory.lineCap
-import org.maplibre.android.style.layers.PropertyFactory.lineColor
-import org.maplibre.android.style.layers.PropertyFactory.lineJoin
-import org.maplibre.android.style.layers.PropertyFactory.lineWidth
-import org.maplibre.android.style.layers.Property
-import org.maplibre.android.style.sources.GeoJsonSource
-import org.maplibre.geojson.LineString
-import org.maplibre.geojson.Point
+import ru.sodovaya.volty.data.history.historyPreviewStyle
 import ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette
 import ru.sodovaya.volty.presentation.map.MapThemePalette
 import ru.sodovaya.volty.presentation.map.themeMapStyle
@@ -58,18 +54,14 @@ internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkThem
 private suspend fun routeSnapshot(context: Context, points: List<Pair<Double, Double>>, darkTheme: Boolean,
     widthDp: Float, heightDp: Float, pixelRatio: Float, palette: MapThemePalette): ImageBitmap? {
     val bounds = routePreviewBounds(points) ?: return null
-    val line = LineString.fromLngLats(points.map { Point.fromLngLat(it.second, it.first) })
     val theme = if (darkTheme) "dark" else "bright"
     val template = context.assets.open("offline-map-styles/openfreemap-$theme.json").bufferedReader().use { it.readText() }
-        .replace("__TILEJSON_DOMAIN__", "tiles.openfreemap.org")
-    val style = Style.Builder().fromJson(themeMapStyle(template, palette, darkTheme))
-        .withSource(GeoJsonSource(SOURCE_ID, line))
-        .withLayer(LineLayer(LAYER_ID, SOURCE_ID).withProperties(lineColor(palette.accent), lineWidth(4f),
-            lineCap(Property.LINE_CAP_ROUND), lineJoin(Property.LINE_JOIN_ROUND)))
-        // Where the ride ended: a ride that stood still has no line to see, only this.
-        .withSource(GeoJsonSource(END_SOURCE_ID, Point.fromLngLat(points.last().second, points.last().first)))
-        .withLayer(CircleLayer(END_LAYER_ID, END_SOURCE_ID).withProperties(circleRadius(6f), circleColor(palette.accent),
-            circleStrokeColor(palette.halo), circleStrokeWidth(2f)))
+    // Keep the same snapshot-safe OFM style preparation as history previews. More importantly,
+    // encode route sources and layers into the style JSON itself: MapSnapshotter can throw
+    // "invalid native peer" from its constructor when Style.Builder carries programmatic sources.
+    val baseStyle = historyPreviewStyle(template) ?: return null
+    val styleJson = routeOverlayStyle(themeMapStyle(baseStyle, palette, darkTheme), points, palette)
+    val style = Style.Builder().fromJson(styleJson)
     val options = MapSnapshotter.Options(widthDp.toInt().coerceAtLeast(1), heightDp.toInt().coerceAtLeast(1))
         .withStyleBuilder(style)
         .withRegion(LatLngBounds.Builder().include(LatLng(bounds.south, bounds.west)).include(LatLng(bounds.north, bounds.east)).build())
@@ -85,5 +77,57 @@ private suspend fun routeSnapshot(context: Context, points: List<Pair<Double, Do
 
 private const val SOURCE_ID = "volty-route-preview"
 private const val LAYER_ID = "volty-route-preview-line"
+private const val START_SOURCE_ID = "volty-route-preview-start"
+private const val START_LAYER_ID = "volty-route-preview-start-dot"
 private const val END_SOURCE_ID = "volty-route-preview-end"
 private const val END_LAYER_ID = "volty-route-preview-end-dot"
+
+private fun routeOverlayStyle(styleJson: String, points: List<Pair<Double, Double>>, palette: MapThemePalette): String {
+    val style = Json.parseToJsonElement(styleJson).jsonObject
+    val sources = style.getValue("sources").jsonObject + mapOf(
+        SOURCE_ID to geoJsonSource(points.map { (lat, lon) -> lon to lat }, "LineString"),
+        START_SOURCE_ID to geoJsonSource(listOf(points.first().second to points.first().first), "Point"),
+        END_SOURCE_ID to geoJsonSource(listOf(points.last().second to points.last().first), "Point"),
+    )
+    val layers = style.getValue("layers").jsonArray + listOf(
+        buildJsonObject {
+            put("id", LAYER_ID); put("type", "line"); put("source", SOURCE_ID)
+            put("layout", buildJsonObject { put("line-cap", "round"); put("line-join", "round") })
+            put("paint", buildJsonObject { put("line-color", cssColor(palette.accent)); put("line-width", 4) })
+        },
+        endpointLayer(START_LAYER_ID, START_SOURCE_ID, palette.accentSecondary, palette.halo, 5),
+        endpointLayer(END_LAYER_ID, END_SOURCE_ID, palette.accent, palette.halo, 6),
+    )
+    return JsonObject(style + ("sources" to JsonObject(sources)) + ("layers" to JsonArray(layers))).toString()
+}
+
+private fun geoJsonSource(coordinates: List<Pair<Double, Double>>, geometryType: String): JsonObject = buildJsonObject {
+    put("type", "geojson")
+    put("data", buildJsonObject {
+        put("type", "Feature")
+        put("properties", JsonObject(emptyMap()))
+        put("geometry", buildJsonObject {
+            put("type", geometryType)
+            if (geometryType == "Point") {
+                val (lon, lat) = coordinates.single()
+                put("coordinates", buildJsonArray { add(JsonPrimitive(lon)); add(JsonPrimitive(lat)) })
+            } else {
+                put("coordinates", buildJsonArray {
+                    coordinates.forEach { (lon, lat) -> add(buildJsonArray { add(JsonPrimitive(lon)); add(JsonPrimitive(lat)) }) }
+                })
+            }
+        })
+    })
+}
+
+private fun endpointLayer(id: String, source: String, fill: Int, stroke: Int, radius: Int) = buildJsonObject {
+    put("id", id); put("type", "circle"); put("source", source)
+    put("paint", buildJsonObject {
+        put("circle-radius", radius)
+        put("circle-color", cssColor(fill))
+        put("circle-stroke-color", cssColor(stroke))
+        put("circle-stroke-width", 2)
+    })
+}
+
+private fun cssColor(argb: Int) = "#%06X".format(argb and 0x00FFFFFF)

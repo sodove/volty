@@ -1,0 +1,7 @@
+<resources>
+    <string name="legacy_history_title">Перенос истории поездок</string>
+    <string name="legacy_history_message">Осталось поездок: %1$d. Пока перенос идёт в фоне, можно пользоваться Volty. Данные старых поездок будут появляться по мере переноса.</string>
+    <string name="legacy_history_resume">Продолжить</string>
+    <string name="legacy_history_later">Позже</string>
+    <string name="legacy_history_hide">Скрыть</string>
+</resources>

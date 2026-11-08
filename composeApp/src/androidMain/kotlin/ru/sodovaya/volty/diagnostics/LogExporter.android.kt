@@ -1,9 +1,15 @@
 package ru.sodovaya.volty.diagnostics
 
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import androidx.core.content.FileProvider
+import com.google.firebase.FirebaseApp
+import com.google.firebase.crashlytics.FirebaseCrashlytics
 import java.io.File
 
 /**
@@ -75,9 +81,45 @@ actual class LogExporter(private val context: Context) {
             appendLine("app: $version")
             appendLine("device: ${Build.MANUFACTURER} ${Build.MODEL}")
             appendLine("android: ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+            appendLine(firebaseStatus())
             appendLine("===========================")
         }
     }
+
+    @Suppress("DEPRECATION")
+    private fun firebaseStatus(): String = buildString {
+        val firebaseReady = runCatching { FirebaseApp.getInstance() }.isSuccess
+        appendLine("firebase.default_app_initialized: $firebaseReady")
+
+        val manifest = runCatching {
+            context.packageManager.getApplicationInfo(context.packageName, PackageManager.GET_META_DATA).metaData
+        }.getOrNull()
+        appendLine("analytics.collection_manifest: ${manifest?.get("firebase_analytics_collection_enabled") ?: "unset"}")
+        appendLine("analytics.storage_consent_manifest: ${manifest?.get("google_analytics_default_allow_analytics_storage") ?: "unset"}")
+        appendLine("crashlytics.collection_manifest: ${manifest?.get("firebase_crashlytics_collection_enabled") ?: "unset"}")
+        val previousCrash = runCatching {
+            FirebaseCrashlytics.getInstance().didCrashOnPreviousExecution()
+        }.getOrNull()
+        appendLine("crashlytics.previous_execution_crashed: ${previousCrash ?: "unavailable"}")
+
+        val validatedNetwork = runCatching {
+            val manager = context.getSystemService(ConnectivityManager::class.java) ?: return@runCatching null
+            manager.getNetworkCapabilities(manager.activeNetwork)?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        }.getOrNull()
+        appendLine("network.android_validated_at_export: ${validatedNetwork ?: "unavailable"}")
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val lastExit = runCatching {
+                context.getSystemService(ActivityManager::class.java)
+                    ?.getHistoricalProcessExitReasons(context.packageName, 0, 1)
+                    ?.firstOrNull()
+            }.getOrNull()
+            if (lastExit != null) {
+                appendLine("android.last_process_exit_reason: ${lastExit.reason}")
+                appendLine("android.last_process_exit_timestamp_ms: ${lastExit.timestamp}")
+            }
+        }
+    }.trimEnd()
 
     @Suppress("DEPRECATION")
     private fun versionCode(info: android.content.pm.PackageInfo): Long =

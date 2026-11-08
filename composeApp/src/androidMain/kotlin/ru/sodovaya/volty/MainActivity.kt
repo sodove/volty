@@ -20,6 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import com.arkivanov.decompose.retainedComponent
 import ru.sodovaya.volty.data.db.DatabaseOpenGate
 import ru.sodovaya.volty.data.db.DatabaseOpenState
+import ru.sodovaya.volty.data.db.observeLegacyHistory
 import ru.sodovaya.volty.diagnostics.DatabaseShareOutcome
 import ru.sodovaya.volty.diagnostics.DatabaseSnapshotExporter
 import ru.sodovaya.volty.diagnostics.LogExporter
@@ -79,6 +80,9 @@ class MainActivity : ComponentActivity() {
         }
         keepScreenOnWhileMigrating()
         attachRootWhenDatabaseReady()
+        if (savedInstanceState == null) {
+            observeLegacyHistory(databaseGate, getKoin().get())
+        }
 
         // MapLibre's native surface can consume the system Back event before
         // Compose's BackHandler gets a chance to see it. Keep the Activity

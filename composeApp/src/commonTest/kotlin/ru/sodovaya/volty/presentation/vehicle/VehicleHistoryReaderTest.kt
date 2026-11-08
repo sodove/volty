@@ -52,6 +52,24 @@ class VehicleHistoryReaderTest {
         assertTrue(reader.battery("r", reader.recorded(r), withCells = false).single().cells.isEmpty())
     }
 
+    @Test fun recordedCellsSupplySummaryWithoutMixingWithDirectReadings() {
+        val source = HistorySource("pack", HistorySourceKind.BATTERY, "Pack")
+        val key = HistorySeriesKey(source.id, "cell_min_v")
+        val direct = HistorySeries(key, listOf(HistorySample(HistoryTick(100, 100, 1), key, 3.95)), emptyList(), false)
+        val snapshot = assertNotNull(vehicleBatterySnapshot(source, emptyList(), listOf(4.0, 4.02), 200))
+        assertEquals(4.0, snapshot.value("cell_min_v"))
+        assertEquals(4.02, snapshot.value("cell_max_v"))
+        assertEquals(20.0, assertNotNull(snapshot.value("cell_delta_mv")), 1e-6)
+        assertNull(snapshot.value("voltage_v"))
+        assertNull(snapshot.value("battery_temperature_c"))
+
+        val reported = assertNotNull(vehicleBatterySnapshot(source, listOf(direct), listOf(4.0, 4.02), 200))
+        assertEquals(3.95, reported.value("cell_min_v"))
+        assertNull(reported.value("cell_max_v"))
+        assertNull(reported.value("cell_delta_mv"))
+        assertNull(vehicleBatterySnapshot(source, emptyList(), listOf(4.0), 200))
+    }
+
     @Test fun sameLabelPacksRetainDistinctSourceIds() = runTest {
         val repo = Repo(emptyList())
         val reader = VehicleHistoryReader(repo, tick)
@@ -60,6 +78,15 @@ class VehicleHistoryReaderTest {
         val snapshots = reader.battery("ride", recorded, withCells = false)
         assertEquals(listOf("GotWay_75042", "GotWay_75042"), snapshots.map { it.label })
         assertEquals(listOf("pack-a", "pack-b"), snapshots.map { it.sourceId })
+    }
+
+    @Test fun begodeBranchesGroupByEndpointAndNeverByLabel() {
+        fun branch(address: String, index: Int) = "native-history-v1:17:${address}6:BEGODE7:BATTERY1:${index}11:CONTRIBUTOR0:0:"
+        val ids = listOf(branch("AA:BB:CC:DD:EE:FF", 0), branch("AA:BB:CC:DD:EE:FF", 1),
+            branch("AA:BB:CC:DD:EE:00", 0), "standalone-pack")
+        val snapshots = ids.map { VehicleBatterySnapshot("GotWay_75042", emptyList(), 0, sourceId = it) }
+        assertEquals(listOf(ids.take(2), listOf(ids[2]), listOf(ids[3])),
+            vehicleBatteryGroups(snapshots).map { group -> group.map { it.sourceId } })
     }
 
     @Test fun routeShapeKeepsBothEndsWithinTheBudget() {

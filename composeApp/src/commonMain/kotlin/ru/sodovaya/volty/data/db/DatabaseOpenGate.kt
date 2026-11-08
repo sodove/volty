@@ -85,6 +85,7 @@ interface DatabaseOpener {
      */
     fun storedVersion(): Int
     fun targetVersion(): Int
+    fun defersHistoryConversion(storedVersion: Int, targetVersion: Int): Boolean = false
     /** Size of the database and its WAL, asked only after [storedVersion] has rolled back any hot journal. */
     fun databaseBytes(): Long
     fun freeBytes(): Long
@@ -187,7 +188,7 @@ class DatabaseOpenGate(
             val stored = opener.storedVersion()
             val target = opener.targetVersion()
             log("open attempt: stored=$stored target=$target", null)
-            if (migrationNotice(stored, target) != null) {
+            if (migrationNotice(stored, target) != null && !opener.defersHistoryConversion(stored, target)) {
                 val bytes = opener.databaseBytes()
                 required = migrationRequiredFreeBytes(bytes)
                 val free = opener.freeBytes()

@@ -24,7 +24,6 @@ import kotlin.time.ExperimentalTime
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.history.HistoryRide
 import ru.sodovaya.volty.domain.history.HistoryUnit
-import ru.sodovaya.volty.presentation.history.HistoryPreviewAttribution
 import ru.sodovaya.volty.presentation.history.HistoryTotal
 import ru.sodovaya.volty.presentation.history.HistoryTotalKind
 import ru.sodovaya.volty.presentation.history.historyUnitText
@@ -38,6 +37,7 @@ import volty.composeapp.generated.resources.*
 fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
     val state by component.state.collectAsState()
     val now = remember { Clock.System.now().toEpochMilliseconds() }
+    val batteryGroups = remember(state.battery) { vehicleBatteryGroups(state.battery) }
     val asOf = state.battery.maxOfOrNull { it.atEpochMillis } ?: state.lastRide?.ended?.epochMillis
     Scaffold(
         topBar = {
@@ -70,8 +70,8 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             if (state.error) item { Text(stringResource(Res.string.vehicle_overview_error), color = MaterialTheme.colorScheme.error) }
-            items(state.battery, key = { "battery-" + it.sourceId }) { snapshot ->
-                BatteryCard(snapshot, showLabel = state.battery.size > 1)
+            items(batteryGroups, key = { "battery-" + it.first().sourceId }) { group ->
+                BatteryCard(group, showLabel = batteryGroups.size > 1)
             }
             state.lastRide?.let { ride ->
                 item { SectionLabel(stringResource(Res.string.vehicle_overview_last_ride, whenText(ride.started.epochMillis, now))) }
@@ -80,8 +80,6 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
                         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                             if (state.lastRoute.size >= 2) {
                                 RouteMapPreview(state.lastRoute, LocalVoltyDarkTheme.current, Modifier.fillMaxWidth().height(160.dp))
-                                // The snapshot hides MapLibre's own logo, so the licence-required credit is drawn here.
-                                HistoryPreviewAttribution()
                             }
                             if (state.lastTotals.isNotEmpty()) TotalsTiles(state.lastTotals)
                         }
@@ -113,13 +111,15 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun BatteryCard(snapshot: VehicleBatterySnapshot, showLabel: Boolean) {
+private fun BatteryCard(group: List<VehicleBatterySnapshot>, showLabel: Boolean) {
+    val snapshot = group.first()
+    val sharedReadings = snapshot.readings.filter { reading -> group.all { reading in it.readings } }
     ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (showLabel) Text(snapshot.label, fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                SocRing(snapshot.value("soc_percent"), size = 104.dp, stroke = 10.dp, caption = stringResource(Res.string.garage_soc))
-                val cells = snapshot.readings.filter { it.metricId != "soc_percent" && it.metricId != "cell_delta_mv" }
+                SocRing(sharedReadings.firstOrNull { it.metricId == "soc_percent" }?.value, size = 104.dp, stroke = 10.dp, caption = stringResource(Res.string.garage_soc))
+                val cells = sharedReadings.filter { it.metricId != "soc_percent" && it.metricId != "cell_delta_mv" }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     cells.chunked(2).forEach { pair ->
                         Row { pair.forEach { StatCell(readingLabel(it.metricId), readingText(it), Modifier.weight(1f)) }
@@ -127,16 +127,31 @@ private fun BatteryCard(snapshot: VehicleBatterySnapshot, showLabel: Boolean) {
                     }
                 }
             }
-            val delta = snapshot.value("cell_delta_mv")
-            if (snapshot.cells.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                CellBars(snapshot.cells, Modifier.fillMaxWidth().height(38.dp))
-                delta?.let { Text(stringResource(Res.string.vehicle_overview_cells,
-                    "${formatFixed(it.toFloat(), 0)} ${stringResource(Res.string.history_unit_millivolt)}"),
-                    fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            } else delta?.let {
-                StatCell(stringResource(Res.string.vehicle_reading_cell_delta), "${formatFixed(it.toFloat(), 0)} ${stringResource(Res.string.history_unit_millivolt)}")
+            group.forEachIndexed { index, branch ->
+                if (group.size > 1) {
+                    Text(stringResource(Res.string.branch_label_n, index + 1), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    val specific = branch.readings.filterNot { it in sharedReadings || it.metricId == "cell_delta_mv" }
+                    if (specific.isNotEmpty()) Row {
+                        specific.forEach { StatCell(readingLabel(it.metricId), readingText(it), Modifier.weight(1f)) }
+                    }
+                }
+                BatteryCells(branch)
             }
         }
+    }
+}
+
+@Composable
+private fun BatteryCells(snapshot: VehicleBatterySnapshot) {
+    val delta = snapshot.value("cell_delta_mv")
+    if (snapshot.cells.isNotEmpty()) Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        CellBars(snapshot.cells, Modifier.fillMaxWidth().height(38.dp))
+        delta?.let { Text(stringResource(Res.string.vehicle_overview_cells,
+            "${formatFixed(it.toFloat(), 0)} ${stringResource(Res.string.history_unit_millivolt)}"),
+            fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    } else delta?.let {
+        StatCell(stringResource(Res.string.vehicle_reading_cell_delta), "${formatFixed(it.toFloat(), 0)} ${stringResource(Res.string.history_unit_millivolt)}")
     }
 }
 
