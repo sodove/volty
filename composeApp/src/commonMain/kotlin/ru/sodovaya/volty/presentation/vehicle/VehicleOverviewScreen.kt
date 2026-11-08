@@ -70,7 +70,7 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (state.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             if (state.error) item { Text(stringResource(Res.string.vehicle_overview_error), color = MaterialTheme.colorScheme.error) }
-            items(state.battery, key = { "battery-" + it.label }) { snapshot ->
+            items(state.battery, key = { "battery-" + it.sourceId }) { snapshot ->
                 BatteryCard(snapshot, showLabel = state.battery.size > 1)
             }
             state.lastRide?.let { ride ->

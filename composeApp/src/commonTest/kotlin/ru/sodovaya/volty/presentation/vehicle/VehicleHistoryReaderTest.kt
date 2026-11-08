@@ -52,6 +52,16 @@ class VehicleHistoryReaderTest {
         assertTrue(reader.battery("r", reader.recorded(r), withCells = false).single().cells.isEmpty())
     }
 
+    @Test fun sameLabelPacksRetainDistinctSourceIds() = runTest {
+        val repo = Repo(emptyList())
+        val reader = VehicleHistoryReader(repo, tick)
+        val sources = listOf("pack-a", "pack-b").map { HistorySource(it, HistorySourceKind.BATTERY, "GotWay_75042") }
+        val recorded = VehicleHistoryReader.Recorded(sources, HistoryRange(0, 600_000))
+        val snapshots = reader.battery("ride", recorded, withCells = false)
+        assertEquals(listOf("GotWay_75042", "GotWay_75042"), snapshots.map { it.label })
+        assertEquals(listOf("pack-a", "pack-b"), snapshots.map { it.sourceId })
+    }
+
     @Test fun routeShapeKeepsBothEndsWithinTheBudget() {
         val fixes = (0 until 1000).map { HistoryGpsFix(HistoryTick(it * 1000L, it * 1000L, 1), 55.0 + it * 1e-4, 37.0, 5.0, null) }
         val shape = vehicleRouteShape(fixes, 50)
@@ -61,7 +71,7 @@ class VehicleHistoryReaderTest {
 
     @Test fun aSecondViewOfTheSameBatteryWithoutChargeIsHidden() {
         fun snap(label: String, soc: Double?) = VehicleBatterySnapshot(label, listOfNotNull(
-            soc?.let { VehicleReading("soc_percent", it, HistoryUnit.PERCENT) }, VehicleReading("battery_temperature_c", 19.0, HistoryUnit.CELSIUS)), 0)
+            soc?.let { VehicleReading("soc_percent", it, HistoryUnit.PERCENT) }, VehicleReading("battery_temperature_c", 19.0, HistoryUnit.CELSIUS)), 0, sourceId = label)
         assertEquals(listOf("wheel"), vehicleBatteryCards(listOf(snap("wheel", 94.0), snap("bms", null))).map { it.label })
         assertEquals(listOf("a", "b"), vehicleBatteryCards(listOf(snap("a", 50.0), snap("b", 60.0))).map { it.label }, "two charged packs are two batteries")
         assertEquals(listOf("x"), vehicleBatteryCards(listOf(snap("x", null), snap("y", null))).map { it.label }, "no charge anywhere: one card, not none")

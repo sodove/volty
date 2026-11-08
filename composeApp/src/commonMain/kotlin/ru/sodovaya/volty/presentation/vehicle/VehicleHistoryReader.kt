@@ -12,7 +12,7 @@ data class VehicleReading(val metricId: String, val value: Double, val unit: His
 
 /** A pack's state at the end of a recorded ride. [cells] are per-cell volts in cell order, empty when not recorded. */
 data class VehicleBatterySnapshot(val label: String, val readings: List<VehicleReading>, val atEpochMillis: Long,
-    val cells: List<Double> = emptyList()) {
+    val cells: List<Double> = emptyList(), val sourceId: String) {
     fun value(metricId: String): Double? = readings.firstOrNull { it.metricId == metricId }?.value
 }
 
@@ -24,7 +24,7 @@ data class VehicleGlance(val ride: HistoryRide, val battery: VehicleBatterySnaps
 internal val vehicleBatteryMetrics = listOf("soc_percent", "voltage_v", "cell_min_v", "cell_max_v", "cell_delta_mv", "battery_temperature_c")
 
 /** The newest non-null value of each metric in a series window, signed for display. */
-internal fun vehicleBatterySnapshot(label: String, series: List<HistorySeries>, cells: List<Double> = emptyList()): VehicleBatterySnapshot? {
+internal fun vehicleBatterySnapshot(source: HistorySource, series: List<HistorySeries>, cells: List<Double> = emptyList()): VehicleBatterySnapshot? {
     val latest = series.mapNotNull { s ->
         val descriptor = HistoryMetricRegistry.descriptor(s.key.metricId) ?: return@mapNotNull null
         val sample = s.samples.lastOrNull { it.value != null && it.value.isFinite() } ?: return@mapNotNull null
@@ -32,7 +32,7 @@ internal fun vehicleBatterySnapshot(label: String, series: List<HistorySeries>, 
     }
     if (latest.isEmpty()) return null
     val ordered = latest.sortedBy { vehicleBatteryMetrics.indexOf(it.third) }
-    return VehicleBatterySnapshot(label, ordered.map { it.first }, ordered.maxOf { it.second }, cells)
+    return VehicleBatterySnapshot(source.label, ordered.map { it.first }, ordered.maxOf { it.second }, cells, source.id)
 }
 
 internal fun vehicleBatteryCards(snapshots: List<VehicleBatterySnapshot>): List<VehicleBatterySnapshot> {
@@ -86,7 +86,7 @@ class VehicleHistoryReader(
         return tier(recorded.sources, batteryTiers).mapNotNull { source ->
             val series = vehicleBatteryMetrics.mapNotNull { metric -> tolerant { history.series(rideId, HistorySeriesKey(source.id, metric), tail, LAST_STATE_POINTS) } }
             val cells = if (!withCells) emptyList() else cellVolts(rideId, source, tail)
-            vehicleBatterySnapshot(source.label, series, cells)
+            vehicleBatterySnapshot(source, series, cells)
         }
     }
 
