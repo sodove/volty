@@ -2,49 +2,68 @@ package ru.sodovaya.volty.video
 
 import android.opengl.EGL14
 import android.opengl.EGLConfig
+import android.opengl.EGLContext
+import android.opengl.EGLDisplay
 import android.opengl.EGLExt
 import android.opengl.EGLSurface
 import android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES
 import android.opengl.GLES20.*
+import android.opengl.GLES30
 import android.view.Surface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
-/** Owns the camera copy and encoder draw in one EGL context on the effect thread. */
-internal class GlCameraSurface : AutoCloseable {
+/** The capture context owns the display. Its shared context draws to the encoder on another thread. */
+internal class GlCameraSurface(private val shared: GlCameraSurface? = null) : AutoCloseable {
     data class Target(val texture: Int, val framebuffer: Int)
     data class Window(val surface: EGLSurface, val width: Int, val height: Int)
 
-    private val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+    private val display: EGLDisplay = shared?.display ?: EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
     private val config: EGLConfig
-    private val context: android.opengl.EGLContext
+    private val context: EGLContext
     private val idle: EGLSurface
-    private val copyProgram: TextureProgram
-    private val outputProgram: TextureProgram
+    private val program: TextureProgram
     private val quad = ByteBuffer.allocateDirect(16 * Float.SIZE_BYTES).order(ByteOrder.nativeOrder())
         .asFloatBuffer().apply { put(floatArrayOf(-1f, -1f, 0f, 0f, 1f, -1f, 1f, 0f, -1f, 1f, 0f, 1f, 1f, 1f, 1f, 1f)); flip() }
     private val identity = FloatArray(16).also { android.opengl.Matrix.setIdentityM(it, 0) }
 
     init {
-        check(EGL14.eglInitialize(display, null, 0, null, 0))
+        if (shared == null) check(EGL14.eglInitialize(display, null, 0, null, 0))
+        var newContext = EGL14.EGL_NO_CONTEXT
+        var newIdle = EGL14.EGL_NO_SURFACE
+        try {
+            config = shared?.config ?: chooseConfig()
+            newContext = EGL14.eglCreateContext(display, config, shared?.context ?: EGL14.EGL_NO_CONTEXT,
+                intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 3, EGL14.EGL_NONE), 0)
+            check(newContext != EGL14.EGL_NO_CONTEXT) { "Cannot create ride video GLES3 context" }
+            newIdle = EGL14.eglCreatePbufferSurface(display, config,
+                intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE), 0)
+            check(newIdle != EGL14.EGL_NO_SURFACE)
+            context = newContext
+            idle = newIdle
+            makeIdle()
+            program = TextureProgram(external = shared == null)
+        } catch (error: RuntimeException) {
+            if (newContext != EGL14.EGL_NO_CONTEXT && EGL14.eglGetCurrentContext() == newContext) {
+                EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+            }
+            if (newIdle != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(display, newIdle)
+            if (newContext != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(display, newContext)
+            if (shared == null) EGL14.eglTerminate(display)
+            throw error
+        }
+    }
+
+    private fun chooseConfig(): EGLConfig {
         val configs = arrayOfNulls<EGLConfig>(1)
         val count = IntArray(1)
         check(EGL14.eglChooseConfig(display, intArrayOf(
-            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+            EGL14.EGL_RENDERABLE_TYPE, EGLExt.EGL_OPENGL_ES3_BIT_KHR,
             EGL14.EGL_SURFACE_TYPE, EGL14.EGL_WINDOW_BIT or EGL14.EGL_PBUFFER_BIT,
             EGL14.EGL_RED_SIZE, 8, EGL14.EGL_GREEN_SIZE, 8, EGL14.EGL_BLUE_SIZE, 8,
             EGL_RECORDABLE_ANDROID, 1, EGL14.EGL_NONE,
-        ), 0, configs, 0, 1, count, 0) && count[0] == 1)
-        config = checkNotNull(configs[0])
-        context = EGL14.eglCreateContext(display, config, EGL14.EGL_NO_CONTEXT,
-            intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE), 0)
-        check(context != EGL14.EGL_NO_CONTEXT)
-        idle = EGL14.eglCreatePbufferSurface(display, config,
-            intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE), 0)
-        check(idle != EGL14.EGL_NO_SURFACE)
-        makeIdle()
-        copyProgram = TextureProgram(external = true)
-        outputProgram = TextureProgram(external = false)
+        ), 0, configs, 0, 1, count, 0) && count[0] == 1) { "No recordable GLES3 EGL config" }
+        return checkNotNull(configs[0])
     }
 
     fun makeIdle() = makeCurrent(idle)
@@ -108,15 +127,15 @@ internal class GlCameraSurface : AutoCloseable {
         glBindFramebuffer(GL_FRAMEBUFFER, target.framebuffer)
         glViewport(0, 0, width, height)
         glDisable(GL_BLEND)
-        draw(copyProgram, GL_TEXTURE_EXTERNAL_OES, input, identity)
+        draw(program, GL_TEXTURE_EXTERNAL_OES, input, identity)
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
     }
 
-    fun begin(window: Window, target: Target, transform: FloatArray) {
+    fun begin(window: Window, texture: Int, transform: FloatArray) {
         makeCurrent(window.surface)
         glViewport(0, 0, window.width, window.height)
         glDisable(GL_BLEND)
-        draw(outputProgram, GL_TEXTURE_2D, target.texture, transform)
+        draw(program, GL_TEXTURE_2D, texture, transform)
         glEnable(GL_BLEND)
         glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
     }
@@ -125,6 +144,19 @@ internal class GlCameraSurface : AutoCloseable {
         check(EGLExt.eglPresentationTimeANDROID(display, window.surface, timestampNanos)) { "Cannot stamp camera frame" }
         check(EGL14.eglSwapBuffers(display, window.surface)) { "Cannot submit camera frame" }
     }
+
+    fun fence(): Long = GLES30.glFenceSync(GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0).also {
+        check(it != 0L) { "Cannot fence ride video texture" }
+    }
+
+    fun flush() = glFlush()
+
+    fun awaitFence(fence: Long) {
+        GLES30.glWaitSync(fence, 0, GLES30.GL_TIMEOUT_IGNORED)
+        deleteFence(fence)
+    }
+
+    fun deleteFence(fence: Long) = GLES30.glDeleteSync(fence)
 
     private fun draw(program: TextureProgram, kind: Int, texture: Int, transform: FloatArray) {
         glUseProgram(program.id)
@@ -145,12 +177,15 @@ internal class GlCameraSurface : AutoCloseable {
 
     override fun close() {
         makeIdle()
-        glDeleteProgram(copyProgram.id)
-        glDeleteProgram(outputProgram.id)
-        EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
+        glDeleteProgram(program.id)
+        detach()
         EGL14.eglDestroySurface(display, idle)
         EGL14.eglDestroyContext(display, context)
-        EGL14.eglTerminate(display)
+        if (shared == null) EGL14.eglTerminate(display)
+    }
+
+    fun detach() {
+        check(EGL14.eglMakeCurrent(display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT))
     }
 
     private class TextureProgram(external: Boolean) {

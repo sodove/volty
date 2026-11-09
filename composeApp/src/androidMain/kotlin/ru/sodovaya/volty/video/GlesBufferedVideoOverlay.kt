@@ -31,10 +31,12 @@ internal class GlesBufferedVideoOverlay(
         val transform = FloatArray(16)
         var timestamp = 0L
         var frameMillis = 0L
+        var clockMismatch = false
+        var ready = 0L
+        var reusable = 0L
     }
 
     private data class Input(val textureId: Int, val texture: SurfaceTexture, val size: Size)
-    private data class Output(val handle: SurfaceOutput, val window: GlCameraSurface.Window)
 
     private val executor = Executor { work ->
         if (Looper.myLooper() == handler.looper) work.run() else handler.post(work)
@@ -47,19 +49,18 @@ internal class GlesBufferedVideoOverlay(
     private val queued = ArrayDeque<Slot>()
     private val inputTransform = FloatArray(16)
     private var input: Input? = null
-    private var output: Output? = null
+    private var output: GlesVideoOutput.Sink? = null
+    private var encoder: GlesVideoOutput? = null
     private var gl: GlCameraSurface? = null
-    private var shapes: GlHudShapes? = null
-    private var text: GlHudText? = null
+    private var depth = 0
+    private var poolGeneration = 0
     private var closed = false
     private var failed = false
     private var active = false
     private var lastAccepted = Long.MIN_VALUE
-    private var lastPresented = Long.MIN_VALUE
-    private var firstPresented = Long.MIN_VALUE
     private var admitted = 0
-    private var presented = 0
     private var ignored = 0
+    private var busyDrops = 0
 
     private fun surface(): GlCameraSurface = gl ?: GlCameraSurface().also { gl = it }
 
@@ -73,8 +74,11 @@ internal class GlesBufferedVideoOverlay(
             renderer.makeIdle()
             clearSlots(renderer)
             val size = request.resolution
-            val depth = videoFrameBufferDepth(size.width, size.height, framesPerSecond)
-            repeat(depth) { free += Slot(renderer.target(size.width, size.height)) }
+            depth = videoFrameBufferDepth(size.width, size.height, framesPerSecond)
+            // Keep the full telemetry lookahead plus a 64 MiB stall reserve, with at least one spare slot.
+            val bytesPerFrame = size.width.toLong() * size.height * 4
+            val reserve = (64L * 1024 * 1024 / bytesPerFrame).coerceIn(1, 4).toInt()
+            repeat(depth + reserve) { free += Slot(renderer.target(size.width, size.height)) }
             val textureId = renderer.inputTexture()
             val texture = SurfaceTexture(textureId).apply { setDefaultBufferSize(size.width, size.height) }
             val cameraSurface = Surface(texture)
@@ -83,15 +87,18 @@ internal class GlesBufferedVideoOverlay(
             texture.setOnFrameAvailableListener({ accept(next) }, handler)
             request.provideSurface(cameraSurface, Executor { it.run() }) {
                 // CameraX can finish this request after the effect handler has shut down.
-                texture.setOnFrameAvailableListener(null)
-                cameraSurface.release()
-                texture.release()
-                handler.post {
-                    if (input === next) input = null
-                    gl?.let { it.makeIdle(); it.deleteTexture(next.textureId) }
+                fun release() {
+                    texture.setOnFrameAvailableListener(null)
+                    cameraSurface.release()
+                    texture.release()
                 }
+                if (!handler.post {
+                    if (input === next) input = null
+                    release()
+                    gl?.let { it.makeIdle(); it.deleteTexture(next.textureId) }
+                }) release()
             }
-            Log.i(TAG, "Camera FIFO depth=$depth size=$size targetFps=$framesPerSecond")
+            Log.i(TAG, "Camera FIFO depth=$depth reserve=$reserve size=$size targetFps=$framesPerSecond")
         } catch (error: RuntimeException) {
             request.willNotProvideSurface()
             fail(error)
@@ -104,18 +111,24 @@ internal class GlesBufferedVideoOverlay(
             surfaceOutput.close()
             return
         }
+        val sink = GlesVideoOutput.Sink(surfaceOutput)
         try {
             val renderer = surface()
-            val encoder = surfaceOutput.getSurface(executor) {
-                if (output?.handle === surfaceOutput) clearOutput()
-                else surfaceOutput.close()
-            }
             clearOutput()
-            val window = renderer.window(encoder)
-            output = Output(surfaceOutput, window)
-            Log.i(TAG, "Encoder surface ${window.width}x${window.height}")
+            val worker = encoder ?: GlesVideoOutput(context, scene) { error ->
+                handler.post { if (!closed) fail(error) }
+            }.also {
+                encoder = it
+                it.setRecordingActive(active)
+            }
+            output = sink
+            val surface = surfaceOutput.getSurface(executor) {
+                // A replaced sink has already queued its close behind the encoder's last swap.
+                if (output === sink) clearOutput()
+            }
+            worker.open(sink, surface, renderer)
         } catch (error: RuntimeException) {
-            surfaceOutput.close()
+            if (output === sink) clearOutput() else if (!sink.retired) surfaceOutput.close()
             fail(error)
             throw ProcessingException()
         }
@@ -133,52 +146,52 @@ internal class GlesBufferedVideoOverlay(
                 if (active) ignored++
                 return
             }
-            if (free.isEmpty()) releaseOldest(sink, renderer)
+            lastAccepted = timestamp
+            val captureMillis = captures.remove(timestamp)
+            if (free.isEmpty()) {
+                if (active) busyDrops++
+                return
+            }
+            if (queued.size == depth) {
+                renderer.flush()
+                releaseOldest(sink, renderer)
+            }
             val slot = free.removeFirst()
+            if (slot.ready != 0L) renderer.deleteFence(slot.ready)
+            if (slot.reusable != 0L) {
+                renderer.awaitFence(slot.reusable)
+                slot.reusable = 0L
+            }
             source.texture.getTransformMatrix(inputTransform)
             sink.handle.updateTransformMatrix(slot.transform, inputTransform)
             slot.timestamp = timestamp
-            slot.frameMillis = captures.remove(timestamp) ?: clock.frameMillis(timestamp, SystemClock.elapsedRealtime())
+            slot.frameMillis = captureMillis ?: clock.frameMillis(timestamp, SystemClock.elapsedRealtime())
+            slot.clockMismatch = clock.timebaseMismatch
             renderer.copy(source.textureId, slot.target, source.size.width, source.size.height)
+            slot.ready = renderer.fence()
             queued.addLast(slot)
-            lastAccepted = timestamp
             if (active) admitted++
         } catch (error: RuntimeException) {
             fail(error)
         }
     }
 
-    private fun releaseOldest(sink: Output, renderer: GlCameraSurface) {
+    private fun releaseOldest(sink: GlesVideoOutput.Sink, renderer: GlCameraSurface) {
+        // The slot's fence covers its copy, even when newer copies are still running.
         val slot = queued.removeFirst()
-        try {
-            check(slot.timestamp > lastPresented) { "Camera FIFO attempted to reorder a frame" }
-            val begin = SystemClock.elapsedRealtimeNanos()
-            renderer.begin(sink.window, slot.target, slot.transform)
-            val width = sink.window.width
-            val height = sink.window.height
-            val started = SystemClock.elapsedRealtimeNanos()
-            val overlay = scene(width, height, slot.timestamp, slot.frameMillis, SystemClock.elapsedRealtime(), clock.timebaseMismatch)
-            val calculated = SystemClock.elapsedRealtimeNanos()
-            if (overlay != null) {
-                val shapeRenderer = shapes ?: GlHudShapes().also { shapes = it }
-                val textRenderer = text ?: GlHudText(context).also { text = it }
-                overlay.ops.forEach { op ->
-                    shapeRenderer.draw(op, width, height)
-                    textRenderer.draw(op, width, height)
+        val generation = poolGeneration
+        val frame = GlesVideoOutput.Frame(slot.target.texture, slot.transform, slot.timestamp,
+            slot.frameMillis, slot.clockMismatch, slot.ready)
+        slot.ready = 0L
+        checkNotNull(encoder).enqueue(sink, frame) { unusedReady, reusable ->
+            handler.post {
+                if (!closed) {
+                    renderer.ensureCurrent()
+                    if (unusedReady != 0L) renderer.deleteFence(unusedReady)
+                    slot.reusable = reusable
+                    if (generation == poolGeneration) free.addLast(slot) else destroySlot(renderer, slot)
                 }
             }
-            val drawn = SystemClock.elapsedRealtimeNanos()
-            renderer.present(sink.window, slot.timestamp)
-            lastPresented = slot.timestamp
-            if (active && presented == 0) firstPresented = slot.timestamp
-            if (active && (++presented and 7) == 0) {
-                val submitted = SystemClock.elapsedRealtimeNanos()
-                Log.i(TAG, "frame index=$presented timestampNs=${slot.timestamp} " +
-                    "camera_us=${(started - begin) / 1000} calc_us=${(calculated - started) / 1000} " +
-                    "draw_us=${(drawn - calculated) / 1000} submit_us=${(submitted - drawn) / 1000}")
-            }
-        } finally {
-            free.addLast(slot)
         }
     }
 
@@ -196,10 +209,10 @@ internal class GlesBufferedVideoOverlay(
             this.active = active
             if (active) {
                 admitted = queued.size
-                presented = 0
                 ignored = 0
-                firstPresented = Long.MIN_VALUE
+                busyDrops = 0
             }
+            encoder?.setRecordingActive(active)
         }
     }
 
@@ -210,15 +223,15 @@ internal class GlesBufferedVideoOverlay(
                     val renderer = gl
                     if (!closed && !failed && sink != null && renderer != null) {
                         val tail = queued.size
+                        renderer.flush()
                         while (queued.isNotEmpty()) releaseOldest(sink, renderer)
-                        Log.i(TAG, "FIFO drained tail=$tail admitted=$admitted presented=$presented ignored=$ignored " +
-                            "firstNs=$firstPresented lastNs=$lastPresented")
+                        checkNotNull(encoder).flush(tail, admitted, ignored, busyDrops, completed)
+                        return@post
                     }
                 } catch (error: RuntimeException) {
                     fail(error)
-                } finally {
-                    completed()
                 }
+                completed()
             }) completed()
     }
 
@@ -227,18 +240,23 @@ internal class GlesBufferedVideoOverlay(
         output = null
         while (queued.isNotEmpty()) free.addLast(queued.removeFirst())
         lastAccepted = Long.MIN_VALUE
-        lastPresented = Long.MIN_VALUE
-        gl?.destroy(old.window)
-        old.handle.close()
+        checkNotNull(encoder).retire(old)
     }
 
     private fun clearSlots(renderer: GlCameraSurface) {
-        queued.forEach { renderer.destroy(it.target) }
-        free.forEach { renderer.destroy(it.target) }
+        poolGeneration++
+        queued.forEach { destroySlot(renderer, it) }
+        free.forEach { destroySlot(renderer, it) }
         queued.clear()
         free.clear()
         captures.clear()
         lastAccepted = Long.MIN_VALUE
+    }
+
+    private fun destroySlot(renderer: GlCameraSurface, slot: Slot) {
+        if (slot.ready != 0L) renderer.deleteFence(slot.ready)
+        if (slot.reusable != 0L) renderer.deleteFence(slot.reusable)
+        renderer.destroy(slot.target)
     }
 
     private fun fail(error: RuntimeException) {
@@ -253,14 +271,18 @@ internal class GlesBufferedVideoOverlay(
             closed = true
             input?.texture?.setOnFrameAvailableListener(null)
             clearOutput()
-            gl?.let { renderer ->
-                renderer.makeIdle()
-                clearSlots(renderer)
-                shapes?.close()
-                text?.close()
-                renderer.close()
-            }
+            val renderer = gl
             gl = null
+            val worker = encoder
+            if (worker == null) renderer?.close() else {
+                // The capture handler may quit immediately after close. The encoder thread
+                // releases both contexts after its last queued use of the shared textures.
+                renderer?.detach()
+                worker.close { renderer?.close() }
+            }
+            free.clear()
+            queued.clear()
+            captures.clear()
         }
     }
 

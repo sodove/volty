@@ -121,7 +121,6 @@ internal class VideoCameraController(
     private val overlayThread = HandlerThread("RideVideoOverlay").apply { start() }
     private val handler = Handler(overlayThread.looper)
     private val timeline = VideoTimeline()
-    private val videoRenderer = VideoOverlayRenderer(context)
     // The preview overlay's own trackers, main thread only: they must not share state with the GL thread's.
     private val previewScales = OverlayScaleTracker()
     private val previewTrips = VideoTripTracker()
@@ -444,7 +443,8 @@ internal class VideoCameraController(
             val onError = { error: Throwable ->
                 ContextCompat.getMainExecutor(context).execute { if (token == generation && !disposed) failed(error) }
             }
-            val videoPipeline = OverlayPipeline(recorded = true, renderer = videoRenderer)
+            // A retiring GLES worker can still finish a frame while the next session binds.
+            val videoPipeline = OverlayPipeline(recorded = true, renderer = VideoOverlayRenderer(context))
             val display = displayRotation()
             val previewBuilder = Preview.Builder().setTargetRotation(display).setTargetAspectRatio(AspectRatio.RATIO_16_9)
             val previewStabilization = Preview.getPreviewCapabilities(info).isStabilizationSupported
