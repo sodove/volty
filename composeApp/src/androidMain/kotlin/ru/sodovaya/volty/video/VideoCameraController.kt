@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.video
 
 import android.Manifest
+import android.app.ActivityManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.SharedPreferences
@@ -102,6 +103,8 @@ internal class VideoCameraController(
     private val owner: LifecycleOwner,
     private val settings: SharedPreferences,
 ) {
+    private val useGlesHud = BuildConfig.GLES_RIDE_HUD &&
+        (context.getSystemService(ActivityManager::class.java)?.deviceConfigurationInfo?.reqGlEsVersion ?: 0) >= 0x0003_0000
     private var preferredQuality = when (settings.getInt(QUALITY_KEY, 1080)) {
         2160 -> Quality.UHD
         720 -> Quality.HD
@@ -300,7 +303,7 @@ internal class VideoCameraController(
         if (currentCapture.targetRotation == rotation) return
         // CameraX applies the initial rotation to the processor output. A later target rotation
         // can be written as MP4 metadata instead, which would turn the already composited HUD.
-        if (BuildConfig.GLES_RIDE_HUD) bind() else currentCapture.targetRotation = rotation
+        if (useGlesHud) bind() else currentCapture.targetRotation = rotation
     }
 
     private fun stopSensors() {
@@ -476,7 +479,7 @@ internal class VideoCameraController(
             val nextPreview = previewBuilder.build().also {
                 it.setSurfaceProvider(previewView.surfaceProvider)
             }
-            val recorder = Recorder.Builder().setQualitySelector(QualitySelector.from(quality)).build()
+            val recorder = VoltyRideRecorder.create(quality)
             val captureBuilder = VideoCapture.Builder(recorder).setTargetRotation(orientation.rotation ?: display)
                 .setMirrorMode(MirrorMode.MIRROR_MODE_ON_FRONT_ONLY)
             if (stabilizationMode == VideoStabilizationMode.VIDEO) captureBuilder.setVideoStabilizationEnabled(true)
@@ -490,7 +493,7 @@ internal class VideoCameraController(
                 finally { probeEffect.close() }
             val height = videoQualityHeight(quality)
             val depth = videoFrameBufferDepth(height * 16 / 9, height, session.frameRate ?: 60)
-            val nextOverlay = if (BuildConfig.GLES_RIDE_HUD) {
+            val nextOverlay = if (useGlesHud) {
                 GlesBufferedVideoOverlay(context, handler, session.frameRate ?: 60, realtime, onError, scene = videoPipeline::glScene)
             } else {
                 lateinit var canvasOverlay: BufferedVideoOverlay
@@ -503,7 +506,7 @@ internal class VideoCameraController(
             val bufferedSession = videoCameraSession(info, nextPreview, nextCapture, nextOverlay.effect, session.frameRate ?: preferredFrameRate)
             cameraProvider.bindToLifecycle(owner, selector, bufferedSession.config)
             Log.i(TAG, "Camera session quality=$quality fps=${bufferedSession.frameRate} frameQueue=$depth " +
-                "stabilization=$stabilizationMode gles=${BuildConfig.GLES_RIDE_HUD} rotation=${nextCapture.targetRotation} " +
+                "stabilization=$stabilizationMode gles=$useGlesHud rotation=${nextCapture.targetRotation} " +
                 "degrees=${nextCapture.resolutionInfo?.rotationDegrees}")
             mutableState.update { it.copy(cameraFailed = false, qualities = qualities, quality = quality,
                 frameRateChoices = session.choices, targetFrameRate = session.frameRate,
@@ -582,8 +585,8 @@ internal class VideoCameraController(
         ledger.reset()
         rotating = false
         rideStamp = "Volty_${SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.ROOT).format(Date())}"
-        // The file's rotation is fixed when a recording starts: take the sensor's latest word now.
-        orientation.rotation?.let { capture?.targetRotation = it }
+        // GLES bakes orientation into the output at bind time. Canvas can set MP4 rotation here.
+        if (!useGlesHud) orientation.rotation?.let { capture?.targetRotation = it }
         mutableState.update { it.copy(phase = VideoRecordingPhase.STARTING, saved = null, savedParts = 0, interrupted = false, error = null, durationSeconds = 0, recordedBytes = 0, recordedNanos = 0, stopOutcome = null, stoppedForStorage = false) }
         finalization.recordingStarted()
         bufferedOverlay?.setRecordingActive(true)
@@ -750,7 +753,7 @@ internal class VideoCameraController(
         finalization.finalized()
         if (!disposed) {
             sessionLifecycle.finalized()
-            if (BuildConfig.GLES_RIDE_HUD && sessionLifecycle.foreground) orientation.rotation?.let(::applyFileRotation)
+            if (useGlesHud && sessionLifecycle.foreground) orientation.rotation?.let(::applyFileRotation)
         }
     }
 
