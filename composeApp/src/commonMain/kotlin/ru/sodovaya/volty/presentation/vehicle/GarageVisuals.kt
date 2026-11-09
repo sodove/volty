@@ -58,7 +58,7 @@ internal fun SocRing(percent: Double?, size: Dp = 92.dp, stroke: Dp = 9.dp, capt
                 Offset(inset, inset), arc, style = Stroke(s, cap = StrokeCap.Round))
         }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(percent?.let { "${formatFixed(it.toFloat(), 0)}%" } ?: "â€”",
+            Text(percent?.let { "${formatFixed(it.toFloat(), 0)}%" } ?: "—",
                 fontSize = if (size >= 80.dp) 22.sp else 15.sp, fontWeight = FontWeight.Bold)
             caption?.let { Text(it, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }

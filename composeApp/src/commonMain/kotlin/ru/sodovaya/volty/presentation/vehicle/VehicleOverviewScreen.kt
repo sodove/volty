@@ -113,12 +113,13 @@ private fun SectionLabel(text: String) {
 @Composable
 private fun BatteryCard(group: List<VehicleBatterySnapshot>, showLabel: Boolean) {
     val snapshot = group.first()
+    val sharedCharge = sharedBatteryCharge(group)
     val sharedReadings = snapshot.readings.filter { reading -> group.all { reading in it.readings } }
     ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (showLabel) Text(snapshot.label, fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                SocRing(sharedReadings.firstOrNull { it.metricId == "soc_percent" }?.value, size = 104.dp, stroke = 10.dp, caption = stringResource(Res.string.garage_soc))
+                SocRing(sharedCharge, size = 104.dp, stroke = 10.dp, caption = stringResource(Res.string.garage_soc))
                 val cells = sharedReadings.filter { it.metricId != "soc_percent" && it.metricId != "cell_delta_mv" }
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     cells.chunked(2).forEach { pair ->
@@ -131,7 +132,10 @@ private fun BatteryCard(group: List<VehicleBatterySnapshot>, showLabel: Boolean)
                 if (group.size > 1) {
                     Text(stringResource(Res.string.branch_label_n, index + 1), style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    val specific = branch.readings.filterNot { it in sharedReadings || it.metricId == "cell_delta_mv" }
+                    val specific = branch.readings.filterNot {
+                        it in sharedReadings || it.metricId == "cell_delta_mv" ||
+                            (it.metricId == "soc_percent" && sharedCharge != null)
+                    }
                     if (specific.isNotEmpty()) Row {
                         specific.forEach { StatCell(readingLabel(it.metricId), readingText(it), Modifier.weight(1f)) }
                     }

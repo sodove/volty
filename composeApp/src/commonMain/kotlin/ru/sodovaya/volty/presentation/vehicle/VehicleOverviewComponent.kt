@@ -8,6 +8,19 @@ import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.presentation.history.HistoryTotal
+import ru.sodovaya.volty.util.formatFixed
+
+/** A shared charge is available only when every branch displays the same whole percent. */
+internal fun sharedBatteryCharge(branches: List<VehicleBatterySnapshot>): Double? {
+    val charge = branches.firstOrNull()?.value("soc_percent") ?: return null
+    if (branches.size == 1) return charge
+    val displayedCharge = formatFixed(charge.toFloat(), 0)
+    return displayedCharge.toDouble().takeIf {
+        branches.drop(1).all { branch ->
+            branch.value("soc_percent")?.let { formatFixed(it.toFloat(), 0) } == displayedCharge
+        }
+    }
+}
 
 data class VehicleOverviewState(
     val vehicle: Vehicle? = null,

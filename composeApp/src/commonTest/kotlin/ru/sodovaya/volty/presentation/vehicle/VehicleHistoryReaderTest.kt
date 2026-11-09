@@ -89,6 +89,21 @@ class VehicleHistoryReaderTest {
             vehicleBatteryGroups(snapshots).map { group -> group.map { it.sourceId } })
     }
 
+    @Test fun sharedChargeRequiresEveryBranchToShowTheSameWholePercent() {
+        fun branch(id: String, charge: Double?) = VehicleBatterySnapshot(
+            id,
+            listOfNotNull(charge?.let { VehicleReading("soc_percent", it, HistoryUnit.PERCENT) }),
+            0,
+            sourceId = id,
+        )
+
+        val first = branch("first", 73.8)
+        assertEquals(74.0, sharedBatteryCharge(listOf(first, branch("second", 74.2))))
+        assertNull(sharedBatteryCharge(listOf(first, branch("second", 74.6))))
+        assertNull(sharedBatteryCharge(listOf(first, branch("second", null))))
+        assertEquals(73.8, sharedBatteryCharge(listOf(first)))
+    }
+
     @Test fun routeShapeKeepsBothEndsWithinTheBudget() {
         val fixes = (0 until 1000).map { HistoryGpsFix(HistoryTick(it * 1000L, it * 1000L, 1), 55.0 + it * 1e-4, 37.0, 5.0, null) }
         val shape = vehicleRouteShape(fixes, 50)
