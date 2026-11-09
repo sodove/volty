@@ -95,6 +95,7 @@ abstract class VerifyProductionReleaseTask : DefaultTask() {
 
 val appVersionCode = 97
 val appVersionName = "0.7.74"
+val glesRideHud = providers.gradleProperty("voltyGlesRideHud").map { it.toBooleanStrict() }.orElse(false)
 val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
     value.toBooleanStrictOrNull()
         ?: error("voltyProductionRelease must be true or false")
@@ -328,6 +329,7 @@ android {
 
     defaultConfig {
         applicationId = "ru.sodovaya.volty"
+        buildConfigField("boolean", "GLES_RIDE_HUD", glesRideHud.get().toString())
         externalNativeBuild {
             cmake {
                 arguments += "-DRNNOISE_MODEL_DIR=${layout.buildDirectory.dir("rnnoise-model").get().asFile.invariantSeparatorsPath}"

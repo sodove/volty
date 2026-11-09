@@ -43,6 +43,7 @@ import androidx.lifecycle.LifecycleOwner
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import ru.sodovaya.volty.BuildConfig
 import ru.sodovaya.volty.domain.video.*
 import ru.sodovaya.volty.util.UnitSystem
 import java.io.File
@@ -114,7 +115,7 @@ internal class VideoCameraController(
     private var capture: VideoCapture<Recorder>? = null
     private var recording: Recording? = null
     private var current: Segment? = null
-    @Volatile private var bufferedOverlay: BufferedVideoOverlay? = null
+    @Volatile private var bufferedOverlay: RideVideoOverlay? = null
     private var view: PreviewView? = null
     // The file's overlay has its own GL thread. The preview's is drawn in the view tree (see [previewInput]).
     private val overlayThread = HandlerThread("RideVideoOverlay").apply { start() }
@@ -276,7 +277,7 @@ internal class VideoCameraController(
                 override fun onOrientationChanged(degrees: Int) {
                     val changed = orientation.onSensorDegrees(degrees) ?: return
                     // A recording keeps the rotation it started with.
-                    if (canEditVideoOverlay(state.value.phase)) capture?.targetRotation = changed
+                    if (canEditVideoOverlay(state.value.phase)) applyFileRotation(changed)
                 }
             }
             if (listener.canDetectOrientation()) listener.enable()
@@ -293,6 +294,14 @@ internal class VideoCameraController(
                 .registerDisplayListener(listener, Handler(Looper.getMainLooper()))
             displayListener = listener
         }
+    }
+
+    private fun applyFileRotation(rotation: Int) {
+        val currentCapture = capture ?: return
+        if (currentCapture.targetRotation == rotation) return
+        // CameraX applies the initial rotation to the processor output. A later target rotation
+        // can be written as MP4 metadata instead, which would turn the already composited HUD.
+        if (BuildConfig.GLES_RIDE_HUD) bind() else currentCapture.targetRotation = rotation
     }
 
     private fun stopSensors() {
@@ -349,7 +358,40 @@ internal class VideoCameraController(
         }
 
         private fun draw(frame: Frame, time: Long, availableAtMillis: Long, clockMismatch: Boolean) {
-            if (recorded) meter.onFrame(frame.timestampNanos)?.let { rate ->
+            val calculated = calculate(geometryOf(frame), frame.timestampNanos, time, availableAtMillis, clockMismatch)
+            if (calculated == null) {
+                renderer.clear(frame.overlayCanvas)
+                gate.invalidate()
+                return
+            }
+            val (scene, key) = calculated
+            // Touching the canvas costs a software raster plus a full-size upload; skip unchanged HUDs.
+            if (!gate.shouldDraw(key)) return
+            // Retraction (2026-11-05): a 15 Hz raster cap stepped both interpolated numbers and text motion.
+            val canvas = frame.overlayCanvas
+            try {
+                renderer.draw(frame, canvas, scene)
+            } catch (error: Exception) {
+                runCatching { renderer.clear(canvas) }
+                throw error
+            }
+        }
+
+        fun glScene(width: Int, height: Int, timestamp: Long, time: Long, available: Long, mismatch: Boolean): OverlayScene? {
+            val geometry = OverlayGeometry(width, height, 0, false, 0, 0, width, height)
+            var scene: OverlayScene? = null
+            guard.attempt { scene = calculate(geometry, timestamp, time, available, mismatch)?.first }
+            return scene
+        }
+
+        private fun calculate(
+            geometry: OverlayGeometry,
+            timestamp: Long,
+            time: Long,
+            availableAtMillis: Long,
+            clockMismatch: Boolean,
+        ): Pair<OverlayScene, OverlayDrawKey>? {
+            if (recorded) meter.onFrame(timestamp)?.let { rate ->
                 if (rate != state.value.frameRate) mutableState.update { it.copy(frameRate = rate) }
             }
             if (clockMismatch && !clockReported) {
@@ -357,12 +399,8 @@ internal class VideoCameraController(
                 Log.w(TAG, "Camera claims a REALTIME timebase but its frames disagree; estimating the offset instead")
                 mutableState.update { it.copy(clockMismatch = true) }
             }
+            if (overlayHidden) return null
             val (snapshot, values) = synchronized(timeline) { timeline.sample(time) to timeline.interpolatedValuesAt(time, availableAtMillis) }
-            if (overlayHidden) {
-                renderer.clear(frame.overlayCanvas)
-                gate.invalidate()
-                return
-            }
             val preset = preset
             val trip = if (overlayUsesTrip(preset)) {
                 trips.trip(
@@ -376,24 +414,11 @@ internal class VideoCameraController(
             val ranges = scales.update(preset, snapshot, unitSystem)
             val words = strings
             val system = unitSystem
-            val geometry = geometryOf(frame)
             contentMotion.beginFrame(listOf(preset, geometry, snapshot?.vehicleId, words, system), time)
-            val scene = renderer.scene(frame, preset, snapshot, words, system, trip, ranges, values, contentMotion)
+            val scene = renderer.scene(geometry, preset, snapshot, words, system, trip, ranges, values, contentMotion)
             val key = overlayDrawKey(preset, snapshot, words, system, geometry, trip = trip, scales = ranges, dials = values)
                 .copy(textPositions = contentMotion.positions)
-            // Touching the canvas costs a software raster plus a full-size upload; skipping it leaves the previous
-            // overlay in place, which is correct whenever the key has not changed.
-            if (!gate.wouldDraw(key)) return
-            // Retraction (2026-11-05): a 15 Hz raster cap stepped both interpolated numbers and text motion.
-            // The camera session limits normal capture to supported 30/60 FPS; repaint on its frame clock.
-            gate.shouldDraw(key)
-            val canvas = frame.overlayCanvas
-            try {
-                renderer.draw(frame, canvas, scene)
-            } catch (error: Exception) {
-                runCatching { renderer.clear(canvas) }
-                throw error
-            }
+            return scene to key
         }
     }
 
@@ -465,15 +490,21 @@ internal class VideoCameraController(
                 finally { probeEffect.close() }
             val height = videoQualityHeight(quality)
             val depth = videoFrameBufferDepth(height * 16 / 9, height, session.frameRate ?: 60)
-            lateinit var nextOverlay: BufferedVideoOverlay
-            nextOverlay = BufferedVideoOverlay(depth, handler, realtime,
-                onError = onError,
-                onDraw = { frame, time, available -> videoPipeline.onDraw(frame, time, available, nextOverlay.clock.timebaseMismatch) },
-            )
+            val nextOverlay = if (BuildConfig.GLES_RIDE_HUD) {
+                GlesBufferedVideoOverlay(context, handler, session.frameRate ?: 60, realtime, onError, videoPipeline::glScene)
+            } else {
+                lateinit var canvasOverlay: BufferedVideoOverlay
+                canvasOverlay = BufferedVideoOverlay(depth, handler, realtime, onError) { frame, time, available ->
+                    videoPipeline.onDraw(frame, time, available, canvasOverlay.clock.timebaseMismatch)
+                }
+                canvasOverlay
+            }
             bufferedOverlay = nextOverlay
             val bufferedSession = videoCameraSession(info, nextPreview, nextCapture, nextOverlay.effect, session.frameRate ?: preferredFrameRate)
             cameraProvider.bindToLifecycle(owner, selector, bufferedSession.config)
-            Log.i(TAG, "Camera session quality=$quality fps=${bufferedSession.frameRate} frameQueue=$depth stabilization=$stabilizationMode")
+            Log.i(TAG, "Camera session quality=$quality fps=${bufferedSession.frameRate} frameQueue=$depth " +
+                "stabilization=$stabilizationMode gles=${BuildConfig.GLES_RIDE_HUD} rotation=${nextCapture.targetRotation} " +
+                "degrees=${nextCapture.resolutionInfo?.rotationDegrees}")
             mutableState.update { it.copy(cameraFailed = false, qualities = qualities, quality = quality,
                 frameRateChoices = session.choices, targetFrameRate = session.frameRate,
                 stabilizationAvailable = previewStabilization || capabilities.isStabilizationSupported,
@@ -717,7 +748,10 @@ internal class VideoCameraController(
         }
         rotating = false
         finalization.finalized()
-        if (!disposed) sessionLifecycle.finalized()
+        if (!disposed) {
+            sessionLifecycle.finalized()
+            if (BuildConfig.GLES_RIDE_HUD && sessionLifecycle.foreground) orientation.rotation?.let(::applyFileRotation)
+        }
     }
 
     private fun failed(error: Throwable) {

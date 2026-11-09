@@ -5,6 +5,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.PorterDuff
 import androidx.camera.effects.Frame
+import ru.sodovaya.volty.domain.video.OverlayGeometry
 import ru.sodovaya.volty.domain.video.OverlayPreset
 import ru.sodovaya.volty.domain.video.OverlayScene
 import ru.sodovaya.volty.domain.video.OverlayContentPosition
@@ -23,14 +24,15 @@ import ru.sodovaya.volty.util.UnitSystem
 internal class VideoOverlayRenderer(context: Context) {
     private val drawer = OverlayCanvasDrawer(OverlayFonts(context), cacheScrims = true)
 
-    fun scene(frame: Frame, preset: OverlayPreset, snapshot: VideoSnapshot?, strings: VideoOverlayStrings,
+    fun scene(geometry: OverlayGeometry, preset: OverlayPreset, snapshot: VideoSnapshot?, strings: VideoOverlayStrings,
         system: UnitSystem, trip: OverlayTrip, scales: Map<VideoMetric, Float>, dials: Map<VideoMetric, Double>,
         contentPosition: OverlayContentPosition,
     ): OverlayScene {
-        val crop = frame.cropRect
-        val rotated = frame.rotationDegrees % 180 != 0
-        val width = if (rotated) crop.height() else crop.width()
-        val height = if (rotated) crop.width() else crop.height()
+        val cropWidth = geometry.cropRight - geometry.cropLeft
+        val cropHeight = geometry.cropBottom - geometry.cropTop
+        val rotated = geometry.rotationDegrees % 180 != 0
+        val width = if (rotated) cropHeight else cropWidth
+        val height = if (rotated) cropWidth else cropHeight
         return buildOverlayScene(OverlaySceneInput(preset, snapshot, strings, system, width, height, trip, scales, dials,
             contentPosition), drawer)
     }

@@ -11,6 +11,13 @@ import ru.sodovaya.volty.domain.video.VideoFrameClock
 import ru.sodovaya.volty.domain.video.VideoFrameFlush
 import ru.sodovaya.volty.domain.video.VideoFrameReleaseQueue
 
+internal interface RideVideoOverlay : AutoCloseable {
+    val effect: CameraEffect
+    fun captured(timestampNanos: Long, receivedAtMillis: Long)
+    fun setRecordingActive(active: Boolean)
+    fun flush(completed: () -> Unit)
+}
+
 /**
  * Only GL textures are delayed: their original timestamps, and consequently audio sync, are unchanged.
  * SENSOR_TIMESTAMP is validated against a real effect frame before exact-timestamp dequeue is enabled.
@@ -25,7 +32,7 @@ internal class BufferedVideoOverlay(
     realtime: Boolean,
     onError: (Throwable) -> Unit,
     onDraw: (Frame, frameMillis: Long, availableAtMillis: Long) -> Boolean,
-) : AutoCloseable {
+) : RideVideoOverlay {
     private val pending = VideoFrameReleaseQueue()
     private val captures = mutableMapOf<Long, Long>()
     val clock = VideoFrameClock(realtime)
@@ -36,7 +43,7 @@ internal class BufferedVideoOverlay(
     private var recordingActive = false
     private var flushing: VideoFrameFlush? = null
     private val flushCompletions = mutableListOf<() -> Unit>()
-    val effect = OverlayEffect(CameraEffect.VIDEO_CAPTURE, queueDepth, handler, onError)
+    override val effect = OverlayEffect(CameraEffect.VIDEO_CAPTURE, queueDepth, handler, onError)
 
     init {
         effect.setOnDrawListener { frame ->
@@ -55,7 +62,7 @@ internal class BufferedVideoOverlay(
         }
     }
 
-    fun captured(timestampNanos: Long, receivedAtMillis: Long) {
+    override fun captured(timestampNanos: Long, receivedAtMillis: Long) {
         handler.post {
             if (closed) return@post
             // Observe BEFORE buffering: calibrating an UNKNOWN clock at draw would add queue latency to time.
@@ -70,7 +77,7 @@ internal class BufferedVideoOverlay(
         }
     }
 
-    fun setRecordingActive(active: Boolean) {
+    override fun setRecordingActive(active: Boolean) {
         handler.post {
             recordingActive = active
             if (!active) {
@@ -96,7 +103,7 @@ internal class BufferedVideoOverlay(
      * Do not wait for a new BLE sample at the tail; the final available value is held if there is no upper bracket.
      * Background source loss may invalidate a surface before this runs; completion still always runs.
      */
-    fun flush(completed: () -> Unit) {
+    override fun flush(completed: () -> Unit) {
         val accepted = handler.post {
             if (closed || !timestampsMatch) {
                 completed()
