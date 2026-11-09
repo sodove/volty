@@ -46,13 +46,32 @@ internal class GlHudText(context: Context) : AutoCloseable {
     private val samplerLocation = GLES20.glGetUniformLocation(shader, "u_texture")
     private val maxTextureSize = IntArray(1).also { GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, it, 0) }[0]
     private var closed = false
+    private var lastColor: Int? = null
 
     fun draw(op: OverlayOp, width: Int, height: Int) {
         if (closed || width <= 0 || height <= 0) return
-        when (op) {
-            is OverlayTextOp -> drawText(op, width, height)
-            is OverlayIconOp -> drawIcon(op, width, height)
-            else -> Unit
+        if (op !is OverlayTextOp && op !is OverlayIconOp) return
+
+        GLES20.glUseProgram(shader)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glUniform1i(samplerLocation, 0)
+        GLES20.glEnableVertexAttribArray(positionLocation)
+        GLES20.glEnableVertexAttribArray(uvLocation)
+        // All glyphs in this op reuse the same client-memory vertex array.
+        vertices.position(0)
+        GLES20.glVertexAttribPointer(positionLocation, 2, GLES20.GL_FLOAT, false, FLOAT_BYTES * 4, vertices)
+        vertices.position(2)
+        GLES20.glVertexAttribPointer(uvLocation, 2, GLES20.GL_FLOAT, false, FLOAT_BYTES * 4, vertices)
+        vertices.position(0)
+        try {
+            when (op) {
+                is OverlayTextOp -> drawText(op, width, height)
+                is OverlayIconOp -> drawIcon(op, width, height)
+                else -> Unit
+            }
+        } finally {
+            GLES20.glDisableVertexAttribArray(positionLocation)
+            GLES20.glDisableVertexAttribArray(uvLocation)
         }
     }
 
@@ -260,26 +279,16 @@ internal class GlHudText(context: Context) : AutoCloseable {
         vertices.put(scratchVertices)
         vertices.position(0)
 
-        GLES20.glUseProgram(shader)
-        // The Java FloatBuffer overload is client-memory input, so it requires ARRAY_BUFFER 0.
-        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture)
-        GLES20.glUniform1i(samplerLocation, 0)
-        GLES20.glUniform4f(colorLocation,
-            android.graphics.Color.red(color) / 255f,
-            android.graphics.Color.green(color) / 255f,
-            android.graphics.Color.blue(color) / 255f,
-            android.graphics.Color.alpha(color) / 255f)
-        GLES20.glEnableVertexAttribArray(positionLocation)
-        GLES20.glEnableVertexAttribArray(uvLocation)
-        GLES20.glVertexAttribPointer(positionLocation, 2, GLES20.GL_FLOAT, false, FLOAT_BYTES * 4, vertices)
-        vertices.position(2)
-        GLES20.glVertexAttribPointer(uvLocation, 2, GLES20.GL_FLOAT, false, FLOAT_BYTES * 4, vertices)
-        vertices.position(0)
+        if (lastColor != color) {
+            GLES20.glUniform4f(colorLocation,
+                android.graphics.Color.red(color) / 255f,
+                android.graphics.Color.green(color) / 255f,
+                android.graphics.Color.blue(color) / 255f,
+                android.graphics.Color.alpha(color) / 255f)
+            lastColor = color
+        }
         GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, 6)
-        GLES20.glDisableVertexAttribArray(positionLocation)
-        GLES20.glDisableVertexAttribArray(uvLocation)
     }
 
     private fun putVertex(index: Int, x: Float, y: Float, u: Float, v: Float) {

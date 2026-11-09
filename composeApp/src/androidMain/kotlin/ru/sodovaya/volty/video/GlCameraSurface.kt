@@ -9,6 +9,7 @@ import android.opengl.EGLSurface
 import android.opengl.GLES11Ext.GL_TEXTURE_EXTERNAL_OES
 import android.opengl.GLES20.*
 import android.opengl.GLES30
+import android.os.SystemClock
 import android.view.Surface
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -140,9 +141,11 @@ internal class GlCameraSurface(private val shared: GlCameraSurface? = null) : Au
         glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA)
     }
 
-    fun present(window: Window, timestampNanos: Long) {
+    fun present(window: Window, timestampNanos: Long, measureSwap: Boolean): Long {
         check(EGLExt.eglPresentationTimeANDROID(display, window.surface, timestampNanos)) { "Cannot stamp camera frame" }
+        val started = if (measureSwap) SystemClock.elapsedRealtimeNanos() else 0L
         check(EGL14.eglSwapBuffers(display, window.surface)) { "Cannot submit camera frame" }
+        return if (measureSwap) SystemClock.elapsedRealtimeNanos() - started else 0L
     }
 
     fun fence(): Long = GLES30.glFenceSync(GLES30.GL_SYNC_GPU_COMMANDS_COMPLETE, 0).also {

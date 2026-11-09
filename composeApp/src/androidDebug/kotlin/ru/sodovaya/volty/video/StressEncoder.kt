@@ -19,6 +19,8 @@ internal class StressEncoder(
     height: Int,
     fps: Int,
     file: File,
+    private val bitRate: Int = 20_000_000,
+    private val keyFrameSeconds: Int = 1,
 ) : AutoCloseable {
     private val resources: Resources
     val surface: Surface
@@ -203,9 +205,9 @@ internal class StressEncoder(
     private fun createResources(width: Int, height: Int, fps: Int, file: File): Resources {
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
             setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_BIT_RATE, BIT_RATE)
+            setInteger(MediaFormat.KEY_BIT_RATE, bitRate)
             setInteger(MediaFormat.KEY_FRAME_RATE, fps)
-            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, I_FRAME_INTERVAL_SECONDS)
+            setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, keyFrameSeconds)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
             }
@@ -216,12 +218,15 @@ internal class StressEncoder(
         var muxer: MediaMuxer? = null
         var started = false
         try {
+            val complexity = codec.codecInfo.getCapabilitiesForType(MediaFormat.MIMETYPE_VIDEO_AVC)
+                .encoderCapabilities.complexityRange
             codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
             inputSurface = codec.createInputSurface()
             muxer = MediaMuxer(file.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
             codec.start()
             started = true
-            Log.i(TAG, "Selected encoder=${codec.name} ${width}x$height requestedFps=$fps bitrate=$BIT_RATE")
+            Log.i(TAG, "Selected encoder=${codec.name} ${width}x$height requestedFps=$fps bitrate=$bitRate " +
+                "complexityRange=$complexity requestedComplexity=default keyFrameSeconds=$keyFrameSeconds")
             return Resources(codec, inputSurface, muxer)
         } catch (failure: Throwable) {
             runCatching { inputSurface?.release() }
@@ -237,8 +242,6 @@ internal class StressEncoder(
 
     private companion object {
         const val TAG = "RideHudStress"
-        const val BIT_RATE = 20_000_000
-        const val I_FRAME_INTERVAL_SECONDS = 1
         const val DRAIN_TIMEOUT_US = 10_000L
         const val FINISH_TIMEOUT_MS = 30_000L
         val RELEASE_JOIN_TIMEOUT_MS = TimeUnit.SECONDS.toMillis(2)

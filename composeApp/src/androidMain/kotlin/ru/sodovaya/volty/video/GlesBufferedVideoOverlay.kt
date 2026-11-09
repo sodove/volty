@@ -25,6 +25,7 @@ internal class GlesBufferedVideoOverlay(
     private val framesPerSecond: Int,
     realtime: Boolean,
     private val onError: (Throwable) -> Unit,
+    private val stressReserve: Int? = null,
     private val scene: (width: Int, height: Int, timestampNanos: Long, frameMillis: Long, availableAtMillis: Long, clockMismatch: Boolean) -> OverlayScene?,
 ) : RideVideoOverlay, SurfaceProcessor {
     private class Slot(val target: GlCameraSurface.Target) {
@@ -77,7 +78,7 @@ internal class GlesBufferedVideoOverlay(
             depth = videoFrameBufferDepth(size.width, size.height, framesPerSecond)
             // Keep the full telemetry lookahead plus a 64 MiB stall reserve, with at least one spare slot.
             val bytesPerFrame = size.width.toLong() * size.height * 4
-            val reserve = (64L * 1024 * 1024 / bytesPerFrame).coerceIn(1, 4).toInt()
+            val reserve = stressReserve ?: (64L * 1024 * 1024 / bytesPerFrame).coerceIn(1, 4).toInt()
             repeat(depth + reserve) { free += Slot(renderer.target(size.width, size.height)) }
             val textureId = renderer.inputTexture()
             val texture = SurfaceTexture(textureId).apply { setDefaultBufferSize(size.width, size.height) }
@@ -115,7 +116,7 @@ internal class GlesBufferedVideoOverlay(
         try {
             val renderer = surface()
             clearOutput()
-            val worker = encoder ?: GlesVideoOutput(context, scene) { error ->
+            val worker = encoder ?: GlesVideoOutput(context, scene, measureSwap = stressReserve != null) { error ->
                 handler.post { if (!closed) fail(error) }
             }.also {
                 encoder = it

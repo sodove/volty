@@ -13,6 +13,7 @@ import ru.sodovaya.volty.domain.video.OverlayScene
 internal class GlesVideoOutput(
     private val context: Context,
     private val scene: (Int, Int, Long, Long, Long, Boolean) -> OverlayScene?,
+    measureSwap: Boolean,
     private val onError: (RuntimeException) -> Unit,
 ) {
     class Sink(val handle: SurfaceOutput) {
@@ -39,6 +40,7 @@ internal class GlesVideoOutput(
     private var firstPresented = Long.MIN_VALUE
     private var lastPresented = Long.MIN_VALUE
     private var presented = 0
+    private val swapSamples = if (measureSwap) LongArray(4096) else null
 
     fun open(sink: Sink, surface: Surface, shared: GlCameraSurface) {
         handler.post {
@@ -93,7 +95,8 @@ internal class GlesVideoOutput(
                     }
                 }
                 val drawn = SystemClock.elapsedRealtimeNanos()
-                renderer.present(window, frame.timestamp)
+                val swapNanos = renderer.present(window, frame.timestamp, active && swapSamples != null)
+                if (active && swapSamples != null && presented < swapSamples.size) swapSamples[presented] = swapNanos
                 lastPresented = frame.timestamp
                 if (active && presented == 0) firstPresented = frame.timestamp
                 if (active && (++presented and 7) == 0) {
@@ -123,6 +126,12 @@ internal class GlesVideoOutput(
     fun flush(tail: Int, admitted: Int, ignored: Int, busyDrops: Int, completed: () -> Unit) {
         if (!handler.post {
                 try {
+                    if (swapSamples != null && presented > 0) {
+                        val count = minOf(presented, swapSamples.size)
+                        val sorted = swapSamples.copyOf(count).apply { sort() }
+                        Log.i(TAG, "EGL swap samples=$count p95_us=${sorted[(count * 95 + 99) / 100 - 1] / 1000} " +
+                            "max_us=${sorted.last() / 1000}")
+                    }
                     Log.i(TAG, "FIFO drained tail=$tail admitted=$admitted presented=$presented ignored=$ignored " +
                         "busyDrops=$busyDrops firstNs=$firstPresented lastNs=$lastPresented")
                 } finally {

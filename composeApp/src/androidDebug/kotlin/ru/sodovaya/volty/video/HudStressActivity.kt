@@ -55,19 +55,27 @@ class HudStressActivity : Activity() {
             finish()
             return
         }
+        val reserve = if (intent.hasExtra("reserve")) intent.getIntExtra("reserve", 0) else null
+        val bitrateMbps = intent.getIntExtra("bitrate", 20)
+        val keyFrameSeconds = intent.getIntExtra("keyFrameSeconds", 1)
         Thread({
-            runCatching { runStress(mode) }
+            runCatching {
+                require(reserve == null || (mode == "gles" && reserve in 1..8))
+                require(bitrateMbps in 1..50)
+                require(keyFrameSeconds in 1..10)
+                runStress(mode, reserve, bitrateMbps * 1_000_000, keyFrameSeconds)
+            }
                 .onFailure { Log.e(TAG, "FAILED mode=$mode", it) }
             runOnUiThread { finish() }
         }, "HudStressDriver").start()
     }
 
-    private fun runStress(mode: String) {
+    private fun runStress(mode: String, reserve: Int?, bitRate: Int, keyFrameSeconds: Int) {
         val input = File(filesDir, "hud-stress-source.mp4")
         check(input.isFile) { "Missing ${input.name}" }
         val file = File(filesDir, "hud-stress-$mode.mp4")
         if (mode == "codec") {
-            StressEncoder(WIDTH, HEIGHT, FPS, file).use { encoder ->
+            StressEncoder(WIDTH, HEIGHT, FPS, file, bitRate, keyFrameSeconds).use { encoder ->
                 Log.i(TAG, "START mode=$mode input=${WIDTH}x$HEIGHT targetFps=$FPS")
                 val submitted = feedStressVideo(input, encoder.surface) {}
                 encoder.finish()
@@ -82,10 +90,10 @@ class HudStressActivity : Activity() {
         val hud = StressHud()
         val depth = videoFrameBufferDepth(WIDTH, HEIGHT, FPS)
         try {
-            StressEncoder(WIDTH, HEIGHT, FPS, file).use { encoder ->
+            StressEncoder(WIDTH, HEIGHT, FPS, file, bitRate, keyFrameSeconds).use { encoder ->
                 val cameraRequest = syntheticRequest()
                 val overlay = if (mode == "gles") {
-                    GlesBufferedVideoOverlay(this, handler, FPS, true, onError) { width, height, _, time, available, _ ->
+                    GlesBufferedVideoOverlay(this, handler, FPS, true, onError, stressReserve = reserve) { width, height, _, time, available, _ ->
                         hud.scene(width, height, time, available)
                     }
                 } else {
@@ -103,11 +111,16 @@ class HudStressActivity : Activity() {
                     overlay.setRecordingActive(true)
                     val surface = cameraRequest.deferrableSurface.surface.get(5, TimeUnit.SECONDS)
                     Log.i(TAG, "START mode=$mode input=${WIDTH}x$HEIGHT targetFps=$FPS depth=$depth")
+                    var firstSourceNs = 0L
+                    var lastSourceNs = 0L
                     val submitted = feedStressVideo(input, surface) { timestamp ->
+                        if (firstSourceNs == 0L) firstSourceNs = timestamp
+                        lastSourceNs = timestamp
                         hud.sample(timestamp)
                         overlay.captured(timestamp, SystemClock.elapsedRealtime())
                         error.get()?.let { throw IllegalStateException("Effect failed during decode", it) }
                     }
+                    Log.i(TAG, "Source surface timestamps firstNs=$firstSourceNs lastNs=$lastSourceNs")
                     // The final decoder buffer must reach the effect before its existing stop drain runs.
                     Thread.sleep(300)
                     val drained = CountDownLatch(1)

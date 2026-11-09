@@ -491,7 +491,7 @@ internal class VideoCameraController(
             val height = videoQualityHeight(quality)
             val depth = videoFrameBufferDepth(height * 16 / 9, height, session.frameRate ?: 60)
             val nextOverlay = if (BuildConfig.GLES_RIDE_HUD) {
-                GlesBufferedVideoOverlay(context, handler, session.frameRate ?: 60, realtime, onError, videoPipeline::glScene)
+                GlesBufferedVideoOverlay(context, handler, session.frameRate ?: 60, realtime, onError, scene = videoPipeline::glScene)
             } else {
                 lateinit var canvasOverlay: BufferedVideoOverlay
                 canvasOverlay = BufferedVideoOverlay(depth, handler, realtime, onError) { frame, time, available ->

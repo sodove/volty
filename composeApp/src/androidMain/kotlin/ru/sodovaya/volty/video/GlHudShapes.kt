@@ -21,9 +21,8 @@ import ru.sodovaya.volty.domain.video.OverlayScrimOp
  * one-pixel shader coverage approximates Canvas antialiasing without relying on GLES extensions. Rounded rect and arc
  * edges are distance-field approximations; the scrim and disc color ramps match the Canvas drawer's stops.
  *
- * This pass owns the active GLES program and vertex attribute state while drawing. On return it binds program 0,
- * disables its position attribute, and restores the previous array-buffer binding. It does not change viewport or
- * blend state.
+ * The encoder context uses client-memory vertices throughout, so ARRAY_BUFFER is zero.
+ * The caller selects its own program for the next draw.
  */
 internal class GlHudShapes : AutoCloseable {
     private var program = createProgram()
@@ -42,7 +41,6 @@ internal class GlHudShapes : AutoCloseable {
     private val vertices: FloatBuffer = ByteBuffer.allocateDirect(4 * 2 * Float.SIZE_BYTES)
         .order(ByteOrder.nativeOrder())
         .asFloatBuffer()
-    private val savedArrayBuffer = IntArray(1)
     private var fillAlpha = 255
 
     /** Draws one op in upright scene pixels, with `(0, 0)` at the output's top-left. */
@@ -56,8 +54,6 @@ internal class GlHudShapes : AutoCloseable {
             else -> return
         }
 
-        GLES20.glGetIntegerv(GLES20.GL_ARRAY_BUFFER_BINDING, savedArrayBuffer, 0)
-        GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
         GLES20.glUseProgram(program)
         GLES20.glUniform2f(viewportUniform, width.toFloat(), height.toFloat())
         GLES20.glUniform1i(modeUniform, mode)
@@ -73,8 +69,6 @@ internal class GlHudShapes : AutoCloseable {
             }
         } finally {
             GLES20.glDisableVertexAttribArray(position)
-            GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, savedArrayBuffer[0])
-            GLES20.glUseProgram(0)
         }
     }
 
