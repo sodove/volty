@@ -7,5 +7,6 @@
         <activity android:name=".debug.HistoryUiProbeActivity" android:exported="true"
             android:windowSoftInputMode="adjustResize" />
         <activity android:name=".debug.RnnoiseProbeActivity" android:exported="true" />
+        <activity android:name=".video.HudStressActivity" android:exported="true" />
     </application>
 </manifest>
