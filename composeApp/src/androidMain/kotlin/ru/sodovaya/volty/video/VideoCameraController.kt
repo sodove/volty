@@ -467,9 +467,6 @@ internal class VideoCameraController(
             val depth = videoFrameBufferDepth(height * 16 / 9, height, session.frameRate ?: 60)
             lateinit var nextOverlay: BufferedVideoOverlay
             nextOverlay = BufferedVideoOverlay(depth, handler, realtime,
-                hasUpperBracket = { frameTime, available -> synchronized(timeline) {
-                    timeline.hasInterpolationBrackets(frameTime, available, preset.widgets.map { it.metric }.toSet())
-                } },
                 onError = onError,
                 onDraw = { frame, time, available -> videoPipeline.onDraw(frame, time, available, nextOverlay.clock.timebaseMismatch) },
             )

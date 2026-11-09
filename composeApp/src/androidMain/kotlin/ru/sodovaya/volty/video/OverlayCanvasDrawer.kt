@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.video
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
@@ -10,6 +11,8 @@ import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.Typeface
+import kotlin.math.ceil
+import kotlin.math.floor
 import ru.sodovaya.volty.domain.video.OverlayArcOp
 import ru.sodovaya.volty.domain.video.OverlayDiscOp
 import ru.sodovaya.volty.domain.video.OverlayIcons
@@ -53,7 +56,12 @@ internal class OverlayFonts(context: Context) {
  * the editor's stage later on. It decides nothing; everything decided is in `buildOverlayScene` and tested there.
  * Not thread-safe: one instance per drawing thread.
  */
-internal class OverlayCanvasDrawer(private val fonts: OverlayFonts) : OverlayTextMeasure {
+internal class OverlayCanvasDrawer(
+    private val fonts: OverlayFonts,
+    private val cacheScrims: Boolean = false,
+) : OverlayTextMeasure {
+    private data class ScrimStrip(val op: OverlayScrimOp, val alpha: Int, val top: Int, val bitmap: Bitmap)
+
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -64,6 +72,8 @@ internal class OverlayCanvasDrawer(private val fonts: OverlayFonts) : OverlayTex
     private val rect = RectF()
     private val glyph = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.LEFT }
     private val glyphBounds = android.graphics.Rect()
+    private var topScrim: ScrimStrip? = null
+    private var bottomScrim: ScrimStrip? = null
 
     override val iconsAvailable: Boolean get() = fonts.icons != null
 
@@ -105,13 +115,43 @@ internal class OverlayCanvasDrawer(private val fonts: OverlayFonts) : OverlayTex
     }
 
     private fun scrim(canvas: Canvas, op: OverlayScrimOp) {
+        val width = canvas.width.toFloat().coerceAtLeast(canvas.height.toFloat()) * 2
+        if (!cacheScrims) {
+            drawScrimGradient(canvas, op, width)
+            return
+        }
+        val cached = if (op.darkAtTop) topScrim else bottomScrim
+        // A preceding draw can change the shared paint's opacity without changing the gradient geometry.
+        val alpha = fill.alpha
+        val strip = if (cached != null && cached.op == op && cached.alpha == alpha) cached else rasterizeScrim(op, alpha)
+        rect.set(0f, strip.top.toFloat(), width, (strip.top + strip.bitmap.height).toFloat())
+        canvas.drawBitmap(strip.bitmap, null, rect, null)
+    }
+
+    private fun rasterizeScrim(op: OverlayScrimOp, alpha: Int): ScrimStrip {
+        // The shader varies only along y. Keep the original fractional coverage in the edge rows.
+        val top = floor(op.top).toInt()
+        val bottom = ceil(op.bottom).toInt()
+        val bitmap = Bitmap.createBitmap(1, bottom - top, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        canvas.translate(0f, -top.toFloat())
+        drawScrimGradient(canvas, op, 1f)
+        return ScrimStrip(op, alpha, top, bitmap).also { strip ->
+            if (op.darkAtTop) topScrim = strip else bottomScrim = strip
+        }
+    }
+
+    private fun drawScrimGradient(canvas: Canvas, op: OverlayScrimOp, width: Float) {
         val solid = OverlayPalette.SCRIM.toInt()
         val colors = intArrayOf(withAlpha(solid, 0f), withAlpha(solid, 0.46f), withAlpha(solid, if (op.darkAtTop) 0.78f else 0.82f))
         val positions = floatArrayOf(0f, if (op.darkAtTop) 0.6f else 0.55f, 1f)
         val (from, to) = if (op.darkAtTop) op.bottom to op.top else op.top to op.bottom
         fill.shader = LinearGradient(0f, from, 0f, to, colors, positions, Shader.TileMode.CLAMP)
-        canvas.drawRect(0f, op.top, canvas.width.toFloat().coerceAtLeast(canvas.height.toFloat()) * 2, op.bottom, fill)
-        fill.shader = null
+        try {
+            canvas.drawRect(0f, op.top, width, op.bottom, fill)
+        } finally {
+            fill.shader = null
+        }
     }
 
     private fun disc(canvas: Canvas, op: OverlayDiscOp) {

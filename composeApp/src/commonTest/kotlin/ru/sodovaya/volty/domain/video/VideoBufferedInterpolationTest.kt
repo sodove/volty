@@ -42,15 +42,6 @@ class VideoBufferedInterpolationTest {
         assertFalse(VideoMetric.SPEED in timeline.interpolatedValuesAt(100, 350))
     }
 
-    @Test fun upperBracketReadinessUsesSourceTimeAndOnlyAvailableSamples() {
-        val timeline = VideoTimeline()
-        timeline.offer(speed(0, 0.0))
-        timeline.offer(speed(100, 0.0, measured = 0))
-        timeline.offer(speed(250, 100.0))
-        assertFalse(timeline.hasInterpolationBrackets(50, 200, setOf(VideoMetric.SPEED)))
-        assertEquals(true, timeline.hasInterpolationBrackets(50, 300, setOf(VideoMetric.SPEED)))
-    }
-
     @Test fun adaptivePreviewDelayFollowsSparseSourceCadenceAndNeverExceedsThreeHundredMillis() {
         val timeline = VideoTimeline()
         timeline.offer(speed(0, 0.0))
@@ -58,6 +49,15 @@ class VideoBufferedInterpolationTest {
         assertEquals(270L, timeline.interpolationDelayMillis())
         timeline.offer(speed(650, 200.0))
         assertEquals(300L, timeline.interpolationDelayMillis())
+    }
+
+    @Test fun pastTheNewestMeasurementTheLastValueHoldsOnlyWhileFresh() {
+        val timeline = VideoTimeline()
+        timeline.offer(speed(0, 10.0))
+        timeline.offer(speed(200, 30.0))
+
+        assertEquals(30.0, timeline.interpolatedValuesAt(300, 550)[VideoMetric.SPEED])
+        assertFalse(VideoMetric.SPEED in timeline.interpolatedValuesAt(2_300, 2_600))
     }
 
     @Test fun previewPresentationTimeNeverMovesBackwardWhenTheDelayIncreases() {

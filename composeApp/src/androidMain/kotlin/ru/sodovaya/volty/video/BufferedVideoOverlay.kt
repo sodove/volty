@@ -16,23 +16,22 @@ import ru.sodovaya.volty.domain.video.VideoFrameReleaseQueue
  * SENSOR_TIMESTAMP is validated against a real effect frame before exact-timestamp dequeue is enabled.
  * This matters: CameraX discards older textures even when a requested timestamp is NOT found.
  * All mutable state is confined to [handler]; capture callbacks post their original receipt time.
+ * CameraX releases one oldest texture per new frame once its queue is full. Exact-timestamp draws
+ * are reserved for stop: releasing a batch on a telemetry update can starve incoming textures.
  */
 internal class BufferedVideoOverlay(
     queueDepth: Int,
     private val handler: Handler,
     realtime: Boolean,
-    private val hasUpperBracket: (frameMillis: Long, availableAtMillis: Long) -> Boolean,
     onError: (Throwable) -> Unit,
     onDraw: (Frame, frameMillis: Long, availableAtMillis: Long) -> Boolean,
 ) : AutoCloseable {
-    private data class Capture(val receivedAt: Long, val frameMillis: Long)
     private val pending = VideoFrameReleaseQueue()
-    private val captures = mutableMapOf<Long, Capture>()
+    private val captures = mutableMapOf<Long, Long>()
     val clock = VideoFrameClock(realtime)
     private var timestampsMatch = false
     private var mismatchReported = false
     private var closed = false
-    private var tickPosted = false
     private var releaseMisses = 0
     private var recordingActive = false
     private var flushing: VideoFrameFlush? = null
@@ -43,12 +42,12 @@ internal class BufferedVideoOverlay(
         effect.setOnDrawListener { frame ->
             if (!timestampsMatch && pending.contains(frame.timestampNanos)) {
                 timestampsMatch = true
-                Log.i(TAG, "Validated capture/effect timestamps; adaptive frame release enabled")
+                Log.i(TAG, "Validated capture/effect timestamps for ordered stop drain")
             } else if (!timestampsMatch && !mismatchReported) {
                 mismatchReported = true
                 Log.w(TAG, "Effect/capture timestamps have not matched; using bounded FIFO fallback")
             }
-            val time = captures[frame.timestampNanos]?.frameMillis
+            val time = captures[frame.timestampNanos]
                 ?: clock.frameMillis(frame.timestampNanos, SystemClock.elapsedRealtime())
             pending.rendered(frame.timestampNanos)
             captures.keys.filter { it <= frame.timestampNanos }.forEach(captures::remove)
@@ -62,13 +61,12 @@ internal class BufferedVideoOverlay(
             // Observe BEFORE buffering: calibrating an UNKNOWN clock at draw would add queue latency to time.
             val time = clock.frameMillis(timestampNanos, receivedAtMillis)
             if (!recordingActive) return@post
-            captures[timestampNanos] = Capture(receivedAtMillis, time)
+            captures[timestampNanos] = time
             while (captures.size > 128) captures.remove(captures.keys.min())
-            pending.offer(timestampNanos, receivedAtMillis)
+            pending.offer(timestampNanos)
             // Capture metadata can arrive during the bounded stop drain. Include it in that same
             // ordered boundary; the shared deadline still prevents an endlessly advancing tail.
             flushing?.append(listOf(timestampNanos))
-            scheduleTick()
         }
     }
 
@@ -76,41 +74,9 @@ internal class BufferedVideoOverlay(
         handler.post {
             recordingActive = active
             if (!active) {
-                handler.removeCallbacks(tick)
-                tickPosted = false
                 pending.flush()
                 captures.clear()
-            } else scheduleTick()
-        }
-    }
-
-    private val tick = Runnable {
-        tickPosted = false
-        if (!closed) {
-            if (timestampsMatch && flushing == null) releaseReadyFrames()
-            scheduleTick()
-        }
-    }
-
-    private fun scheduleTick() {
-        if (tickPosted || closed || !recordingActive) return
-        tickPosted = true
-        handler.postDelayed(tick, 10)
-    }
-
-    private fun releaseReadyFrames() {
-        val now = SystemClock.elapsedRealtime()
-        repeat(64) {
-            val timestamp = pending.next(now) { stamp ->
-                captures[stamp]?.let { hasUpperBracket(it.frameMillis, now) } ?: true
-            } ?: return
-            val capture = captures[timestamp]
-            val result = draw(timestamp)
-            if (result == OverlayEffect.RESULT_FRAME_NOT_FOUND && capture != null && now - capture.receivedAt < 300) {
-                pending.retry(timestamp, capture.receivedAt)
-                return // Texture delivery may trail CaptureResult. Never overtake this frame.
             }
-            captures.remove(timestamp)
         }
     }
 
@@ -173,7 +139,6 @@ internal class BufferedVideoOverlay(
     override fun close() {
         handler.post {
             closed = true
-            handler.removeCallbacks(tick)
             handler.removeCallbacks(drainFlush)
             finishFlush()
             pending.flush()

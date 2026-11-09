@@ -338,18 +338,6 @@ class VideoTimeline(
         return result
     }
 
-    /** Only used to release a GPU frame early; the 300 ms deadline always wins over missing telemetry. */
-    fun hasInterpolationBrackets(frameMillis: Long, availableAtMillis: Long, metrics: Set<VideoMetric>): Boolean {
-        val raw = sample(frameMillis) ?: return true
-        return metrics.filter { it != VideoMetric.ELAPSED && it != VideoMetric.DISTANCE }.all { metric ->
-            if (raw.readings[metric]?.value?.isFinite() != true) true
-            else {
-                val (before, after) = brackets(metric, frameMillis, availableAtMillis)
-                before?.freshValue(metric, frameMillis) != null && after != null
-            }
-        }
-    }
-
     /** Recent source cadence, not cadence of repeated combined battery/controller folds. */
     fun interpolationDelayMillis(): Long {
         var largestGap = 0L

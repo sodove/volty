@@ -17,11 +17,11 @@ import ru.sodovaya.volty.domain.video.buildOverlayScene
 import ru.sodovaya.volty.util.UnitSystem
 
 /**
- * One renderer for CameraX preview AND encoded video; UI controls never enter the output. This class only knows the
- * camera's frame geometry; the picture comes from `buildOverlayScene` and [OverlayCanvasDrawer].
+ * Renderer for CameraX encoded video. This class only knows the camera's frame geometry; the picture comes from
+ * `buildOverlayScene` and [OverlayCanvasDrawer].
  */
 internal class VideoOverlayRenderer(context: Context) {
-    private val drawer = OverlayCanvasDrawer(OverlayFonts(context))
+    private val drawer = OverlayCanvasDrawer(OverlayFonts(context), cacheScrims = true)
 
     fun scene(frame: Frame, preset: OverlayPreset, snapshot: VideoSnapshot?, strings: VideoOverlayStrings,
         system: UnitSystem, trip: OverlayTrip, scales: Map<VideoMetric, Float>, dials: Map<VideoMetric, Double>,
