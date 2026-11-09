@@ -444,6 +444,9 @@ open class VehicleEnergyTracker(
      */
     private fun dischargeCurrent(snapshot: VehicleData, online: List<PackState>): Pair<Float?, CurrentSource> {
         val motion = snapshot.motion
+        // The synthesized Begode pack can carry the same provisional controller current.
+        // Neither representation can seed a persistent counter or capacity measurement.
+        if (!motion.currentPolarityConfirmed) return null to CurrentSource.NONE
         if (motion.isConnected && motion.hasBatteryCurrent && motion.batteryCurrentA.isFinite()) {
             return motion.batteryCurrentA to CurrentSource.CONTROLLER
         }

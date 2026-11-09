@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.energy.BegodeCurrentSettings
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.DeviceFactKey
@@ -84,6 +85,22 @@ class BegodeProtocol(
     /** Wall clock in epoch milliseconds, for [ControllerData.wheelPwmAlarmSinceMillis] only; tests replaying a dump inject the dump's time. */
     private val nowMillis: () -> Long = ::wallClockMillis,
 ) : BmsProtocol(), MotionSource, ProtocolFacts {
+
+    private var currentLearner: BegodeCurrentLearner? = null
+    private var calibrationLiveAtMillis: Long? = null
+    private var currentPolarityConfirmed = true
+    private var currentSettings: () -> BegodeCurrentSettings = { BegodeCurrentSettings.DEFAULT }
+    private var saveCurrentEvidence: (BegodeCurrentSettings, BegodeCurrentEvidence) -> Unit = { _, _ -> }
+
+    internal fun configureCurrentCalibration(
+        settings: () -> BegodeCurrentSettings,
+        onEvidence: (BegodeCurrentSettings, BegodeCurrentEvidence) -> Unit,
+    ) {
+        currentSettings = settings
+        saveCurrentEvidence = onEvidence
+        currentLearner = BegodeCurrentLearner()
+        currentPolarityConfirmed = settings().confirmedSign != null
+    }
 
     /** The ledger stamps with the same wall clock as the PWM-alarm onset. */
     override fun ledgerNowMillis(): Long = nowMillis()
@@ -877,9 +894,10 @@ class BegodeProtocol(
      * always used for [BmsData.current] (positive = charging); [ControllerData]
      * speaks VESC's (positive = drawing from the pack, see
      * `VescProtocol.synthesiseBattery`, which negates in the other direction).
-     * Both currents are therefore negated here, and the capture is what makes
-     * that safe to do in one step: battery and phase current are BOTH negative
-     * in the same frames of an idle wheel, so one convention covers both.
+     * The battery accessor already includes the controller's sign and offset.
+     * Retraction: an idle capture did not establish the battery channel's physical
+     * direction. Under traction, the T4 and ET Max captures show opposite signs.
+     * The phase channel keeps its own convention.
      *
      * **Temperatures.** [escTempC] is the mainboard MPU reading of the live
      * frame and [motorTempC] the 0x07 motor thermistor — genuinely two
@@ -981,6 +999,7 @@ class BegodeProtocol(
             motorCurrentA = if (sawLiveMotion) -phaseCurrentA else 0f,
             batteryCurrentA = controllerBatteryCurrent,
             hasBatteryCurrent = batteryCurrent != null,
+            currentPolarityConfirmed = currentPolarityConfirmed,
             inputVoltageV = voltage ?: 0f,
             // The same latch shape as hasDuty, one field over (G §9.3): a
             // missing cell count leaves no honest voltage, 0 V is what the
@@ -1385,6 +1404,9 @@ class BegodeProtocol(
 
     override fun reset() {
         buffer.reset()
+        currentLearner?.reset()
+        calibrationLiveAtMillis = null
+        currentPolarityConfirmed = currentLearner == null || currentSettings().confirmedSign != null
         branches.forEach { it.reset() }
         observedCellPositions.forEach { it.clear() }
         liveVoltageRaw = 0
@@ -1619,6 +1641,7 @@ class BegodeProtocol(
         // as measurement. Independent of [smartBmsSeen] — motion belongs to the
         // wheel, and a wheel with a smart BMS still moves.
         if (liveVoltageRaw > 0) {
+            if (currentLearner != null) calibrationLiveAtMillis = nowMillis()
             signedSpeedKmhValue = speedRaw * SPEED_KMH_PER_UNIT
             // MAGNITUDE, for the same reason and in the same place as
             // [dutyPercent]'s: every consumer of [ControllerData.speedKmh]
@@ -1930,7 +1953,11 @@ class BegodeProtocol(
         // reopen until [reset], so a single frame that gets past this is
         // permanent for the connection. See [isZeroPaddedPayload].
         if (isZeroPaddedPayload(frame)) return
-        batteryCurrentAValue = -frame.i16BE(2) * BATTERY_CURRENT_A_PER_UNIT
+        val rawA = frame.i16BE(2) * BATTERY_CURRENT_A_PER_UNIT
+        val settings = currentSettings()
+        currentPolarityConfirmed = currentLearner == null || settings.confirmedSign != null
+        batteryCurrentAValue = -settings.dischargeAmps(rawA)
+        learnCurrent(rawA, settings)
         val motorTempRaw = frame.i16BE(6)
         // The thermistor's counterpart of the duty latch below: one non-zero
         // reading is what proves a sensor is wired at all. See [motorTempC] for
@@ -1976,6 +2003,21 @@ class BegodeProtocol(
         rebuildLiveData()
         if (motionFramesSinceLive < NO_LIVE_FRAME) motionFramesSinceLive++
         observeControllerFrame(0x07)
+    }
+
+    private fun learnCurrent(rawA: Float, settings: BegodeCurrentSettings) {
+        val learner = currentLearner ?: return
+        val liveAt = calibrationLiveAtMillis ?: return
+        val now = nowMillis()
+        if (motionFramesSinceLive != 0 || liveVoltageRaw <= 0 || now - liveAt !in 0..CURRENT_CALIBRATION_JOIN_MS) return
+        val evidence = learner.onControllerSample(
+            atMillis = now, rawA = rawA,
+            // Use a fixed scale. Discovering a cell count is not a physical voltage step.
+            railV = liveVoltageRaw * 0.01f, speedKmh = speedKmhValue, tripKm = sessionTripKm(),
+            effectiveSign = settings.confirmedSign?.multiplier,
+            learnOffset = settings.offsetA == null,
+        )
+        saveCurrentEvidence(settings, evidence)
     }
 
     private fun observeControllerFrame(type: Int) {
@@ -2040,7 +2082,9 @@ class BegodeProtocol(
         //
         // Negated HERE rather than in `rebuild`, so that the power computed
         // from it downstream cannot disagree with the sign of its own current.
-        branch.currentA = -(frame.i16BE(8) * 0.1f)
+        val rawDischargeA = frame.i16BE(8) * 0.1f
+        val bmsMultiplier = currentSettings().bmsMultiplier
+        branch.currentA = -rawDischargeA * bmsMultiplier
 
         // Two temperature sensors per section, degrees Celsius directly.
         val t1 = frame.i16BE(10)
@@ -2056,6 +2100,12 @@ class BegodeProtocol(
         // On a boot frame keep the previous known values (or none) instead of
         // publishing zeros that would feed the dashboard and alert thresholds.
         val isBootPlaceholder = t1 == 0 && t2 == 0 && sectionVoltageRaw == 0
+        // Compare the same physical half of each BMS on every sample. The
+        // whole-pack field tracks the controller rail and is not an independent
+        // witness. Alternating halves would introduce their balancing difference.
+        if (section == 0 && sectionVoltageRaw > 0 && branch.packVoltageV > 0f) {
+            currentLearner?.onBmsSample(bmsnum shr 1, nowMillis(), rawDischargeA, sectionVoltageRaw * 0.1f)
+        }
         if (!isBootPlaceholder) {
             // The sanity range guards against garbage spikes.
             if (t1 in TEMP_SANITY) branch.sectionTemps[section * 2] = t1.toFloat()
@@ -2065,7 +2115,7 @@ class BegodeProtocol(
 
         rebuild(branch, bmsnum shr 1)
         observeTelemetry(TelemetryOrigin.BATTERY, bmsnum shr 1) {
-            observedBegodeBranch(frame, isBootPlaceholder, voltageCertified = branchVoltageCertified)
+            observedBegodeBranch(frame, isBootPlaceholder, voltageCertified = branchVoltageCertified, bmsMultiplier = bmsMultiplier)
         }
         observeTelemetry(TelemetryOrigin.BATTERY, bmsnum shr 1, TelemetryRole.ASSEMBLY, section) {
             observedBegodeAssembly(frame, isBootPlaceholder, TEMP_SANITY)
@@ -2222,6 +2272,7 @@ class BegodeProtocol(
     }
 
     companion object {
+        private const val CURRENT_CALIBRATION_JOIN_MS = 600L
         /** [motionFramesSinceLive] before any genuine live frame (and after a reset). */
         private const val NO_LIVE_FRAME = Int.MAX_VALUE
 

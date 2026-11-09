@@ -2,11 +2,15 @@ package ru.sodovaya.volty.domain.stats
 
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.navigation.ConsumptionEvidenceBuilder
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 /**
  * **The test that was missing when the first hardware ride found an inverted
@@ -37,6 +41,24 @@ import kotlin.test.assertTrue
  * the contract.
  */
 class BegodeForwardRideConsumptionTest {
+
+    @OptIn(ExperimentalTime::class)
+    @Test
+    fun rangeUsesOnlyDistanceAndPowerWithConfirmedPolarity() {
+        val start = Instant.fromEpochSeconds(0)
+        val measured = assertNotNull(forwardRidingWheel(speedRaw = -1000).latestMotion(0))
+        val samples = listOf(
+            measured.copy(timestamp = start, tripKm = 0f, powerW = 4000f),
+            measured.copy(timestamp = start + 30.seconds, tripKm = 0.2f, powerW = -4000f, currentPolarityConfirmed = false),
+            measured.copy(timestamp = start + 60.seconds, tripKm = 0.5f, powerW = 600f),
+            measured.copy(timestamp = start + 120.seconds, tripKm = 1.5f, powerW = 600f),
+        )
+        val evidence = assertNotNull(ConsumptionEvidenceBuilder.build(samples.last(), samples))
+        assertEquals(1.0, evidence.distanceKm)
+        assertEquals(10.0, evidence.whPerKm, 0.001)
+        assertEquals(2, evidence.measuredSampleCount)
+        assertEquals(10.0, assertNotNull(ConsumptionEvidenceBuilder.recentWhPerKm(samples, 3.0)), 0.001)
+    }
 
     /**
      * A 40S ET Max riding forward at 36 km/h and drawing 5 A from the pack —

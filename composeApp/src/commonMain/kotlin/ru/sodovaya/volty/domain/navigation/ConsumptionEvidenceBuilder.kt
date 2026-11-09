@@ -27,7 +27,7 @@ object ConsumptionEvidenceBuilder {
             )
         }
 
-        val measuredPowerSamples = samples.filter { MotionReadings.powerW(it) != null }
+        val measuredPowerSamples = confirmedPowerSamples(samples)
         val ride = RideEnergy.windowedRide(measuredPowerSamples, since = null) ?: return null
         val whPerKm = if (ride.km > 0f) ride.wh.toDouble() / ride.km.toDouble() else return null
         if (!whPerKm.isFinite()) return null
@@ -59,7 +59,7 @@ object ConsumptionEvidenceBuilder {
             }
             return null
         }
-        val measured = samples.filter { MotionReadings.powerW(it) != null }
+        val measured = confirmedPowerSamples(samples)
         if (measured.size < 2) return null
         val ride = RideEnergy.windowedRide(tailWithin(measured, recentKm), since = null) ?: return null
         if (ride.km <= 0f) return null
@@ -69,6 +69,13 @@ object ConsumptionEvidenceBuilder {
     private fun tailWithin(samples: List<ControllerData>, recentKm: Double): List<ControllerData> {
         val from = samples.last().tripKm - recentKm
         return samples.dropWhile { it.tripKm < from }
+    }
+
+    private fun confirmedPowerSamples(samples: List<ControllerData>): List<ControllerData> {
+        // A return to automatic can make polarity provisional again. Do not
+        // integrate across that interval as if both endpoints shared its sign.
+        val firstConfirmed = samples.indexOfLast { !it.currentPolarityConfirmed } + 1
+        return samples.subList(firstConfirmed, samples.size).filter { MotionReadings.powerW(it) != null }
     }
 
     private fun durationMillis(samples: List<ControllerData>): Long {

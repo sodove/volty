@@ -13,7 +13,9 @@ import ru.sodovaya.volty.domain.history.HistoryReadRepository
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.data.prefs.DataStoreBegodeCurrentStore
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
+import ru.sodovaya.volty.domain.energy.BegodeCurrentStore
 import ru.sodovaya.volty.data.social.DefaultSocialRepository
 import ru.sodovaya.volty.data.social.HttpSocialTransport
 import ru.sodovaya.volty.data.social.LiveKitVoiceRoomRepository
@@ -49,6 +51,7 @@ val appModule = module {
         ru.sodovaya.volty.data.db.SqlDelightChannelSharingRevokeJournal(get(),kotlinx.coroutines.Dispatchers.IO)
     }
     single { AppPrefs(get<DataStoreFactory>().create()) }
+    single<BegodeCurrentStore> { DataStoreBegodeCurrentStore(get<DataStoreFactory>().create()) }
     singleOf(::SqlDelightVehicleRepository) bind VehicleRepository::class
     single<ru.sodovaya.volty.domain.energy.VehicleEnergyStore> { ru.sodovaya.volty.data.db.SqlDelightVehicleEnergyStore(get()) }
     single<ru.sodovaya.volty.domain.pwm.VehiclePwmStore> { ru.sodovaya.volty.data.db.SqlDelightVehiclePwmStore(get()) }
@@ -68,7 +71,8 @@ val appModule = module {
     // `binds` rather than a second `single { get<BmsRepository>() as … }` so the
     // cast cannot go stale if the implementation ever moves.
     single { KableBmsRepository(get(), get(), get(), get<BleAdapterStateProvider>(),
-        get<ru.sodovaya.volty.data.history.HistoryRecordingRuntime>(), get<ru.sodovaya.volty.domain.energy.VehicleEnergyStore>(), get<ru.sodovaya.volty.domain.pwm.VehiclePwmStore>()) } binds arrayOf(
+        get<ru.sodovaya.volty.data.history.HistoryRecordingRuntime>(), get<ru.sodovaya.volty.domain.energy.VehicleEnergyStore>(),
+        get<ru.sodovaya.volty.domain.pwm.VehiclePwmStore>(), begodeCurrentStore = get()) } binds arrayOf(
         BmsRepository::class,
         CanDiscovery::class,
         ControllerConfigSource::class,

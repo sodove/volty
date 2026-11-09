@@ -128,6 +128,7 @@ object MotionAggregator {
             // Battery current is summed, so an absent contributor makes the
             // vehicle total unavailable rather than a misleading partial.
             hasBatteryCurrent = d.all { it.hasBatteryCurrent },
+            currentPolarityConfirmed = d.all { it.currentPolarityConfirmed },
             // `G §9.3`: averaged over the controllers that MEASURE a voltage,
             // not over all of them. Begode is the first decoder that publishes
             // `0` meaning unknown (no cell count ⇒ no scale ⇒ no honest

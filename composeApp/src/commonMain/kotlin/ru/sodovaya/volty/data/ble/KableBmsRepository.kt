@@ -52,6 +52,9 @@ import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.energy.EnergyMemory
 import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
+import ru.sodovaya.volty.domain.energy.BegodeCurrentSettings
+import ru.sodovaya.volty.domain.energy.BegodeCurrentSign
+import ru.sodovaya.volty.domain.energy.BegodeCurrentStore
 import ru.sodovaya.volty.domain.energy.VehicleEnergyTracker
 import ru.sodovaya.volty.domain.pwm.PwmCalibration
 import ru.sodovaya.volty.domain.pwm.PwmCalibrationLearner
@@ -99,11 +102,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.retryWhen
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -179,6 +185,7 @@ class KableBmsRepository private constructor(
      * every existing construction site keeps its behaviour). Koin binds the SQLDelight store.
      */
     private val pwmStore: VehiclePwmStore? = null,
+    private val begodeCurrentStore: BegodeCurrentStore? = null,
 ) : BmsRepository, CanDiscovery, ControllerConfigSource, LearnedCellCountSource, BleDiagnosticsRepository {
 
     private val diagnosticBuffer = BleDiagnosticBuffer()
@@ -360,10 +367,11 @@ class KableBmsRepository private constructor(
         historyRuntime: ru.sodovaya.volty.data.history.HistoryRecordingRuntime,
         energyStore: VehicleEnergyStore? = null,
         pwmStore: VehiclePwmStore? = null,
+        begodeCurrentStore: BegodeCurrentStore? = null,
     ) : this(vehicleRepository, { serviceController.start() }, { serviceController.stop() },
         Dispatchers.Default, rideHistoryRepository, bleAdapterStateProvider,
         historyStartup = { historyRuntime.prepare().ingress }, historyShutdown = historyRuntime::close,
-        energyStore = energyStore, pwmStore = pwmStore)
+        energyStore = energyStore, pwmStore = pwmStore, begodeCurrentStore = begodeCurrentStore)
 
     internal companion object {
         /**
@@ -563,6 +571,12 @@ class KableBmsRepository private constructor(
     }
 
     private val scope = CoroutineScope(coroutineContext + SupervisorJob())
+    private val begodeCurrentSettings: StateFlow<Map<String, BegodeCurrentSettings>?>? =
+        begodeCurrentStore?.settings?.retryWhen { error, _ ->
+            println("[VOLTY-BLE] Begode current calibration load failed: $error")
+            delay(5_000L)
+            true
+        }?.stateIn(scope, SharingStarted.Eagerly, null)
 
     private val _activeData = MutableStateFlow(BmsData())
     override val activeData: StateFlow<BmsData> = _activeData.asStateFlow()
@@ -3119,6 +3133,9 @@ class KableBmsRepository private constructor(
             // from the SPEC (not a bare BmsType) so a controller link gets its
             // controller's own VescProtocol — a MotionSource, which is what
             // makes ConnectionSession.onMotionSample fire.
+            if (link.spec.protocolKind == ProtocolKind.BEGODE && begodeCurrentSettings?.value == null) {
+                withTimeoutOrNull(1_000L) { begodeCurrentSettings?.first { it != null } }
+            }
             val protocol = createProtocol(link.spec, vehicle)
             historyProtocol = protocol
             val channel: Channel<Sample> = sessionLock.withLock {
@@ -3947,6 +3964,7 @@ class KableBmsRepository private constructor(
      */
     private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
         val protocol = buildProtocol(spec, vehicle)
+        if (protocol is BegodeProtocol) attachBegodeCurrentCalibration(protocol, spec.address)
         if (spec.ownedPacks.any { it.globalIndex == 0 }) primaryPackProtocol = protocol
         val configSource = protocol as? ControllerConfigSource
         if (configSource != null) {
@@ -3959,6 +3977,33 @@ class KableBmsRepository private constructor(
             }
         }
         return protocol
+    }
+
+    private fun attachBegodeCurrentCalibration(protocol: BegodeProtocol, address: String) {
+        val store = begodeCurrentStore ?: return
+        val saving = Mutex()
+        protocol.configureCurrentCalibration(
+            settings = { begodeCurrentSettings?.value?.get(address) ?: BegodeCurrentSettings.DEFAULT },
+            onEvidence = { settings, evidence ->
+                val sign = BegodeCurrentSign.entries.firstOrNull { it.multiplier == evidence.sign }
+                val bmsSign = if (settings.learnedBmsSign == null)
+                    BegodeCurrentSign.entries.firstOrNull { it.multiplier == evidence.bmsSign } else null
+                val offset = evidence.offsetA
+                if (sign != null || offset != null || bmsSign != null) scope.launch {
+                    if (!saving.tryLock()) return@launch
+                    try {
+                        store.saveEvidence(address, sign, offset, bmsSign, settings.confirmedSign ?: sign)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        println("[VOLTY-BLE] Begode current calibration save failed: $e")
+                        delay(5_000L)
+                    } finally {
+                        saving.unlock()
+                    }
+                }
+            },
+        )
     }
 
     /**

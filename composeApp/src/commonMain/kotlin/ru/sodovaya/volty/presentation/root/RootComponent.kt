@@ -930,7 +930,8 @@ class DefaultRootComponent(
                         controllerConfigSource = get<ControllerConfigSource>(),
                         learnedCellCountSource = get<ru.sodovaya.volty.data.bms.LearnedCellCountSource>(),
                         energyStore = get<ru.sodovaya.volty.domain.energy.VehicleEnergyStore>(),
-                        rangeSource = get<ru.sodovaya.volty.data.energy.RangeSource>()
+                        rangeSource = get<ru.sodovaya.volty.data.energy.RangeSource>(),
+                        begodeCurrentStore = get()
                     )
                 )
             }

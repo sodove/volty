@@ -1,0 +1,15 @@
+<resources>
+    <string name="vehicle_begode_current_title">Begode current calibration</string>
+    <string name="vehicle_begode_current_sign">Controller current polarity</string>
+    <string name="vehicle_begode_current_auto">Automatic</string>
+    <string name="vehicle_begode_current_raw">Direct</string>
+    <string name="vehicle_begode_current_inverted">Inverted</string>
+    <string name="vehicle_begode_current_learning">Learns during normal rides. Using direct polarity for now.</string>
+    <string name="vehicle_begode_current_detected">Detected polarity · %1$s</string>
+    <string name="vehicle_begode_current_offset">Manual correction, A</string>
+    <string name="vehicle_begode_current_offset_active">Applied correction</string>
+    <string name="vehicle_begode_current_offset_hint">Added to the current after applying polarity.</string>
+    <string name="vehicle_begode_current_offset_invalid">Enter a value between −20 and +20 A.</string>
+    <string name="vehicle_begode_current_error">Could not read or save the current calibration.</string>
+    <string name="vehicle_begode_current_apply">Apply</string>
+</resources>

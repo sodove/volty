@@ -1,0 +1,15 @@
+<resources>
+    <string name="vehicle_begode_current_title">Калибровка тока Begode</string>
+    <string name="vehicle_begode_current_sign">Полярность тока контроллера</string>
+    <string name="vehicle_begode_current_auto">Авто</string>
+    <string name="vehicle_begode_current_raw">Прямая</string>
+    <string name="vehicle_begode_current_inverted">Обратная</string>
+    <string name="vehicle_begode_current_learning">Определяется в обычных поездках. Пока используется прямая полярность.</string>
+    <string name="vehicle_begode_current_detected">Определена полярность · %1$s</string>
+    <string name="vehicle_begode_current_offset">Ручная поправка, А</string>
+    <string name="vehicle_begode_current_offset_active">Действующая поправка</string>
+    <string name="vehicle_begode_current_offset_hint">Прибавляется к току после выбора полярности.</string>
+    <string name="vehicle_begode_current_offset_invalid">Введите значение от −20 до +20 А.</string>
+    <string name="vehicle_begode_current_error">Не удалось прочитать или сохранить калибровку тока.</string>
+    <string name="vehicle_begode_current_apply">Применить</string>
+</resources>

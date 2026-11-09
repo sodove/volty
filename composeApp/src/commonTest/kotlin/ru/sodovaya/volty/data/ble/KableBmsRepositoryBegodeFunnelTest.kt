@@ -653,6 +653,7 @@ class KableBmsRepositoryBegodeFunnelTest {
      * by `the fold fixture leaves no ControllerData field at its default`.
      */
     private fun everyFieldNonDefault(): ControllerData = ControllerData(
+        currentPolarityConfirmed = false,
         speedKmh = 43.5f,
         speedSource = SpeedSource.DERIVED,
         speedUnknownReason = SpeedUnknownReason.FIRMWARE_DID_NOT_REPORT,

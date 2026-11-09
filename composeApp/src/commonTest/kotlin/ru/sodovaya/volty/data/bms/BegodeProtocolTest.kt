@@ -1,9 +1,13 @@
 package ru.sodovaya.volty.data.bms
 
+import ru.sodovaya.volty.domain.energy.BegodeCurrentSettings
+import ru.sodovaya.volty.domain.energy.BegodeCurrentSign
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryReading
 import ru.sodovaya.volty.presentation.common.groupPackCells
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -164,6 +168,55 @@ class BegodeProtocolTest {
         // The 0x00 phase-current reading remains the controller motor-current
         // reading after the independent battery-current frame arrives.
         assertEquals(3.5f, assertNotNull(protocol.latestMotion(0)).motorCurrentA, 0.001f)
+    }
+
+    @Test
+    fun currentCalibrationReachesControllerPowerAndSyntheticPackWithoutChangingPhaseCurrent() {
+        val protocol = BegodeProtocol(cellCount = 16)
+        var settings = BegodeCurrentSettings()
+        val readings = mutableListOf<TelemetryReading>()
+        protocol.telemetryObserver = { readings += it.readings }
+        protocol.configureCurrentCalibration({ settings }) { _, _ -> }
+        protocol.onNotification(liveFrame(voltageRaw = 6000, currentRaw = -350))
+        protocol.onNotification(motionFrame(batteryCurrentRaw = -500, motorTempRaw = 20, dutyRaw = 4))
+        val provisional = assertNotNull(protocol.latestMotion(0))
+        assertEquals(-300f, provisional.powerW, 0.001f)
+        assertFalse(provisional.currentPolarityConfirmed)
+
+        settings = BegodeCurrentSettings(manualSign = BegodeCurrentSign.INVERTED, manualOffsetA = -1.9f)
+        protocol.onNotification(liveFrame(voltageRaw = 6000, currentRaw = -350))
+        protocol.onNotification(motionFrame(batteryCurrentRaw = -500, motorTempRaw = 20, dutyRaw = 4))
+        val draw = assertNotNull(protocol.latestMotion(0))
+        assertTrue(draw.currentPolarityConfirmed)
+        assertEquals(3.1f, draw.batteryCurrentA, 0.001f)
+        assertEquals(186f, draw.powerW, 0.001f)
+        assertEquals(3.5f, draw.motorCurrentA, 0.001f)
+        assertEquals(-3.1f, assertNotNull(protocol.latestData(0)).current, 0.001f)
+        assertEquals(186.0, assertNotNull(readings.last { it.metric == TelemetryMetric.CONTROLLER_POWER }.value), 0.001)
+
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 200, motorTempRaw = 20, dutyRaw = 4))
+        val regen = assertNotNull(protocol.latestMotion(0))
+        assertEquals(-3.9f, regen.batteryCurrentA, 0.001f)
+        assertEquals(-234f, regen.powerW, 0.001f)
+    }
+
+    @Test
+    fun polarityEvidenceRequiresRecentLiveVoltageEvenWhenNoCurrentFrameIntervened() {
+        var now = 1_000L
+        val protocol = BegodeProtocol(cellCount = 16, nowMillis = { now })
+        var candidateSamples = 0
+        protocol.configureCurrentCalibration({ BegodeCurrentSettings.DEFAULT }) { _, _ -> candidateSamples++ }
+        protocol.onNotification(liveFrame(voltageRaw = 6000))
+        now += 1_000
+        val current = motionFrame(batteryCurrentRaw = 300, motorTempRaw = 20, dutyRaw = 4)
+        protocol.onNotification(current)
+        assertEquals(0, candidateSamples)
+        assertEquals(3f, assertNotNull(protocol.latestMotion(0)).batteryCurrentA, 0.001f)
+
+        protocol.onNotification(liveFrame(voltageRaw = 5980))
+        now += 20
+        protocol.onNotification(current)
+        assertEquals(1, candidateSamples)
     }
 
     @Test

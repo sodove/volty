@@ -29,6 +29,9 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import ru.sodovaya.volty.domain.energy.BegodeCurrentSettings
+import ru.sodovaya.volty.domain.energy.BegodeCurrentSign
+import ru.sodovaya.volty.util.formatSigned
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.text.input.KeyboardType
@@ -117,6 +120,19 @@ import volty.composeapp.generated.resources.vehicle_energy_reset
 import volty.composeapp.generated.resources.vehicle_energy_reset_title
 import volty.composeapp.generated.resources.vehicle_energy_reset_text
 import volty.composeapp.generated.resources.vehicle_energy_reset_confirm
+import volty.composeapp.generated.resources.vehicle_begode_current_title
+import volty.composeapp.generated.resources.vehicle_begode_current_sign
+import volty.composeapp.generated.resources.vehicle_begode_current_auto
+import volty.composeapp.generated.resources.vehicle_begode_current_raw
+import volty.composeapp.generated.resources.vehicle_begode_current_inverted
+import volty.composeapp.generated.resources.vehicle_begode_current_learning
+import volty.composeapp.generated.resources.vehicle_begode_current_detected
+import volty.composeapp.generated.resources.vehicle_begode_current_offset
+import volty.composeapp.generated.resources.vehicle_begode_current_offset_active
+import volty.composeapp.generated.resources.vehicle_begode_current_offset_hint
+import volty.composeapp.generated.resources.vehicle_begode_current_offset_invalid
+import volty.composeapp.generated.resources.vehicle_begode_current_error
+import volty.composeapp.generated.resources.vehicle_begode_current_apply
 
 internal val VEHICLE_ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "unicycle", "moto", "solar", "ev", "boat", "rv")
 
@@ -399,6 +415,17 @@ private fun EnergyBlock(state: VehicleEditComponent.State, component: VehicleEdi
             SettingsDangerRow(stringResource(Res.string.vehicle_energy_reset), onClick = { confirmReset = true })
         }
     }
+    if (state.begodeCurrent.isNotEmpty()) {
+        SectionLabel(stringResource(Res.string.vehicle_begode_current_title))
+        SettingsGroup(null) {
+            state.begodeCurrent.entries.forEachIndexed { index, (address, settings) ->
+                if (index > 0) SettingsRowDivider()
+                if (state.begodeCurrent.size > 1) EnergyValueRow(address, "")
+                BegodeCurrentControls(address, settings, component)
+            }
+        }
+    }
+    if (state.begodeCurrentError) Caption(stringResource(Res.string.vehicle_begode_current_error))
     if (confirmReset) {
         AlertDialog(
             onDismissRequest = { confirmReset = false },
@@ -413,6 +440,60 @@ private fun EnergyBlock(state: VehicleEditComponent.State, component: VehicleEdi
             title = { Text(stringResource(Res.string.vehicle_energy_reset_title)) },
             text = { Text(stringResource(Res.string.vehicle_energy_reset_text)) }
         )
+    }
+}
+
+@Composable
+private fun BegodeCurrentControls(
+    address: String,
+    settings: BegodeCurrentSettings,
+    component: VehicleEditComponent,
+) {
+    val automatic = stringResource(Res.string.vehicle_begode_current_auto)
+    val raw = stringResource(Res.string.vehicle_begode_current_raw)
+    val inverted = stringResource(Res.string.vehicle_begode_current_inverted)
+    SettingsChoiceRow<BegodeCurrentSign?>(
+        title = stringResource(Res.string.vehicle_begode_current_sign),
+        options = listOf(null to automatic, BegodeCurrentSign.RAW to raw, BegodeCurrentSign.INVERTED to inverted),
+        selected = settings.manualSign,
+        onSelect = { component.onBegodeCurrentSign(address, it) },
+        hint = if (settings.manualSign != null) null else when (settings.learnedSign) {
+            null -> stringResource(Res.string.vehicle_begode_current_learning)
+            BegodeCurrentSign.RAW -> stringResource(Res.string.vehicle_begode_current_detected, raw)
+            BegodeCurrentSign.INVERTED -> stringResource(Res.string.vehicle_begode_current_detected, inverted)
+        },
+    )
+    var offsetText by remember(address, settings.manualOffsetA) {
+        mutableStateOf(settings.manualOffsetA?.toString().orEmpty())
+    }
+    val offsetValid = parseBegodeCurrentOffset(offsetText) != null
+    SettingsRowDivider()
+    EnergyValueRow(
+        stringResource(Res.string.vehicle_begode_current_offset_active),
+        settings.offsetA?.let { formatSigned(it, 2) + " A" } ?: "—",
+    )
+    Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        OutlinedTextField(
+            value = offsetText,
+            onValueChange = { offsetText = it },
+            label = { Text(stringResource(Res.string.vehicle_begode_current_offset)) },
+            supportingText = {
+                Text(stringResource(if (offsetText.isNotBlank() && !offsetValid)
+                    Res.string.vehicle_begode_current_offset_invalid else Res.string.vehicle_begode_current_offset_hint))
+            },
+            isError = offsetText.isNotBlank() && !offsetValid,
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = { component.onBegodeCurrentOffset(address, offsetText) }, enabled = offsetValid) {
+                Text(stringResource(Res.string.vehicle_begode_current_apply))
+            }
+            TextButton(onClick = {
+                offsetText = ""
+                component.onBegodeCurrentOffset(address, null)
+            }, enabled = settings.manualOffsetA != null) { Text(automatic) }
+        }
     }
 }
 

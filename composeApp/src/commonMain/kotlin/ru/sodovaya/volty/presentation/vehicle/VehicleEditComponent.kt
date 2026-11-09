@@ -38,6 +38,10 @@ import ru.sodovaya.volty.data.energy.RangeSource
 import ru.sodovaya.volty.domain.energy.EnergyRecord
 import ru.sodovaya.volty.domain.energy.OcvCurve
 import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
+import ru.sodovaya.volty.domain.energy.BegodeCurrentSettings
+import ru.sodovaya.volty.domain.energy.BegodeCurrentSign
+import ru.sodovaya.volty.domain.energy.BegodeCurrentStore
+import ru.sodovaya.volty.domain.energy.MAX_BEGODE_CURRENT_OFFSET_A
 import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.picker.addBmsType
@@ -113,6 +117,8 @@ interface VehicleEditComponent : DraftExitComponent {
 
     /** Forget what the app learned about this pack (capacity, resistance). Entered capacity stays. */
     fun onResetLearnedEnergy()
+    fun onBegodeCurrentSign(address: String, sign: BegodeCurrentSign?) {}
+    fun onBegodeCurrentOffset(address: String, text: String?) {}
 
     // ----- Estimated PWM -----
 
@@ -524,6 +530,8 @@ interface VehicleEditComponent : DraftExitComponent {
         val capacityUnit: CapacityUnit = CapacityUnit.WH,
         /** Null while creating: a vehicle that does not exist yet has learned nothing. */
         val energy: EnergySummary? = null,
+        val begodeCurrent: Map<String, BegodeCurrentSettings> = emptyMap(),
+        val begodeCurrentError: Boolean = false,
 
         // ----- Estimated PWM -----
 
@@ -817,7 +825,8 @@ class DefaultVehicleEditComponent(
     // Optional prefilled BMS info when creating from Picker
     private val prefilledBmsType: BmsType? = null,
     private val prefilledBmsAddress: String? = null,
-    private val prefilledName: String? = null
+    private val prefilledName: String? = null,
+    private val begodeCurrentStore: BegodeCurrentStore? = null,
 ) : VehicleEditComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -1073,6 +1082,7 @@ class DefaultVehicleEditComponent(
                     savedValues = loaded.editableValues,
                     energy = if (energyStore != null) energySummaryOf(storedRecord, loadedAlert, liveWhPerKm) else null
                 )
+                observeBegodeCurrent(v)
                 refreshPwm()
                 return
             }
@@ -1173,6 +1183,50 @@ class DefaultVehicleEditComponent(
     override fun onSocCutoffChanged(v: Int?) { _state.update { it.copy(socCutoffPercent = v) } }
     override fun onCapacityChanged(text: String) { _state.update { it.copy(capacityText = text) } }
     override fun onCapacityUnitChanged(unit: CapacityUnit) { _state.update { it.copy(capacityUnit = unit) } }
+
+    private fun observeBegodeCurrent(vehicle: Vehicle) {
+        val store = begodeCurrentStore ?: return
+        val addresses = (vehicle.controllers.filter { it.controllerType == ControllerType.BEGODE }.map { it.address } +
+            vehicle.packs.filter { it.bmsType == BmsType.BEGODE }.map { it.bmsAddress }).filter { it.isNotBlank() }.distinct()
+        if (addresses.isEmpty()) return
+        scope.launch {
+            try {
+                store.settings.collect { all ->
+                    _state.update { state ->
+                        state.copy(begodeCurrent = addresses.associateWith { all[it] ?: BegodeCurrentSettings() })
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _state.update { it.copy(begodeCurrentError = true) }
+            }
+        }
+    }
+
+    override fun onBegodeCurrentSign(address: String, sign: BegodeCurrentSign?) = updateBegodeCurrent(address) {
+        setManualSign(address, sign)
+    }
+
+    override fun onBegodeCurrentOffset(address: String, text: String?) {
+        val amps = if (text == null) null else parseBegodeCurrentOffset(text) ?: return
+        updateBegodeCurrent(address) { setManualOffset(address, amps) }
+    }
+
+    private fun updateBegodeCurrent(address: String, change: suspend BegodeCurrentStore.() -> Unit) {
+        val store = begodeCurrentStore ?: return
+        if (address !in _state.value.begodeCurrent) return
+        scope.launch {
+            try {
+                store.change()
+                _state.update { it.copy(begodeCurrentError = false) }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _state.update { it.copy(begodeCurrentError = true) }
+            }
+        }
+    }
     override fun onResetLearnedEnergy() {
         val id = vehicleId ?: return
         val store = energyStore ?: return
@@ -1657,6 +1711,9 @@ class DefaultVehicleEditComponent(
         }
     }
 }
+
+internal fun parseBegodeCurrentOffset(text: String): Float? = text.trim().replace(',', '.').toFloatOrNull()
+    ?.takeIf { it.isFinite() && it in -MAX_BEGODE_CURRENT_OFFSET_A..MAX_BEGODE_CURRENT_OFFSET_A }
 
 /**
  * Applies this form's edits **to the vehicle it loaded** — and touches nothing

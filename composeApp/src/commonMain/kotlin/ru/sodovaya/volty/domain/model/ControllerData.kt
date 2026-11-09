@@ -254,7 +254,9 @@ data class ControllerData(
     /** With [DutySource.ESTIMATED]: the model reached 100 % (field weakening beyond), shown as "at least 100 %". */
     val dutyAtCeiling: Boolean = false,
     val isConnected: Boolean = false,
-    val timestamp: Instant = Clock.System.now()
+    val timestamp: Instant = Clock.System.now(),
+    /** False while Begode is using provisional polarity for display. */
+    val currentPolarityConfirmed: Boolean = true,
 ) {
     val speedKnown: Boolean get() = speedSource != SpeedSource.NONE
 

@@ -28,8 +28,8 @@ internal fun observedBegodeAssembly(frame: ByteArray, bootPlaceholder: Boolean,
 }
 
 internal fun observedBegodeBranch(frame: ByteArray, bootPlaceholder: Boolean,
-    voltageCertified: Boolean = false): List<TelemetryReading> {
-    val current = -(frame.i16BE(8) * 0.1)
+    voltageCertified: Boolean = false, bmsMultiplier: Int = 1): List<TelemetryReading> {
+    val current = -(frame.i16BE(8) * 0.1) * bmsMultiplier
     val voltage = frame.u16BE(6) * 0.1
     // Retraction: this frame's whole-pack voltage was never recorded, because nothing certified its
     // convention. Once the wheel's own live frame has agreed with it on a whole series count, it is
