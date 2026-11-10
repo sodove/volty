@@ -1,12 +1,14 @@
 package ru.sodovaya.volty.presentation.nearby
 
 import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.essenty.backhandler.BackDispatcher
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import com.arkivanov.essenty.lifecycle.Lifecycle
 import com.arkivanov.essenty.lifecycle.create
 import com.arkivanov.essenty.lifecycle.destroy
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.*
+import io.ktor.http.encodedPath
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
 import ru.sodovaya.volty.data.social.*
@@ -18,6 +20,7 @@ import kotlin.test.*
 @OptIn(ExperimentalCoroutinesApi::class)
 class VoiceSpacesNearbyComponentTest {
     private val actor="10000000-0000-0000-0000-000000000001"
+    private val server="40000000-0000-0000-0000-000000000004"
     private val accepted=FriendSummary(FriendshipId("accepted"),SocialUserId("20000000-0000-0000-0000-000000000002"),"Friend",FriendshipState.ACCEPTED)
     private val pending=FriendSummary(FriendshipId("pending"),SocialUserId("30000000-0000-0000-0000-000000000003"),"Waiting",FriendshipState.REQUEST_RECEIVED)
     private inner class Transport:SocialTransport by UnavailableSocialTransport() {
@@ -64,13 +67,57 @@ class VoiceSpacesNearbyComponentTest {
         val transport=Transport();val store=Credentials();val repository=DefaultSocialRepository(transport,store,test.backgroundScope)
         val parent=SupervisorJob(test.coroutineContext[Job]);val scope=CoroutineScope(test.coroutineContext+parent)
         val lifecycle=LifecycleRegistry().apply {create()}
+        val backDispatcher=BackDispatcher()
         val calls=mutableListOf<Pair<SocialAuthenticatedAccount,FriendSummary>>()
-        val client=HttpClient(MockEngine) {engine {dispatcher=StandardTestDispatcher(test.testScheduler);addHandler {respond("""{"items":[]}""")}}}
+        val client=HttpClient(MockEngine) {engine {
+            dispatcher=StandardTestDispatcher(test.testScheduler)
+            addHandler {request ->
+                respond(if(request.url.encodedPath.endsWith(server))
+                    """{"revision":1,"community":{"id":"$server","name":"Riders","description":"","visibility":"PRIVATE","createdAtEpochMillis":1},"ownerId":"$actor","channels":[]}"""
+                else """{"items":[]}""")
+            }
+        }}
         val factory=NearbyCommunityAccountFactory(client,"https://example.test/v2/nearby",{Drafts(it)},InvitationSecretGenerator {error("No entropy")})
-        val component=DefaultVoiceSpacesNearbyComponent(DefaultComponentContext(lifecycle),scope,repository,factory,
+        val component=DefaultVoiceSpacesNearbyComponent(DefaultComponentContext(lifecycle,backHandler=backDispatcher),scope,repository,factory,
             {actor},{_,_->error("No channel selected")},{account,friend->calls+=account to friend},{})
         suspend fun login() {repository.login(LoginRequest("rider","password"))}
         suspend fun close() {component.close();parent.cancel();client.close()}
+    }
+
+    @Test fun system_back_closes_the_server_before_falling_through_to_root()=runTest {
+        val f=Fixture(this)
+        try {
+            f.login();runCurrent()
+            val presenter=assertNotNull(f.component.servers.value.presenter)
+            presenter.openServer(server);runCurrent()
+            assertEquals(ServerWorkspaceSection.SERVER,presenter.state.value.section)
+            assertEquals(server,presenter.state.value.browser.selectedCommunity)
+
+            assertTrue(f.backDispatcher.back())
+            runCurrent()
+
+            assertEquals(ServerWorkspaceSection.MY_SERVERS,presenter.state.value.section)
+            assertNull(presenter.state.value.browser.selectedCommunity)
+            assertFalse(f.backDispatcher.back())
+        } finally {f.close();runCurrent()}
+    }
+
+    @Test fun reselecting_nearby_returns_to_my_servers_even_from_a_catalog_server()=runTest {
+        val f=Fixture(this)
+        try {
+            f.login();runCurrent()
+            val presenter=assertNotNull(f.component.servers.value.presenter)
+            presenter.openCatalog();runCurrent()
+            presenter.openServer(server);runCurrent()
+            assertEquals(ServerWorkspaceSection.SERVER,presenter.state.value.section)
+            assertEquals(ServerWorkspaceSection.CATALOG,presenter.state.value.origin)
+
+            f.component.onTabReselected()
+            runCurrent()
+
+            assertEquals(ServerWorkspaceSection.MY_SERVERS,presenter.state.value.section)
+            assertNull(presenter.state.value.browser.selectedCommunity)
+        } finally {f.close();runCurrent()}
     }
 
     @Test fun recovery_uses_email_without_password_and_waits_for_actual_acceptance()=runTest {

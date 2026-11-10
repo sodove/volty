@@ -670,6 +670,11 @@ class DefaultRootComponent(
     }
 
     override fun onTab(tab: RootComponent.Tab) {
+        val current = stack.value.active.instance
+        if (tab == RootComponent.Tab.Nearby && current is RootComponent.Child.Nearby) {
+            current.component.onTabReselected()
+            return
+        }
         val config = configForTab(tab, liveVehicleAvailable = liveVehicle() != null) ?: return
         nav.bringToFront(permissionGatedConfig(config, permissionsChecker.missingPermissions()))
     }

@@ -73,11 +73,12 @@ internal fun NearbyConversationPanelScreen(
     onOpenDetails: () -> Unit = {},
     listen: VoiceListenSettings = VoiceListenSettings(),
     onParticipantGain: (actorId: String, db: Float) -> Unit = { _, _ -> },
+    showSwitchConfirmation: Boolean = true,
 ) {
     val panel = nearbyConversationPanel(voice, sharing)
     val roster = nearbyChannelRosterPanel(voice)
     val pending = voice.pending
-    if (pending != null && pending.confirmationRequired && !pending.confirmed) {
+    if (showSwitchConfirmation && pending != null && pending.confirmationRequired && !pending.confirmed) {
         AlertDialog(
             onDismissRequest = { actions.cancelVoiceRequest(pending.id) },
             title = { Text(stringResource(Res.string.nearby_panel_switch_title)) },

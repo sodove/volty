@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.ride
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -12,14 +13,21 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Groups
+import androidx.compose.material.icons.filled.ShowChart
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,8 +42,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.alert.ActiveAlert
@@ -48,9 +59,7 @@ import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.TempBands
-import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
-import ru.sodovaya.volty.presentation.common.NearbyLinkButton
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
 import ru.sodovaya.volty.presentation.common.voltyStatusColors
@@ -63,6 +72,7 @@ import ru.sodovaya.volty.presentation.nearby.SocialLiveState
 import ru.sodovaya.volty.presentation.navigation.LightNavigationCallbacks
 import ru.sodovaya.volty.presentation.navigation.LightNavigationState
 import ru.sodovaya.volty.presentation.ride.gauge.RadialGauge
+import ru.sodovaya.volty.presentation.video.rememberRideVideoOpener
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
 import ru.sodovaya.volty.util.formatFixed
@@ -120,6 +130,9 @@ import volty.composeapp.generated.resources.status_connecting
 import volty.composeapp.generated.resources.status_disconnected
 import volty.composeapp.generated.resources.status_idle
 import volty.composeapp.generated.resources.status_reconnecting
+import volty.composeapp.generated.resources.tab_graph
+import volty.composeapp.generated.resources.tab_nearby
+import volty.composeapp.generated.resources.video_title
 import org.koin.compose.koinInject
 import volty.composeapp.generated.resources.status_scanning
 import volty.composeapp.generated.resources.controller_issue_not_reported
@@ -354,26 +367,8 @@ fun RideDashboardScreen(
                 )
             }
 
-        // Graph is no longer a bottom tab — this is its entry point from the
-        // ride dashboard. It lives here, alongside the odometer strip, rather
-        // than inside either renderer, so it's present for all styles
-        // (Classic's cluster otherwise leaves riders no
-        // Graph affordance on this screen at all).
         if (state.style != DashboardStyle.LIGHT) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                ru.sodovaya.volty.presentation.video.RideVideoButton(
-                    fill = MaterialTheme.colorScheme.surfaceVariant,
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Spacer(Modifier.width(8.dp))
-                NearbyLinkButton(onClick = onOpenNearby)
-                Spacer(Modifier.width(8.dp))
-                GraphLinkButton(onClick = component::onOpenGraph)
-            }
+            RideDashboardActions(onOpenNearby = onOpenNearby, onOpenGraph = component::onOpenGraph)
 
             OdometerStrip(motion = motion, units = units, uptimeSeconds = state.uptimeSeconds)
             TelemetryRateReadout(state)
@@ -389,6 +384,64 @@ fun RideDashboardScreen(
             onAdd = component::onAddVehicle,
             onDisconnect = component::onDisconnect,
             onDismiss = component::onSheetDismiss
+        )
+    }
+}
+
+@Composable
+private fun RideDashboardActions(onOpenNearby: () -> Unit, onOpenGraph: () -> Unit) {
+    val openCamera = rememberRideVideoOpener()
+    Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Row(
+            modifier = Modifier.widthIn(max = 480.dp).fillMaxWidth().height(IntrinsicSize.Min),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            RideDashboardAction(
+                icon = Icons.Default.Videocam,
+                label = stringResource(Res.string.video_title),
+                onClick = openCamera,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
+            RideDashboardAction(
+                icon = Icons.Default.Groups,
+                label = stringResource(Res.string.tab_nearby),
+                onClick = onOpenNearby,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
+            RideDashboardAction(
+                icon = Icons.Default.ShowChart,
+                label = stringResource(Res.string.tab_graph),
+                onClick = onOpenGraph,
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun RideDashboardAction(
+    icon: ImageVector,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val colors = MaterialTheme.colorScheme
+    Column(
+        modifier = modifier
+            .heightIn(min = 48.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .background(colors.surfaceContainerHigh)
+            .clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 6.dp, vertical = 10.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Icon(icon, contentDescription = null, tint = colors.primary, modifier = Modifier.size(20.dp))
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = colors.onSurface,
+            textAlign = TextAlign.Center,
         )
     }
 }

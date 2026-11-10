@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.presentation.vehicle
 
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -15,6 +17,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,39 +69,52 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
             }
         },
     ) { padding ->
-        LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            if (state.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-            if (state.error) item { Text(stringResource(Res.string.vehicle_overview_error), color = MaterialTheme.colorScheme.error) }
-            items(batteryGroups, key = { "battery-" + it.first().sourceId }) { group ->
-                BatteryCard(group, showLabel = batteryGroups.size > 1)
-            }
-            state.lastRide?.let { ride ->
-                item { SectionLabel(stringResource(Res.string.vehicle_overview_last_ride, whenText(ride.started.epochMillis, now))) }
-                item {
-                    ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().clickable { component.onOpenRide(ride.id) }) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (state.lastRoute.size >= 2) {
-                                RouteMapPreview(state.lastRoute, LocalVoltyDarkTheme.current, Modifier.fillMaxWidth().height(160.dp))
+        Box(Modifier.padding(padding).fillMaxSize()) {
+            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (state.error) item { Text(stringResource(Res.string.vehicle_overview_error), color = MaterialTheme.colorScheme.error) }
+                items(batteryGroups, key = { "battery-" + it.first().sourceId }) { group ->
+                    BatteryCard(group, showLabel = batteryGroups.size > 1)
+                }
+                state.lastRide?.let { ride ->
+                    item { SectionLabel(stringResource(Res.string.vehicle_overview_last_ride, whenText(ride.started.epochMillis, now))) }
+                    item {
+                        ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().clickable { component.onOpenRide(ride.id) }) {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                                if (state.lastRoute.size >= 2) {
+                                    RouteMapPreview(state.lastRoute, LocalVoltyDarkTheme.current, Modifier.fillMaxWidth().height(160.dp))
+                                }
+                                if (state.lastTotals.isNotEmpty()) TotalsTiles(state.lastTotals)
                             }
-                            if (state.lastTotals.isNotEmpty()) TotalsTiles(state.lastTotals)
+                        }
+                    }
+                }
+                if (!state.loading && !state.error && state.rides.isEmpty()) item {
+                    Text(stringResource(Res.string.vehicle_overview_no_rides), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (state.rides.isNotEmpty()) {
+                    item { SectionLabel(stringResource(Res.string.vehicle_overview_rides)) }
+                    item {
+                        ElevatedCard(shape = RoundedCornerShape(22.dp)) {
+                            val latestRideId = state.lastRide?.id
+                            val olderTotalsAlpha by animateFloatAsState(
+                                targetValue = if (state.rideTotals.keys.any { it != latestRideId }) 1f else 0f,
+                                animationSpec = tween(180),
+                                label = "older ride totals",
+                            )
+                            val olderTotalsModifier = Modifier.graphicsLayer { alpha = olderTotalsAlpha }
+                            state.rides.forEachIndexed { i, ride ->
+                                if (i > 0) HorizontalDivider(Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                                RideRow(ride, state.rideTotals[ride.id], now,
+                                    totalsModifier = if (ride.id == latestRideId) Modifier else olderTotalsModifier,
+                                ) { component.onOpenRide(ride.id) }
+                            }
                         }
                     }
                 }
             }
-            if (!state.loading && !state.error && state.rides.isEmpty()) item {
-                Text(stringResource(Res.string.vehicle_overview_no_rides), color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (state.rides.isNotEmpty()) {
-                item { SectionLabel(stringResource(Res.string.vehicle_overview_rides)) }
-                item {
-                    ElevatedCard(shape = RoundedCornerShape(22.dp)) {
-                        state.rides.forEachIndexed { i, ride ->
-                            if (i > 0) HorizontalDivider(Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                            RideRow(ride, state.rideTotals[ride.id], now) { component.onOpenRide(ride.id) }
-                        }
-                    }
-                }
+            if (state.loading) {
+                LinearProgressIndicator(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 16.dp))
             }
         }
     }
@@ -160,7 +176,7 @@ private fun BatteryCells(snapshot: VehicleBatterySnapshot) {
 }
 
 @Composable
-private fun RideRow(ride: HistoryRide, totals: List<HistoryTotal>?, now: Long, onClick: () -> Unit) {
+private fun RideRow(ride: HistoryRide, totals: List<HistoryTotal>?, now: Long, totalsModifier: Modifier, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 16.dp, vertical = 13.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
@@ -170,11 +186,12 @@ private fun RideRow(ride: HistoryRide, totals: List<HistoryTotal>?, now: Long, o
                 totals?.firstOrNull { it.kind == HistoryTotalKind.DURATION_MILLIS }?.text(),
                 totals?.firstOrNull { it.kind == HistoryTotalKind.WH_PER_KM }?.text(),
             )
-            // Totals for older rides arrive later. Keep their row height stable.
             Text(
                 parts.joinToString(" · "),
+                modifier = totalsModifier,
                 fontSize = 12.5.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                minLines = 1,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )

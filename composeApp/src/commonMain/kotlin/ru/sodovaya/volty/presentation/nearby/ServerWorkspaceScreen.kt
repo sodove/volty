@@ -23,8 +23,11 @@ import volty.composeapp.generated.resources.*
 /** Rendering only. The root supplies a presenter whose connect callback owns voice admission. */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifier = Modifier) {
-    val state by presenter.state.collectAsState()
+internal fun ServerWorkspaceScreen(
+    state: ServerWorkspaceUiState,
+    presenter: ServerWorkspacePresenter,
+    modifier: Modifier = Modifier,
+) {
     val enabled = !state.commands.busy && !state.channelDeletion.busy && state.actorId != null
     val mutationEnabled = enabled && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking
         Column(modifier.fillMaxSize().padding(horizontal=16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
@@ -38,15 +41,6 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
                     FilledTonalIconButton(onClick=presenter::openCreate,enabled=mutationEnabled) {
                         Icon(Icons.Default.Add,contentDescription=stringResource(Res.string.nearby_create))
                     }
-                }
-            } else {
-                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
-                    TextButton(onClick={if(state.section==ServerWorkspaceSection.CATALOG) presenter.openMine() else presenter.back()},enabled=enabled) {
-                        Text(stringResource(Res.string.nearby_back))
-                    }
-                    if(state.section!=ServerWorkspaceSection.SERVER) Text(stringResource(
-                        if(state.section==ServerWorkspaceSection.CREATE) Res.string.nearby_servers_create else Res.string.nearby_servers_catalog),
-                        style=MaterialTheme.typography.titleMedium,maxLines=1,overflow=TextOverflow.Ellipsis)
                 }
             }
             state.commands.error?.let { Text(stringResource(it.workspaceMessage()),color=MaterialTheme.colorScheme.error) }

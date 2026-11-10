@@ -310,9 +310,8 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         scope.launch { if (enabled(allowCreation)) work() }
     }
     fun openMine() = action(true) {
-        withdrawAcceptance()
-        form.update { it.copy(section=ServerWorkspaceSection.MY_SERVERS,returnTo=ServerWorkspaceSection.MY_SERVERS) }
-        workspace.dismissRemoval();workspace.browser.clearSelection();workspace.browser.refreshMemberships()
+        leavePage(ServerWorkspaceSection.MY_SERVERS)
+        workspace.browser.refreshMemberships()
     }
     fun openCatalog() = action(true) {
         withdrawAcceptance()
@@ -382,11 +381,21 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
             else -> workspace.browser.refreshMemberships()
         }
     }
+    fun returnToMine() = action(true) {
+        if (form.value.section != ServerWorkspaceSection.MY_SERVERS || workspace.browser.state.value.selectedCommunity != null) {
+            leavePage(ServerWorkspaceSection.MY_SERVERS)
+        }
+    }
     fun back() = action(true) {
+        val page = form.value
+        val origin = if (page.section == ServerWorkspaceSection.CATALOG) ServerWorkspaceSection.MY_SERVERS else page.returnTo
+        leavePage(origin)
+    }
+    private suspend fun leavePage(destination: ServerWorkspaceSection) {
         withdrawAcceptance()
-        val origin=form.value.returnTo
-        form.update {it.copy(section=origin)}
-        workspace.dismissRemoval();workspace.browser.clearSelection()
+        workspace.dismissRemoval()
+        workspace.browser.clearSelection()
+        form.update { it.copy(section = destination, returnTo = destination) }
     }
     fun connect(channel: String) {
         if(!enabled() || form.value.section!=ServerWorkspaceSection.SERVER) return

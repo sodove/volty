@@ -31,13 +31,25 @@ import volty.composeapp.generated.resources.*
 fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifier: Modifier=Modifier) {
     val state by component.state.collectAsState()
     val servers by component.servers.collectAsState()
+    val presenter = servers.presenter
+    val workspace = presenter?.state?.collectAsState()?.value
+    val showingProfile = state.session is SocialSession.Authenticated && state.section == NearbyShellSection.PROFILE
+    val serverPage = workspace?.takeIf { state.section == NearbyShellSection.SERVERS }
+    val title = when {
+        showingProfile -> Res.string.nearby_profile_title
+        serverPage?.section == ServerWorkspaceSection.CATALOG -> Res.string.nearby_servers_catalog
+        serverPage?.section == ServerWorkspaceSection.CREATE -> Res.string.nearby_servers_create
+        else -> Res.string.nearby_title
+    }
     val profileDescription=stringResource(Res.string.nearby_profile_title)
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
-            IconButton(onClick={if(state.section==NearbyShellSection.PROFILE) component.openServers() else component.back()}) {
+            val serverCommandsBusy = serverPage?.section != ServerWorkspaceSection.MY_SERVERS &&
+                (serverPage?.commands?.busy == true || serverPage?.channelDeletion?.busy == true)
+            IconButton(onClick=component::back, enabled=!serverCommandsBusy) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack,contentDescription=stringResource(Res.string.nearby_back))
             }
-            Text(stringResource(if(state.section==NearbyShellSection.PROFILE) Res.string.nearby_profile_title else Res.string.nearby_title),
+            Text(stringResource(title),
                 modifier=Modifier.weight(1f),style=MaterialTheme.typography.titleLarge,maxLines=1,overflow=TextOverflow.Ellipsis)
             val account=state.session as? SocialSession.Authenticated
             if(account!=null) FilledTonalIconButton(onClick=component::openProfile,enabled=!state.busy,shape=CircleShape) {
@@ -45,10 +57,10 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
                     modifier=Modifier.semantics {contentDescription=profileDescription},style=MaterialTheme.typography.titleSmall)
             }
         }
-        if(state.session is SocialSession.Authenticated) state.error?.let {
+        if(state.session is SocialSession.Authenticated && !showingProfile) state.error?.let {
             Text(stringResource(it.shellMessage()),Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.error)
         }
-        if(state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+        if(state.busy && !showingProfile) LinearProgressIndicator(Modifier.fillMaxWidth())
         if(state.confirmingDeletion) AlertDialog(
             onDismissRequest=component::cancelDeleteAccount,
             title={Text(stringResource(Res.string.nearby_delete_account_title))},
@@ -64,21 +76,24 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
         )
         if(state.session !is SocialSession.Authenticated) {
             NearbyAuthForm(state,component,Modifier.weight(1f))
+        } else if(showingProfile) {
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                NearbyProfileForm(state,component,Modifier.fillMaxSize())
+                if(state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            }
         } else {
-            if(state.section!=NearbyShellSection.PROFILE) TabRow(selectedTabIndex=if(state.section==NearbyShellSection.FRIENDS) 1 else 0) {
+            TabRow(selectedTabIndex=if(state.section==NearbyShellSection.FRIENDS) 1 else 0) {
                 Tab(selected=state.section==NearbyShellSection.SERVERS,onClick=component::openServers,
                     text={Text(stringResource(Res.string.nearby_shell_servers))})
                 Tab(selected=state.section==NearbyShellSection.FRIENDS,onClick=component::openFriends,
                     text={Text(stringResource(Res.string.nearby_friends_tab))})
             }
             Crossfade(state.section, modifier=Modifier.weight(1f), animationSpec=tween(220), label="nearbyPage") { section ->
-            when(section) {
-                NearbyShellSection.PROFILE -> NearbyProfileForm(state,component,Modifier.fillMaxSize())
-                NearbyShellSection.FRIENDS -> NearbyFriendsView(state,component,Modifier.fillMaxSize())
-                NearbyShellSection.SERVERS -> {
-                    val presenter=servers.presenter
+                if(section == NearbyShellSection.FRIENDS) {
+                    NearbyFriendsView(state,component,Modifier.fillMaxSize())
+                } else {
                     when {
-                        presenter!=null -> ServerWorkspaceScreen(presenter,Modifier.fillMaxSize())
+                        presenter!=null && workspace!=null -> ServerWorkspaceScreen(workspace,presenter,Modifier.fillMaxSize())
                         servers.failed -> Column(Modifier.padding(16.dp)) {
                             Text(stringResource(Res.string.nearby_shell_unavailable))
                             Button(onClick=component::retryServers) {Text(stringResource(Res.string.nearby_retry))}
@@ -87,26 +102,55 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
                     }
                 }
             }
-            }
         }
     }
 }
 
 @Composable
 private fun NearbyProfileForm(state: VoiceSpacesNearbyState,component: DefaultVoiceSpacesNearbyComponent,modifier: Modifier) {
-    LazyColumn(modifier.fillMaxWidth(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        item {OutlinedTextField(state.profile.displayName,component::setProfileName,
-            Modifier.widthIn(max=520.dp).fillMaxWidth(),label={Text(stringResource(Res.string.nearby_name))},
-            singleLine=true,enabled=!state.busy)}
-        item {Button(onClick=component::submitProfile,enabled=!state.busy) {
+    val name = state.profile.displayName
+    var editor by remember { mutableStateOf(TextFieldValue(name, TextRange(name.length))) }
+    LaunchedEffect(state.profile.saved, name) {
+        if (state.profile.saved && editor.text != name) editor = TextFieldValue(name, TextRange(name.length))
+    }
+    LazyColumn(modifier.fillMaxWidth().imePadding(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+        item(key="profile-name") {
+            OutlinedTextField(
+                value = editor,
+                onValueChange = { value ->
+                    if (value.text.length <= 80) {
+                        val changed = value.text != editor.text
+                        editor = value
+                        if (changed) component.setProfileName(value.text)
+                    }
+                },
+                modifier = Modifier.widthIn(max=520.dp).fillMaxWidth(),
+                label = { Text(stringResource(Res.string.nearby_name)) },
+                singleLine = true,
+                enabled = !state.busy,
+            )
+        }
+        item(key="profile-save") {Button(onClick=component::submitProfile,enabled=!state.busy) {
             Text(stringResource(Res.string.nearby_profile_save))
         }}
-        if(state.profile.saved) item {Text(stringResource(Res.string.nearby_shell_profile_saved))}
-        item {NearbyCallNotificationSettings(Modifier.widthIn(max=520.dp).fillMaxWidth())}
-        item {TextButton(onClick=component::logout,enabled=!state.busy) {
+        item(key="profile-feedback") {
+            val error = state.error
+            Text(
+                text = when {
+                    error != null -> stringResource(error.shellMessage())
+                    state.profile.saved -> stringResource(Res.string.nearby_shell_profile_saved)
+                    else -> ""
+                },
+                minLines = 1,
+                color = if(error != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        item(key="profile-notifications") {NearbyCallNotificationSettings(Modifier.widthIn(max=520.dp).fillMaxWidth())}
+        item(key="profile-logout") {TextButton(onClick=component::logout,enabled=!state.busy) {
             Text(stringResource(Res.string.nearby_logout),color=MaterialTheme.colorScheme.error)
         }}
-        item {TextButton(onClick=component::requestDeleteAccount,enabled=!state.busy) {
+        item(key="profile-delete") {TextButton(onClick=component::requestDeleteAccount,enabled=!state.busy) {
             Text(stringResource(Res.string.nearby_delete_account),color=MaterialTheme.colorScheme.error)
         }}
     }

@@ -5,6 +5,8 @@ import android.content.Context
 import android.graphics.Color
 import android.os.SystemClock
 import android.view.ViewGroup
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -16,12 +18,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color as ComposeColor
@@ -37,7 +41,12 @@ import dev.chrisbanes.haze.HazeState
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.rememberHazeState
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
@@ -80,6 +89,7 @@ import ru.sodovaya.volty.presentation.history.HISTORY_MAP_LOW_ARGB
 import ru.sodovaya.volty.presentation.history.HISTORY_MAP_HIGH_ARGB
 import ru.sodovaya.volty.presentation.history.HISTORY_MAP_MAX_COLOR_STROKES
 import ru.sodovaya.volty.domain.history.HistoryGpsFix
+import kotlin.coroutines.resume
 import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.sin
@@ -146,6 +156,7 @@ actual fun PlatformRideMapLayer(
     onHistoryMediaClick: (String) -> Unit,
     showAttribution: Boolean,
     active: Boolean,
+    historyCoverKey: HistoryMapCoverKey?,
 ) {
     AndroidMapLibreView(
         cacheKey = "ride",
@@ -156,6 +167,7 @@ actual fun PlatformRideMapLayer(
         onHistoryMediaClick = onHistoryMediaClick,
         showAttribution = showAttribution,
         active = active,
+        historyCoverKey = historyCoverKey,
         modifier = modifier,
     )
 }
@@ -199,6 +211,7 @@ private fun AndroidMapLibreView(
     onHistoryMediaClick: (String) -> Unit = {},
     showAttribution: Boolean = true,
     active: Boolean = true,
+    historyCoverKey: HistoryMapCoverKey? = null,
 ) {
     val context = LocalContext.current
     val palette = LocalVoltyMapPalette.current
@@ -209,6 +222,9 @@ private fun AndroidMapLibreView(
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember(cacheKey) { mutableStateOf(false) }
     var lastCameraRequest by remember(cacheKey) { mutableStateOf<MapCameraRequest?>(null) }
+    var historyFitRendered by remember(historyCoverKey, darkTheme) {
+        mutableStateOf(false)
+    }
     val latestScene = rememberUpdatedState(scene)
     val latestGestureCallback = rememberUpdatedState(onCameraGesture)
     val latestGestureEndCallback = rememberUpdatedState(onCameraGestureEnd)
@@ -347,11 +363,13 @@ private fun AndroidMapLibreView(
         onDispose { readyMap.removeOnMapClickListener(listener) }
     }
 
-    LaunchedEffect(map, styleReady, latestScene.value.cameraRequest) {
+    LaunchedEffect(map, styleReady, latestScene.value.cameraRequest, historyCoverKey, darkTheme) {
         val readyMap = map ?: return@LaunchedEffect
         if (!styleReady) return@LaunchedEffect
         val request = latestScene.value.cameraRequest ?: return@LaunchedEffect
-        if (sameMapCameraCommand(lastCameraRequest, request) || !mapCameraRequestApplies(latestScene.value, request)) return@LaunchedEffect
+        val coldHistoryFit = historyCoverKey != null && !historyFitRendered && request is MapCameraRequest.FitHistory
+        if (!coldHistoryFit && sameMapCameraCommand(lastCameraRequest, request)) return@LaunchedEffect
+        if (!mapCameraRequestApplies(latestScene.value, request)) return@LaunchedEffect
         if (request is MapCameraRequest.FitAlternatives || request is MapCameraRequest.FitParticipants || request is MapCameraRequest.FitHistory) {
             var frames = 0
             while ((readyMap.width <= 0 || readyMap.height <= 0) && frames < 120) {
@@ -363,7 +381,19 @@ private fun AndroidMapLibreView(
         // A frame wait may outlive the scene that issued this command.
         if (latestScene.value.cameraRequest != request || !mapCameraRequestApplies(latestScene.value, request)) return@LaunchedEffect
         when (request) {
-            is MapCameraRequest.FitHistory -> fitHistory(readyMap, checkNotNull(latestScene.value.history), request)
+            is MapCameraRequest.FitHistory -> {
+                val history = checkNotNull(latestScene.value.history)
+                if (coldHistoryFit) {
+                    // The initial history viewport has no live camera to animate from.
+                    // Keep drawing under the cover until the fitted map has a frame.
+                    historyFitRendered = mapView.awaitFittedHistoryFrame(readyMap) {
+                        updateHistoryRouteGeoJson(readyMap, history)
+                        fitHistory(readyMap, history, request.copy(reduceMotion = true))
+                    }
+                } else {
+                    fitHistory(readyMap, history, request)
+                }
+            }
             is MapCameraRequest.FitAlternatives -> fitAlternatives(readyMap, request.points)
             is MapCameraRequest.FitParticipants -> fitAlternatives(readyMap, request.points)
             is MapCameraRequest.Recenter -> recenter(readyMap, request.fix)
@@ -499,6 +529,16 @@ private fun AndroidMapLibreView(
                 .hazeSource(state = hazeState, zIndex = 0f),
         )
         MapTopBottomBlur(hazeState = hazeState, modifier = Modifier.fillMaxSize())
+        if (historyCoverKey != null) {
+            key(historyCoverKey, darkTheme) {
+                val coverAlpha by animateFloatAsState(
+                    targetValue = if (historyFitRendered) 0f else 1f,
+                    animationSpec = tween(RIDE_MAP_FADE_MILLIS),
+                    label = "historyMapCover",
+                )
+                Box(Modifier.matchParentSize().alpha(coverAlpha).background(ComposeColor(palette.background)))
+            }
+        }
         if (showAttribution) MapAttributionCorner(
             darkTheme = darkTheme,
             modifier = Modifier.align(Alignment.BottomEnd).padding(end = 4.dp, bottom = 2.dp),
@@ -574,10 +614,44 @@ private fun recenter(map: MapLibreMap, fix: RideLocationFix) {
     )
 }
 
-private fun fitHistory(map: MapLibreMap, scene: HistoryMapScene, request: MapCameraRequest.FitHistory) {
-    val padding = historyFitPadding(map.width.toInt(), map.height.toInt(), request.insets) ?: return
+private suspend fun MapView.awaitFittedHistoryFrame(map: MapLibreMap, fit: () -> Boolean): Boolean = coroutineScope {
+    if (!fit()) return@coroutineScope false
+    var listener: MapView.OnDidFinishRenderingFrameListener? = null
+    var fallback: Job? = null
+    try {
+        suspendCancellableCoroutine<Boolean> { continuation ->
+            var firstFrame = true
+            var allowMissingTiles = false
+            val callback = MapView.OnDidFinishRenderingFrameListener { fullyRendered, _, _ ->
+                if (firstFrame) {
+                    // A render may already have been in flight when the camera moved.
+                    firstFrame = false
+                    map.triggerRepaint()
+                } else if ((fullyRendered || allowMissingTiles) && continuation.isActive) {
+                    continuation.resume(true)
+                }
+            }
+            listener = callback
+            addOnDidFinishRenderingFrameListener(callback)
+            map.triggerRepaint()
+            fallback = launch {
+                // Missing tiles must not keep a positioned offline route covered.
+                // Still wait for a frame, even if rendering is paused in the background.
+                delay(1_500L)
+                allowMissingTiles = true
+                map.triggerRepaint()
+            }
+        }
+    } finally {
+        fallback?.cancel()
+        listener?.let(::removeOnDidFinishRenderingFrameListener)
+    }
+}
+
+private fun fitHistory(map: MapLibreMap, scene: HistoryMapScene, request: MapCameraRequest.FitHistory): Boolean {
+    val padding = historyFitPadding(map.width.toInt(), map.height.toInt(), request.insets) ?: return false
     val points = scene.segments.flatMap { it.fixes }.map { LatLng(it.lat, it.lon) }.distinct()
-    if (points.isEmpty()) return
+    if (points.isEmpty()) return false
     val update = if (points.size == 1) CameraUpdateFactory.newCameraPosition(
         CameraPosition.Builder(map.cameraPosition).target(points.single()).zoom(15.0).tilt(0.0).bearing(0.0).build())
     else {
@@ -585,6 +659,7 @@ private fun fitHistory(map: MapLibreMap, scene: HistoryMapScene, request: MapCam
         CameraUpdateFactory.newLatLngBounds(bounds, 0.0, 0.0, padding.left, padding.top, padding.right, padding.bottom)
     }
     if (request.reduceMotion) map.moveCamera(update) else map.animateCamera(update)
+    return true
 }
 
 @Composable

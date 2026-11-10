@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.nearby
 
 import com.arkivanov.decompose.ComponentContext
+import com.arkivanov.essenty.backhandler.BackCallback
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -45,12 +46,20 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
     private val binding=ServerWorkspaceAccountBinding(scope,repository.authenticatedAccount,factory,nextId,connectChannel)
     val servers=binding.state
     private val friends=NearbyFriendsPresenter(scope,repository)
+    private val localBackCallback = BackCallback(isEnabled = false, onBack = ::back)
     private var closed=false
     private var operation=0L
 
     init {
+        backHandler.register(localBackCallback)
         scope.launch(start=CoroutineStart.UNDISPATCHED) {try {awaitCancellation()} finally {close()}}
         lifecycle.doOnDestroy {lifetime.cancel()}
+        scope.launch {
+            servers.collectLatest { binding ->
+                val pages = binding.presenter?.state ?: flowOf(null)
+                combine(state, pages, ::hasLocalPage).collect { localBackCallback.isEnabled = it }
+            }
+        }
         scope.launch {
             var previous:SocialAuthenticatedAccount?=null
             repository.authenticatedAccount.collectLatest { account ->
@@ -221,15 +230,38 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
         friends.accepted(user)?.let {call(account,it)}
     }
     fun retryServers() {if(enabled()) binding.retry()}
-    fun back() {if(enabled()) onBack()}
+    fun onTabReselected() {
+        if (!enabled()) return
+        openServers()
+        servers.value.presenter?.returnToMine()
+    }
+    fun back() {
+        if (!enabled()) return
+        val shell = state.value
+        val presenter = servers.value.presenter
+        when {
+            !hasLocalPage(shell, presenter?.state?.value) -> onBack()
+            shell.section == NearbyShellSection.PROFILE -> openServers()
+            else -> presenter?.back()
+        }
+    }
     suspend fun close():Unit=withContext(NonCancellable) {
         if(closed) return@withContext
-        closed=true;lifetime.cancel();binding.close();friends.bind(null)
+        closed=true
+        backHandler.unregister(localBackCallback)
+        lifetime.cancel();binding.close();friends.bind(null)
         // Private data is withdrawn, but the session is not a screen's to forget. Retraction: resetting it
         // to the LoggedOut default made the screen draw the sign-in form through the 300 ms exit fade.
         form.value=VoiceSpacesNearbyState();output.value=VoiceSpacesNearbyState(session=output.value.session)
     }
 }
+
+private fun hasLocalPage(shell: VoiceSpacesNearbyState, workspace: ServerWorkspaceUiState?): Boolean =
+    shell.session is SocialSession.Authenticated && when (shell.section) {
+        NearbyShellSection.PROFILE -> true
+        NearbyShellSection.SERVERS -> workspace != null && workspace.section != ServerWorkspaceSection.MY_SERVERS
+        NearbyShellSection.FRIENDS -> false
+    }
 
 /** An Authenticated session counts only while its account is live and is the same user. */
 internal fun nearbyVisibleSession(session: SocialSession,authority: SocialAuthenticatedAccount?): SocialSession =

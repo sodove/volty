@@ -30,7 +30,7 @@ data class VehicleOverviewState(
     val battery: List<VehicleBatterySnapshot> = emptyList(),
     val lastTotals: List<HistoryTotal> = emptyList(),
     val lastRoute: List<Pair<Double, Double>> = emptyList(),
-    /** Filled ride by ride after the main content; a ride missing here is still loading or unreadable. */
+    /** The last ride's totals arrive with the overview, then older totals arrive together. */
     val rideTotals: Map<String, List<HistoryTotal>> = emptyMap(),
     val error: Boolean = false,
 )
@@ -101,13 +101,18 @@ class DefaultVehicleOverviewComponent(
         // Publish the layout together so a late route or battery card cannot move the ride list.
         mutableState.update { overview.copy(vehicle = it.vehicle, error = readFailed) }
 
-        // The list's own numbers come last and one at a time, so the screen is usable first.
-        rides.drop(1).forEach { ride ->
+        val olderTotals = mutableMapOf<String, List<HistoryTotal>>()
+        for (ride in rides.drop(1)) {
             try {
-                val totals = reader.totals(ride.id, reader.recorded(ride))
-                mutableState.update { it.copy(rideTotals = it.rideTotals + (ride.id to totals)) }
-            } catch (cancel: CancellationException) { throw cancel }
-            catch (_: Exception) { }
+                olderTotals[ride.id] = reader.totals(ride.id, reader.recorded(ride))
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (_: Exception) {
+                // An unreadable ride has no totals to publish.
+            }
+        }
+        if (olderTotals.isNotEmpty()) {
+            mutableState.update { it.copy(rideTotals = it.rideTotals + olderTotals) }
         }
     }
 

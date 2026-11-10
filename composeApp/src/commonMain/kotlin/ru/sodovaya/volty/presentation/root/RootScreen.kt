@@ -10,6 +10,9 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -28,10 +31,19 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -45,6 +57,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,6 +89,7 @@ import ru.sodovaya.volty.presentation.root.nearby.nearbyConversationPanelVisible
 import ru.sodovaya.volty.presentation.root.nearby.NearbyIncomingCallScreen
 import ru.sodovaya.volty.presentation.root.nearby.NearbyRadioStatusLine
 import ru.sodovaya.volty.presentation.root.nearby.nearbyChannelMarkers
+import ru.sodovaya.volty.presentation.map.HistoryMapCoverKey
 import ru.sodovaya.volty.presentation.map.MapAttributionCorner
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
@@ -146,13 +162,23 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         HistoryMapHost(activeHistory?.component ?: component, ++historyViewportSequence[0])
     }
     val historyFrame by historyHost.state.collectAsState()
-    val recordedScene = if (historyState != null && historyScreenContent(historyState).phase == HistoryScreenPhase.READY)
+    val historyPhase = historyState?.let { historyScreenContent(it).phase }
+    val recordedScene = if (historyState != null && historyPhase == HistoryScreenPhase.READY)
         qualifiedHistoryMap(historyFrame, historyState.detail.ride?.favoriteSource(), historyState.detail.range) else null
+    val lastLiveMap = remember { booleanArrayOf(false) }
+    val historyFromRide = remember(historyHost) { mutableStateOf(lastLiveMap[0]) }
+    var historyDetailShown by remember(historyHost) { mutableStateOf(false) }
+    LaunchedEffect(historyHost, historyPhase) {
+        if (historyPhase == HistoryScreenPhase.READY) historyDetailShown = true
+        if (historyPhase == HistoryScreenPhase.CATALOG && historyDetailShown) historyFromRide.value = false
+    }
     val darkTheme = LocalVoltyDarkTheme.current
     val nearby by component.nearby.state.collectAsState()
     val voiceListen by component.voiceListen.collectAsState()
     var conversationDetailsVisible by remember { mutableStateOf(false) }
     val conversationVisible = nearbyConversationPanelVisible(nearby.voice, nearby.sharing)
+    val lastConversation = remember { arrayOf(nearby.voice to nearby.sharing) }
+    if (conversationVisible) SideEffect { lastConversation[0] = nearby.voice to nearby.sharing }
     LaunchedEffect(conversationVisible) {
         if (!conversationVisible) conversationDetailsVisible = false
     }
@@ -177,6 +203,9 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val offlineActionScope = rememberCoroutineScope()
     val activeRide = active as? RootComponent.Child.Ride
     val activeRideState = activeRide?.component?.state?.collectAsState()?.value
+    val activeChromeVisible = bottomTabBarVisible(chromeDestination(active), activeRideState?.style)
+    val lastChrome = remember { arrayOf(active) }
+    if (activeChromeVisible) SideEffect { lastChrome[0] = active }
     val navigationState by component.navigation.state.collectAsState()
     val locationState by component.navigation.locationState.collectAsState()
     var mapRecenterRequest by remember { mutableLongStateOf(0L) }
@@ -185,6 +214,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val rideMapVisible = active is RootComponent.Child.Ride &&
         rideAvailable &&
         activeRideState?.style == DashboardStyle.LIGHT
+    SideEffect { lastLiveMap[0] = rideMapVisible }
     LaunchedEffect(rideMapVisible, nearby.voice.pending) {
         if (rideMapVisible && nearby.voice.pending?.let { it.confirmationRequired && !it.confirmed }==true)
             conversationDetailsVisible = true
@@ -365,6 +395,8 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                 },
                 // History and Group Map place attribution above their own bottom chrome.
                 showAttribution = activeHistory == null && !groupMapVisible,
+                historyCoverKey = if (activeHistory != null && !historyFromRide.value)
+                    HistoryMapCoverKey(historyHost.viewportGeneration, historyState?.selectedRideId) else null,
                 active = rideMapRenderActive(mapHost.visible, mapAlpha),
             )
         }
@@ -470,24 +502,48 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     NearbyIncomingCallScreen(nearby.incoming, component.nearby.incomingActions)
                     // Light already owns a glass pill over the map.
                     if (!childShowsRideMap) {
-                        NearbyConversationPanelScreen(
-                            nearby.voice, nearby.sharing, expanded = false, actions = component.nearby.actions,
-                            maxHeight = panelMaximumHeight, onOpenDetails = { conversationDetailsVisible = true },
-                        )
+                        AnimatedVisibility(
+                            visible = conversationVisible,
+                            enter = expandVertically(expandFrom = Alignment.Bottom) + fadeIn(),
+                            exit = shrinkVertically(shrinkTowards = Alignment.Bottom) + fadeOut(),
+                        ) {
+                            val (voice, sharing) = if (conversationVisible) nearby.voice to nearby.sharing
+                            else lastConversation[0]
+                            NearbyConversationPanelScreen(
+                                voice, sharing, expanded = false, actions = component.nearby.actions,
+                                maxHeight = panelMaximumHeight, onOpenDetails = { conversationDetailsVisible = true },
+                                showSwitchConfirmation = instance === active && conversationVisible,
+                            )
+                        }
                         NearbyRadioStatusLine()
                     }
                 }
-                BottomTabBar(
-                    active = instance,
-                    groupMapVisible = instance is RootComponent.Child.GroupMap,
-                    rideAvailable = rideAvailable,
-                    vehicleConnected = vehicleConnected,
-                    rideStyle = childRideStyle,
-                    onTab = component::onTab,
-                    onGroupMap = component::onOpenGroupMap,
-                    modifier = Modifier.navigationBarsPadding(),
-                )
+                if (bottomTabBarVisible(chromeDestination(instance), childRideStyle)) {
+                    Spacer(Modifier.navigationBarsPadding().height(ROOT_TAB_BAR_HEIGHT))
+                }
             }
+        }
+
+        // One bar owns input while Decompose crossfades or queues destinations.
+        // Every destination reserves its own space, so neither the outgoing
+        // layout nor the shared map resizes as the overlay moves.
+        AnimatedVisibility(
+            visible = activeChromeVisible,
+            modifier = Modifier.align(Alignment.BottomCenter),
+            enter = slideInVertically(tween(RIDE_MAP_FADE_MILLIS)) { it / 3 } + fadeIn(tween(RIDE_MAP_FADE_MILLIS)),
+            exit = slideOutVertically(tween(RIDE_MAP_FADE_MILLIS)) { it / 3 } + fadeOut(tween(RIDE_MAP_FADE_MILLIS)),
+        ) {
+            val chromeChild = if (activeChromeVisible) active else lastChrome[0]
+            BottomTabBar(
+                active = chromeChild,
+                inputEnabled = activeChromeVisible,
+                groupMapVisible = chromeChild is RootComponent.Child.GroupMap,
+                rideAvailable = rideAvailable,
+                vehicleConnected = vehicleConnected,
+                onTab = component::onTab,
+                onGroupMap = component::onOpenGroupMap,
+                modifier = Modifier.navigationBarsPadding().height(ROOT_TAB_BAR_HEIGHT),
+            )
         }
 
         if (conversationDetailsVisible && conversationVisible) {
@@ -536,32 +592,31 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     }
 }
 
+private val ROOT_TAB_BAR_HEIGHT = 72.dp
+
+private fun chromeDestination(child: RootComponent.Child): RootChromeDestination = when (child) {
+    is RootComponent.Child.Ride -> RootChromeDestination.RIDE
+    is RootComponent.Child.Dashboard -> RootChromeDestination.BATTERY
+    is RootComponent.Child.Nearby -> RootChromeDestination.NEARBY
+    is RootComponent.Child.Settings -> RootChromeDestination.SETTINGS
+    is RootComponent.Child.GroupMap -> RootChromeDestination.GROUP_MAP
+    is RootComponent.Child.Picker -> if (child.component.state.value.mode == "cold") RootChromeDestination.PICKER
+        else RootChromeDestination.OTHER
+    else -> RootChromeDestination.OTHER
+}
+
 @Composable
 private fun BottomTabBar(
     active: RootComponent.Child,
+    inputEnabled: Boolean,
     groupMapVisible: Boolean,
     rideAvailable: Boolean,
     vehicleConnected: Boolean,
-    rideStyle: DashboardStyle?,
     onTab: (RootComponent.Tab) -> Unit,
     onGroupMap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val destination = when {
-        groupMapVisible -> RootChromeDestination.GROUP_MAP
-        else -> when (active) {
-        is RootComponent.Child.Ride -> RootChromeDestination.RIDE
-        is RootComponent.Child.Dashboard -> RootChromeDestination.BATTERY
-        is RootComponent.Child.Nearby -> RootChromeDestination.NEARBY
-        is RootComponent.Child.Settings -> RootChromeDestination.SETTINGS
-        // Only the cold picker is a home; the add/guest pickers are flows with their own back.
-        is RootComponent.Child.Picker -> if (active.component.state.value.mode == "cold") RootChromeDestination.PICKER
-            else RootChromeDestination.OTHER
-        else -> RootChromeDestination.OTHER
-        }
-    }
-    val visible = bottomTabBarVisible(destination, rideStyle)
-    if (!visible) return
+    val destination = chromeDestination(active)
 
     // Graph is no longer a tab — it's reached from a button on either dashboard.
     // While it's on screen no tab is selected, hence the nullable.
@@ -593,38 +648,43 @@ private fun BottomTabBar(
             // Nothing connected: the dashboards would be empty, so offer the picker in their place.
             Tab(
                 stringResource(Res.string.tab_connect),
-                current == RootComponent.Tab.Connect
+                current == RootComponent.Tab.Connect, inputEnabled
             ) { onTab(RootComponent.Tab.Connect) }
         } else {
             if (rideAvailable) {
                 Tab(
                     stringResource(Res.string.tab_ride),
-                    current == RootComponent.Tab.Ride
+                    current == RootComponent.Tab.Ride, inputEnabled
                 ) { onTab(RootComponent.Tab.Ride) }
             }
             Tab(
                 stringResource(Res.string.tab_battery),
-                current == RootComponent.Tab.Battery
+                current == RootComponent.Tab.Battery, inputEnabled
             ) { onTab(RootComponent.Tab.Battery) }
         }
         Tab(
             stringResource(Res.string.tab_nearby),
-            current == RootComponent.Tab.Nearby
+            current == RootComponent.Tab.Nearby, inputEnabled
         ) { onTab(RootComponent.Tab.Nearby) }
         if (shouldShowGroupMapTab(destination, groupMapVisible)) {
-            Tab(stringResource(Res.string.tab_map), groupMapVisible, onGroupMap)
+            Tab(stringResource(Res.string.tab_map), groupMapVisible, inputEnabled, onGroupMap)
         }
-        Tab(stringResource(Res.string.tab_settings), current == RootComponent.Tab.Settings) { onTab(RootComponent.Tab.Settings) }
+        Tab(stringResource(Res.string.tab_settings), current == RootComponent.Tab.Settings, inputEnabled) { onTab(RootComponent.Tab.Settings) }
     }
 }
 
 @Composable
-private fun RowScope.Tab(label: String, active: Boolean, onClick: () -> Unit) {
-    val bg = if (active) MaterialTheme.colorScheme.primary else Color.Transparent
-    val fg = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+private fun RowScope.Tab(label: String, active: Boolean, inputEnabled: Boolean, onClick: () -> Unit) {
+    val bg by animateColorAsState(
+        if (active) MaterialTheme.colorScheme.primary else Color.Transparent, label = "tab background",
+    )
+    val fg by animateColorAsState(
+        if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant, label = "tab label",
+    )
     Box(
         modifier = Modifier
             .weight(1f)
+            .fillMaxHeight()
             .clip(
                 RoundedCornerShape(
                     if (active) 16.dp else 20.dp,
@@ -634,8 +694,9 @@ private fun RowScope.Tab(label: String, active: Boolean, onClick: () -> Unit) {
                 )
             )
             .background(bg)
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
+            .then(if (inputEnabled) {
+                Modifier.clickable(role = Role.Tab, onClick = onClick).semantics { selected = active }
+            } else Modifier),
         contentAlignment = Alignment.Center
     ) {
         Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = fg, maxLines = 1)

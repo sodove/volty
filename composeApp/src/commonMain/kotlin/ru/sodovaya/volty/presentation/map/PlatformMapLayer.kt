@@ -4,6 +4,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
 
+data class HistoryMapCoverKey(val viewportGeneration: Long, val selectedRideId: String?)
+
 /** Android owns the map renderer; common code owns only earned marker data. */
 @Composable
 expect fun PlatformRideMapLayer(
@@ -17,6 +19,8 @@ expect fun PlatformRideMapLayer(
     showAttribution: Boolean = true,
     /** False pauses rendering; the retained map keeps its style, tiles and camera. */
     active: Boolean = true,
+    /** Hide the default or stale camera while a recorded ride opened from an opaque screen is positioned. */
+    historyCoverKey: HistoryMapCoverKey? = null,
 )
 
 /** Compatibility surface for the root host until Task 11 supplies the retained scene. */

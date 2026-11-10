@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.vehicle
 
 import android.content.Context
+import android.util.LruCache
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -10,10 +11,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -49,9 +52,12 @@ internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkThem
         val height = constraints.maxHeight
         if (width <= 0 || height <= 0) return@BoxWithConstraints
 
-        // A new request must not display a bitmap produced with the previous palette.
-        key(context, points, darkTheme, width, height, density, palette) {
-            val snapshot by produceState<RoutePreviewSnapshot?>(null) {
+        val request = RoutePreviewRequest(points, darkTheme, width, height, density, palette)
+        // Navigation and lazy item disposal can both recreate this composition.
+        key(context, request) {
+            val cached = remember { routePreviewCache.get(request) }
+            val snapshot by produceState<RoutePreviewSnapshot?>(cached?.let(::RoutePreviewSnapshot)) {
+                if (cached != null) return@produceState
                 val bitmap = try {
                     withTimeoutOrNull(8_000L) {
                         routeSnapshot(context, points, darkTheme, width / density, height / density, density, palette)
@@ -61,6 +67,7 @@ internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkThem
                 } catch (_: Exception) {
                     null
                 }
+                if (bitmap != null) routePreviewCache.put(request, bitmap)
                 value = RoutePreviewSnapshot(bitmap)
             }
             snapshot?.let { result ->
@@ -77,6 +84,19 @@ internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkThem
 
 /** The result stays absent while the themed snapshot is still loading. */
 private data class RoutePreviewSnapshot(val bitmap: ImageBitmap?)
+
+private data class RoutePreviewRequest(
+    val points: List<Pair<Double, Double>>,
+    val darkTheme: Boolean,
+    val width: Int,
+    val height: Int,
+    val density: Float,
+    val palette: MapThemePalette,
+)
+
+private val routePreviewCache = object : LruCache<RoutePreviewRequest, ImageBitmap>(8 * 1024 * 1024) {
+    override fun sizeOf(key: RoutePreviewRequest, value: ImageBitmap): Int = value.asAndroidBitmap().allocationByteCount
+}
 
 /** The track is a layer of the snapshot's own style, so it sits on the streets it was ridden on. Null on any failure. */
 private suspend fun routeSnapshot(context: Context, points: List<Pair<Double, Double>>, darkTheme: Boolean,
