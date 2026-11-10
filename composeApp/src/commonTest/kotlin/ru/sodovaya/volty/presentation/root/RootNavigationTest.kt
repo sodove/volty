@@ -12,6 +12,7 @@ import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
@@ -108,7 +109,7 @@ class RootNavigationTest {
     @Test
     fun withAVehicleHomeIsStillTheRide() {
         assertEquals(Config.Ride, homeConfigFor(vehicle()))
-        assertEquals(Config.Dashboard, configForTab(RootComponent.Tab.Battery))
+        assertEquals(Config.Dashboard, configForTab(RootComponent.Tab.Battery, liveVehicleAvailable = true))
     }
 
     @Test
@@ -152,6 +153,14 @@ class RootNavigationTest {
     }
 
     @Test
+    fun withoutASavedVehicleTheBackStackDropsLiveScreensAndKeepsHistory() {
+        val history = Config.History()
+        val garage = configAfterDisconnect()
+        assertEquals(listOf(garage, history), stackAfterAbsence(listOf(Config.Ride, Config.Dashboard, history), null))
+        assertEquals(listOf(garage), stackAfterAbsence(listOf(garage, Config.Ride), null))
+    }
+
+    @Test
     fun a_returning_vehicle_gets_its_dashboard_back_where_the_card_stood_in() {
         val card = Config.VehicleOverview("v")
         assertEquals(listOf(Config.Ride, Config.Settings), stackAfterReturn(listOf(card, Config.Settings), "v", Config.Ride))
@@ -163,19 +172,39 @@ class RootNavigationTest {
 
     @Test
     fun the_connect_tab_reaches_the_cold_picker() {
-        assertEquals(Config.Picker(mode = "cold"), configForTab(RootComponent.Tab.Connect))
+        assertEquals(Config.Picker(mode = "cold"), configForTab(RootComponent.Tab.Connect, liveVehicleAvailable = false))
     }
 
     @Test
     fun the_battery_tab_reaches_the_existing_dashboard() {
-        assertEquals(Config.Dashboard, configForTab(RootComponent.Tab.Battery))
+        assertEquals(Config.Dashboard, configForTab(RootComponent.Tab.Battery, liveVehicleAvailable = true))
     }
 
     @Test
     fun the_ride_and_settings_tabs_reach_their_own_destinations() {
-        assertEquals(Config.Ride, configForTab(RootComponent.Tab.Ride))
-        assertEquals(Config.Nearby, configForTab(RootComponent.Tab.Nearby))
-        assertEquals(Config.Settings, configForTab(RootComponent.Tab.Settings))
+        assertEquals(Config.Ride, configForTab(RootComponent.Tab.Ride, liveVehicleAvailable = true))
+        assertEquals(Config.Nearby, configForTab(RootComponent.Tab.Nearby, liveVehicleAvailable = false))
+        assertEquals(Config.Settings, configForTab(RootComponent.Tab.Settings, liveVehicleAvailable = false))
+    }
+
+    @Test
+    fun retainedVehicleCannotReopenLiveTabsWhileItsLinksAreDown() {
+        val selected = vehicle()
+        val offlineStates = listOf(
+            ConnectionState.Idle,
+            ConnectionState.Disconnected,
+            ConnectionState.Reconnecting(1, "wheel off"),
+            ConnectionState.Failed("wheel off"),
+        )
+        for (state in offlineStates) {
+            val live = liveVehicleForNavigation(state, selected)
+            assertNull(live, "$state with a retained selection")
+            assertEquals(configAfterDisconnect(), homeConfigFor(live))
+            assertNull(configForTab(RootComponent.Tab.Ride, liveVehicleAvailable = live != null))
+            assertNull(configForTab(RootComponent.Tab.Battery, liveVehicleAvailable = live != null))
+        }
+        assertEquals(selected, liveVehicleForNavigation(ConnectionState.Connected(selected), selected))
+        assertNull(liveVehicleForNavigation(ConnectionState.Connected(selected), null))
     }
 
     // --- shouldLeaveRide: never leave a Ride entry behind for a vehicle that

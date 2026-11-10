@@ -82,6 +82,53 @@ class VehicleOverviewComponentTest {
         assertEquals(listOf("r2"), c.state.value.rides.map { it.id }); assertEquals(1, history.catalogPages)
     }
 
+    @Test fun publishesTheOverviewWithItsRouteBeforeLoadingOlderTotals() = runTest {
+        val routeRequested = CompletableDeferred<Unit>()
+        val routeReady = CompletableDeferred<Unit>()
+        val olderTotalsReady = CompletableDeferred<Unit>()
+        val fixes = listOf(
+            HistoryGpsFix(HistoryTick(20_000_000, 20_000_000, 1), 55.0, 37.0, 5.0, null),
+            HistoryGpsFix(HistoryTick(20_001_000, 20_001_000, 1), 55.001, 37.001, 5.0, null),
+        )
+        val history = object : History() {
+            override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryRoutePage {
+                if (rideId != "r2") return super.route(rideId, range, after)
+                routeRequested.complete(Unit)
+                routeReady.await()
+                return HistoryRoutePage(fixes.first().tick, HistoryPage(fixes, null, false), emptyList())
+            }
+
+            override suspend fun sources(rideId: String): List<HistorySource> {
+                if (rideId == "r1") olderTotalsReady.await()
+                return super.sources(rideId)
+            }
+        }
+        val component = component(history)
+        runCurrent()
+        assertTrue(routeRequested.isCompleted, "the last ride's route read is in progress")
+        val loading = component.state.value
+        assertTrue(loading.loading)
+        assertTrue(loading.rides.isEmpty())
+        assertNull(loading.lastRide)
+        assertTrue(loading.battery.isEmpty())
+        assertTrue(loading.lastTotals.isEmpty())
+
+        routeReady.complete(Unit)
+        runCurrent()
+        val ready = component.state.value
+        assertFalse(ready.loading)
+        assertEquals(listOf("r2", "r1"), ready.rides.map { it.id })
+        assertEquals("r2", ready.lastRide?.id)
+        assertEquals(fixes.map { it.lat to it.lon }, ready.lastRoute)
+        assertEquals(52.0, ready.battery.single().value("soc_percent"))
+        assertTrue(ready.lastTotals.isNotEmpty())
+        assertEquals(setOf("r2"), ready.rideTotals.keys)
+
+        olderTotalsReady.complete(Unit)
+        runCurrent()
+        assertEquals(setOf("r2", "r1"), component.state.value.rideTotals.keys)
+    }
+
     @Test fun aVehicleWithoutRidesShowsNothingRecordedAndNoError() = runTest {
         val history = object : History() {
             override val pages = listOf(HistoryPage(listOf(ride("r3", "wheel", 30_000_000)), null, false),

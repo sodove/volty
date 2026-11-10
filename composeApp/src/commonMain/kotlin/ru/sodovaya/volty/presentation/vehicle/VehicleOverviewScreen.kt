@@ -170,7 +170,14 @@ private fun RideRow(ride: HistoryRide, totals: List<HistoryTotal>?, now: Long, o
                 totals?.firstOrNull { it.kind == HistoryTotalKind.DURATION_MILLIS }?.text(),
                 totals?.firstOrNull { it.kind == HistoryTotalKind.WH_PER_KM }?.text(),
             )
-            if (parts.isNotEmpty()) Text(parts.joinToString(" · "), fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Totals for older rides arrive later. Keep their row height stable.
+            Text(
+                parts.joinToString(" · "),
+                fontSize = 12.5.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
     }

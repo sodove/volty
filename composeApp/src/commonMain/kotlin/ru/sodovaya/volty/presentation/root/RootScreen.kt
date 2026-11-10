@@ -74,6 +74,7 @@ import ru.sodovaya.volty.presentation.root.nearby.nearbyConversationPanelVisible
 import ru.sodovaya.volty.presentation.root.nearby.NearbyIncomingCallScreen
 import ru.sodovaya.volty.presentation.root.nearby.NearbyRadioStatusLine
 import ru.sodovaya.volty.presentation.root.nearby.nearbyChannelMarkers
+import ru.sodovaya.volty.presentation.map.MapAttributionCorner
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
 import ru.sodovaya.volty.presentation.map.rideMapHostState
@@ -333,163 +334,176 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         )
     }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-    // Reserve space for the destination and tab bar even on short landscape windows.
-    val panelMaximumHeight = maxHeight / 2
-    val detailsMaximumHeight = maxHeight * 0.8f
-    Column(modifier = Modifier.fillMaxSize()) {
-        Box(modifier = Modifier.weight(1f)) {
-            // The map fades with the screen crossfade instead of jumping 0/1 at the
-            // start of a transition, which let it flash through a fading screen.
-            val mapAlpha by animateFloatAsState(
-                targetValue = if (mapHost.visible) 1f else 0f,
-                animationSpec = tween(RIDE_MAP_FADE_MILLIS),
-                label = "rideMapAlpha",
+        // Reserve space for the destination and tab bar even on short landscape windows.
+        val panelMaximumHeight = maxHeight / 2
+        val mapViewportHeight = maxHeight
+        val detailsMaximumHeight = maxHeight * 0.8f
+        // The map fades with the screen crossfade instead of jumping 0/1 at the
+        // start of a transition, which let it flash through a fading screen.
+        val mapAlpha by animateFloatAsState(
+            targetValue = if (mapHost.visible) 1f else 0f,
+            animationSpec = tween(RIDE_MAP_FADE_MILLIS),
+            label = "rideMapAlpha",
+        )
+        if (mapHost.mounted) {
+            PlatformRideMapLayer(
+                scene = mapScene,
+                darkTheme = darkTheme,
+                onCameraGesture = { now ->
+                    if (active is RootComponent.Child.Ride) component.navigation.onCameraGesture(now)
+                },
+                onCameraGestureEnd = { now ->
+                    if (active is RootComponent.Child.Ride) component.navigation.onCameraGestureEnd(now)
+                },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(mapAlpha),
+                onHistoryMediaClick = { id ->
+                    activeHistory?.component?.let { owner ->
+                        owner.state.value.media.items.singleOrNull { it.id == id }?.let(owner::openMedia)
+                    }
+                },
+                // History and Group Map place attribution above their own bottom chrome.
+                showAttribution = activeHistory == null && !groupMapVisible,
+                active = rideMapRenderActive(mapHost.visible, mapAlpha),
             )
-            if (mapHost.mounted) {
-                PlatformRideMapLayer(
-                    scene = mapScene,
-                    darkTheme = darkTheme,
-                    onCameraGesture = { now ->
-                        if (active is RootComponent.Child.Ride) component.navigation.onCameraGesture(now)
-                    },
-                    onCameraGestureEnd = { now ->
-                        if (active is RootComponent.Child.Ride) component.navigation.onCameraGestureEnd(now)
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .alpha(mapAlpha),
-                    onHistoryMediaClick = { id ->
-                        activeHistory?.component?.let { owner ->
-                            owner.state.value.media.items.singleOrNull { it.id == id }?.let(owner::openMedia)
-                        }
-                    },
-                    // History renders the same required attribution in its
-                    // measured bottom panel, above the system gesture area.
-                    showAttribution = activeHistory == null,
-                    active = rideMapRenderActive(mapHost.visible, mapAlpha),
-                )
-            }
-            Children(
-                stack = component.stack,
-                animation = stackAnimation(fade(tween(RIDE_MAP_FADE_MILLIS)))
-            ) { child ->
-                when (val instance = child.instance) {
-                    is RootComponent.Child.Loading -> Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) { CircularProgressIndicator() }
-                    is RootComponent.Child.Welcome -> WelcomeScreen(instance.component)
-                    is RootComponent.Child.Permissions -> PermissionsGateScreen(instance.component)
-                    is RootComponent.Child.Scanning -> ScanningScreen(instance.component)
-                    is RootComponent.Child.AutoConnect -> AutoConnectScreen(instance.component)
-                    is RootComponent.Child.Picker -> PickerScreen(instance.component)
-                    is RootComponent.Child.Ride -> RideDashboardScreen(
-                        instance.component,
-                        // The native map is hosted above at Root level so its
-                        // Compose/GL surface survives tab changes. Light only
-                        // needs a non-null marker to leave the HUD transparent,
-                        // and the outgoing HUD needs it until its fade ends.
-                        mapLayer = if (rideHudMapBacked(mapHost)) ({}) else null,
-                        onOpenBattery = { component.onTab(RootComponent.Tab.Battery) },
-                        onOpenNearby = { component.onTab(RootComponent.Tab.Nearby) },
-                        onOpenGroupMap = component::onOpenGroupMap,
-                        onRecenterMap = {
-                            mapRecenterRequest++
-                            component.navigation.onRecenterRequested()
-                            if (component.navigation.locationState.value.status !is RideLocationStatus.Available) {
-                                requestLocationPermission()
-                            }
-                        },
-                        gpsSpeedKmh = freshGpsSpeedKmh,
-                        nearbyMap = channelMap,
-                        nearbyVoice = nearby.voice,
-                        nearbySharing = nearby.sharing,
-                        onOpenConversation = { conversationDetailsVisible = true },
-                        navigationState = navigationState,
-                        navigationCallbacks = LightNavigationCallbacks(
-                            onOpenPlanner = {
-                                component.navigation.onPlannerRequested()
+        }
+        Children(
+            stack = component.stack,
+            animation = stackAnimation(fade(tween(RIDE_MAP_FADE_MILLIS)))
+        ) { child ->
+            val instance = child.instance
+            val childRide = instance as? RootComponent.Child.Ride
+            val childRideStyle = if (instance === active) activeRideState?.style
+            else childRide?.component?.state?.collectAsState()?.value?.style
+            val childShowsRideMap = childRideStyle == DashboardStyle.LIGHT && rideAvailable
+            // Both screens in the crossfade keep their own viewport and bottom chrome.
+            // The native map sits outside the child layout and keeps one full-size surface.
+            Column(Modifier.fillMaxSize()) {
+                Box(Modifier.weight(1f).fillMaxWidth()) {
+                    when (instance) {
+                        is RootComponent.Child.Loading -> Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) { CircularProgressIndicator() }
+                        is RootComponent.Child.Welcome -> WelcomeScreen(instance.component)
+                        is RootComponent.Child.Permissions -> PermissionsGateScreen(instance.component)
+                        is RootComponent.Child.Scanning -> ScanningScreen(instance.component)
+                        is RootComponent.Child.AutoConnect -> AutoConnectScreen(instance.component)
+                        is RootComponent.Child.Picker -> PickerScreen(instance.component)
+                        is RootComponent.Child.Ride -> RideDashboardScreen(
+                            instance.component,
+                            // The native map is hosted above at Root level so its
+                            // Compose/GL surface survives tab changes. Light only
+                            // needs a non-null marker to leave the HUD transparent,
+                            // and the outgoing HUD needs it until its fade ends.
+                            mapLayer = if (rideHudMapBacked(mapHost)) ({}) else null,
+                            onOpenBattery = { component.onTab(RootComponent.Tab.Battery) },
+                            onOpenNearby = { component.onTab(RootComponent.Tab.Nearby) },
+                            onOpenGroupMap = component::onOpenGroupMap,
+                            onRecenterMap = {
+                                mapRecenterRequest++
+                                component.navigation.onRecenterRequested()
                                 if (component.navigation.locationState.value.status !is RideLocationStatus.Available) {
                                     requestLocationPermission()
                                 }
                             },
-                            onQueryChanged = component.navigation::onQueryChanged,
-                            onPlaceSelected = component.navigation::onPlaceSelected,
-                            onRouteStyleChanged = component.navigation::onRouteStyleChanged,
-                            onTopSpeedChanged = component.navigation::onTopSpeedChanged,
-                            onAlternativeSelected = component.navigation::onAlternativeSelected,
-                            onStartNavigation = component.navigation::onStartNavigation,
-                            onRetry = component.navigation::onRetry,
-                            onStopNavigation = component.navigation::onStopNavigation,
-                            onRequestLocationPermission = requestLocationPermission,
-                            onOpenLocationSettings = onOpenLocationSettings,
-                        ),
-                    )
-                    is RootComponent.Child.Dashboard -> DashboardScreen(component = instance.component)
-                    is RootComponent.Child.PackDetail -> PackDetailScreen(instance.component)
-                    is RootComponent.Child.SetupWizard -> SetupWizardScreen(instance.component)
-                    is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
-                    is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
-                    is RootComponent.Child.VehicleInfo -> ru.sodovaya.volty.presentation.vehicle.info.VehicleInfoScreen(instance.component)
-                    is RootComponent.Child.PwmCalibration -> ru.sodovaya.volty.presentation.vehicle.pwm.PwmCalibrationScreen(instance.component)
-                    is RootComponent.Child.VehicleOverview -> ru.sodovaya.volty.presentation.vehicle.VehicleOverviewScreen(instance.component)
-                    is RootComponent.Child.History -> HistoryScreen(instance.component,
-                        cursorMaxAgeMillis = { 5_000L }, gpsMaxAgeMillis = 5_000L, mapHost = historyHost,
-                        vehicleNames = instance.vehicleNames.collectAsState(emptyMap()).value)
-                    is RootComponent.Child.Nearby -> VoiceSpacesNearbyScreen(instance.component)
-                    is RootComponent.Child.GroupMap -> ChannelMapScreen(
-                        statusText = when {
-                            channelMap.channelId == null -> stringResource(volty.composeapp.generated.resources.Res.string.nearby_channel_map_unavailable)
-                            !channelMap.observed -> stringResource(volty.composeapp.generated.resources.Res.string.nearby_map_loading)
-                            else -> stringResource(volty.composeapp.generated.resources.Res.string.nearby_map_positions,channelMarkers.size)
-                        },
-                        darkTheme = darkTheme,
-                        onBack = component::onBack,
-                    )
-                    is RootComponent.Child.Settings -> SettingsScreen(instance.component)
+                            gpsSpeedKmh = freshGpsSpeedKmh,
+                            nearbyMap = channelMap,
+                            nearbyVoice = nearby.voice,
+                            nearbySharing = nearby.sharing,
+                            onOpenConversation = { conversationDetailsVisible = true },
+                            navigationState = navigationState,
+                            navigationCallbacks = LightNavigationCallbacks(
+                                onOpenPlanner = {
+                                    component.navigation.onPlannerRequested()
+                                    if (component.navigation.locationState.value.status !is RideLocationStatus.Available) {
+                                        requestLocationPermission()
+                                    }
+                                },
+                                onQueryChanged = component.navigation::onQueryChanged,
+                                onPlaceSelected = component.navigation::onPlaceSelected,
+                                onRouteStyleChanged = component.navigation::onRouteStyleChanged,
+                                onTopSpeedChanged = component.navigation::onTopSpeedChanged,
+                                onAlternativeSelected = component.navigation::onAlternativeSelected,
+                                onStartNavigation = component.navigation::onStartNavigation,
+                                onRetry = component.navigation::onRetry,
+                                onStopNavigation = component.navigation::onStopNavigation,
+                                onRequestLocationPermission = requestLocationPermission,
+                                onOpenLocationSettings = onOpenLocationSettings,
+                            ),
+                        )
+                        is RootComponent.Child.Dashboard -> DashboardScreen(component = instance.component)
+                        is RootComponent.Child.PackDetail -> PackDetailScreen(instance.component)
+                        is RootComponent.Child.SetupWizard -> SetupWizardScreen(instance.component)
+                        is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
+                        is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
+                        is RootComponent.Child.VehicleInfo -> ru.sodovaya.volty.presentation.vehicle.info.VehicleInfoScreen(instance.component)
+                        is RootComponent.Child.PwmCalibration -> ru.sodovaya.volty.presentation.vehicle.pwm.PwmCalibrationScreen(instance.component)
+                        is RootComponent.Child.VehicleOverview -> ru.sodovaya.volty.presentation.vehicle.VehicleOverviewScreen(instance.component)
+                        is RootComponent.Child.History -> HistoryScreen(instance.component,
+                            cursorMaxAgeMillis = { 5_000L }, gpsMaxAgeMillis = 5_000L, mapHost = historyHost,
+                            mapViewportHeight = mapViewportHeight,
+                            vehicleNames = instance.vehicleNames.collectAsState(emptyMap()).value)
+                        is RootComponent.Child.Nearby -> VoiceSpacesNearbyScreen(instance.component)
+                        is RootComponent.Child.GroupMap -> ChannelMapScreen(
+                            statusText = when {
+                                channelMap.channelId == null -> stringResource(volty.composeapp.generated.resources.Res.string.nearby_channel_map_unavailable)
+                                !channelMap.observed -> stringResource(volty.composeapp.generated.resources.Res.string.nearby_map_loading)
+                                else -> stringResource(volty.composeapp.generated.resources.Res.string.nearby_map_positions,channelMarkers.size)
+                            },
+                            darkTheme = darkTheme,
+                            onBack = component::onBack,
+                        )
+                        is RootComponent.Child.Settings -> SettingsScreen(instance.component)
+                    }
+                    if (instance is RootComponent.Child.GroupMap) {
+                        MapAttributionCorner(
+                            darkTheme = darkTheme,
+                            modifier = Modifier.align(Alignment.BottomEnd).padding(end = 4.dp, bottom = 2.dp),
+                        )
+                    }
                 }
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = panelMaximumHeight).verticalScroll(rememberScrollState())
+                ) {
+                    NearbyIncomingCallScreen(nearby.incoming, component.nearby.incomingActions)
+                    // Light already owns a glass pill over the map.
+                    if (!childShowsRideMap) {
+                        NearbyConversationPanelScreen(
+                            nearby.voice, nearby.sharing, expanded = false, actions = component.nearby.actions,
+                            maxHeight = panelMaximumHeight, onOpenDetails = { conversationDetailsVisible = true },
+                        )
+                        NearbyRadioStatusLine()
+                    }
+                }
+                BottomTabBar(
+                    active = instance,
+                    groupMapVisible = instance is RootComponent.Child.GroupMap,
+                    rideAvailable = rideAvailable,
+                    vehicleConnected = vehicleConnected,
+                    rideStyle = childRideStyle,
+                    onTab = component::onTab,
+                    onGroupMap = component::onOpenGroupMap,
+                    modifier = Modifier.navigationBarsPadding(),
+                )
             }
         }
-        Column(Modifier.fillMaxWidth().heightIn(max=panelMaximumHeight).verticalScroll(rememberScrollState())) {
-            NearbyIncomingCallScreen(nearby.incoming,component.nearby.incomingActions)
-            // The Light ride already owns a glass pill over its map. An earlier
-            // revision added a second dock that resized the HUD on expansion.
-            if (!rideMapVisible) NearbyConversationPanelScreen(
-                nearby.voice, nearby.sharing, expanded=false, actions=component.nearby.actions,
-                maxHeight=panelMaximumHeight, onOpenDetails={ conversationDetailsVisible = true },
-            )
-            // One line while an offline radio runs; the server screen has the full card.
-            if (!rideMapVisible) NearbyRadioStatusLine()
-        }
-        // Persistent bottom tab bar — only for main destinations
-        BottomTabBar(
-            active = active,
-            groupMapVisible = groupMapVisible,
-            rideAvailable = rideAvailable,
-            vehicleConnected = vehicleConnected,
-            rideStyle = activeRideState?.style,
-            onTab = { tab ->
-                component.onTab(tab)
-            },
-            onGroupMap = component::onOpenGroupMap,
-            modifier = Modifier.navigationBarsPadding()
-        )
-    }
 
-    if (conversationDetailsVisible && conversationVisible) {
-        ModalBottomSheet(
-            onDismissRequest = { conversationDetailsVisible = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-            containerColor = MaterialTheme.colorScheme.surface,
-            tonalElevation = 0.dp,
-        ) {
-            NearbyConversationPanelScreen(
-                nearby.voice, nearby.sharing, expanded=true, actions=component.nearby.actions,
-                maxHeight=detailsMaximumHeight,
-                listen=voiceListen, onParticipantGain=component::setParticipantGain,
-            )
+        if (conversationDetailsVisible && conversationVisible) {
+            ModalBottomSheet(
+                onDismissRequest = { conversationDetailsVisible = false },
+                sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+                containerColor = MaterialTheme.colorScheme.surface,
+                tonalElevation = 0.dp,
+            ) {
+                NearbyConversationPanelScreen(
+                    nearby.voice, nearby.sharing, expanded=true, actions=component.nearby.actions,
+                    maxHeight=detailsMaximumHeight,
+                    listen=voiceListen, onParticipantGain=component::setParticipantGain,
+                )
+            }
         }
-    }
     }
     visibleMeteredApproval?.let { region ->
         AlertDialog(

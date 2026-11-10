@@ -110,6 +110,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.retryWhen
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -1088,7 +1089,7 @@ class KableBmsRepository private constructor(
             bleAvailability(bleAdapterStateProvider.isBluetoothEnabled())
         )
         if (unavailableReason != null) {
-            _connectionState.value = ConnectionState.Failed(unavailableReason)
+            publishScanState(ConnectionState.Failed(unavailableReason))
             println("[VOLTY-BLE] scan skipped: $unavailableReason")
             return@flow
         }
@@ -1102,17 +1103,7 @@ class KableBmsRepository private constructor(
         val knownAddresses: Map<String, Vehicle> =
             vehiclesByAddress(vehicleRepository.vehicles.first())
         val rememberedTypes = vehicleRepository.deviceTypeMemories.first()
-        // A scan can run WHILE a connection is live (the Picker seeds itself
-        // with the connected device and keeps scanning for others). Don't let
-        // it clobber the Connected / Connecting / Reconnecting state machine —
-        // the watchdog only acts in Connected, so overwriting it would blind
-        // the drop detection.
-        when (_connectionState.value) {
-            is ConnectionState.Connected,
-            is ConnectionState.Connecting,
-            is ConnectionState.Reconnecting -> Unit
-            else -> _connectionState.value = ConnectionState.Scanning
-        }
+        publishScanState(ConnectionState.Scanning)
         try {
             val scanner = Scanner()
             scanner.advertisements.collect { ad ->
@@ -1148,10 +1139,24 @@ class KableBmsRepository private constructor(
             throw e
         } catch (e: Exception) {
             val reason = readableBleFailureReason(e)
-            _connectionState.value = ConnectionState.Failed(reason)
+            publishScanState(ConnectionState.Failed(reason))
             println("[VOLTY-BLE] scan stopped: $reason")
         }
     }.flowOn(Dispatchers.Default)
+
+    // The picker may scan while a vehicle connects or while its links are live.
+    // Retraction: preserving the link state only at scan start still allowed
+    // scan failures to hide the live tabs and blind the Connected watchdog.
+    private fun publishScanState(scanState: ConnectionState) {
+        _connectionState.update { current ->
+            when (current) {
+                is ConnectionState.Connected,
+                is ConnectionState.Connecting,
+                is ConnectionState.Reconnecting -> current
+                else -> scanState
+            }
+        }
+    }
 
     override suspend fun connect(vehicle: Vehicle): Result<Unit> {
         // If a caller hands a transient guest Vehicle back to connect(), route

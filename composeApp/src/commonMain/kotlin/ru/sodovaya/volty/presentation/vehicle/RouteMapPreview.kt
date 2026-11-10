@@ -5,7 +5,7 @@ import androidx.compose.ui.Modifier
 import kotlin.math.PI
 import kotlin.math.cos
 
-/** A ride's track drawn over a still map; the plain [RouteSketch] stands in until (or unless) the map renders. */
+/** A ride's track drawn over a still map; a themed [RouteSketch] is the fallback if the map cannot render. */
 @Composable
 internal expect fun RouteMapPreview(points: List<Pair<Double, Double>>, darkTheme: Boolean, modifier: Modifier = Modifier)
 

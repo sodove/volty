@@ -8,6 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -107,9 +108,10 @@ internal fun whenText(epochMillis: Long, nowMillis: Long): String {
 /** A sketch of the recorded track, fitted to the box with longitude shrunk by latitude. */
 @Composable
 internal fun RouteSketch(points: List<Pair<Double, Double>>, modifier: Modifier = Modifier) {
-    val line = Color(0xFF1E9E86)
-    val ground = MaterialTheme.colorScheme.surfaceVariant
-    val markerOutline = MaterialTheme.colorScheme.onSurface
+    val palette = LocalVoltyMapPalette.current
+    val line = Color(palette.accent)
+    val ground = Color(palette.background)
+    val markerOutline = Color(palette.halo)
     Canvas(modifier.clip(RoundedCornerShape(14.dp)).background(ground)) {
         if (points.size < 2) return@Canvas
         val midLat = points.sumOf { it.first } / points.size

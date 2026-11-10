@@ -237,11 +237,6 @@ internal fun activeVehicleForCreatePrefill(
 internal fun homeConfigFor(vehicle: Vehicle?): Config =
     if (vehicle != null) Config.Ride else configAfterDisconnect()
 
-/**
- * Destination of each bottom-bar tab. Pure for the same reason as
- * [homeConfigFor] — the Battery tab must keep reaching the existing
- * [Config.Dashboard], and that is worth pinning in a test.
- */
 /** Past the ride's own absence window, so the summary reads the ride already closed. */
 internal const val ABSENT_SUMMARY_DELAY_MILLIS = ru.sodovaya.volty.domain.history.RIDE_ABSENCE_MILLIS + 5_000L
 
@@ -259,8 +254,13 @@ internal fun absentSummaryApplies(active: Config): Boolean = active is Config.Ri
  * to restart the app (field report 2026-10-26). The dead dashboard is now replaced there too, and
  * a card left at the bottom gets the garage under it - where a disconnect lands anyway.
  */
-internal fun stackAfterAbsence(stack: List<Config>, vehicleId: String): List<Config>? {
+internal fun stackAfterAbsence(stack: List<Config>, vehicleId: String?): List<Config>? {
     if (stack.none(::absentSummaryApplies)) return null
+    if (vehicleId == null) {
+        val remaining = stack.filterNot(::absentSummaryApplies)
+        val garage = configAfterDisconnect()
+        return if (garage in remaining) remaining else listOf(garage) + remaining
+    }
     val summary = Config.VehicleOverview(vehicleId)
     var placed = summary in stack
     val swapped = stack.flatMap { config ->
@@ -292,9 +292,13 @@ internal fun stackAfterReturn(stack: List<Config>, vehicleId: String, home: Conf
  */
 internal fun configAfterDisconnect(): Config = Config.Picker(mode = "cold")
 
-internal fun configForTab(tab: RootComponent.Tab): Config = when (tab) {
-    RootComponent.Tab.Ride -> Config.Ride
-    RootComponent.Tab.Battery -> Config.Dashboard
+/** BLE can retain the selected vehicle long after its last live link goes down. */
+internal fun liveVehicleForNavigation(connection: ConnectionState, selected: Vehicle?): Vehicle? =
+    selected?.takeIf { connection is ConnectionState.Connected }
+
+internal fun configForTab(tab: RootComponent.Tab, liveVehicleAvailable: Boolean): Config? = when (tab) {
+    RootComponent.Tab.Ride -> Config.Ride.takeIf { liveVehicleAvailable }
+    RootComponent.Tab.Battery -> Config.Dashboard.takeIf { liveVehicleAvailable }
     RootComponent.Tab.Nearby -> Config.Nearby
     RootComponent.Tab.Settings -> Config.Settings
     // Without a vehicle there is no dashboard to return to: the cold picker is "home".
@@ -518,7 +522,7 @@ class DefaultRootComponent(
     private val _rideAvailable =
         MutableValue(homeConfigFor(bmsRepository.activeVehicle.value) is Config.Ride)
     override val rideAvailable: Value<Boolean> = _rideAvailable
-    private val _vehicleConnected = MutableValue(bmsRepository.activeVehicle.value != null)
+    private val _vehicleConnected = MutableValue(liveVehicle() != null)
     override val vehicleConnected: Value<Boolean> = _vehicleConnected
 
     init {
@@ -558,7 +562,6 @@ class DefaultRootComponent(
                 }
                 val home = homeConfigFor(v)
                 _rideAvailable.value = home is Config.Ride
-                _vehicleConnected.value = v != null
                 // Switching to a source-less vehicle must not leave a Ride
                 // entry anywhere in the stack — see [shouldLeaveRide].
                 if (shouldLeaveRide(v, stack.value.items.map { it.configuration })) {
@@ -571,15 +574,15 @@ class DefaultRootComponent(
         // has been closed show what it recorded. Coming back returns to the dashboard by itself.
         scope.launch {
             combine(bmsRepository.connectionState, bmsRepository.activeVehicle) { state, vehicle ->
-                (state is ConnectionState.Connected) to vehicle?.takeUnless { it.isDemo || it.isGuest }?.id
+                (liveVehicleForNavigation(state, vehicle) != null) to vehicle?.takeUnless { it.isDemo || it.isGuest }?.id
             }.distinctUntilChanged().collectLatest { (connected, vehicleId) ->
+                _vehicleConnected.value = connected
                 if (connected) { leaveAbsentSummary(); return@collectLatest }
-                if (vehicleId == null) return@collectLatest
                 delay(ABSENT_SUMMARY_DELAY_MILLIS)
-                val configs = stack.value.items.map { it.configuration as Config }
-                if (stackAfterAbsence(configs, vehicleId) != null) {
+                nav.navigate { current ->
+                    val next = stackAfterAbsence(current, vehicleId) ?: return@navigate current
                     absentSummaryVehicleId = vehicleId
-                    nav.navigate { current -> stackAfterAbsence(current, vehicleId) ?: current }
+                    next
                 }
             }
         }
@@ -625,7 +628,10 @@ class DefaultRootComponent(
      * so every active vehicle lands on Ride, from one rule rather than five
      * copies of it.
      */
-    private fun homeConfig(): Config = homeConfigFor(bmsRepository.activeVehicle.value)
+    private fun homeConfig(): Config = homeConfigFor(liveVehicle())
+
+    private fun liveVehicle(): Vehicle? =
+        liveVehicleForNavigation(bmsRepository.connectionState.value, bmsRepository.activeVehicle.value)
 
     /**
      * Every composer terminal callback takes the same total route. This covers
@@ -664,7 +670,8 @@ class DefaultRootComponent(
     }
 
     override fun onTab(tab: RootComponent.Tab) {
-        nav.bringToFront(permissionGatedConfig(configForTab(tab), permissionsChecker.missingPermissions()))
+        val config = configForTab(tab, liveVehicleAvailable = liveVehicle() != null) ?: return
+        nav.bringToFront(permissionGatedConfig(config, permissionsChecker.missingPermissions()))
     }
 
     override fun onOpenHistory() { goTo(Config.History()) }

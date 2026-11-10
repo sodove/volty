@@ -15,6 +15,7 @@ class RootNavigationChromePolicyTest {
     @Test
     fun light_ride_dashboard_keeps_its_hud_navigation() {
         assertFalse(bottomTabBarVisible(RootChromeDestination.RIDE, DashboardStyle.LIGHT))
+        assertFalse(bottomTabBarVisible(RootChromeDestination.RIDE, null))
     }
 
     @Test

@@ -73,21 +73,34 @@ class DefaultVehicleOverviewComponent(
     }
 
     private suspend fun load() {
-        val rides = try {
-            reader.newestRides(setOf(vehicleId), maxRides)[vehicleId].orEmpty()
-        } catch (cancel: CancellationException) { throw cancel }
-        catch (_: Exception) { mutableState.update { it.copy(loading = false, error = true) }; return }
+        var readFailed = false
+        suspend fun <T> read(block: suspend () -> T): T? = try {
+            block()
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (_: Exception) {
+            readFailed = true
+            null
+        }
+
+        val rides = read { reader.newestRides(setOf(vehicleId), maxRides)[vehicleId] }.orEmpty()
         val last = rides.firstOrNull()
-        mutableState.update { it.copy(rides = rides, lastRide = last) }
-        if (last != null) try {
-            val recorded = reader.recorded(last)
-            mutableState.update { it.copy(battery = reader.battery(last.id, recorded, withCells = true)) }
-            val totals = reader.totals(last.id, recorded)
-            mutableState.update { it.copy(lastTotals = totals, rideTotals = it.rideTotals + (last.id to totals)) }
-            mutableState.update { it.copy(lastRoute = reader.route(last.id, recorded)) }
-        } catch (cancel: CancellationException) { throw cancel }
-        catch (_: Exception) { mutableState.update { it.copy(error = true) } }
-        mutableState.update { it.copy(loading = false) }
+        val recorded = last?.let { read { reader.recorded(it) } }
+        val ready = VehicleOverviewState(loading = false, rides = rides, lastRide = last)
+        val overview = if (last != null && recorded != null) {
+            val battery = read { reader.battery(last.id, recorded, withCells = true) }
+            val totals = read { reader.totals(last.id, recorded) }
+            val route = read { reader.route(last.id, recorded) }
+            ready.copy(
+                battery = battery.orEmpty(),
+                lastTotals = totals.orEmpty(),
+                lastRoute = route.orEmpty(),
+                rideTotals = totals?.let { mapOf(last.id to it) }.orEmpty(),
+            )
+        } else ready
+        // Publish the layout together so a late route or battery card cannot move the ride list.
+        mutableState.update { overview.copy(vehicle = it.vehicle, error = readFailed) }
+
         // The list's own numbers come last and one at a time, so the screen is usable first.
         rides.drop(1).forEach { ride ->
             try {

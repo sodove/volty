@@ -2,20 +2,25 @@ package ru.sodovaya.volty.presentation.vehicle
 
 import android.content.Context
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -36,19 +41,42 @@ import ru.sodovaya.volty.presentation.map.themeMapStyle
 
 @Composable
 internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkTheme: Boolean, modifier: Modifier) {
-    val context = LocalContext.current
+    val context = LocalContext.current.applicationContext
     val density = LocalDensity.current.density
     val palette = LocalVoltyMapPalette.current
-    BoxWithConstraints(modifier.clip(RoundedCornerShape(14.dp))) {
-        val width = constraints.maxWidth; val height = constraints.maxHeight
-        val snapshot by produceState<ImageBitmap?>(null, points, darkTheme, width, height, palette) {
-            value = if (width <= 0 || height <= 0) null
-            else routeSnapshot(context.applicationContext, points, darkTheme, width / density, height / density, density, palette)
+    BoxWithConstraints(modifier.clip(RoundedCornerShape(14.dp)).background(Color(palette.background))) {
+        val width = constraints.maxWidth
+        val height = constraints.maxHeight
+        if (width <= 0 || height <= 0) return@BoxWithConstraints
+
+        // A new request must not display a bitmap produced with the previous palette.
+        key(context, points, darkTheme, width, height, density, palette) {
+            val snapshot by produceState<RoutePreviewSnapshot?>(null) {
+                val bitmap = try {
+                    withTimeoutOrNull(8_000L) {
+                        routeSnapshot(context, points, darkTheme, width / density, height / density, density, palette)
+                    }
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (_: Exception) {
+                    null
+                }
+                value = RoutePreviewSnapshot(bitmap)
+            }
+            snapshot?.let { result ->
+                val bitmap = result.bitmap
+                if (bitmap == null) {
+                    RouteSketch(points, Modifier.fillMaxSize())
+                } else {
+                    Image(bitmap, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                }
+            }
         }
-        snapshot?.let { Image(it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize()) }
-            ?: RouteSketch(points, Modifier.fillMaxSize())
     }
 }
+
+/** The result stays absent while the themed snapshot is still loading. */
+private data class RoutePreviewSnapshot(val bitmap: ImageBitmap?)
 
 /** The track is a layer of the snapshot's own style, so it sits on the streets it was ridden on. Null on any failure. */
 private suspend fun routeSnapshot(context: Context, points: List<Pair<Double, Double>>, darkTheme: Boolean,

@@ -22,7 +22,7 @@ internal fun bottomTabBarVisible(
     destination: RootChromeDestination,
     rideStyle: DashboardStyle?,
 ): Boolean = when (destination) {
-    RootChromeDestination.RIDE -> rideStyle != DashboardStyle.LIGHT
+    RootChromeDestination.RIDE -> rideStyle != null && rideStyle != DashboardStyle.LIGHT
     RootChromeDestination.BATTERY,
     RootChromeDestination.NEARBY,
     RootChromeDestination.PICKER,

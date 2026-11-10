@@ -31,6 +31,7 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -49,7 +50,7 @@ import volty.composeapp.generated.resources.*
 @Composable
 fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey) -> Long,
     gpsMaxAgeMillis: Long, modifier: Modifier = Modifier, vehicleNames: Map<String, String> = emptyMap(),
-    reduceMotion: Boolean = false, mapHost: HistoryMapHost? = null) {
+    reduceMotion: Boolean = false, mapHost: HistoryMapHost? = null, mapViewportHeight: Dp? = null) {
     val state by owner.state.collectAsState()
     val requestRecordingLocation = rememberHistoryRecordingLocationRequest(owner)
     val content = historyScreenContent(state)
@@ -123,9 +124,13 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
             val density = LocalDensity.current
             val direction = LocalLayoutDirection.current
             // The standalone map is inside safeDrawingPadding. The retained
-            // root map is outside it, so its fit needs those measured pixels too.
+            // root map is outside it, and extends behind the bottom call/radio dock.
             val externalTop = if (mapHost != null) WindowInsets.safeDrawing.getTop(density) else 0
-            val externalBottom = if (mapHost != null) WindowInsets.safeDrawing.getBottom(density) else 0
+            val safeBottom = if (mapHost != null) WindowInsets.safeDrawing.getBottom(density) else 0
+            val externalBottom = mapViewportHeight?.let {
+                val viewportPixels = with(density) { it.roundToPx() }
+                (viewportPixels - constraints.maxHeight - externalTop).coerceAtLeast(safeBottom)
+            } ?: safeBottom
             val externalLeft = if (mapHost != null) WindowInsets.safeDrawing.getLeft(density, direction) else 0
             val externalRight = if (mapHost != null) WindowInsets.safeDrawing.getRight(density, direction) else 0
             val panelWidth = if (wide) maxWidth * 0.5f else maxWidth

@@ -17,4 +17,19 @@ class KableBmsRepositoryBluetoothGuardTest {
         val state = assertIs<ConnectionState.Failed>(repository.connectionState.value)
         assertEquals(BLUETOOTH_DISABLED_REASON, state.reason)
     }
+
+    @Test
+    fun scan_with_bluetooth_off_keeps_the_live_demo_connection() = bleRepositoryTest(
+        bleAdapterStateProvider = BleAdapterStateProvider { false },
+    ) { repository ->
+        repository.connectDemo().getOrThrow()
+        try {
+            val connected = assertIs<ConnectionState.Connected>(repository.connectionState.value)
+
+            assertEquals(emptyList(), repository.scanAll().toList())
+            assertEquals(connected, repository.connectionState.value)
+        } finally {
+            repository.disconnect()
+        }
+    }
 }
