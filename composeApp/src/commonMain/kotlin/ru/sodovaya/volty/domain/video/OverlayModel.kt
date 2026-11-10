@@ -348,12 +348,12 @@ class VideoTimeline(
                 if (snapshot.readings[metric]?.value?.isFinite() != true) { previous = null; continue }
                 val stamp = snapshot.measuredAt(metric)
                 previous?.let { prior ->
-                    if (stamp > prior) largestGap = maxOf(largestGap, (stamp - prior).coerceAtMost(300))
+                    if (stamp > prior) largestGap = maxOf(largestGap, (stamp - prior).coerceAtMost(VIDEO_TELEMETRY_LOOKAHEAD_MILLIS))
                 }
                 previous = stamp
             }
         }
-        return (largestGap + 20).coerceIn(80, 300)
+        return (largestGap + 20).coerceIn(DEFAULT_INTERPOLATION_DELAY_MILLIS, VIDEO_TELEMETRY_LOOKAHEAD_MILLIS)
     }
 
     private fun brackets(metric: VideoMetric, targetMillis: Long, availableAtMillis: Long): Pair<VideoSnapshot?, VideoSnapshot?> {

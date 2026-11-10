@@ -4,6 +4,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.presentation.history.*
@@ -80,6 +81,8 @@ class VehicleHistoryReader(
     private val peakCache = ru.sodovaya.volty.presentation.history.HistoryPeakCache()
     private data class PreviewRoute(val ride: HistoryRide, val points: List<Pair<Double, Double>>)
     private val lastPreviewRoute = MutableStateFlow<PreviewRoute?>(null)
+    private data class OverviewBattery(val ride: HistoryRide, val packs: List<VehicleBatterySnapshot>)
+    private val recentOverviewBatteries = MutableStateFlow<List<OverviewBattery>>(emptyList())
     data class Recorded(val sources: List<HistorySource>, val range: HistoryRange)
 
     /** One pass over the shared catalog, newest first, collecting up to [perVehicle] rides of each vehicle. */
@@ -101,6 +104,20 @@ class VehicleHistoryReader(
      * same battery (a Begode reports its pack too) is the same battery, not a second, empty one. */
     suspend fun battery(rideId: String, recorded: Recorded, withCells: Boolean): List<VehicleBatterySnapshot> =
         vehicleBatteryCards(readBattery(rideId, recorded, withCells))
+
+    internal fun cachedOverviewBattery(ride: HistoryRide): List<VehicleBatterySnapshot>? =
+        recentOverviewBatteries.value.firstOrNull { it.ride == ride }?.packs
+
+    internal suspend fun overviewBattery(ride: HistoryRide, recorded: Recorded): List<VehicleBatterySnapshot> {
+        val packs = battery(ride.id, recorded, withCells = true)
+        if (ride.status == HistoryRideStatus.COMPLETED && ride.ended != null && packs.isNotEmpty()) {
+            recentOverviewBatteries.update { previous ->
+                (listOf(OverviewBattery(ride, packs)) + previous.filterNot { it.ride.vehicleId == ride.vehicleId })
+                    .take(OVERVIEW_BATTERY_CACHE_SIZE)
+            }
+        }
+        return packs
+    }
 
     private suspend fun readBattery(rideId: String, recorded: Recorded, withCells: Boolean): List<VehicleBatterySnapshot> {
         val range = recorded.range
@@ -151,6 +168,7 @@ class VehicleHistoryReader(
         try { block() } catch (cancel: CancellationException) { throw cancel } catch (_: Exception) { null }
 
     private companion object {
+        const val OVERVIEW_BATTERY_CACHE_SIZE = 8
         const val LAST_STATE_WINDOW_MILLIS = 10 * 60_000L
         const val LAST_STATE_POINTS = 60
         const val MAX_CELLS = 64

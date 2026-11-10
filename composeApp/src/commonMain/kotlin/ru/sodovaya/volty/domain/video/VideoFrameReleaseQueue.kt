@@ -23,10 +23,14 @@ class VideoFrameReleaseQueue {
     fun flush(): List<Long> = pending.sorted().also { pending.clear() }
 }
 
-/** About 300 ms of camera-paced buffering, with a 192 MiB RGBA texture budget. */
+// T4 current/duty frames were 310 ms apart at the median and 329 ms at p95.
+// Leave room for delivery jitter so the next reading can bracket the capture time.
+internal const val VIDEO_TELEMETRY_LOOKAHEAD_MILLIS = 380L
+
+/** Camera-paced buffering under a 192 MiB RGBA texture budget. */
 fun videoFrameBufferDepth(width: Int, height: Int, framesPerSecond: Int): Int {
     require(width > 0 && height > 0 && framesPerSecond > 0)
     val bytesPerFrame = width.toLong() * height * 4
-    val desired = (framesPerSecond.coerceAtMost(60) * 300 + 999) / 1000
+    val desired = ((framesPerSecond.coerceAtMost(60) * VIDEO_TELEMETRY_LOOKAHEAD_MILLIS + 999) / 1000).toInt()
     return minOf(desired, (192L * 1024 * 1024 / bytesPerFrame).coerceAtMost(64).toInt()).coerceAtLeast(1)
 }

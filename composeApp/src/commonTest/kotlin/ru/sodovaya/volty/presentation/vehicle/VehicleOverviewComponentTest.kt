@@ -147,6 +147,44 @@ class VehicleOverviewComponentTest {
         sourcesReady.complete(Unit)
     }
 
+    @Test fun reopeningStartsWithAllRecordedPacksFromTheSameRide() = runTest {
+        val batteryRequested = CompletableDeferred<Unit>()
+        val batteryReady = CompletableDeferred<Unit>()
+        var holdBattery = false
+        val newest = ride("r2", "bike", 20_000_000)
+        val history = object : History() {
+            override suspend fun sources(rideId: String) = listOf(
+                HistorySource("pack", HistorySourceKind.BATTERY, "Pack"),
+                HistorySource("aux", HistorySourceKind.BATTERY, "Aux"),
+            )
+
+            override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
+                if (holdBattery) {
+                    batteryRequested.complete(Unit)
+                    batteryReady.await()
+                }
+                return super.recordedKeys(rideId, sourceId, limit)
+            }
+        }
+        val reader = historyReader(history)
+        val first = component(history, maxRides = 1, reader = reader)
+        runCurrent()
+        val fullBattery = first.state.value.battery
+        assertEquals(listOf("pack", "aux"), fullBattery.map { it.sourceId })
+
+        holdBattery = true
+        val seed = VehicleOverviewSeed(bike, VehicleGlance(newest, fullBattery.first(), emptyList()))
+        val reopened = component(history, maxRides = 1, seed = seed, reader = reader)
+        val initialBattery = reopened.state.value.battery
+        runCurrent()
+        assertTrue(batteryRequested.isCompleted)
+        assertTrue(reopened.state.value.loading)
+        val loadingBattery = reopened.state.value.battery
+        batteryReady.complete(Unit)
+        assertEquals(fullBattery, initialBattery)
+        assertEquals(fullBattery, loadingBattery)
+    }
+
     private val previewPoints = listOf(55.0 to 37.0, 55.001 to 37.001)
 
     private fun previewRoute(): HistoryRoutePage {

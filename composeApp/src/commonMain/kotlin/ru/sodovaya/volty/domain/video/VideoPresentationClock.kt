@@ -4,7 +4,7 @@ package ru.sodovaya.volty.domain.video
 class VideoPresentationClock {
     private var previous: Long? = null
     fun frameMillis(nowMillis: Long, delayMillis: Long): Long {
-        val delay = delayMillis.coerceIn(0, 300)
+        val delay = delayMillis.coerceIn(0, VIDEO_TELEMETRY_LOOKAHEAD_MILLIS)
         val target = if (nowMillis < Long.MIN_VALUE + delay) Long.MIN_VALUE else nowMillis - delay
         return maxOf(previous ?: target, target).also { previous = it }
     }

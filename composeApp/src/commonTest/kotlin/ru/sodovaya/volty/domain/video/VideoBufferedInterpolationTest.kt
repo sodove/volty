@@ -22,6 +22,17 @@ class VideoBufferedInterpolationTest {
         assertEquals(40.0, timeline.interpolatedValuesAt(100, 300)[VideoMetric.SPEED])
     }
 
+    @Test fun hdFrameHasLookaheadForTheNextBegodeSample() {
+        val timeline = VideoTimeline()
+        timeline.offer(speed(0, 0.0))
+        timeline.offer(speed(350, 65.8, measured = 329))
+
+        val frameMillis = 25L
+        val lookaheadMillis = videoFrameBufferDepth(1280, 720, 60) * 1_000L / 60
+        val value = timeline.interpolatedValuesAt(frameMillis, frameMillis + lookaheadMillis)
+        assertEquals(5.0, value.getValue(VideoMetric.SPEED), absoluteTolerance = 0.0001)
+    }
+
     @Test fun futureDisconnectDoesNotEraseAHistoricalFrameButUnknownAtTheFrameDoes() {
         val timeline = VideoTimeline()
         timeline.offer(speed(0, 0.0))
@@ -42,13 +53,15 @@ class VideoBufferedInterpolationTest {
         assertFalse(VideoMetric.SPEED in timeline.interpolatedValuesAt(100, 350))
     }
 
-    @Test fun adaptivePreviewDelayFollowsSparseSourceCadenceAndNeverExceedsThreeHundredMillis() {
+    @Test fun adaptivePreviewDelayCoversSparseSourceCadenceAndStaysBounded() {
         val timeline = VideoTimeline()
         timeline.offer(speed(0, 0.0))
         timeline.offer(speed(250, 100.0))
         assertEquals(270L, timeline.interpolationDelayMillis())
-        timeline.offer(speed(650, 200.0))
-        assertEquals(300L, timeline.interpolationDelayMillis())
+        timeline.offer(speed(579, 200.0))
+        assertEquals(349L, timeline.interpolationDelayMillis())
+        timeline.offer(speed(1_100, 300.0))
+        assertEquals(380L, timeline.interpolationDelayMillis())
     }
 
     @Test fun pastTheNewestMeasurementTheLastValueHoldsOnlyWhileFresh() {
@@ -66,7 +79,7 @@ class VideoBufferedInterpolationTest {
         assertEquals(920L, clock.frameMillis(1016, 270))
         assertEquals(930L, clock.frameMillis(1200, 270))
         clock.reset()
-        assertEquals(730L, clock.frameMillis(1000, 270))
+        assertEquals(620L, clock.frameMillis(1000, 380))
     }
 
     @Test fun aRecentFoldCannotRefreshAnOldMeasurementEvenWithoutAnExplicitExpiry() {

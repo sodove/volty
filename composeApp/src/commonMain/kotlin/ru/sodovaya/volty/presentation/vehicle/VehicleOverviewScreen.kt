@@ -1,8 +1,13 @@
 package ru.sodovaya.volty.presentation.vehicle
 
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -147,13 +152,25 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
 
 @Composable
 private fun BatterySection(groups: List<List<VehicleBatterySnapshot>>, loading: Boolean) {
-    Column(Modifier.fillMaxWidth().animateContentSize(tween(180))) {
-        if (groups.isEmpty() && loading) {
+    AnimatedContent(
+        targetState = groups.takeUnless { it.isEmpty() && loading },
+        modifier = Modifier.fillMaxWidth(),
+        // Animate structural changes only. Updated readings in the same layout replace in place.
+        contentKey = { packs -> packs?.map { group -> group.map { it.sourceId to it.cells.isNotEmpty() } } },
+        transitionSpec = {
+            (fadeIn(tween(220)) togetherWith fadeOut(tween(140))) using SizeTransform { _, _ -> tween(220) }
+        },
+        label = "overview battery",
+    ) { packs ->
+        if (packs == null) {
             BatteryLoadingCard(Modifier.padding(bottom = 12.dp))
-        }
-        groups.forEach { group ->
-            key(group.first().sourceId) {
-                BatteryCard(group, showLabel = groups.size > 1, modifier = Modifier.padding(bottom = 12.dp))
+        } else {
+            Column(Modifier.fillMaxWidth()) {
+                packs.forEach { group ->
+                    key(group.first().sourceId) {
+                        BatteryCard(group, showLabel = packs.size > 1, modifier = Modifier.padding(bottom = 12.dp))
+                    }
+                }
             }
         }
     }

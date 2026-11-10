@@ -30,9 +30,10 @@ class VideoFrameReleaseQueueTest {
         assertEquals(listOf(30L), queue.flush())
     }
 
-    @Test fun memoryBudgetBoundsUhdWhileHdCanKeepThreeHundredMillisAtSixtyFps() {
-        assertEquals(18, videoFrameBufferDepth(1280, 720, 60))
-        assertEquals(9, videoFrameBufferDepth(1280, 720, 30))
+    @Test fun memoryBudgetBoundsUhdWhileHdCoversTheWheelSampleCadence() {
+        assertEquals(23, videoFrameBufferDepth(1280, 720, 60))
+        assertEquals(12, videoFrameBufferDepth(1280, 720, 30))
+        assertEquals(23, videoFrameBufferDepth(1920, 1080, 60))
         val uhd = videoFrameBufferDepth(3840, 2160, 60)
         assertTrue(uhd * 3840L * 2160L * 4L <= 192L * 1024 * 1024)
         assertTrue(uhd < 18)

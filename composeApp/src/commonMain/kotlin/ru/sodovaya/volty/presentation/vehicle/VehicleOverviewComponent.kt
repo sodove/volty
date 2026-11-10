@@ -72,7 +72,7 @@ class DefaultVehicleOverviewComponent(
         VehicleOverviewState(
             vehicle = initial?.vehicle,
             lastRide = glance?.ride,
-            battery = listOfNotNull(glance?.battery),
+            battery = glance?.ride?.let(reader::cachedOverviewBattery) ?: listOfNotNull(glance?.battery),
             lastTotals = glance?.totals.orEmpty(),
         )
     })
@@ -102,10 +102,11 @@ class DefaultVehicleOverviewComponent(
         }
         val last = rides.firstOrNull()
         val cached = mutableState.value.takeIf { last != null && it.lastRide == last }
+        val knownBattery = last?.let(reader::cachedOverviewBattery) ?: cached?.battery.orEmpty()
         val cachedRoute = last?.let(reader::cachedRoute)
         val knownTotals = cached?.lastTotals.orEmpty()
         mutableState.update {
-            it.copy(lastRide = last, battery = cached?.battery.orEmpty(), lastTotals = knownTotals, lastRoute = cachedRoute.orEmpty())
+            it.copy(lastRide = last, battery = knownBattery, lastTotals = knownTotals, lastRoute = cachedRoute.orEmpty())
         }
 
         val recorded = last?.let { read { reader.recorded(it) } }
@@ -115,8 +116,8 @@ class DefaultVehicleOverviewComponent(
             mutableState.update { it.copy(lastRoute = points) }
         } else null
         val battery = if (last != null && recorded != null) {
-            read { reader.battery(last.id, recorded, withCells = true) } ?: cached?.battery.orEmpty()
-        } else cached?.battery.orEmpty()
+            read { reader.overviewBattery(last, recorded) } ?: knownBattery
+        } else knownBattery
 
         mutableState.update { it.copy(battery = battery) }
         val totals = if (last != null && recorded != null) {
