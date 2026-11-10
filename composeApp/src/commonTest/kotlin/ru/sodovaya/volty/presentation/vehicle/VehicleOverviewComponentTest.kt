@@ -58,9 +58,11 @@ class VehicleOverviewComponentTest {
         }
     }
 
-    private fun TestScope.component(history: History, vehicles: List<Vehicle> = listOf(bike), maxRides: Int = 10) =
-        DefaultVehicleOverviewComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
-            "bike", Vehicles(vehicles), VehicleHistoryReader(history, { HistoryTick(40_000_000, 40_000_000, 1) }, computeDispatcher = Dispatchers.Unconfined), {}, {}, {}, {}, {}, maxRides = maxRides)
+    private fun TestScope.component(
+        history: History, vehicles: List<Vehicle> = listOf(bike), maxRides: Int = 10, seed: VehicleOverviewSeed? = null,
+    ) = DefaultVehicleOverviewComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
+        "bike", Vehicles(vehicles), VehicleHistoryReader(history, { HistoryTick(40_000_000, 40_000_000, 1) }, computeDispatcher = Dispatchers.Unconfined),
+        {}, {}, {}, {}, {}, maxRides = maxRides, seed = seed)
 
     @Test fun showsOnlyThisVehiclesRidesAndTheLastKnownBatteryOfTheNewest() = runTest {
         val history = History(); val c = component(history); runCurrent()
@@ -122,8 +124,9 @@ class VehicleOverviewComponentTest {
         val loading = component.state.value
         assertTrue(loading.loading)
         assertTrue(loading.rides.isEmpty())
-        assertNull(loading.lastRide)
-        assertTrue(loading.battery.isEmpty())
+        assertEquals("r2", loading.lastRide?.id)
+        assertEquals(52.0, loading.battery.single().value("soc_percent"),
+            "the earned battery must be visible while the route is still loading")
         assertTrue(loading.lastTotals.isEmpty())
 
         routeReady.complete(Unit)
@@ -145,6 +148,37 @@ class VehicleOverviewComponentTest {
         lastOlderTotalsReady.complete(Unit)
         runCurrent()
         assertEquals(setOf("r2", "r1", "r0"), component.state.value.rideTotals.keys)
+    }
+
+    @Test fun garageBatteryIsVisibleBeforeTheHistoryReadAndReplacedByTheLatestRide() = runTest {
+        val catalogRequested = CompletableDeferred<Unit>()
+        val catalogReady = CompletableDeferred<Unit>()
+        val history = object : History() {
+            override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> {
+                catalogRequested.complete(Unit)
+                catalogReady.await()
+                return super.rides(before)
+            }
+        }
+        val earlierRide = ride("r1", "bike", 10_000_000)
+        val snapshot = VehicleBatterySnapshot(
+            "Pack", listOf(VehicleReading("soc_percent", 81.0, HistoryUnit.PERCENT)),
+            earlierRide.ended!!.epochMillis, sourceId = "pack",
+        )
+        val c = component(history, seed = VehicleOverviewSeed(bike, VehicleGlance(earlierRide, snapshot, emptyList())))
+        runCurrent()
+
+        assertTrue(catalogRequested.isCompleted)
+        assertTrue(c.state.value.loading)
+        assertEquals(bike, c.state.value.vehicle)
+        assertEquals(earlierRide, c.state.value.lastRide)
+        assertEquals(listOf(snapshot), c.state.value.battery)
+
+        catalogReady.complete(Unit)
+        runCurrent()
+        assertFalse(c.state.value.loading)
+        assertEquals("r2", c.state.value.lastRide?.id)
+        assertEquals(52.0, c.state.value.battery.single().value("soc_percent"))
     }
 
     @Test fun aVehicleWithoutRidesShowsNothingRecordedAndNoError() = runTest {

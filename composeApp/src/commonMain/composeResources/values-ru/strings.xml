@@ -49,6 +49,8 @@
     <string name="vehicle_overview_settings">Настройки ТС</string>
     <string name="vehicle_overview_alerts">Алерты</string>
     <string name="vehicle_overview_battery">Батарея · на %1$s</string>
+    <string name="vehicle_overview_loading_battery">Загрузка данных батареи…</string>
+    <string name="vehicle_overview_loading_route">Загрузка маршрута…</string>
     <string name="vehicle_overview_last_ride">Последняя поездка · %1$s</string>
     <string name="vehicle_overview_rides">Поездки</string>
     <string name="vehicle_overview_no_rides">Записанных поездок пока нет</string>

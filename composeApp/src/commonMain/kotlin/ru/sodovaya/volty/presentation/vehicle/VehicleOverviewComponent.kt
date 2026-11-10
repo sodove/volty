@@ -22,6 +22,8 @@ internal fun sharedBatteryCharge(branches: List<VehicleBatterySnapshot>): Double
     }
 }
 
+data class VehicleOverviewSeed(val vehicle: Vehicle, val glance: VehicleGlance?)
+
 data class VehicleOverviewState(
     val vehicle: Vehicle? = null,
     val loading: Boolean = true,
@@ -60,10 +62,20 @@ class DefaultVehicleOverviewComponent(
     private val onAlertsRequested: (String) -> Unit,
     private val onBackRequested: () -> Unit,
     private val maxRides: Int = 10,
+    seed: VehicleOverviewSeed? = null,
 ) : VehicleOverviewComponent, ComponentContext by componentContext {
     private val lifetime = SupervisorJob(parentScope.coroutineContext[Job])
     private val scope = CoroutineScope(parentScope.coroutineContext + lifetime)
-    private val mutableState = MutableStateFlow(VehicleOverviewState())
+    private val mutableState = MutableStateFlow(run {
+        val initial = seed?.takeIf { it.vehicle.id == vehicleId }
+        val glance = initial?.glance?.takeIf { it.ride.vehicleId == vehicleId }
+        VehicleOverviewState(
+            vehicle = initial?.vehicle,
+            lastRide = glance?.ride,
+            battery = listOfNotNull(glance?.battery),
+            lastTotals = glance?.totals.orEmpty(),
+        )
+    })
     override val state: StateFlow<VehicleOverviewState> = mutableState.asStateFlow()
 
     init {
@@ -83,23 +95,38 @@ class DefaultVehicleOverviewComponent(
             null
         }
 
-        val rides = read { reader.newestRides(setOf(vehicleId), maxRides)[vehicleId] }.orEmpty()
+        val rides = read { reader.newestRides(setOf(vehicleId), maxRides)[vehicleId].orEmpty() }
+        if (rides == null) {
+            mutableState.update { it.copy(loading = false, error = true) }
+            return
+        }
         val last = rides.firstOrNull()
         val recorded = last?.let { read { reader.recorded(it) } }
-        val ready = VehicleOverviewState(loading = false, rides = rides, lastRide = last)
-        val overview = if (last != null && recorded != null) {
-            val battery = read { reader.battery(last.id, recorded, withCells = true) }
-            val totals = read { reader.totals(last.id, recorded) }
-            val route = read { reader.route(last.id, recorded) }
-            ready.copy(
-                battery = battery.orEmpty(),
-                lastTotals = totals.orEmpty(),
-                lastRoute = route.orEmpty(),
-                rideTotals = totals?.let { mapOf(last.id to it) }.orEmpty(),
+        val cached = mutableState.value.takeIf { last != null && it.lastRide == last }
+        val battery = if (last != null && recorded != null) {
+            read { reader.battery(last.id, recorded, withCells = true) } ?: cached?.battery.orEmpty()
+        } else cached?.battery.orEmpty()
+
+        // The card can show earned battery data while the longer route and totals reads run.
+        val knownTotals = cached?.lastTotals.orEmpty()
+        mutableState.update { it.copy(lastRide = last, battery = battery, lastTotals = knownTotals) }
+        val totals = if (last != null && recorded != null) {
+            read { reader.totals(last.id, recorded) } ?: knownTotals
+        } else knownTotals
+        val route = if (last != null && recorded != null) read { reader.route(last.id, recorded) }.orEmpty()
+        else emptyList()
+
+        // Publish the latest route, totals and list together. Older totals stay batched below.
+        mutableState.update {
+            it.copy(
+                loading = false,
+                rides = rides,
+                lastTotals = totals,
+                lastRoute = route,
+                rideTotals = if (last != null) mapOf(last.id to totals) else emptyMap(),
+                error = readFailed,
             )
-        } else ready
-        // Publish the layout together so a late route or battery card cannot move the ride list.
-        mutableState.update { overview.copy(vehicle = it.vehicle, error = readFailed) }
+        }
 
         val olderTotals = mutableMapOf<String, List<HistoryTotal>>()
         for (ride in rides.drop(1)) {

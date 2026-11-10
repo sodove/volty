@@ -1,12 +1,11 @@
 package ru.sodovaya.volty.presentation.vehicle
 
-import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -27,6 +26,7 @@ import kotlin.time.ExperimentalTime
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.history.HistoryRide
 import ru.sodovaya.volty.domain.history.HistoryUnit
+import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.presentation.history.HistoryTotal
 import ru.sodovaya.volty.presentation.history.HistoryTotalKind
 import ru.sodovaya.volty.presentation.history.historyUnitText
@@ -50,7 +50,8 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
                         Text(state.vehicle?.name ?: "", fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         Text(if (asOf != null) stringResource(Res.string.vehicle_overview_offline_at, whenText(asOf, now))
                             else stringResource(Res.string.vehicle_overview_offline),
-                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                 },
                 navigationIcon = { IconButton(onClick = component::onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, null) } },
@@ -69,52 +70,94 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
             }
         },
     ) { padding ->
-        Box(Modifier.padding(padding).fillMaxSize()) {
-            LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                if (state.error) item { Text(stringResource(Res.string.vehicle_overview_error), color = MaterialTheme.colorScheme.error) }
-                items(batteryGroups, key = { "battery-" + it.first().sourceId }) { group ->
-                    BatteryCard(group, showLabel = batteryGroups.size > 1)
-                }
-                state.lastRide?.let { ride ->
-                    item { SectionLabel(stringResource(Res.string.vehicle_overview_last_ride, whenText(ride.started.epochMillis, now))) }
-                    item {
-                        ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().clickable { component.onOpenRide(ride.id) }) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                                if (state.lastRoute.size >= 2) {
-                                    RouteMapPreview(state.lastRoute, LocalVoltyDarkTheme.current, Modifier.fillMaxWidth().height(160.dp))
-                                }
-                                if (state.lastTotals.isNotEmpty()) TotalsTiles(state.lastTotals)
-                            }
-                        }
+        LazyColumn(Modifier.padding(padding).fillMaxSize(), contentPadding = PaddingValues(16.dp, 4.dp, 16.dp, 16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            if (state.error) item { Text(stringResource(Res.string.vehicle_overview_error), color = MaterialTheme.colorScheme.error) }
+            item(key = "overview-summary") {
+                Column {
+                    BatterySection(batteryGroups, state.loading)
+                    state.lastRide?.let { ride ->
+                        LastRideCard(ride, state.lastTotals, state.lastRoute, state.loading, now) { component.onOpenRide(ride.id) }
+                    }
+                    if (!state.loading && !state.error && state.rides.isEmpty()) {
+                        Text(stringResource(Res.string.vehicle_overview_no_rides), color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                if (!state.loading && !state.error && state.rides.isEmpty()) item {
-                    Text(stringResource(Res.string.vehicle_overview_no_rides), color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                if (state.rides.isNotEmpty()) {
-                    item { SectionLabel(stringResource(Res.string.vehicle_overview_rides)) }
-                    item {
-                        ElevatedCard(shape = RoundedCornerShape(22.dp)) {
-                            val latestRideId = state.lastRide?.id
-                            val olderTotalsAlpha by animateFloatAsState(
-                                targetValue = if (state.rideTotals.keys.any { it != latestRideId }) 1f else 0f,
-                                animationSpec = tween(180),
-                                label = "older ride totals",
-                            )
-                            val olderTotalsModifier = Modifier.graphicsLayer { alpha = olderTotalsAlpha }
-                            state.rides.forEachIndexed { i, ride ->
-                                if (i > 0) HorizontalDivider(Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                                RideRow(ride, state.rideTotals[ride.id], now,
-                                    totalsModifier = if (ride.id == latestRideId) Modifier else olderTotalsModifier,
-                                ) { component.onOpenRide(ride.id) }
-                            }
+            }
+            if (state.rides.isNotEmpty()) {
+                item(key = "ride-list-label") { SectionLabel(stringResource(Res.string.vehicle_overview_rides)) }
+                item(key = "ride-list") {
+                    ElevatedCard(shape = RoundedCornerShape(22.dp)) {
+                        val latestRideId = state.lastRide?.id
+                        val olderTotalsAlpha by animateFloatAsState(
+                            targetValue = if (state.rideTotals.keys.any { it != latestRideId }) 1f else 0f,
+                            animationSpec = tween(180),
+                            label = "older ride totals",
+                        )
+                        val olderTotalsModifier = Modifier.graphicsLayer { alpha = olderTotalsAlpha }
+                        state.rides.forEachIndexed { i, ride ->
+                            if (i > 0) HorizontalDivider(Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                            RideRow(ride, state.rideTotals[ride.id], now,
+                                totalsModifier = if (ride.id == latestRideId) Modifier else olderTotalsModifier,
+                            ) { component.onOpenRide(ride.id) }
                         }
                     }
                 }
             }
-            if (state.loading) {
-                LinearProgressIndicator(Modifier.align(Alignment.TopCenter).fillMaxWidth().padding(horizontal = 16.dp))
+        }
+    }
+}
+
+@Composable
+private fun BatterySection(groups: List<List<VehicleBatterySnapshot>>, loading: Boolean) {
+    Column(Modifier.fillMaxWidth().animateContentSize(tween(180))) {
+        if (groups.isEmpty() && loading) {
+            BatteryLoadingCard(Modifier.padding(bottom = 12.dp))
+        }
+        groups.forEach { group ->
+            key(group.first().sourceId) {
+                BatteryCard(group, showLabel = groups.size > 1, modifier = Modifier.padding(bottom = 12.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun BatteryLoadingCard(modifier: Modifier = Modifier) {
+    ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = modifier.fillMaxWidth()) {
+        Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+            SocRing(null, size = 104.dp, stroke = 10.dp, caption = stringResource(Res.string.garage_soc))
+            Text(stringResource(Res.string.vehicle_overview_loading_battery), color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+}
+
+@Composable
+private fun LastRideCard(
+    ride: HistoryRide,
+    totals: List<HistoryTotal>,
+    route: List<Pair<Double, Double>>,
+    loading: Boolean,
+    now: Long,
+    onClick: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        SectionLabel(stringResource(Res.string.vehicle_overview_last_ride, whenText(ride.started.epochMillis, now)))
+        ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+            Column(Modifier.animateContentSize(tween(180)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                // Reserve the preview while reading the route so the existing totals stay in place.
+                val previewModifier = Modifier.fillMaxWidth().height(160.dp)
+                if (route.size >= 2) {
+                    RouteMapPreview(route, LocalVoltyDarkTheme.current, previewModifier)
+                } else if (loading) {
+                    Surface(modifier = previewModifier, shape = RoundedCornerShape(14.dp), color = MaterialTheme.colorScheme.surfaceContainerHigh) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(stringResource(Res.string.vehicle_overview_loading_route), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                if (totals.isNotEmpty()) TotalsTiles(totals)
             }
         }
     }
@@ -127,11 +170,11 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun BatteryCard(group: List<VehicleBatterySnapshot>, showLabel: Boolean) {
+private fun BatteryCard(group: List<VehicleBatterySnapshot>, showLabel: Boolean, modifier: Modifier = Modifier) {
     val snapshot = group.first()
     val sharedCharge = sharedBatteryCharge(group)
     val sharedReadings = snapshot.readings.filter { reading -> group.all { reading in it.readings } }
-    ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = Modifier.fillMaxWidth()) {
+    ElevatedCard(shape = RoundedCornerShape(22.dp), modifier = modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             if (showLabel) Text(snapshot.label, fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(18.dp)) {

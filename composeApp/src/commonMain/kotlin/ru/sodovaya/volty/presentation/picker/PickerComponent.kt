@@ -20,6 +20,8 @@ import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.model.isDemo
+import ru.sodovaya.volty.presentation.vehicle.VehicleGlance
+import ru.sodovaya.volty.presentation.vehicle.VehicleOverviewSeed
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -56,7 +58,7 @@ interface PickerComponent {
         /** Every saved vehicle; those not in [myInRange] are offered for an offline look. */
         val saved: List<Vehicle> = emptyList(),
         /** Newest recorded ride of each saved vehicle, for the garage; absent while loading or never ridden. */
-        val glances: Map<String, ru.sodovaya.volty.presentation.vehicle.VehicleGlance> = emptyMap(),
+        val glances: Map<String, VehicleGlance> = emptyMap(),
         val glancesLoaded: Boolean = false,
         val otherNearby: List<DiscoveredDevice> = emptyList(),   // detected (bmsType != null)
         val otherDevices: List<DiscoveredDevice> = emptyList(),  // undetected (bmsType == null)
@@ -79,9 +81,9 @@ class DefaultPickerComponent(
     private val onAddNewBatteryRequested: () -> Unit,
     private val onDemoConnected: () -> Unit,
     private val onCancelled: () -> Unit,
-    private val onOpenSavedRequested: (vehicleId: String) -> Unit = {},
+    private val onOpenSavedRequested: (VehicleOverviewSeed) -> Unit = {},
     private val onConnectSavedRequested: (vehicleId: String) -> Unit = {},
-    private val loadGlances: (suspend (Set<String>) -> Map<String, ru.sodovaya.volty.presentation.vehicle.VehicleGlance>)? = null
+    private val loadGlances: (suspend (Set<String>) -> Map<String, VehicleGlance>)? = null
 ) : PickerComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -351,6 +353,8 @@ class DefaultPickerComponent(
     }
 
     override fun onBack() { onCancelled() }
-    override fun onOpenSaved(vehicle: Vehicle) { onOpenSavedRequested(vehicle.id) }
+    override fun onOpenSaved(vehicle: Vehicle) {
+        onOpenSavedRequested(VehicleOverviewSeed(vehicle, state.value.glances[vehicle.id]))
+    }
     override fun onConnectSaved(vehicle: Vehicle) { onConnectSavedRequested(vehicle.id) }
 }

@@ -57,6 +57,7 @@ import ru.sodovaya.volty.presentation.vehicle.VehicleEditComponent
 import ru.sodovaya.volty.presentation.vehicle.draftOf
 import ru.sodovaya.volty.presentation.vehicle.liveLinkAddresses
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditSeed
+import ru.sodovaya.volty.presentation.vehicle.VehicleOverviewSeed
 import ru.sodovaya.volty.presentation.vehicle.wizard.DefaultSetupWizardComponent
 import ru.sodovaya.volty.presentation.vehicle.wizard.WizardHandoff
 import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardComponent
@@ -524,11 +525,13 @@ class DefaultRootComponent(
     override val rideAvailable: Value<Boolean> = _rideAvailable
     private val _vehicleConnected = MutableValue(liveVehicle() != null)
     override val vehicleConnected: Value<Boolean> = _vehicleConnected
+    private var pendingOverviewSeed: VehicleOverviewSeed? = null
 
     init {
         lifecycle.doOnDestroy {
             scope.coroutineContext[Job]?.cancel()
             pendingEditorSeeds.clear()
+            pendingOverviewSeed = null
             nearbyPresenter.close()
             navigation.close()
         }
@@ -608,9 +611,12 @@ class DefaultRootComponent(
      * On a stack that does not already hold [config] this is exactly `push`, so
      * no existing route changes shape.
      */
-    private fun goTo(config: Config) {
+    private fun goTo(config: Config, prepareChild: (() -> Unit)? = null) {
         val destination = permissionGatedConfig(config, permissionsChecker.missingPermissions())
-        nav.navigate { stack -> stackAfterGoTo(stack, destination) }
+        nav.navigate { stack ->
+            if (destination == config && destination !in stack) prepareChild?.invoke()
+            stackAfterGoTo(stack, destination)
+        }
     }
 
     /** Every root stack replacement passes through the buried-composer guard. */
@@ -797,7 +803,9 @@ class DefaultRootComponent(
                         goTo(Config.SetupWizard(prefillFromActiveConnection = false))
                     },
                     onDemoConnected = { replaceAll(homeConfig()) },
-                    onOpenSavedRequested = { id -> goTo(Config.VehicleOverview(id)) },
+                    onOpenSavedRequested = { seed ->
+                        goTo(Config.VehicleOverview(seed.vehicle.id)) { pendingOverviewSeed = seed }
+                    },
                     onConnectSavedRequested = { id -> replaceAll(Config.AutoConnect(id)) },
                     loadGlances = { ids ->
                         val reader = vehicleHistoryReader()
@@ -985,6 +993,8 @@ class DefaultRootComponent(
                 )
             )
             is Config.VehicleOverview -> {
+                val seed = pendingOverviewSeed?.takeIf { it.vehicle.id == config.vehicleId }
+                if (seed != null) pendingOverviewSeed = null
                 RootComponent.Child.VehicleOverview(ru.sodovaya.volty.presentation.vehicle.DefaultVehicleOverviewComponent(
                     context, scope, config.vehicleId, get(), vehicleHistoryReader(),
                     onConnectRequested = { id -> replaceAll(Config.AutoConnect(id)) },
@@ -992,6 +1002,7 @@ class DefaultRootComponent(
                     onEditRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     onAlertsRequested = { id -> goTo(Config.VehicleAlerts(id)) },
                     onBackRequested = { nav.pop() },
+                    seed = seed,
                 ))
             }
             is Config.History -> {

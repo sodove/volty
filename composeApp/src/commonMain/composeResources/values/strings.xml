@@ -49,6 +49,8 @@
     <string name="vehicle_overview_settings">Vehicle settings</string>
     <string name="vehicle_overview_alerts">Alerts</string>
     <string name="vehicle_overview_battery">Battery · as of %1$s</string>
+    <string name="vehicle_overview_loading_battery">Loading battery data…</string>
+    <string name="vehicle_overview_loading_route">Loading route…</string>
     <string name="vehicle_overview_last_ride">Last ride · %1$s</string>
     <string name="vehicle_overview_rides">Rides</string>
     <string name="vehicle_overview_no_rides">No recorded rides yet</string>
