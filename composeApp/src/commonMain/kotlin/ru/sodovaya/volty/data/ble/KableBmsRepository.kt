@@ -6,7 +6,6 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CompletableDeferred
 
 import com.juul.kable.Peripheral
-import com.juul.kable.Scanner
 import ru.sodovaya.volty.data.bms.AntBmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
@@ -1108,7 +1107,7 @@ class KableBmsRepository private constructor(
         val rememberedTypes = vehicleRepository.deviceTypeMemories.first()
         publishScanState(ConnectionState.Scanning)
         try {
-            val scanner = Scanner()
+            val scanner = nonBlockingBleScanner()
             scanner.advertisements.collect { ad ->
                 val name = ad.name
                 val serviceList = ad.uuids.map { it.toString().lowercase() }
@@ -3403,7 +3402,7 @@ class KableBmsRepository private constructor(
         val cached = cachedAdvertisement(address)
         if (cached != null) return cached
         val found = withTimeoutOrNull(BleConfig.advertisementSearchMs) {
-            Scanner().advertisements.first { it.identifier.toString() == address }
+            nonBlockingBleScanner().advertisements.first { it.identifier.toString() == address }
         }
         if (found != null) cacheAdvertisement(address, found)
         return found
