@@ -1,6 +1,9 @@
 package ru.sodovaya.volty.presentation.picker
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.*
+import androidx.compose.animation.expandVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -14,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -30,6 +34,8 @@ import ru.sodovaya.volty.presentation.vehicle.*
 import ru.sodovaya.volty.util.formatFixed
 import volty.composeapp.generated.resources.*
 
+private const val GLANCE_REVEAL_MILLIS = 220
+
 /**
  * The cold picker as a garage: saved vehicles first, with what was recorded last, and the scan quietly
  * marking which of them are nearby. New devices and demo sit below, small.
@@ -40,6 +46,13 @@ internal fun GarageScreen(component: PickerComponent, state: PickerComponent.Sta
     val inRange = state.myInRange.map { it.id }.toSet()
     val layout = garageLayout(state.saved, inRange)
     val now = remember { Clock.System.now().toEpochMilliseconds() }
+    // Keep one reveal clock above the lazy items so newly composed cards join it in progress.
+    val glanceAlpha = animateFloatAsState(
+        targetValue = if (state.glancesLoaded) 1f else 0f,
+        animationSpec = tween(GLANCE_REVEAL_MILLIS),
+        label = "garage recorded data",
+    )
+    val glanceModifier = Modifier.graphicsLayer { alpha = glanceAlpha.value }
     fun connect(v: Vehicle) = if (v.id in inRange) component.onConnectKnown(v) else component.onConnectSaved(v)
 
     LazyColumn(Modifier.fillMaxSize().statusBarsPadding(), contentPadding = PaddingValues(16.dp, 12.dp, 16.dp, 24.dp),
@@ -58,19 +71,23 @@ internal fun GarageScreen(component: PickerComponent, state: PickerComponent.Sta
             Text(stringResource(Res.string.picker_error, error), color = MaterialTheme.colorScheme.error, fontSize = 12.sp)
         } }
         val hero = layout.hero
-        if (hero == null) item { EmptyGarage(component::onAddNewBattery) }
-        else item(key = "hero-" + hero.id) {
+        if (hero == null && state.savedLoaded) item { EmptyGarage(component::onAddNewBattery) }
+        if (hero != null) item(key = "hero-" + hero.id) {
             HeroCard(hero, state.glances[hero.id], hero.id in inRange, state.glancesLoaded, now,
+                modifier = Modifier.animateItem(fadeInSpec = tween(GLANCE_REVEAL_MILLIS), placementSpec = null),
+                glanceModifier = glanceModifier,
                 connecting = state.connecting == hero.primaryAddress,
                 onConnect = { connect(hero) }, onDetails = { component.onOpenSaved(hero) })
         }
         if (layout.others.isNotEmpty()) {
-            item { SectionLabel(stringResource(Res.string.garage_more)) }
-            item {
+            item(key = "garage-more-label") { SectionLabel(stringResource(Res.string.garage_more)) }
+            item(key = "garage-more") {
                 ElevatedCard(shape = RoundedCornerShape(20.dp)) {
                     layout.others.forEachIndexed { i, v ->
-                        if (i > 0) HorizontalDivider(Modifier.padding(start = 64.dp), color = MaterialTheme.colorScheme.outlineVariant)
-                        GarageRow(v, state.glances[v.id], v.id in inRange, now) { component.onOpenSaved(v) }
+                        key(v.id) {
+                            if (i > 0) HorizontalDivider(Modifier.padding(start = 64.dp), color = MaterialTheme.colorScheme.outlineVariant)
+                            GarageRow(v, state.glances[v.id], v.id in inRange, now, glanceModifier) { component.onOpenSaved(v) }
+                        }
                     }
                 }
             }
@@ -89,7 +106,7 @@ internal fun GarageScreen(component: PickerComponent, state: PickerComponent.Sta
         if (state.showAll) items(state.otherDevices, key = { "u-" + it.address }) { d ->
             DeviceRow(d, isConnecting = state.connecting == d.address) { component.onDeviceTapped(d) }
         }
-        item {
+        if (state.savedLoaded) item(key = "garage-actions") {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) {
                 if (hero != null) TextButton(onClick = component::onAddNewBattery) { Text(stringResource(Res.string.garage_add)) }
                 TextButton(onClick = { component.onTryDemo(DemoProfile.SCOOTER) }) { Text(stringResource(Res.string.garage_demo_scooter)) }
@@ -119,25 +136,29 @@ private fun SectionLabel(text: String) {
 
 @Composable
 private fun HeroCard(vehicle: Vehicle, glance: VehicleGlance?, near: Boolean, loaded: Boolean, now: Long,
-    connecting: Boolean, onConnect: () -> Unit, onDetails: () -> Unit) {
-    ElevatedCard(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth().clickable(onClick = onDetails)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+    modifier: Modifier, glanceModifier: Modifier, connecting: Boolean, onConnect: () -> Unit, onDetails: () -> Unit) {
+    ElevatedCard(shape = RoundedCornerShape(24.dp), modifier = modifier.fillMaxWidth().clickable(onClick = onDetails)) {
+        Column(Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 VehicleBadge(vehicle.iconKey)
-                Column(Modifier.weight(1f)) {
+                Column(Modifier.weight(1f).animateContentSize(tween(GLANCE_REVEAL_MILLIS))) {
                     Text(vehicle.name, fontSize = 18.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     val distance = glance?.total(HistoryTotalKind.DISTANCE_KM)?.text()
                     Text(when {
                         glance != null -> whenText(glance.ride.started.epochMillis, now) + (distance?.let { " · $it" } ?: "")
                         loaded -> stringResource(Res.string.garage_no_rides)
                         else -> " "
-                    }, fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }, modifier = glanceModifier, fontSize = 12.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 NearPill(near)
             }
             val battery = glance?.battery
-            if (battery != null || glance?.totals?.isNotEmpty() == true) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+            AnimatedVisibility(
+                visible = battery != null || glance?.totals?.isNotEmpty() == true,
+                enter = expandVertically(tween(GLANCE_REVEAL_MILLIS), expandFrom = Alignment.Top),
+            ) {
+                Row(glanceModifier.padding(top = 14.dp), verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(16.dp)) {
                     SocRing(battery?.value("soc_percent"), caption = stringResource(Res.string.garage_soc))
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row {
@@ -154,7 +175,7 @@ private fun HeroCard(vehicle: Vehicle, glance: VehicleGlance?, near: Boolean, lo
                     }
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.padding(top = 14.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onConnect, enabled = !connecting, modifier = Modifier.weight(1f).height(48.dp), shape = RoundedCornerShape(14.dp)) {
                     if (connecting) CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
                     else Text(stringResource(Res.string.vehicle_overview_connect))
@@ -168,19 +189,28 @@ private fun HeroCard(vehicle: Vehicle, glance: VehicleGlance?, near: Boolean, lo
 }
 
 @Composable
-private fun GarageRow(vehicle: Vehicle, glance: VehicleGlance?, near: Boolean, now: Long, onClick: () -> Unit) {
+private fun GarageRow(vehicle: Vehicle, glance: VehicleGlance?, near: Boolean, now: Long,
+    glanceModifier: Modifier, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         VehicleBadge(vehicle.iconKey, size = 38.dp)
         Column(Modifier.weight(1f)) {
             Text(vehicle.name, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (glance != null) Text(whenText(glance.ride.started.epochMillis, now) +
-                (glance.total(HistoryTotalKind.DISTANCE_KM)?.let { " · " + it.text() } ?: ""),
-                fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            AnimatedVisibility(
+                visible = glance != null,
+                enter = expandVertically(tween(GLANCE_REVEAL_MILLIS), expandFrom = Alignment.Top),
+            ) {
+                glance?.let {
+                    Text(whenText(it.ride.started.epochMillis, now) +
+                        (it.total(HistoryTotalKind.DISTANCE_KM)?.let { distance -> " · " + distance.text() } ?: ""),
+                        modifier = glanceModifier, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
         val soc = glance?.battery?.value("soc_percent")
         if (near) NearPill(true)
-        else if (soc != null) Text("${formatFixed(soc.toFloat(), 0)}%", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = socColor(soc))
+        else if (soc != null) Text("${formatFixed(soc.toFloat(), 0)}%", modifier = glanceModifier,
+            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = socColor(soc))
     }
 }
 

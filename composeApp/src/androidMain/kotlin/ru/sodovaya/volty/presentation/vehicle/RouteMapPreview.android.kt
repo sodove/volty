@@ -2,22 +2,29 @@ package ru.sodovaya.volty.presentation.vehicle
 
 import android.content.Context
 import android.util.LruCache
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -33,6 +40,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import org.jetbrains.compose.resources.stringResource
 import org.maplibre.android.geometry.LatLng
 import org.maplibre.android.geometry.LatLngBounds
 import org.maplibre.android.maps.Style
@@ -41,6 +49,8 @@ import ru.sodovaya.volty.data.history.historyPreviewStyle
 import ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette
 import ru.sodovaya.volty.presentation.map.MapThemePalette
 import ru.sodovaya.volty.presentation.map.themeMapStyle
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.vehicle_overview_loading_route
 
 @Composable
 internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkTheme: Boolean, modifier: Modifier) {
@@ -70,13 +80,28 @@ internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkThem
                 if (bitmap != null) routePreviewCache.put(request, bitmap)
                 value = RoutePreviewSnapshot(bitmap)
             }
+            // A settled cache hit starts opaque. Only a newly loaded preview fades in.
+            val revealed = animateFloatAsState(
+                targetValue = if (snapshot == null) 0f else 1f,
+                animationSpec = tween(320),
+                label = "route preview",
+            )
             snapshot?.let { result ->
+                val content = Modifier.fillMaxSize().graphicsLayer { alpha = revealed.value }
                 val bitmap = result.bitmap
                 if (bitmap == null) {
-                    RouteSketch(points, Modifier.fillMaxSize())
+                    RouteSketch(points, content)
                 } else {
-                    Image(bitmap, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    Image(bitmap, contentDescription = null, contentScale = ContentScale.Crop, modifier = content)
                 }
+            }
+            val loadingLabelVisible by remember { derivedStateOf { revealed.value < 1f } }
+            if (loadingLabelVisible) {
+                Text(
+                    stringResource(Res.string.vehicle_overview_loading_route),
+                    modifier = Modifier.align(Alignment.Center).graphicsLayer { alpha = 1f - revealed.value },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }

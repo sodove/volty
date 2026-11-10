@@ -32,6 +32,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -57,6 +58,7 @@ interface PickerComponent {
         val myInRange: List<Vehicle> = emptyList(),
         /** Every saved vehicle; those not in [myInRange] are offered for an offline look. */
         val saved: List<Vehicle> = emptyList(),
+        val savedLoaded: Boolean = false,
         /** Newest recorded ride of each saved vehicle, for the garage; absent while loading or never ridden. */
         val glances: Map<String, VehicleGlance> = emptyMap(),
         val glancesLoaded: Boolean = false,
@@ -100,7 +102,7 @@ class DefaultPickerComponent(
     private suspend fun startScan() {
         val saved = vehicleRepository.vehicles.first()
         val garage = saved.filterNot { v -> v.isGuest || v.isDemo }
-        _state.update { it.copy(saved = garage) }
+        _state.update { it.copy(saved = garage, savedLoaded = true) }
         // History reads run beside the scan; the garage renders its vehicles before their numbers arrive.
         loadGlances?.let { load -> scope.launch {
             val glances = try { load(garage.map { it.id }.toSet()) }
@@ -117,41 +119,81 @@ class DefaultPickerComponent(
         // what's wrong. Seed the picker with the currently-connected device so
         // it's always visible. Saved vehicles land in myInRange; guests fall
         // back to a synthetic DiscoveredDevice in otherNearby.
-        val activeConn = bmsRepository.connectionState.value
-        val activeVehicle = bmsRepository.activeVehicle.value
-        if (activeVehicle != null &&
-            (activeConn is ConnectionState.Connected || activeConn is ConnectionState.Reconnecting)
-        ) {
-            // primaryAddress, not the primary pack's: it already prefers the
-            // controller and is defined for a vehicle with zero packs.
-            val savedMatch = savedByAddress[activeVehicle.primaryAddress]
-            _state.update { s ->
-                if (savedMatch != null && !activeVehicle.isGuest) {
-                    s.copy(myInRange = listOf(savedMatch))
-                } else {
-                    s.copy(
-                        otherNearby = listOf(
-                            DiscoveredDevice(
-                                address = activeVehicle.primaryAddress,
-                                name = activeVehicle.name,
-                                rssi = 0,
-                                // Both nullable and both carried, so the row can
-                                // name a controller-only vehicle by its
-                                // controller instead of falling through to
-                                // "unknown type". A pack-only vehicle keeps
-                                // exactly the old pair (type, null).
-                                bmsType = activeVehicle.bmsTypeOrNull,
-                                controllerType = activeVehicle.primaryController?.controllerType,
-                                knownVehicle = savedMatch
+        // A retrying connection is not proximity evidence. Only a live
+        // Connected state may stand in for an advertisement, and that seed is
+        // withdrawn as soon as the live state ends. Keep real scan hits as a
+        // separate source so withdrawing the seed cannot hide a device that
+        // the scanner actually observed during this picker session.
+        val scanSeenVehicleIds = mutableSetOf<String>()
+        val scanSeenAddresses = mutableSetOf<String>()
+        var connectedSeedVehicleId: String? = null
+        var connectedSeedAddress: String? = null
+        scope.launch {
+            bmsRepository.connectionState.collect { connection ->
+                // Use the vehicle carried by Connected itself. activeVehicle
+                // may briefly still refer to the previous target during a
+                // reconnect/switch; it must not grant presence to that row.
+                val liveVehicle = (connection as? ConnectionState.Connected)?.vehicle
+                val addressMatch = liveVehicle?.let { savedByAddress[it.primaryAddress] }
+                val savedMatch = addressMatch
+                    ?.takeUnless { liveVehicle?.isGuest == true }
+                val nextSeedVehicleId = savedMatch?.id
+                val nextSeedAddress = liveVehicle?.primaryAddress
+                val oldVehicleId = connectedSeedVehicleId
+                val oldAddress = connectedSeedAddress
+                _state.update { s ->
+                    var myInRange = s.myInRange
+                    var otherNearby = s.otherNearby
+                    if (oldVehicleId != null && oldVehicleId != nextSeedVehicleId &&
+                        oldVehicleId !in scanSeenVehicleIds
+                    ) {
+                        myInRange = myInRange.filterNot { it.id == oldVehicleId }
+                    }
+                    if (oldAddress != null && oldAddress != nextSeedAddress &&
+                        oldAddress !in scanSeenAddresses
+                    ) {
+                        otherNearby = otherNearby.filterNot { it.address == oldAddress }
+                    }
+                    if (liveVehicle == null) {
+                        s.copy(myInRange = myInRange, otherNearby = otherNearby)
+                    } else if (savedMatch != null) {
+                        if (myInRange.none { it.id == savedMatch.id }) myInRange = myInRange + savedMatch
+                        otherNearby = otherNearby.filterNot { it.address == nextSeedAddress }
+                        s.copy(myInRange = myInRange, otherNearby = otherNearby)
+                    } else {
+                        s.copy(
+                            myInRange = myInRange,
+                            otherNearby = otherNearby.withScanHit(
+                                DiscoveredDevice(
+                                    address = liveVehicle.primaryAddress,
+                                    name = liveVehicle.name,
+                                    rssi = 0,
+                                    bmsType = liveVehicle.bmsTypeOrNull,
+                                    controllerType = liveVehicle.primaryController?.controllerType,
+                                    knownVehicle = addressMatch
+                                )
                             )
                         )
-                    )
+                    }
                 }
+                connectedSeedVehicleId = nextSeedVehicleId
+                connectedSeedAddress = nextSeedAddress
             }
         }
         scanJob = scope.launch {
             bmsRepository.scanAll().collect { dev ->
                 val matched = savedByAddress[dev.address]
+                if (matched != null) scanSeenVehicleIds += matched.id
+                val beforeHit = _state.value
+                if (matched == null &&
+                    (dev.bmsType != null || beforeHit.otherNearby.any { it.address == dev.address })
+                ) {
+                    // Only this route publishes the address into otherNearby.
+                    // A saved match goes to myInRange; an undetected new address
+                    // goes to otherDevices and cannot keep a synthetic nearby
+                    // row alive merely by sharing its address.
+                    scanSeenAddresses += dev.address
+                }
                 _state.update { s ->
                     when {
                         matched != null -> {

@@ -37,6 +37,7 @@ import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
@@ -487,6 +488,75 @@ class PickerComponentTest {
             assertEquals(listOf("v-both"), expectMostRecentItem().myInRange.map { it.id })
             cancelAndIgnoreRemainingEvents()
         }
+    }
+
+    @Test
+    fun `reconnecting saved vehicle with no scan hits is not marked nearby`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = vehicle(id = "v-wheel", address = "AA:WHEEL")
+        val repo = FakeBmsRepo(emptyList()).apply {
+            activeVehicle.value = saved
+            connectionState.value = ConnectionState.Reconnecting(attempt = 1, reason = "link lost")
+        }
+        val (c, _) = component(
+            mode = "cold",
+            scan = emptyList(),
+            saved = listOf(saved),
+            bmsRepo = repo
+        )
+
+        assertFalse(c.state.value.savedLoaded, "an empty result has not been read at initial composition")
+        advanceUntilIdle()
+
+        assertTrue(c.state.value.savedLoaded)
+        assertTrue(c.state.value.myInRange.isEmpty(), "a retrying connection is not proof the wheel is nearby")
+    }
+
+    @Test
+    fun `connected vehicle seed is withdrawn when connection starts reconnecting`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = vehicle(id = "v-wheel", address = "AA:WHEEL")
+        val repo = FakeBmsRepo(emptyList()).apply {
+            activeVehicle.value = saved
+            connectionState.value = ConnectionState.Connected(saved)
+        }
+        val (c, _) = component(
+            mode = "cold",
+            scan = emptyList(),
+            saved = listOf(saved),
+            bmsRepo = repo
+        )
+
+        advanceUntilIdle()
+        assertEquals(listOf("v-wheel"), c.state.value.myInRange.map { it.id }, "a live connection is visible while it is live")
+
+        repo.connectionState.value = ConnectionState.Reconnecting(attempt = 1, reason = "link lost")
+        runCurrent()
+
+        assertTrue(c.state.value.myInRange.isEmpty(), "the synthetic connected row must not outlive the live state")
+    }
+
+    @Test
+    fun `scan sighting keeps a saved vehicle nearby after connected seed is withdrawn`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = vehicle(id = "v-wheel", address = "AA:WHEEL")
+        val hit = device("AA:WHEEL", BmsType.JK_BMS)
+        val repo = FakeBmsRepo(listOf(hit)).apply {
+            activeVehicle.value = saved
+            connectionState.value = ConnectionState.Connected(saved)
+        }
+        val (c, _) = component(
+            mode = "cold",
+            scan = listOf(hit),
+            saved = listOf(saved),
+            bmsRepo = repo
+        )
+
+        advanceUntilIdle()
+        repo.connectionState.value = ConnectionState.Reconnecting(attempt = 1, reason = "link lost")
+        runCurrent()
+
+        assertEquals(listOf("v-wheel"), c.state.value.myInRange.map { it.id }, "a real scan hit remains independent of the connection seed")
     }
 
     @Test
