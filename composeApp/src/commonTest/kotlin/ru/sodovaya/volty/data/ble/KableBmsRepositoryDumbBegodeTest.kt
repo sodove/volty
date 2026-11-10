@@ -7,6 +7,9 @@ import ru.sodovaya.volty.data.bms.BegodeT4Fixture
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.domain.energy.CapacitySource
 import ru.sodovaya.volty.domain.energy.EnergyMemory
+import ru.sodovaya.volty.domain.energy.CapacityCandidate
+import ru.sodovaya.volty.domain.energy.CapacityLearnDecision
+import kotlinx.coroutines.launch
 import ru.sodovaya.volty.domain.energy.LearnedCapacity
 import ru.sodovaya.volty.domain.energy.OcvCurve
 import ru.sodovaya.volty.domain.energy.PersistedCharge
@@ -563,6 +566,36 @@ class KableBmsRepositoryDumbBegodeTest {
     }
 
     @Test
+    fun `reset clears candidate and diagnostics even when their load was in flight`() {
+        val gate = CompletableDeferred<Unit>()
+        val memory = EnergyMemory(
+            LearnedCapacity(14f, 50f, 2), null, null,
+            CapacityCandidate(LearnedCapacity(29f, 25f, 1), 29f, 29f),
+            CapacityLearnDecision.DIVERGENT,
+        )
+        val store = FakeEnergyStore(loadGate = gate, seededByChemistry = mapOf(Chemistry.LI_ION_NMC to memory))
+        energyRepoTest(store) { repo ->
+            val ride = EnergyRide(repo, vehicle(cellCount = 24))
+            ride.feed(1_000); advanceUntilIdle()
+            assertEquals(1, store.loads.size)
+            val reset = launch { repo.resetLearnedEnergy("v1") }
+            advanceUntilIdle()
+            assertTrue(store.resets.isEmpty(), "reset is waiting for the in-flight load")
+            gate.complete(Unit)
+            reset.join()
+            ride.feed(8_000); advanceUntilIdle()
+            repo.disconnect()
+            assertEquals(listOf("v1"), store.resets)
+            assertTrue(store.saves.isNotEmpty(), "the tracker did issue a save after the reset")
+            for (save in store.saves) {
+                assertNull(save.memory.learned)
+                assertNull(save.memory.capacityCandidate)
+                assertNull(save.memory.lastCapacityDecision)
+            }
+        }
+    }
+
+    @Test
     fun `resetting another vehicle leaves the connected trackers learning alone`() {
         val learned = LearnedCapacity(41f, 40f, 2)
         val store = FakeEnergyStore(mapOf("v1" to EnergyMemory(learned, null, null)))
@@ -664,9 +697,10 @@ class KableBmsRepositoryDumbBegodeTest {
             ride.feed(1_000); advanceUntilIdle() // the NMC load is now suspended on the gate
             vehicles.value = listOf(base.copy(chemistry = Chemistry.LIFEPO4))
             advanceUntilIdle()
-            ride.feed(1_000); advanceUntilIdle() // a fresh engine under LiFePO4; its own load is suspended too
-            assertEquals(listOf(Chemistry.LI_ION_NMC, Chemistry.LIFEPO4), store.loads.map { it.third })
+            ride.feed(1_000); advanceUntilIdle() // a fresh engine under LiFePO4 waits for the old load
+            assertEquals(listOf(Chemistry.LI_ION_NMC), store.loads.map { it.third })
             gate.complete(Unit); advanceUntilIdle()
+            assertEquals(listOf(Chemistry.LI_ION_NMC, Chemistry.LIFEPO4), store.loads.map { it.third })
             ride.feed(1_000)
             assertNull(
                 repo.activeVehicleData.value.energy?.learned,

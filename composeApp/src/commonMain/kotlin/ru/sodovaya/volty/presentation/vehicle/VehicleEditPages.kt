@@ -31,6 +31,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import ru.sodovaya.volty.domain.energy.BegodeCurrentSettings
 import ru.sodovaya.volty.domain.energy.BegodeCurrentSign
+import ru.sodovaya.volty.domain.energy.CapacityLearnDecision
+import ru.sodovaya.volty.domain.energy.CapacityLearner
+import ru.sodovaya.volty.domain.energy.CapacityLearningStatus
 import ru.sodovaya.volty.util.formatSigned
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.text.KeyboardOptions
@@ -120,6 +123,17 @@ import volty.composeapp.generated.resources.vehicle_energy_reset
 import volty.composeapp.generated.resources.vehicle_energy_reset_title
 import volty.composeapp.generated.resources.vehicle_energy_reset_text
 import volty.composeapp.generated.resources.vehicle_energy_reset_confirm
+import volty.composeapp.generated.resources.vehicle_capacity_waiting_rest
+import volty.composeapp.generated.resources.vehicle_capacity_accepted
+import volty.composeapp.generated.resources.vehicle_capacity_recovered
+import volty.composeapp.generated.resources.vehicle_capacity_more_drop
+import volty.composeapp.generated.resources.vehicle_capacity_soc_not_falling
+import volty.composeapp.generated.resources.vehicle_capacity_no_discharge
+import volty.composeapp.generated.resources.vehicle_capacity_gaps
+import volty.composeapp.generated.resources.vehicle_capacity_invalid
+import volty.composeapp.generated.resources.vehicle_capacity_divergent
+import volty.composeapp.generated.resources.vehicle_capacity_interrupted
+import volty.composeapp.generated.resources.vehicle_capacity_candidate_progress
 import volty.composeapp.generated.resources.vehicle_begode_current_title
 import volty.composeapp.generated.resources.vehicle_begode_current_sign
 import volty.composeapp.generated.resources.vehicle_begode_current_auto
@@ -395,6 +409,7 @@ private fun EnergyBlock(state: VehicleEditComponent.State, component: VehicleEdi
                 LearnedCaption.LEARNING -> Caption(stringResource(Res.string.vehicle_energy_learning))
                 LearnedCaption.HIDDEN -> Unit
             }
+            energy?.learning?.let { CapacityLearningCaption(it) }
         }
         if (energy != null) {
             energy.resistanceMilliOhm?.let { mohm ->
@@ -440,6 +455,30 @@ private fun EnergyBlock(state: VehicleEditComponent.State, component: VehicleEdi
             title = { Text(stringResource(Res.string.vehicle_energy_reset_title)) },
             text = { Text(stringResource(Res.string.vehicle_energy_reset_text)) }
         )
+    }
+}
+
+@Composable
+private fun CapacityLearningCaption(status: CapacityLearningStatus) {
+    val message = when (status.lastDecision) {
+        null -> Res.string.vehicle_capacity_waiting_rest
+        CapacityLearnDecision.ACCEPTED -> Res.string.vehicle_capacity_accepted
+        CapacityLearnDecision.RECOVERED -> Res.string.vehicle_capacity_recovered
+        CapacityLearnDecision.NEED_MORE_DROP -> Res.string.vehicle_capacity_more_drop
+        CapacityLearnDecision.SOC_NOT_FALLING -> Res.string.vehicle_capacity_soc_not_falling
+        CapacityLearnDecision.NO_NET_DISCHARGE -> Res.string.vehicle_capacity_no_discharge
+        CapacityLearnDecision.TELEMETRY_GAPS -> Res.string.vehicle_capacity_gaps
+        CapacityLearnDecision.INVALID -> Res.string.vehicle_capacity_invalid
+        CapacityLearnDecision.DIVERGENT -> Res.string.vehicle_capacity_divergent
+        CapacityLearnDecision.INTERRUPTED -> Res.string.vehicle_capacity_interrupted
+    }
+    Caption(stringResource(message))
+    if (status.candidateMeasurements > 0) {
+        Caption(stringResource(
+            Res.string.vehicle_capacity_candidate_progress,
+            status.candidateMeasurements,
+            CapacityLearner.RECOVERY_MEASUREMENTS,
+        ))
     }
 }
 

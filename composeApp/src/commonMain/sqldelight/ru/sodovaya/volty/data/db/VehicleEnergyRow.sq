@@ -16,6 +16,12 @@ CREATE TABLE VehicleEnergyRow (
     resistanceOhm   REAL,
     counterPercent  REAL,
     counterAtMillis INTEGER,
+    candidateUsableAh REAL,
+    candidateWeight   REAL,
+    candidateRides    INTEGER,
+    candidateMinAh    REAL,
+    candidateMaxAh    REAL,
+    lastCapacityDecision TEXT,
     FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
 );
 
@@ -23,8 +29,12 @@ selectByVehicle:
 SELECT * FROM VehicleEnergyRow WHERE vehicleId = :vehicleId;
 
 upsert:
-INSERT OR REPLACE INTO VehicleEnergyRow(vehicleId, seriesCells, chemistry, learnedUsableAh, learnWeight, learnRides, resistanceOhm, counterPercent, counterAtMillis)
-VALUES (:vehicleId, :seriesCells, :chemistry, :learnedUsableAh, :learnWeight, :learnRides, :resistanceOhm, :counterPercent, :counterAtMillis);
+INSERT OR REPLACE INTO VehicleEnergyRow(vehicleId, seriesCells, chemistry, learnedUsableAh, learnWeight, learnRides,
+    resistanceOhm, counterPercent, counterAtMillis, candidateUsableAh, candidateWeight, candidateRides,
+    candidateMinAh, candidateMaxAh, lastCapacityDecision)
+VALUES (:vehicleId, :seriesCells, :chemistry, :learnedUsableAh, :learnWeight, :learnRides,
+    :resistanceOhm, :counterPercent, :counterAtMillis, :candidateUsableAh, :candidateWeight, :candidateRides,
+    :candidateMinAh, :candidateMaxAh, :lastCapacityDecision);
 
 deleteByVehicle:
 DELETE FROM VehicleEnergyRow WHERE vehicleId = :vehicleId;

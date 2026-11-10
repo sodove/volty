@@ -102,7 +102,7 @@ class RideHistoryClearTest {
     }
 
     @Test fun everyTableOfEveryStoredSchemaIsEitherHistoryOrKept() {
-        for (version in 1..29) {
+        for (version in 1..VoltyDatabase.Schema.version.toInt()) {
             val tables = snapshot(version).tables()
             val unclassified = tables - RIDE_HISTORY_TABLES.toSet() - kept
             assertEquals(emptySet(), unclassified, "v$version has a table the clear does not know about")

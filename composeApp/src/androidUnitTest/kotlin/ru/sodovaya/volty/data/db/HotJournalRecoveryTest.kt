@@ -127,8 +127,8 @@ class HotJournalRecoveryTest {
                 val stored = long(app, "PRAGMA user_version")
                 seen += "open from $stored"
                 VoltyDatabaseProvider(app).database.transaction {
-                    VoltyDatabase.Schema.migrate(app, stored, 29)
-                    app.execute(null, "PRAGMA user_version = 29", 0)
+                    VoltyDatabase.Schema.migrate(app, stored, VoltyDatabase.Schema.version)
+                    app.execute(null, "PRAGMA user_version = ${VoltyDatabase.Schema.version}", 0)
                 }
             }
         }
@@ -143,7 +143,7 @@ class HotJournalRecoveryTest {
             "the old version is read, the journal is gone before anything is sized, and the conversion restarts from 27")
 
         val after = drivers.last()
-        assertEquals(29L, long(after, "PRAGMA user_version"))
+        assertEquals(VoltyDatabase.Schema.version, long(after, "PRAGMA user_version"))
         assertEquals("ok", string(after, "PRAGMA integrity_check"))
         assertEquals(0L, long(after, "SELECT COUNT(*) FROM sqlite_master WHERE name = 'HistorySampleV2'"), "V2 converted and dropped")
         assertEquals(v2Rows, long(after, "SELECT COALESCE(SUM(COALESCE(runCount, 1)), 0) FROM HistorySampleV3"),

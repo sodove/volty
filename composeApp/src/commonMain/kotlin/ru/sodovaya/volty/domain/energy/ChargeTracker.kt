@@ -58,7 +58,7 @@ class ChargeTracker(
     var integratedAh: Double = 0.0
         private set
 
-    /** Total time in steps that were skipped (dt >= [GAP_SKIP_MS]). */
+    /** Total time that could not be integrated due to a sample gap or missing current. */
     var gapMillis: Long = 0L
         private set
 
@@ -121,6 +121,8 @@ class ChargeTracker(
             atRest = false
             restVoltageSocPercent = null
             if (counterPercent != null) return displayed // not integrated, not corrected
+        } else if (current == null) {
+            gapMillis += dt
         }
 
         if (counterPercent == null) {

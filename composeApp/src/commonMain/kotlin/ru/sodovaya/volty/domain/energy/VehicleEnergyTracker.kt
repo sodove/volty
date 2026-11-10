@@ -60,6 +60,7 @@ data class EnergyState(
     val modelled: Boolean,
     /** The model's working; see [EnergyDetail]. Null unless [modelled]. */
     val detail: EnergyDetail? = null,
+    val capacityLearning: CapacityLearningStatus? = null,
 )
 
 /**
@@ -100,7 +101,7 @@ data class EnergyState(
  *
  * **Learning.** A segment opens at the first rest after the counter seeds and is closed at the end
  * of each later rest episode (the rest sample about 2 s before the episode ended is its end point), feeding
- * [CapacityLearner.merge]. A re-seed (long gap) abandons the open segment.
+ * [CapacityLearner.evaluate]. A re-seed (long gap) abandons the open segment.
  *
  * Not thread-safe: called from the single sample funnel.
  */
@@ -111,7 +112,7 @@ open class VehicleEnergyTracker(
     private val seriesCellsHint: () -> Int? = { null },
     /** Called when a series count is resolved that no engine has been built for. */
     private val onSeriesCells: (Int) -> Unit = {},
-    awaitMemory: Boolean = false,
+    private val awaitMemory: Boolean = false,
 ) {
     /** The profile as of connect, refreshed by [updateVehicle] when the rider edits it mid-connection. */
     private var vehicle: Vehicle = vehicle
@@ -133,6 +134,9 @@ open class VehicleEnergyTracker(
 
     /** Owner bookkeeping for the 30 s save interval; Long.MIN_VALUE = not started. */
     var lastSaveAtMs: Long = Long.MIN_VALUE
+    var capacityLearningRevision: Long = 0L
+        private set
+    var savedCapacityLearningRevision: Long = 0L
 
     private inner class Engine(val cells: Int, mem: EnergyMemory) {
         var bounds = VoltageSocEstimator.boundsFor(vehicle.chemistry, vehicle.alertConfig)
@@ -142,6 +146,8 @@ open class VehicleEnergyTracker(
             }
         )
         var learned: LearnedCapacity? = mem.learned
+        var candidate = mem.capacityCandidate
+        var lastDecision = mem.lastCapacityDecision
         val charge = ChargeTracker(
             ChargeConfig(vehicle.chemistry, bounds.first, bounds.second, null),
             mem.counter
@@ -184,6 +190,14 @@ open class VehicleEnergyTracker(
             anchor = null; recent.clear(); inRest = false
         }
 
+        fun interruptedSegment() {
+            if (anchor != null && lastDecision != CapacityLearnDecision.INTERRUPTED) {
+                lastDecision = CapacityLearnDecision.INTERRUPTED
+                capacityLearningRevision++
+            }
+            abandonSegment()
+        }
+
         fun trackLearning(atMillis: Long, restSoc: Float?) {
             if (restSoc != null) {
                 inRest = true
@@ -209,18 +223,23 @@ open class VehicleEnergyTracker(
                     durationMillis = end.at - start.at,
                     gapMillis = end.gap - start.gap,
                 )
-                val merged = CapacityLearner.merge(learned, segment)
-                if (merged !== learned) {
-                    learned = merged
+                val update = CapacityLearner.evaluate(learned, candidate, segment)
+                if (learned != update.learned || candidate != update.candidate || lastDecision != update.decision) {
+                    capacityLearningRevision++
+                }
+                if (update.learned != learned) {
+                    learned = update.learned
                     refreshCapacity()
                 }
+                candidate = update.candidate
+                lastDecision = update.decision
                 // Keep the segment start while the segment is rejected ONLY because the SoC drop is still
                 // too small: a city ride with a stop every few minutes never reaches the minimum drop
                 // between two consecutive stops, so moving the anchor to every stop (an earlier revision
                 // did) meant such a ride never learned anything. Everything else restarts from here: an
                 // accepted learn, a rise or no fall (a charge, or noise), a segment already too gappy to
                 // ever become valid, or a non-finite reading.
-                if (CapacityLearner.isStillGrowing(segment)) return
+                if (update.decision == CapacityLearnDecision.NEED_MORE_DROP) return
             }
             anchor = end
         }
@@ -250,7 +269,11 @@ open class VehicleEnergyTracker(
             engine = Engine(cells, loaded)
         } else if (e.learned == null && loaded.learned != null) {
             e.learned = loaded.learned
+            e.candidate = loaded.capacityCandidate
+            if (e.lastDecision == null) e.lastDecision = loaded.lastCapacityDecision
             e.refreshCapacity()
+        } else if (e.lastDecision == null) {
+            e.lastDecision = loaded.lastCapacityDecision
         }
     }
 
@@ -288,6 +311,7 @@ open class VehicleEnergyTracker(
         if (chemistryChanged) {
             engine = null
             memory = EnergyMemory.EMPTY
+            memoryReady = !awaitMemory
             return
         }
         engine?.let {
@@ -303,25 +327,32 @@ open class VehicleEnergyTracker(
      * undone by the next periodic or disconnect save, which re-upserts [memory].
      */
     fun resetLearned() {
-        memory = memory.copy(learned = null, resistanceOhm = null)
+        memory = memory.copy(learned = null, resistanceOhm = null, capacityCandidate = null, lastCapacityDecision = null)
+        capacityLearningRevision++
         engine?.let {
             it.learned = null
+            it.candidate = null
+            it.lastDecision = null
             it.resistance = PackResistanceEstimator(null)
             it.abandonSegment()
             it.refreshCapacity()
         }
     }
 
-    /** Ends the open rest episode (the ride is over) so a final segment can be learned. */
+    /** Close a final rest or record that the connection ended before a second rest. */
     fun finish() {
-        engine?.let { if (it.inRest) it.closeEpisode() }
+        val e = engine ?: return
+        if (e.inRest) {
+            e.closeEpisode()
+            e.abandonSegment()
+        } else e.interruptedSegment()
     }
 
     /** What to persist now. Counter is the live counter when there is one, else what was loaded. */
     fun memory(): EnergyMemory {
         val e = engine ?: return memory
         val counter = e.charge.counterPercent?.let { PersistedCharge(it, lastAtMillis ?: 0L) } ?: memory.counter
-        return EnergyMemory(e.learned, e.resistance.ohm, counter)
+        return EnergyMemory(e.learned, e.resistance.ohm, counter, e.candidate, e.lastDecision)
     }
 
     open fun apply(snapshot: VehicleData, now: Instant): VehicleData {
@@ -356,7 +387,7 @@ open class VehicleEnergyTracker(
         lastAtMillis = atMillis
         val soc = e.charge.update(ChargeInput(atMillis, agg.voltage, cells, current, e.resistance.ohm))
         if (soc == null) {
-            e.abandonSegment()
+            e.interruptedSegment()
         } else {
             e.wasSeeded = true
             e.trackLearning(atMillis, e.charge.restVoltageSocPercent)
@@ -378,6 +409,7 @@ open class VehicleEnergyTracker(
             learned = e.learned,
             resistanceOhm = e.resistance.ohm,
             modelled = true,
+            capacityLearning = if (memoryReady) CapacityLearningStatus(e.lastDecision, e.candidate?.estimate?.rides ?: 0) else null,
             detail = EnergyDetail(
                 counterSocPercent = e.charge.counterPercent,
                 voltageSocPercent = e.charge.voltageSocPercent,
@@ -474,7 +506,10 @@ open class VehicleEnergyTracker(
         // First engine takes the memory it was constructed with; a changed count is a different battery.
         val fresh = Engine(cells, if (existing == null) memory else EnergyMemory.EMPTY)
         engine = fresh
-        if (existing != null) memory = EnergyMemory.EMPTY
+        if (existing != null) {
+            memory = EnergyMemory.EMPTY
+            memoryReady = !awaitMemory
+        }
         onSeriesCells(cells)
         return fresh
     }

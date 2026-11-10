@@ -1,0 +1,13 @@
+<resources>
+    <string name="vehicle_capacity_waiting_rest">Ожидается участок разряда между двумя остановками.</string>
+    <string name="vehicle_capacity_accepted">Последний замер ёмкости принят.</string>
+    <string name="vehicle_capacity_recovered">Ёмкость обновлена по трём согласованным замерам.</string>
+    <string name="vehicle_capacity_more_drop">Заряд снизился слишком мало для замера. Между остановками нужно минимум 20 процентных пунктов.</string>
+    <string name="vehicle_capacity_soc_not_falling">Замер отклонён, потому что заряд между остановками не снизился.</string>
+    <string name="vehicle_capacity_no_discharge">Замер отклонён, потому что суммарного разряда не было.</string>
+    <string name="vehicle_capacity_gaps">Замер отклонён, потому что пропуски телеметрии заняли больше 5% времени.</string>
+    <string name="vehicle_capacity_invalid">Замер отклонён из-за некорректных показаний или времени.</string>
+    <string name="vehicle_capacity_divergent">Замер отличается от текущей оценки больше чем на 40%. Ожидается подтверждение.</string>
+    <string name="vehicle_capacity_interrupted">Замер прервался до следующей точки покоя.</string>
+    <string name="vehicle_capacity_candidate_progress">Согласованных замеров для новой оценки · %1$d из %2$d</string>
+</resources>

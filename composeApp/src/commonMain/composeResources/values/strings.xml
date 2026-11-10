@@ -1405,7 +1405,7 @@
     <string name="vehicle_energy_unit">Unit</string>
     <string name="vehicle_energy_unit_wh">Wh</string>
     <string name="vehicle_energy_unit_ah">Ah</string>
-    <string name="vehicle_energy_learned">learned: ~%1$d Wh, rides: %2$d</string>
+    <string name="vehicle_energy_learned">Learned ~%1$d Wh · %2$d measurements</string>
     <string name="vehicle_energy_learning">learning…</string>
     <string name="vehicle_energy_resistance">Resistance</string>
     <string name="vehicle_energy_resistance_value">~%1$d mΩ</string>

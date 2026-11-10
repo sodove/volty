@@ -649,6 +649,9 @@ class KableBmsRepository private constructor(
 
     /** Lock guarding session swap + the userInitiatedDisconnect flag. */
     private val sessionLock = Mutex()
+    private val energyStoreWriteLock = Mutex()
+    private class EnergyWriteTicket(val cells: Int, val chemistry: Chemistry)
+    private val pendingEnergyWrites = MutableStateFlow<Map<String, EnergyWriteTicket>>(emptyMap())
 
     /**
      * The links of the current connection — one [PackLink] per distinct pack
@@ -1751,20 +1754,31 @@ class KableBmsRepository private constructor(
                     // load, or at install - could pair the old battery's row with the new battery's engine.
                     val chemistry = tracker.chemistry
                     scope.launch {
-                        val loaded = try {
-                            store.load(socVehicle.id, cells, chemistry)
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            // A failed load must NEVER become "empty memory": installing EMPTY would mark the
-                            // memory ready and the next save would overwrite the stored row with nothing. The
-                            // tracker keeps running from empty memory but, never being ready, saves nothing.
-                            println("[VOLTY-BLE] energy memory load failed for ${socVehicle.id}: $e")
-                            return@launch
-                        }
-                        sessionLock.withLock {
-                            if (ownsActivePipeline(owner) && tracker.seriesCells == cells && tracker.chemistry == chemistry) {
-                                tracker.installMemory(loaded)
+                        fun ownsMemoryKey() = ownsActivePipeline(owner) && tracker.seriesCells == cells && tracker.chemistry == chemistry
+                        energyStoreWriteLock.withLock {
+                            // A load can delete a stale row. Check the key before touching it, and keep reset
+                            // out until installation so a pre-reset load cannot bring back deleted evidence.
+                            val canLoad = sessionLock.withLock {
+                                val owns = ownsMemoryKey()
+                                if (owns) pendingEnergyWrites.update { pending ->
+                                    val write = pending[socVehicle.id]
+                                    if (write != null && (write.cells != cells || write.chemistry != chemistry))
+                                        pending - socVehicle.id else pending
+                                }
+                                owns
+                            }
+                            if (!canLoad) return@withLock
+                            val loaded = try {
+                                store.load(socVehicle.id, cells, chemistry)
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // Installing EMPTY after a failed read would let the next save wipe the row.
+                                println("[VOLTY-BLE] energy memory load failed for ${socVehicle.id}: $e")
+                                return@withLock
+                            }
+                            sessionLock.withLock {
+                                if (ownsMemoryKey()) tracker.installMemory(loaded)
                             }
                         }
                     }
@@ -2024,14 +2038,17 @@ class KableBmsRepository private constructor(
     }
 
     override suspend fun resetLearnedEnergy(vehicleId: String) {
-        sessionLock.withLock {
-            val tracker = vehicleConnection?.energy
-            if (tracker != null && tracker.vehicleId == vehicleId) tracker.resetLearned()
+        energyStoreWriteLock.withLock {
+            sessionLock.withLock {
+                pendingEnergyWrites.update { it - vehicleId }
+                val tracker = vehicleConnection?.energy
+                if (tracker != null && tracker.vehicleId == vehicleId) tracker.resetLearned()
+            }
+            energyStore?.reset(vehicleId)
         }
-        energyStore?.reset(vehicleId)
     }
 
-    /** Persist the active tracker's memory at most every [ENERGY_SAVE_INTERVAL_MS]. Called on the funnel, under sessionLock. */
+    /** Save a capacity decision promptly. Other energy readings keep the periodic save interval. */
     private fun maybeSaveEnergy(orchestrator: VehicleConnection) {
         val store = energyStore ?: return
         // Derived from the pipeline being published, never from a separate slot: only the connection that
@@ -2039,9 +2056,11 @@ class KableBmsRepository private constructor(
         val tracker = orchestrator.energy ?: return
         val now = nowMs()
         if (tracker.lastSaveAtMs == Long.MIN_VALUE) tracker.lastSaveAtMs = now
-        if (now - tracker.lastSaveAtMs < ENERGY_SAVE_INTERVAL_MS) return
+        val learningChanged = tracker.capacityLearningRevision != tracker.savedCapacityLearningRevision
+        if (!learningChanged && now - tracker.lastSaveAtMs < ENERGY_SAVE_INTERVAL_MS) return
         val save = energySaveOf(tracker) ?: return
         tracker.lastSaveAtMs = now
+        tracker.savedCapacityLearningRevision = tracker.capacityLearningRevision
         scope.launch { saveEnergyLogged(store, save) }
     }
 
@@ -2057,7 +2076,19 @@ class KableBmsRepository private constructor(
         // Chemistry is captured with the cells and the memory, under the same lock: a chemistry edit between
         // here and the write must not store this battery's learning under the next battery's key.
         val chemistry = tracker.chemistry
-        return { store -> store.save(vehicleId, cells, chemistry, memory) }
+        val ticket = EnergyWriteTicket(cells, chemistry)
+        pendingEnergyWrites.update { it + (vehicleId to ticket) }
+        return { store ->
+            try {
+                energyStoreWriteLock.withLock {
+                    if (pendingEnergyWrites.value[vehicleId] === ticket) {
+                        store.save(vehicleId, cells, chemistry, memory)
+                    }
+                }
+            } finally {
+                pendingEnergyWrites.update { if (it[vehicleId] === ticket) it - vehicleId else it }
+            }
+        }
     }
 
     /** A failed write is logged and dropped (the next interval retries); cancellation is never swallowed. */
@@ -3379,6 +3410,7 @@ class KableBmsRepository private constructor(
     }
 
     private suspend fun onLinkDrop(link: PackLink, reason: String, ownsAttempt: () -> Boolean = { true }) {
+        var energySave: (suspend (VehicleEnergyStore) -> Unit)? = null
         val recovery = sessionLock.withLock {
             if (userInitiatedDisconnect) {
                 println("[VOLTY-BLE] onLinkDrop ignored — user disconnected")
@@ -3393,6 +3425,15 @@ class KableBmsRepository private constructor(
                     (link.status == LinkStatus.ONLINE || link.status == LinkStatus.CONNECTING)
             }
             if (!believedUp) return@withLock null
+            if (links.none { it !== link && (it.status == LinkStatus.ONLINE || it.status == LinkStatus.CONNECTING) }) {
+                energySave = vehicleConnection?.energy?.let { tracker ->
+                    tracker.finish()
+                    energySaveOf(tracker)?.also {
+                        tracker.lastSaveAtMs = nowMs()
+                        tracker.savedCapacityLearningRevision = tracker.capacityLearningRevision
+                    }
+                }
+            }
             // Leave the up state BEFORE starting the loop — its "already
             // online" guard would otherwise short-circuit on the very first
             // iteration and the link would never come back. The dead session
@@ -3428,6 +3469,9 @@ class KableBmsRepository private constructor(
             vehicleConnection to reconnect
         } ?: return
         try {
+            val save = energySave
+            val store = energyStore
+            if (save != null && store != null) saveEnergyLogged(store, save)
             recovery.first?.let { orchestrator ->
                 beforeDropReraiseForTest?.invoke()
                 reRaiseYieldedLinksFor(orchestrator, link.spec.address)

@@ -2,6 +2,8 @@ package ru.sodovaya.volty.data.db
 
 import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import kotlinx.coroutines.test.runTest
+import ru.sodovaya.volty.domain.energy.CapacityCandidate
+import ru.sodovaya.volty.domain.energy.CapacityLearnDecision
 import ru.sodovaya.volty.domain.energy.EnergyMemory
 import ru.sodovaya.volty.domain.energy.EnergyRecord
 import ru.sodovaya.volty.domain.energy.LearnedCapacity
@@ -12,7 +14,10 @@ import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.nameplateAh
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import java.io.File
+import java.nio.file.Files
 
 class SqlDelightVehicleEnergyStoreTest {
 
@@ -42,6 +47,38 @@ class SqlDelightVehicleEnergyStoreTest {
         val store = newStore()
         store.save("v1", 24, Chemistry.LI_ION_NMC, memory)
         assertEquals(memory, store.load("v1", 24, Chemistry.LI_ION_NMC))
+    }
+
+    @Test
+    fun upgradeFrom29PreservesExistingLearningAndPersistsRecoveryEvidence() = runTest {
+        val source = assertNotNull(listOf(
+            File("src/commonMain/sqldelight/databases/29.db"),
+            File("composeApp/src/commonMain/sqldelight/databases/29.db"),
+        ).firstOrNull { it.isFile })
+        val copy = Files.createTempFile("volty-energy-v29-", ".db").toFile()
+        try {
+            source.copyTo(copy, overwrite = true)
+            val driver = JdbcSqliteDriver("jdbc:sqlite:${copy.absolutePath}")
+            try {
+                driver.execute(null, """
+                    INSERT INTO VehicleEnergyRow VALUES
+                    ('v1', 24, 'LI_ION_NMC', 17.5, 120, 3, 0.045, 80.6, 1700000000000)
+                """.trimIndent(), 0)
+                VoltyDatabase.Schema.migrate(driver, 29, VoltyDatabase.Schema.version)
+                val provider = VoltyDatabaseProvider(driver)
+                val store = SqlDelightVehicleEnergyStore(provider)
+                assertEquals(memory, store.load("v1", 24, Chemistry.LI_ION_NMC))
+
+                val pending = memory.copy(
+                    capacityCandidate = CapacityCandidate(LearnedCapacity(36f, 48f, 2), 35f, 37f),
+                    lastCapacityDecision = CapacityLearnDecision.DIVERGENT,
+                )
+                store.save("v1", 24, Chemistry.LI_ION_NMC, pending)
+                assertEquals(pending, SqlDelightVehicleEnergyStore(provider).peek("v1")?.memory)
+                store.reset("v1")
+                assertNull(store.peek("v1"))
+            } finally { driver.close() }
+        } finally { copy.delete() }
     }
 
     @Test

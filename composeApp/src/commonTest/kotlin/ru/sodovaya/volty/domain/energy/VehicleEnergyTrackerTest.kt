@@ -414,6 +414,53 @@ class VehicleEnergyTrackerTest {
     }
 
     @Test
+    fun anEstablishedLowEstimateRecoversAcrossThreeSeparateConnections() {
+        val old = LearnedCapacity(14.4f, 48f, 2)
+        var memory = EnergyMemory(old, null, null)
+        repeat(3) { attempt ->
+            val rig = Rig(wheel(capacity = entered30Ah), memory)
+            rig.run(40, packVoltsAt(96f), 0f)
+            rig.rideBetweenStops(96f, 72f)
+            rig.tracker.finish() // Disconnect while stopped, before the next acceleration.
+            memory = rig.tracker.memory()
+            if (attempt < 2) {
+                assertEquals(old, memory.learned)
+                assertEquals(attempt + 1, memory.capacityCandidate?.estimate?.rides)
+                assertEquals(CapacityLearnDecision.DIVERGENT, memory.lastCapacityDecision)
+            }
+        }
+        val recovered = assertNotNull(memory.learned)
+        assertEquals(30f, recovered.usableAh, 3f)
+        assertEquals(3, recovered.rides)
+        assertNull(memory.capacityCandidate)
+        assertEquals(CapacityLearnDecision.RECOVERED, memory.lastCapacityDecision)
+    }
+
+    @Test
+    fun aDropWithMissingCurrentReportsTelemetryGaps() {
+        val rig = Rig(wheel())
+        rig.run(40, packVoltsAt(96f), 0f)
+        rig.run(10, packVoltsAt(95f), 40f)
+        rig.run(250, packVoltsAt(81f), null) // Pack volts arrive, the controller current does not.
+        rig.run(250, packVoltsAt(79f), 40f)
+        rig.run(40, packVoltsAt(72f), 0f)
+        rig.run(1, packVoltsAt(72f) - 2f, 30f)
+        val learning = assertNotNull(rig.last.energy?.capacityLearning)
+        assertEquals(CapacityLearnDecision.TELEMETRY_GAPS, learning.lastDecision)
+        assertNull(rig.last.energy?.learned)
+    }
+
+    @Test
+    fun aConnectionEndingBeforeTheNextStopRecordsAnInterruption() {
+        val rig = Rig(wheel())
+        rig.run(40, packVoltsAt(96f), 0f)
+        rig.run(40, packVoltsAt(88f), 40f)
+        assertNotNull(rig.last.energy?.detail?.learnDropPercent, "the first rest anchored a measurement")
+        rig.tracker.finish()
+        assertEquals(CapacityLearnDecision.INTERRUPTED, rig.tracker.memory().lastCapacityDecision)
+    }
+
+    @Test
     fun aCityRideWithManyShortStopsStillLearnsOnceTheCumulativeDropIsLargeEnough() {
         val rig = Rig(wheel())
         rig.run(40, packVoltsAt(96f), 0f)
@@ -422,6 +469,7 @@ class VehicleEnergyTrackerTest {
             rig.rideBetweenStops(soc, next)
             soc = next
             rig.run(1, packVoltsAt(soc) - 2f, 30f) // leaving the stop closes the episode
+            if (next == 90f) assertEquals(CapacityLearnDecision.NEED_MORE_DROP, rig.last.energy?.capacityLearning?.lastDecision)
         }
         val learned = assertNotNull(rig.last.energy!!.learned, "five 6 % stops add up to a learnable drop")
         assertEquals(1, learned.rides, "exactly one learn: 96 -> 72 (24 %), then 72 -> 66 is too small again")

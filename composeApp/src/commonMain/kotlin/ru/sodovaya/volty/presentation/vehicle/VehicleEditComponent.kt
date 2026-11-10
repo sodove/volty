@@ -38,6 +38,10 @@ import ru.sodovaya.volty.data.energy.RangeSource
 import ru.sodovaya.volty.domain.energy.EnergyRecord
 import ru.sodovaya.volty.domain.energy.OcvCurve
 import ru.sodovaya.volty.domain.energy.VehicleEnergyStore
+import ru.sodovaya.volty.domain.energy.CapacityLearningStatus
+import ru.sodovaya.volty.domain.energy.EnergyState
+import ru.sodovaya.volty.domain.energy.LearnedCapacity
+import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.energy.BegodeCurrentSettings
 import ru.sodovaya.volty.domain.energy.BegodeCurrentSign
 import ru.sodovaya.volty.domain.energy.BegodeCurrentStore
@@ -68,6 +72,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -728,7 +733,8 @@ data class EnergySummary(
     val learnedNameplateWh: Float?,
     val learnRides: Int,
     val resistanceMilliOhm: Int?,
-    val avgWhPerKm: Float?
+    val avgWhPerKm: Float?,
+    val learning: CapacityLearningStatus? = null,
 )
 
 /** What the line under the capacity field says. */
@@ -767,18 +773,35 @@ internal fun energySummaryOf(
     val wh = if (record != null && learned != null && record.seriesCells > 0) {
         val (low, high) = VoltageSocEstimator.boundsFor(record.chemistry, alert)
         val fraction = OcvCurve.usableFraction(record.chemistry, low, high)
-        (learned.usableAh / fraction * record.seriesCells * record.chemistry.nominalCellV)
-            .takeIf { fraction > 0f && it.isFinite() && it > 0f }
+        nameplateWh(learned, record.seriesCells * record.chemistry.nominalCellV, fraction)
     } else null
     return EnergySummary(
         learnedNameplateWh = wh,
         learnRides = learned?.rides ?: 0,
-        resistanceMilliOhm = record?.memory?.resistanceOhm
-            ?.takeIf { it.isFinite() && it > 0f }
-            ?.let { (it * 1000f).roundToInt() },
-        avgWhPerKm = avgWhPerKm
+        resistanceMilliOhm = resistanceMilliOhm(record?.memory?.resistanceOhm),
+        avgWhPerKm = avgWhPerKm,
+        learning = record?.memory?.capacityLearning?.takeIf { it.lastDecision != null || it.candidateMeasurements > 0 },
     )
 }
+
+internal fun liveCapacitySummaryOf(energy: EnergyState?): EnergySummary? {
+    val status = energy?.capacityLearning ?: return null
+    return EnergySummary(
+        learnedNameplateWh = nameplateWh(energy.learned, energy.nominalPackV, energy.detail?.usableFraction),
+        learnRides = energy.learned?.rides ?: 0,
+        resistanceMilliOhm = resistanceMilliOhm(energy.resistanceOhm),
+        avgWhPerKm = null,
+        learning = status,
+    )
+}
+
+private fun nameplateWh(learned: LearnedCapacity?, nominalV: Float?, fraction: Float?): Float? {
+    if (learned == null || nominalV == null || fraction == null || fraction <= 0f) return null
+    return (learned.usableAh / fraction * nominalV).takeIf { it.isFinite() && it > 0f }
+}
+
+private fun resistanceMilliOhm(ohm: Float?): Int? =
+    ohm?.takeIf { it.isFinite() && it > 0f }?.let { (it * 1000f).roundToInt() }
 
 @OptIn(ExperimentalTime::class)
 class DefaultVehicleEditComponent(
@@ -872,6 +895,11 @@ class DefaultVehicleEditComponent(
      */
     private val sectionBackCallback = BackCallback(isEnabled = false, priority = 1) { onCloseSection() }
 
+    private var loadedAlert: AlertConfig = AlertConfig()
+    private var storedRecord: EnergyRecord? = null
+    private var liveWhPerKm: Float? = null
+    private var liveCapacitySummary: EnergySummary? = null
+
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
         backHandler.register(backCallback)
@@ -925,6 +953,14 @@ class DefaultVehicleEditComponent(
                     observe(active, data)
                     // The connection state is an input so a disconnect clears the learned count.
                     refreshLearnedCellCount(active, st)
+                    val energy = data.energy.takeIf {
+                        vehicleId != null && active?.id == vehicleId && (st as? ConnectionState.Connected)?.vehicle?.id == vehicleId
+                    }
+                    val live = liveCapacitySummaryOf(energy)
+                    if (live != liveCapacitySummary) {
+                        liveCapacitySummary = live
+                        publishEnergy()
+                    }
                 }
         }
         // Average consumption is live, not stored, and meaningful only for the connected vehicle:
@@ -942,17 +978,15 @@ class DefaultVehicleEditComponent(
         }
     }
 
-    /** The edited vehicle's loaded alert config, for the learned-capacity bounds. */
-    private var loadedAlert: AlertConfig = AlertConfig()
-    private var storedRecord: EnergyRecord? = null
-    private var liveWhPerKm: Float? = null
-
     private fun publishEnergy() {
         _state.update { s ->
             if (s.energy == null) s
-            else s.copy(energy = energySummaryOf(storedRecord, loadedAlert, liveWhPerKm))
+            else s.copy(energy = currentEnergySummary())
         }
     }
+
+    private fun currentEnergySummary(): EnergySummary = liveCapacitySummary?.copy(avgWhPerKm = liveWhPerKm)
+        ?: energySummaryOf(storedRecord, loadedAlert, liveWhPerKm)
 
     /**
      * Only for the vehicle being edited, for the reason [observe] gives: another vehicle's wheel
@@ -1080,8 +1114,9 @@ class DefaultVehicleEditComponent(
                 storedRecord = energyStore?.peek(v.id)
                 _state.value = loaded.copy(
                     savedValues = loaded.editableValues,
-                    energy = if (energyStore != null) energySummaryOf(storedRecord, loadedAlert, liveWhPerKm) else null
+                    energy = if (energyStore != null) currentEnergySummary() else null
                 )
+                observeEnergyRecord(v.id)
                 observeBegodeCurrent(v)
                 refreshPwm()
                 return
@@ -1229,13 +1264,22 @@ class DefaultVehicleEditComponent(
     }
     override fun onResetLearnedEnergy() {
         val id = vehicleId ?: return
+        if (energyStore == null) return
+        scope.launch {
+            bmsRepository.resetLearnedEnergy(id)
+            storedRecord = null
+            liveCapacitySummary = null
+            publishEnergy()
+        }
+    }
+
+    private fun observeEnergyRecord(id: String) {
         val store = energyStore ?: return
         scope.launch {
-            // The live tracker first (it would re-save its RAM copy), then the store.
-            bmsRepository.resetLearnedEnergy(id)
-            store.reset(id)
-            storedRecord = null
-            publishEnergy()
+            store.observe(id).catch { println("[VOLTY] energy memory stream failed: $it") }.collect { record ->
+                storedRecord = record
+                publishEnergy()
+            }
         }
     }
 

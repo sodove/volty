@@ -1403,7 +1403,7 @@
     <string name="vehicle_energy_unit">Единица</string>
     <string name="vehicle_energy_unit_wh">Втч</string>
     <string name="vehicle_energy_unit_ah">А·ч</string>
-    <string name="vehicle_energy_learned">выучено: ~%1$d Втч, поездок: %2$d</string>
+    <string name="vehicle_energy_learned">Выучено ~%1$d Вт·ч · замеров %2$d</string>
     <string name="vehicle_energy_learning">учусь…</string>
     <string name="vehicle_energy_resistance">Сопротивление</string>
     <string name="vehicle_energy_resistance_value">~%1$d мОм</string>

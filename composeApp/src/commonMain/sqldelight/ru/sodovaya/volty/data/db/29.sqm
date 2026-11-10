@@ -1,0 +1,7 @@
+-- Keep the existing pack estimate while the learner collects evidence for an alternative.
+ALTER TABLE VehicleEnergyRow ADD COLUMN candidateUsableAh REAL;
+ALTER TABLE VehicleEnergyRow ADD COLUMN candidateWeight REAL;
+ALTER TABLE VehicleEnergyRow ADD COLUMN candidateRides INTEGER;
+ALTER TABLE VehicleEnergyRow ADD COLUMN candidateMinAh REAL;
+ALTER TABLE VehicleEnergyRow ADD COLUMN candidateMaxAh REAL;
+ALTER TABLE VehicleEnergyRow ADD COLUMN lastCapacityDecision TEXT;

@@ -1,17 +1,26 @@
 package ru.sodovaya.volty.domain.energy
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
 import ru.sodovaya.volty.domain.model.Chemistry
 
 /** What the app has learned about one vehicle's pack. Every field is null until earned. */
 data class EnergyMemory(
     val learned: LearnedCapacity?,
     val resistanceOhm: Float?,
-    val counter: PersistedCharge?
+    val counter: PersistedCharge?,
+    val capacityCandidate: CapacityCandidate? = null,
+    val lastCapacityDecision: CapacityLearnDecision? = null,
 ) {
+    val capacityLearning: CapacityLearningStatus
+        get() = CapacityLearningStatus(lastCapacityDecision, capacityCandidate?.estimate?.rides ?: 0)
+
     companion object {
         val EMPTY = EnergyMemory(null, null, null)
     }
 }
+
+data class CapacityLearningStatus(val lastDecision: CapacityLearnDecision?, val candidateMeasurements: Int)
 
 /** A stored row as it is: the memory plus the (seriesCells, chemistry) key it was saved under. */
 data class EnergyRecord(val memory: EnergyMemory, val seriesCells: Int, val chemistry: Chemistry)
@@ -31,6 +40,7 @@ interface VehicleEnergyStore {
      * editor) can look without wiping what the tracker learned.
      */
     suspend fun peek(vehicleId: String): EnergyRecord?
+    fun observe(vehicleId: String): Flow<EnergyRecord?> = flow { emit(peek(vehicleId)) }
     suspend fun save(vehicleId: String, seriesCells: Int, chemistry: Chemistry, memory: EnergyMemory)
     suspend fun reset(vehicleId: String)
 }

@@ -52,6 +52,11 @@ import ru.sodovaya.volty.data.ble.planAliasHandoffs
 import ru.sodovaya.volty.data.ble.planLinks
 import ru.sodovaya.volty.data.energy.RangeSource
 import ru.sodovaya.volty.domain.energy.EnergyMemory
+import ru.sodovaya.volty.domain.energy.CapacityCandidate
+import ru.sodovaya.volty.domain.energy.CapacityLearnDecision
+import ru.sodovaya.volty.domain.energy.CapacityLearningStatus
+import ru.sodovaya.volty.domain.energy.CapacitySource
+import ru.sodovaya.volty.domain.energy.EnergyState
 import ru.sodovaya.volty.domain.energy.EnergyRecord
 import ru.sodovaya.volty.domain.energy.LearnedCapacity
 import ru.sodovaya.volty.domain.energy.OcvCurve
@@ -147,7 +152,11 @@ class VehicleEditComponentTest {
         override suspend fun connectDemo(profile: DemoProfile): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() {}
         val learnedResets = mutableListOf<String>()
-        override suspend fun resetLearnedEnergy(vehicleId: String) { learnedResets += vehicleId }
+        var energyResetStore: VehicleEnergyStore? = null
+        override suspend fun resetLearnedEnergy(vehicleId: String) {
+            learnedResets += vehicleId
+            energyResetStore?.reset(vehicleId)
+        }
         /** What the repository says about the PWM evidence and calibration; the editor reads it, never the store. */
         var pwmMemoryAnswer: ru.sodovaya.volty.domain.pwm.PwmMemory = ru.sodovaya.volty.domain.pwm.PwmMemory.EMPTY
         var pwmMemoryReads = 0
@@ -423,6 +432,7 @@ class VehicleEditComponentTest {
         lifecycle: LifecycleRegistry = newLifecycle()
     ): DefaultVehicleEditComponent {
         val ctx = DefaultComponentContext(lifecycle, backHandler = backDispatcher)
+        bmsRepo.energyResetStore = energyStore
         return DefaultVehicleEditComponent(
             componentContext = ctx,
             vehicleId = vehicleId,
@@ -3865,7 +3875,11 @@ class VehicleEditComponentTest {
     // ------------------------------------------------------- the Energy block (Task 8)
 
     /** A store that remembers every call, so a test can assert what was ISSUED. */
-    private class FakeEnergyStore(var record: EnergyRecord? = null) : VehicleEnergyStore {
+    private class FakeEnergyStore(record: EnergyRecord? = null) : VehicleEnergyStore {
+        private val records = MutableStateFlow(record)
+        var record: EnergyRecord?
+            get() = records.value
+            set(value) { records.value = value }
         val loads = mutableListOf<Triple<String, Int, Chemistry>>()
         val peeks = mutableListOf<String>()
         val resets = mutableListOf<String>()
@@ -3874,6 +3888,7 @@ class VehicleEditComponentTest {
             return EnergyMemory.EMPTY
         }
         override suspend fun peek(vehicleId: String): EnergyRecord? { peeks += vehicleId; return record }
+        override fun observe(vehicleId: String): Flow<EnergyRecord?> = records
         override suspend fun save(vehicleId: String, seriesCells: Int, chemistry: Chemistry, memory: EnergyMemory) {}
         override suspend fun reset(vehicleId: String) { resets += vehicleId; record = null }
     }
@@ -4295,6 +4310,42 @@ class VehicleEditComponentTest {
         assertNull(e.learnedNameplateWh)
         assertEquals(0, e.learnRides)
         assertEquals(30, e.resistanceMilliOhm)
+    }
+
+    @Test
+    fun `capacity diagnostics follow persisted and live decisions for the edited vehicle only`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vehicle = existingVehicle()
+        val memory = EnergyMemory(LearnedCapacity(10f, 50f, 2), null, null)
+        val store = FakeEnergyStore(EnergyRecord(memory, 24, Chemistry.LI_ION_NMC))
+        val bms = FakeBmsRepo()
+        val editor = component(FakeVehicleRepo(listOf(vehicle)), bmsRepo = bms, energyStore = store)
+        advanceUntilIdle()
+        assertNull(editor.state.value.energy?.learning)
+
+        store.record = store.record?.copy(memory = memory.copy(
+            capacityCandidate = CapacityCandidate(LearnedCapacity(21f, 25f, 1), 21f, 21f),
+            lastCapacityDecision = CapacityLearnDecision.DIVERGENT,
+        ))
+        advanceUntilIdle()
+        val stored = CapacityLearningStatus(CapacityLearnDecision.DIVERGENT, 1)
+        assertEquals(stored, editor.state.value.energy?.learning)
+
+        val live = CapacityLearningStatus(CapacityLearnDecision.TELEMETRY_GAPS, 2)
+        bms.activeVehicleData.value = VehicleData(energy = EnergyState(
+            socPercent = null, usableAh = null, nominalPackV = null, remainingWh = null,
+            capacitySource = CapacitySource.NONE, learned = null, resistanceOhm = null,
+            modelled = true, capacityLearning = live,
+        ))
+        bms.goLive(vehicle.copy(id = "other"))
+        advanceUntilIdle()
+        assertEquals(stored, editor.state.value.energy?.learning)
+        bms.goLive(vehicle)
+        advanceUntilIdle()
+        assertEquals(live, editor.state.value.energy?.learning)
+        bms.connectionState.value = ConnectionState.Idle
+        advanceUntilIdle()
+        assertEquals(stored, editor.state.value.energy?.learning)
     }
 
     @Test

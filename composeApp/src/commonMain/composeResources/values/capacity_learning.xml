@@ -1,0 +1,13 @@
+<resources>
+    <string name="vehicle_capacity_waiting_rest">Waiting for a discharge interval between two stops.</string>
+    <string name="vehicle_capacity_accepted">Latest capacity measurement accepted.</string>
+    <string name="vehicle_capacity_recovered">Capacity updated after three matching measurements.</string>
+    <string name="vehicle_capacity_more_drop">Charge fell too little for a capacity measurement. At least 20 percentage points are needed between stops.</string>
+    <string name="vehicle_capacity_soc_not_falling">Measurement rejected because charge did not fall between stops.</string>
+    <string name="vehicle_capacity_no_discharge">Measurement rejected because there was no net discharge.</string>
+    <string name="vehicle_capacity_gaps">Measurement rejected because more than 5% of the interval had missing telemetry.</string>
+    <string name="vehicle_capacity_invalid">Measurement rejected because the readings or timing were invalid.</string>
+    <string name="vehicle_capacity_divergent">Measurement differs from the current estimate by more than 40%. Waiting for confirmation.</string>
+    <string name="vehicle_capacity_interrupted">The measurement was interrupted before the next stop.</string>
+    <string name="vehicle_capacity_candidate_progress">Matching measurements for a new estimate · %1$d of %2$d</string>
+</resources>
