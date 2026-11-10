@@ -2,7 +2,7 @@ package ru.sodovaya.volty.presentation.vehicle
 
 import android.content.Context
 import android.util.LruCache
-import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -12,11 +12,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -80,12 +84,16 @@ internal actual fun RouteMapPreview(points: List<Pair<Double, Double>>, darkThem
                 if (bitmap != null) routePreviewCache.put(request, bitmap)
                 value = RoutePreviewSnapshot(bitmap)
             }
-            // A settled cache hit starts opaque. Only a newly loaded preview fades in.
-            val revealed = animateFloatAsState(
-                targetValue = if (snapshot == null) 0f else 1f,
-                animationSpec = tween(320),
-                label = "route preview",
-            )
+            // A cache hit still fades on entry. Once shown, scrolling this item offscreen
+            // and back shouldn't restart the fade for the same snapshot request.
+            var shown by rememberSaveable { mutableStateOf(false) }
+            val revealed = remember { Animatable(if (cached != null && shown) 1f else 0f) }
+            LaunchedEffect(snapshot) {
+                if (snapshot != null && revealed.value < 1f) {
+                    revealed.animateTo(1f, tween(if (cached != null) 140 else 320))
+                    shown = true
+                }
+            }
             snapshot?.let { result ->
                 val content = Modifier.fillMaxSize().graphicsLayer { alpha = revealed.value }
                 val bitmap = result.bitmap

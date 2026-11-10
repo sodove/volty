@@ -84,7 +84,7 @@ class DefaultVehicleOverviewComponent(
         scope.launch { load() }
     }
 
-    private suspend fun load() {
+    private suspend fun load(): Unit = coroutineScope {
         var readFailed = false
         suspend fun <T> read(block: suspend () -> T): T? = try {
             block()
@@ -98,31 +98,38 @@ class DefaultVehicleOverviewComponent(
         val rides = read { reader.newestRides(setOf(vehicleId), maxRides)[vehicleId].orEmpty() }
         if (rides == null) {
             mutableState.update { it.copy(loading = false, error = true) }
-            return
+            return@coroutineScope
         }
         val last = rides.firstOrNull()
-        val recorded = last?.let { read { reader.recorded(it) } }
         val cached = mutableState.value.takeIf { last != null && it.lastRide == last }
+        val cachedRoute = last?.let(reader::cachedRoute)
+        val knownTotals = cached?.lastTotals.orEmpty()
+        mutableState.update {
+            it.copy(lastRide = last, battery = cached?.battery.orEmpty(), lastTotals = knownTotals, lastRoute = cachedRoute.orEmpty())
+        }
+
+        val recorded = last?.let { read { reader.recorded(it) } }
+        // The map can start rendering as soon as its track arrives, alongside the metric reads.
+        val routeLoad = if (last != null && recorded != null && cachedRoute == null) launch {
+            val points = reader.route(last, recorded)
+            mutableState.update { it.copy(lastRoute = points) }
+        } else null
         val battery = if (last != null && recorded != null) {
             read { reader.battery(last.id, recorded, withCells = true) } ?: cached?.battery.orEmpty()
         } else cached?.battery.orEmpty()
 
-        // The card can show earned battery data while the longer route and totals reads run.
-        val knownTotals = cached?.lastTotals.orEmpty()
-        mutableState.update { it.copy(lastRide = last, battery = battery, lastTotals = knownTotals) }
+        mutableState.update { it.copy(battery = battery) }
         val totals = if (last != null && recorded != null) {
             read { reader.totals(last.id, recorded) } ?: knownTotals
         } else knownTotals
-        val route = if (last != null && recorded != null) read { reader.route(last.id, recorded) }.orEmpty()
-        else emptyList()
+        routeLoad?.join()
 
-        // Publish the latest route, totals and list together. Older totals stay batched below.
+        // The list appears with the latest ride's totals. Older totals stay batched below.
         mutableState.update {
             it.copy(
                 loading = false,
                 rides = rides,
                 lastTotals = totals,
-                lastRoute = route,
                 rideTotals = if (last != null) mapOf(last.id to totals) else emptyMap(),
                 error = readFailed,
             )

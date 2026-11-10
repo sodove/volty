@@ -60,9 +60,13 @@ class VehicleOverviewComponentTest {
 
     private fun TestScope.component(
         history: History, vehicles: List<Vehicle> = listOf(bike), maxRides: Int = 10, seed: VehicleOverviewSeed? = null,
+        reader: VehicleHistoryReader = historyReader(history),
     ) = DefaultVehicleOverviewComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope,
-        "bike", Vehicles(vehicles), VehicleHistoryReader(history, { HistoryTick(40_000_000, 40_000_000, 1) }, computeDispatcher = Dispatchers.Unconfined),
+        "bike", Vehicles(vehicles), reader,
         {}, {}, {}, {}, {}, maxRides = maxRides, seed = seed)
+
+    private fun historyReader(history: History) =
+        VehicleHistoryReader(history, { HistoryTick(40_000_000, 40_000_000, 1) }, computeDispatcher = Dispatchers.Unconfined)
 
     @Test fun showsOnlyThisVehiclesRidesAndTheLastKnownBatteryOfTheNewest() = runTest {
         val history = History(); val c = component(history); runCurrent()
@@ -82,6 +86,75 @@ class VehicleOverviewComponentTest {
     @Test fun stopsPagingOnceEnoughRidesAreFound() = runTest {
         val history = History(); val c = component(history, maxRides = 1); runCurrent()
         assertEquals(listOf("r2"), c.state.value.rides.map { it.id }); assertEquals(1, history.catalogPages)
+    }
+
+    @Test fun routeCanAppearWhileBatteryIsStillBeingRead() = runTest {
+        val batteryRequested = CompletableDeferred<Unit>()
+        val batteryReady = CompletableDeferred<Unit>()
+        val history = object : History() {
+            override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
+                batteryRequested.complete(Unit)
+                batteryReady.await()
+                return super.recordedKeys(rideId, sourceId, limit)
+            }
+
+            override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?) = previewRoute()
+        }
+        val overview = component(history, maxRides = 1)
+        runCurrent()
+        assertTrue(batteryRequested.isCompleted)
+        assertTrue(overview.state.value.loading)
+        assertEquals("r2", overview.state.value.lastRide?.id)
+        assertEquals(previewPoints, overview.state.value.lastRoute)
+        batteryReady.complete(Unit)
+    }
+
+    @Test fun reopeningUsesTheLastRouteAfterConfirmingTheLatestRide() = runTest {
+        val sourcesRequested = CompletableDeferred<Unit>()
+        val sourcesReady = CompletableDeferred<Unit>()
+        var holdSources = false
+        var newest = ride("r2", "bike", 20_000_000)
+        val history = object : History() {
+            override val pages get() = listOf(HistoryPage(listOf(newest), null, false))
+
+            override suspend fun sources(rideId: String): List<HistorySource> {
+                if (holdSources) {
+                    sourcesRequested.complete(Unit)
+                    sourcesReady.await()
+                }
+                return super.sources(rideId)
+            }
+
+            override suspend fun route(rideId: String, range: HistoryRange, after: HistoryCursor?) = previewRoute()
+        }
+        val reader = historyReader(history)
+        val first = component(history, maxRides = 1, reader = reader)
+        runCurrent()
+        assertEquals(previewPoints, first.state.value.lastRoute)
+
+        holdSources = true
+        val reopened = component(history, maxRides = 1, reader = reader)
+        runCurrent()
+        assertTrue(sourcesRequested.isCompleted)
+        assertTrue(reopened.state.value.loading)
+        assertEquals(previewPoints, reopened.state.value.lastRoute)
+
+        newest = ride("new", "bike", 30_000_000)
+        val changed = component(history, maxRides = 1, reader = reader)
+        runCurrent()
+        assertEquals("new", changed.state.value.lastRide?.id)
+        assertTrue(changed.state.value.lastRoute.isEmpty())
+        sourcesReady.complete(Unit)
+    }
+
+    private val previewPoints = listOf(55.0 to 37.0, 55.001 to 37.001)
+
+    private fun previewRoute(): HistoryRoutePage {
+        val fixes = previewPoints.mapIndexed { index, (lat, lon) ->
+            val time = 20_000_000L + index * 1_000L
+            HistoryGpsFix(HistoryTick(time, time, 1), lat, lon, 5.0, null)
+        }
+        return HistoryRoutePage(fixes.first().tick, HistoryPage(fixes, null, false), emptyList())
     }
 
     @Test fun publishesTheOverviewBeforeRevealingOlderTotalsTogether() = runTest {

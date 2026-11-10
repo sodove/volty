@@ -693,6 +693,8 @@ class DefaultRootComponent(
             ru.sodovaya.volty.data.history.PreparedHistoryReadRepository(get(), clock::prepare), clock::readTick)
     }
 
+    private val vehicleOverviewHistoryReader by lazy(::vehicleHistoryReader)
+
     override fun onOpenGroupMap() {
         goTo(Config.GroupMap)
     }
@@ -996,7 +998,7 @@ class DefaultRootComponent(
                 val seed = pendingOverviewSeed?.takeIf { it.vehicle.id == config.vehicleId }
                 if (seed != null) pendingOverviewSeed = null
                 RootComponent.Child.VehicleOverview(ru.sodovaya.volty.presentation.vehicle.DefaultVehicleOverviewComponent(
-                    context, scope, config.vehicleId, get(), vehicleHistoryReader(),
+                    context, scope, config.vehicleId, get(), vehicleOverviewHistoryReader,
                     onConnectRequested = { id -> replaceAll(Config.AutoConnect(id)) },
                     onOpenRideRequested = { rideId -> goTo(Config.History(rideId)) },
                     onEditRequested = { id -> goTo(Config.VehicleEdit(id)) },

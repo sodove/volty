@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.vehicle
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.presentation.history.*
@@ -77,6 +78,8 @@ class VehicleHistoryReader(
     private val computeDispatcher: CoroutineDispatcher = Dispatchers.Default,
 ) {
     private val peakCache = ru.sodovaya.volty.presentation.history.HistoryPeakCache()
+    private data class PreviewRoute(val ride: HistoryRide, val points: List<Pair<Double, Double>>)
+    private val lastPreviewRoute = MutableStateFlow<PreviewRoute?>(null)
     data class Recorded(val sources: List<HistorySource>, val range: HistoryRange)
 
     /** One pass over the shared catalog, newest first, collecting up to [perVehicle] rides of each vehicle. */
@@ -125,8 +128,18 @@ class VehicleHistoryReader(
         readHistoryTotals(history, rideId, recorded.sources, recorded.range, peakCache = peakCache)
     }
 
-    suspend fun route(rideId: String, recorded: Recorded): List<Pair<Double, Double>> =
-        tolerant { readHistoryRouteFixes(history, rideId, recorded.range, ROUTE_PAGES) }?.let(::vehicleRouteShape).orEmpty()
+    internal fun cachedRoute(ride: HistoryRide): List<Pair<Double, Double>>? =
+        lastPreviewRoute.value?.takeIf { it.ride == ride }?.points
+
+    internal suspend fun route(ride: HistoryRide, recorded: Recorded): List<Pair<Double, Double>> {
+        val points = withContext(computeDispatcher) {
+            tolerant { readHistoryRouteFixes(history, ride.id, recorded.range, ROUTE_PAGES)?.let(::vehicleRouteShape) }.orEmpty()
+        }
+        if (ride.status == HistoryRideStatus.COMPLETED && ride.ended != null && points.size >= 2) {
+            lastPreviewRoute.value = PreviewRoute(ride, points)
+        }
+        return points
+    }
 
     suspend fun glance(ride: HistoryRide): VehicleGlance {
         val recorded = recorded(ride)

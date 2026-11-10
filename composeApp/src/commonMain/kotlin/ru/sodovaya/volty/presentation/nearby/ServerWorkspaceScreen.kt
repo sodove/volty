@@ -148,7 +148,11 @@ private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWor
     val browser=state.browser
     val enabled=!state.commands.busy && !state.channelDeletion.busy && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking && state.actorId!=null
     var menuExpanded by remember(browser.selectedCommunity) {mutableStateOf(false)}
-    LazyColumn(modifier.fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+    LazyColumn(
+        modifier.fillMaxHeight(),
+        contentPadding = PaddingValues(vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
         if(state.channelDeletion.community==browser.selectedCommunity) {
             state.channelDeletion.error?.let { failure -> item {
                 Text(stringResource(failure.channelDeletionMessage()),color=MaterialTheme.colorScheme.error)
@@ -205,8 +209,10 @@ private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWor
                 if(detail.community.description.isNotBlank()) Text(detail.community.description,Modifier.padding(top=8.dp),style=MaterialTheme.typography.bodyMedium)
             }
             item {
-                Text(stringResource(Res.string.nearby_servers_channels),style=MaterialTheme.typography.titleMedium)
-                Text(stringResource(Res.string.nearby_servers_voice_only),style=MaterialTheme.typography.bodySmall)
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(stringResource(Res.string.nearby_servers_channels),style=MaterialTheme.typography.titleMedium)
+                    Text(stringResource(Res.string.nearby_servers_voice_only),style=MaterialTheme.typography.bodySmall)
+                }
             }
             if(detail.channels.isEmpty()) item {Text(stringResource(Res.string.nearby_servers_no_channels))}
             items(detail.channels,key={it.id}) {channel ->
