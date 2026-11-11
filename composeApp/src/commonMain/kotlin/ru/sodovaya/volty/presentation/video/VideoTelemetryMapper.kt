@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.presentation.video
 
+import ru.sodovaya.volty.domain.model.BmsCurrentSource
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DutySource
@@ -13,6 +14,7 @@ import ru.sodovaya.volty.domain.video.VideoMetric
 import ru.sodovaya.volty.domain.video.VideoReading
 import ru.sodovaya.volty.domain.video.VideoSnapshot
 import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 private const val MAX_SOURCE_AGE_MILLIS = 2_000L
 
@@ -49,6 +51,12 @@ fun videoTelemetrySnapshot(
     }
     val motionAvailable = motionAgeMillis != null
     val batteryAvailable = batteryAgeMillis != null
+    val controllerInput = motion.inputSample?.takeIf { motionAvailable }
+    val inputAgeMillis = if (controllerInput != null) {
+        sourceAgeMillis(controllerInput.measuredAtEpochMillis, nowEpochMillis)
+    } else {
+        motionAgeMillis
+    }
 
     val readings = VideoMetric.entries.associateWith { VideoReading(value = null) }.toMutableMap()
     val expiries = mutableMapOf<VideoMetric, Long>()
@@ -112,8 +120,10 @@ fun videoTelemetrySnapshot(
         // ControllerData has no independent phase-current presence flag. This
         // mirrors the Light HUD: a nonzero current or known power is its evidence.
         put(VideoMetric.MOTOR_CURRENT, motion.motorCurrentA.takeIf { it != 0f || motion.hasPower }, motionAgeMillis)
-        put(VideoMetric.CONTROLLER_CURRENT, MotionReadings.batteryCurrentA(motion), motionAgeMillis)
-        put(VideoMetric.CONTROLLER_POWER, MotionReadings.powerW(motion), motionAgeMillis)
+        val inputCurrent = MotionReadings.batteryCurrentA(motion).takeIf { inputAgeMillis != null }
+        val inputPower = if (controllerInput != null) controllerInput.powerW else MotionReadings.powerW(motion)
+        put(VideoMetric.CONTROLLER_CURRENT, inputCurrent, inputAgeMillis)
+        put(VideoMetric.CONTROLLER_POWER, inputPower.takeIf { inputAgeMillis != null }, inputAgeMillis)
         put(VideoMetric.DISTANCE, MotionReadings.tripKm(motion), motionAgeMillis)
     } else {
         dutyHold.reset()
@@ -141,8 +151,15 @@ fun videoTelemetrySnapshot(
     val currentBattery = contributors.minByOrNull { it.data.timestamp }?.let {
         battery.copy(timestamp = it.data.timestamp)
     } ?: battery
-    val inputCurrent = batteryInputCurrent(motion, currentBattery, nowEpochMillis,
-        motionAvailable = motionAvailable, batteryAvailable = batteryAvailable && packCurrentAvailable)
+    // A synthetic pack republishes the controller's reading with the pack's newer timestamp.
+    val controllerMotion = if (controllerInput != null) {
+        motion.copy(timestamp = Instant.fromEpochMilliseconds(controllerInput.measuredAtEpochMillis))
+    } else {
+        motion
+    }
+    val mirroredCurrent = controllerInput != null && currentBattery.currentSource == BmsCurrentSource.CONTROLLER
+    val inputCurrent = batteryInputCurrent(controllerMotion, currentBattery, nowEpochMillis,
+        motionAvailable = motionAvailable, batteryAvailable = batteryAvailable && packCurrentAvailable && !mirroredCurrent)
     put(VideoMetric.INPUT_CURRENT, inputCurrent?.dischargePositiveAmps,
         inputCurrent?.let { sourceAgeMillis(it.sampleEpochMillis, nowEpochMillis) })
 

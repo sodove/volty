@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.bms
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.energy.BegodeCurrentSettings
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerInputSample
 import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.DeviceFactKey
 import ru.sodovaya.volty.domain.model.SectionState
@@ -82,7 +83,7 @@ private fun wallClockMillis(): Long = Clock.System.now().toEpochMilliseconds()
  */
 class BegodeProtocol(
     private val cellCount: Int? = null,
-    /** Wall clock in epoch milliseconds, for [ControllerData.wheelPwmAlarmSinceMillis] only; tests replaying a dump inject the dump's time. */
+    /** Wall clock in epoch milliseconds. Tests replaying a dump can inject its receipt time. */
     private val nowMillis: () -> Long = ::wallClockMillis,
 ) : BmsProtocol(), MotionSource, ProtocolFacts {
 
@@ -247,6 +248,7 @@ class BegodeProtocol(
 
     /** Last decoded battery current, A — see [batteryCurrentA]. */
     private var batteryCurrentAValue: Float = 0f
+    private var controllerInputSample: ControllerInputSample? = null
 
     /** Last decoded motor temperature, °C — see [motorTempC]. */
     private var motorTempCValue: Float = 0f
@@ -976,6 +978,11 @@ class BegodeProtocol(
         val voltage = inputVoltageOrNull()
         // Negated into the controller convention — see the KDoc on sign.
         val controllerBatteryCurrent = if (batteryCurrent != null) -batteryCurrent else 0f
+        val powerW = (voltage ?: 0f) * controllerBatteryCurrent
+        val hasPower = voltage != null && batteryCurrent != null
+        if (dutyFresh) {
+            controllerInputSample = ControllerInputSample(nowMillis(), powerW.takeIf { hasPower && powerJoinFresh() })
+        }
         motion = ControllerData(
             speedKmh = speed ?: 0f,
             // REPORTED only for a sample that HAS a speed. A wheel that has
@@ -1008,8 +1015,9 @@ class BegodeProtocol(
             hasInputVoltage = voltage != null,
             // Retraction (2026-11-05): voltage alone used to earn power here, even before the battery-current
             // frame arrived. Both factors are required; the placeholder 0 A is not a measurement.
-            powerW = (voltage ?: 0f) * controllerBatteryCurrent,
-            hasPower = voltage != null && batteryCurrent != null,
+            powerW = powerW,
+            hasPower = hasPower,
+            inputSample = controllerInputSample,
             escTempC = if (sawLiveMotion) boardTempC else NO_TEMP_SENSOR_C,
             motorTempC = motorTemp ?: NO_TEMP_SENSOR_C,
             hasMotorTemp = motorTemp != null,
@@ -1451,6 +1459,7 @@ class BegodeProtocol(
         faultsValue = emptyList()
         tiltbackSpeedValue = null
         batteryCurrentAValue = 0f
+        controllerInputSample = null
         motorTempCValue = 0f
         sawMotionFrame = false
         // Per-wheel evidence, exactly like the duty latch: a wheel whose motor
@@ -1999,9 +2008,9 @@ class BegodeProtocol(
         // its own bytes before the only read — but the controller sample below
         // reads them right here, so a leak would now be observable, and it is
         // pinned by a test.
+        if (motionFramesSinceLive < NO_LIVE_FRAME) motionFramesSinceLive++
         rebuildMotion(dutyFresh = true)
         rebuildLiveData()
-        if (motionFramesSinceLive < NO_LIVE_FRAME) motionFramesSinceLive++
         observeControllerFrame(0x07)
     }
 
@@ -2020,10 +2029,11 @@ class BegodeProtocol(
         saveCurrentEvidence(settings, evidence)
     }
 
+    private fun powerJoinFresh() = motionFramesSinceLive in 1..POWER_JOIN_MAX_MOTION_FRAMES
+
     private fun observeControllerFrame(type: Int) {
         val decoded = motion ?: return
-        val powerJoinFresh = motionFramesSinceLive in 1..POWER_JOIN_MAX_MOTION_FRAMES
-        observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedBegodeController(type, decoded, powerJoinFresh) }
+        observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedBegodeController(type, decoded, powerJoinFresh()) }
     }
 
     /**

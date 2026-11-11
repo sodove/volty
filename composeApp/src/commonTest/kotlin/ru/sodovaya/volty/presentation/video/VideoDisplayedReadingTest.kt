@@ -34,13 +34,13 @@ class VideoDisplayedReadingTest {
     }
 
     @Test
-    fun everyWidgetTextAndArcUseTheInterpolatedValueWhileStyleUsesRawThresholds() {
-        val rawRule = listOf(
+    fun everyWidgetUsesTheInterpolatedValueForTextSweepsAndStyle() {
+        val rules = listOf(
             OverlayRule(OverlayComparison.GTE, 48.0, foreground = "#FFFF0000"),
             OverlayRule(OverlayComparison.GTE, 100.0, background = "#FFFF0000"),
         )
         val widgets = listOf(
-            OverlayWidget(id = "value", metric = VideoMetric.SPEED, kind = OverlayWidgetKind.VALUE_CARD, rules = rawRule),
+            OverlayWidget(id = "value", metric = VideoMetric.SPEED, kind = OverlayWidgetKind.VALUE_CARD, rules = rules),
             OverlayWidget(id = "icon-value", metric = VideoMetric.SPEED, kind = OverlayWidgetKind.ICON_VALUE),
             OverlayWidget(id = "chip", metric = VideoMetric.SPEED, kind = OverlayWidgetKind.ICON_CHIP),
             OverlayWidget(id = "arc", metric = VideoMetric.SPEED, kind = OverlayWidgetKind.ARC),
@@ -69,12 +69,30 @@ class VideoDisplayedReadingTest {
 
         assertEquals(9, valueRuns.count { it.text == "45" }, "all eight widget kinds, including the bar's secondary value")
         assertFalse(valueRuns.any { it.text == "50" })
-        assertEquals(overlayColorArgb("#FFFF0000"), valueRuns.first { it.text == "45" }.color, "threshold remains based on raw 50")
+        assertEquals(overlayColorArgb(widgets.first().style.foreground), valueRuns.first { it.text == "45" }.color)
         val filledArcs = scene.ops.filterIsInstance<OverlayArcOp>().filter { it.color == overlayColorArgb("#FFFFFFFF") }
         assertEquals(3, filledArcs.size)
         assertTrue(filledArcs.any { it.sweepDegrees == 270f * 0.45f })
         assertTrue(filledArcs.any { it.sweepDegrees == -90f * 0.45f })
         assertTrue(filledArcs.any { it.sweepDegrees == 90f * 0.45f })
+    }
+
+    @Test
+    fun dutyChipUsesTheThresholdOfTheDisplayedFrameInBothDirections() {
+        val meow = OverlayTemplates.meowIcons()
+        val duty = meow.widgets.single { it.metric == VideoMetric.DUTY }
+        val preset = meow.copy(widgets = listOf(duty))
+        val strings = VideoOverlayStrings()
+        val geometry = OverlayGeometry(720, 1280, 0, false, 0, 0, 720, 1280)
+        for ((raw, shown) in listOf(74.0 to 68.0, 68.0 to 71.0, 86.0 to 84.0)) {
+            val snapshot = snapshot(mapOf(VideoMetric.DUTY to VideoReading(raw)))
+            val dials = mapOf(VideoMetric.DUTY to shown)
+            val input = OverlaySceneInput(preset, snapshot, strings, UnitSystem.METRIC, 720, 1280, dials = dials)
+            val expected = overlayStyle(duty, VideoReading(shown)).background
+
+            assertEquals(overlayColorArgb(expected), buildOverlayScene(input).ops.filterIsInstance<OverlayRectOp>().single().fill)
+            assertEquals(expected, overlayDrawKey(preset, snapshot, strings, UnitSystem.METRIC, geometry, dials = dials).facets.single().background)
+        }
     }
 
     @Test

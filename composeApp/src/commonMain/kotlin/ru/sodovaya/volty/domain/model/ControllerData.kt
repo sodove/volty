@@ -22,6 +22,9 @@ enum class SpeedUnknownReason {
     MIXED
 }
 
+/** Timing and power of the frame that measured [ControllerData.batteryCurrentA]. */
+data class ControllerInputSample(val measuredAtEpochMillis: Long, val powerW: Float?)
+
 @OptIn(ExperimentalTime::class)
 data class ControllerData(
     /**
@@ -257,6 +260,8 @@ data class ControllerData(
     val timestamp: Instant = Clock.System.now(),
     /** False while Begode is using provisional polarity for display. */
     val currentPolarityConfirmed: Boolean = true,
+    /** Set by protocols that publish input current separately from the rest of the controller telemetry. */
+    val inputSample: ControllerInputSample? = null,
 ) {
     val speedKnown: Boolean get() = speedSource != SpeedSource.NONE
 

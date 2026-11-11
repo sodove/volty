@@ -14,6 +14,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerInputSample
 import ru.sodovaya.volty.domain.model.ControllerState
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
@@ -219,8 +220,8 @@ class KableBmsRepositoryBegodeFunnelTest {
         val atSevenBytes = replayCountingDecodes(stream.chunkedInto(7))
 
         // (1) Same VALUES. What the wheel ends up saying cannot depend on where
-        // the radio split the stream. Timestamp is stamped per rebuild, so it
-        // is the one field that may legitimately differ between two replays.
+        // the radio split the stream. Both replays share a fixed frame-receipt
+        // clock. The snapshot timestamp is still stamped per rebuild.
         val real = assertNotNull(
             atRealBoundaries.motion,
             "the capture must decode motion through its real MTU-23 boundaries"
@@ -307,7 +308,7 @@ class KableBmsRepositoryBegodeFunnelTest {
      * so no decode can be double-counted by two frames landing in one append.
      */
     private fun replayCountingDecodes(notifications: List<ByteArray>): DecodeTally {
-        val protocol = BegodeProtocol(cellCount = 40)
+        val protocol = BegodeProtocol(cellCount = 40, nowMillis = { 1_700_000_000_000L })
         var lastMotion: ControllerData? = null
         var lastPack0: BmsData? = null
         var lastPack1: BmsData? = null
@@ -711,7 +712,8 @@ class KableBmsRepositoryBegodeFunnelTest {
         // Pinned rather than left at `Clock.System.now()`: the guard above has
         // to compare this against a default-constructed sample, and two `now()`
         // readings are neither reliably equal nor reliably different.
-        timestamp = Instant.fromEpochSeconds(1_700_000_000L)
+        timestamp = Instant.fromEpochSeconds(1_700_000_000L),
+        inputSample = ControllerInputSample(measuredAtEpochMillis = 1_699_999_999_700L, powerW = 4_920f),
     )
 
     private companion object {

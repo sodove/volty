@@ -26,6 +26,7 @@ data class OverlayWidgetFacet(
     val arcStep: Int?,
     val secondaryText: String? = null,
     val scaleMax: Float? = null,
+    val ruleFired: Boolean = false,
 )
 
 /**
@@ -48,6 +49,7 @@ data class OverlayDrawKey(
     val noLink: Boolean = false,
     /** Quantized animated content positions: motion must redraw even after the number stops changing. */
     val textPositions: Map<String, Float> = emptyMap(),
+    val warningWidgetId: String? = null,
 )
 
 /**
@@ -89,7 +91,7 @@ fun overlayDrawKey(
     val facets = preset.widgets.map { widget ->
         val rawReading = overlayReading(widget.metric, snapshot, trip)
         val reading = displayedReading(widget.metric, rawReading, dials)
-        val style = overlayStyle(widget, rawReading)
+        val style = overlayStyle(widget, reading)
         val swept = widget.kind in SWEPT_KINDS
         val arcStep = if (swept) overlayFraction(widget, reading, system, scales)?.let { (it * ARC_STEPS).roundToInt() } else null
         OverlayWidgetFacet(
@@ -101,9 +103,11 @@ fun overlayDrawKey(
                 videoValueText(metric, displayedReading(metric, overlayReading(metric, snapshot, trip), dials), system)
             },
             scaleMax = if (swept && widget.arc.autoScale) overlayScaleMax(widget, scales) else null,
+            ruleFired = overlayRuleFired(widget, reading),
         )
     }
-    return OverlayDrawKey(preset, facets, snapshot?.demo == true, strings, system, geometry, clockText, overlayNoLink(snapshot))
+    return OverlayDrawKey(preset, facets, snapshot?.demo == true, strings, system, geometry, clockText, overlayNoLink(snapshot),
+        warningWidgetId = overlayWarning(preset, snapshot, dials)?.id)
 }
 
 private val SWEPT_KINDS = setOf(

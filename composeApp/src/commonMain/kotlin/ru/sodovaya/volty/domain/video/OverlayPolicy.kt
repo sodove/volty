@@ -30,8 +30,13 @@ fun overlayRuleFired(widget: OverlayWidget, reading: VideoReading?): Boolean {
  * temperature 80, charge 15) speaks up. The lower tiers already recolour their value, and a chip on each would talk
  * over the whole ride.
  */
-fun overlayWarning(preset: OverlayPreset, snapshot: VideoSnapshot?): OverlayWidget? = preset.widgets.firstOrNull { widget ->
-    val value = snapshot?.readings?.get(widget.metric)?.value?.takeIf(Double::isFinite)
+fun overlayWarning(
+    preset: OverlayPreset,
+    snapshot: VideoSnapshot?,
+    dials: Map<VideoMetric, Double>? = null,
+): OverlayWidget? = preset.widgets.firstOrNull { widget ->
+    val value = displayedReading(widget.metric, snapshot?.readings?.get(widget.metric), dials)
+        ?.value?.takeIf(Double::isFinite)
     value != null && widget.rules.isNotEmpty() && widget.rules.all { it.threshold.isFinite() && ruleMatches(value, it) }
 }
 

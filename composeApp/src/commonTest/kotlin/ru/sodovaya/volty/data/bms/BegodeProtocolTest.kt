@@ -4,17 +4,30 @@ import ru.sodovaya.volty.domain.energy.BegodeCurrentSettings
 import ru.sodovaya.volty.domain.energy.BegodeCurrentSign
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerState
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.TelemetryMetric
 import ru.sodovaya.volty.domain.model.TelemetryReading
+import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.VehicleData
+import ru.sodovaya.volty.domain.stats.MotionAggregator
+import ru.sodovaya.volty.domain.video.VideoMetric
+import ru.sodovaya.volty.domain.video.VideoTimeline
 import ru.sodovaya.volty.presentation.common.groupPackCells
+import ru.sodovaya.volty.presentation.video.videoTelemetrySnapshot
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 /**
  * Tests against a REAL capture from a Begode ET Max (see [BegodeDumpFixture]).
@@ -198,6 +211,54 @@ class BegodeProtocolTest {
         val regen = assertNotNull(protocol.latestMotion(0))
         assertEquals(-3.9f, regen.batteryCurrentA, 0.001f)
         assertEquals(-234f, regen.powerW, 0.001f)
+    }
+
+    @OptIn(ExperimentalTime::class)
+    @Test
+    fun cameraInterpolatesInputReadingsBetweenCurrentFrames() {
+        var now = 20_000L
+        val start = now
+        val protocol = BegodeProtocol(cellCount = 16, nowMillis = { now })
+        val controller = Controller(0, "Wheel", ControllerType.BEGODE, "AA")
+        val vehicle = Vehicle("wheel", "Wheel", "wheel", emptyList(), listOf(controller),
+            chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochMilliseconds(0))
+        val timeline = VideoTimeline()
+
+        fun offer() {
+            val timestamp = Instant.fromEpochMilliseconds(now)
+            val decoded = assertNotNull(protocol.latestMotion(0)).copy(timestamp = timestamp)
+            val motion = MotionAggregator.aggregate(listOf(ControllerState(controller, decoded, isOnline = true)))
+            val mirrored = assertNotNull(protocol.latestData(0)).copy(timestamp = timestamp)
+            val snapshot = videoTelemetrySnapshot(VehicleData(motion = motion, aggregate = mirrored), vehicle,
+                ConnectionState.Connected(vehicle), receivedAtMillis = now - start, nowEpochMillis = now)
+            timeline.offer(assertNotNull(snapshot))
+        }
+
+        protocol.onNotification(liveFrame(voltageRaw = 6000))
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 500, motorTempRaw = 20, dutyRaw = 2))
+        offer()
+
+        now = start + 290
+        protocol.onNotification(liveFrame(voltageRaw = 5800))
+        assertEquals(290f, assertNotNull(protocol.latestMotion(0)).powerW, 0.01f)
+        offer()
+
+        now = start + 310
+        protocol.onNotification(motionFrame(batteryCurrentRaw = -500, motorTempRaw = 20, dutyRaw = 2))
+        offer()
+
+        val midpoint = timeline.interpolatedValuesAt(155, 380)
+        assertEquals(5.0, midpoint.getValue(VideoMetric.CONTROLLER_POWER), 0.01)
+        assertEquals(0.0, midpoint.getValue(VideoMetric.CONTROLLER_CURRENT), 0.01)
+        assertEquals(0.0, midpoint.getValue(VideoMetric.INPUT_CURRENT), 0.01)
+        assertEquals(-290.0, timeline.interpolatedValuesAt(310, 380).getValue(VideoMetric.CONTROLLER_POWER), 0.01)
+
+        now = start + 2_311
+        protocol.onNotification(liveFrame(voltageRaw = 5800))
+        offer()
+        val afterCurrentExpires = timeline.interpolatedValuesAt(2_311, 2_311)
+        assertNull(afterCurrentExpires[VideoMetric.CONTROLLER_POWER])
+        assertNull(afterCurrentExpires[VideoMetric.INPUT_CURRENT])
     }
 
     @Test

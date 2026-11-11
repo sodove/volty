@@ -96,7 +96,7 @@ data class OverlaySceneInput(
     /**
      * Buffered linear values for continuous numbers and sweeps. null means a static/editor scene; an empty map
      * means the live buffer is not ready. Retraction: these used to affect only sweeps, then a dashboard chase.
-     * Raw readings still gate presence, thresholds and provenance.
+     * Raw readings still gate presence and provenance. HUD thresholds follow the displayed value.
      */
     val dials: Map<VideoMetric, Double>? = null,
     val contentPosition: OverlayContentPosition? = null,
@@ -202,7 +202,8 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
     private fun OverlayWidget.isArc() =
         kind == OverlayWidgetKind.ARC || kind == OverlayWidgetKind.ARC_LEFT || kind == OverlayWidgetKind.ARC_RIGHT
 
-    private fun OverlayWidget.reading() = overlayReading(metric, input.snapshot, input.trip)
+    private fun OverlayWidget.reading() =
+        displayedReading(metric, overlayReading(metric, input.snapshot, input.trip), input.dials)
 
     private fun resolve(widget: OverlayWidget): PixelBox? {
         val placement = widget.placement ?: return legacyArc(widget)
@@ -363,9 +364,8 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
     }
 
     private fun card(widget: OverlayWidget, box: PixelBox) {
-        val rawReading = widget.reading()
-        val reading = displayedReading(widget.metric, rawReading, input.dials)
-        val look = Look(widget, rawReading)
+        val reading = widget.reading()
+        val look = Look(widget, reading)
         val f = box.value / 64f
         val radius = (widget.style.cornerRadius * f).coerceAtMost(box.height / 2)
         ops += OverlayRectOp(
@@ -399,7 +399,7 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
         val baseline = if (widget.style.showLabel) box.bottom - 30f * f else box.cy + box.value * scale * 0.36f
         if (iconed) {
             val size = box.value * 0.8f
-            ops += OverlayIconOp(overlayIconShown(widget, rawReading), startX, baseline - size * 0.9f, size, look.accent)
+            ops += OverlayIconOp(overlayIconShown(widget, reading), startX, baseline - size * 0.9f, size, look.accent)
         }
         ops += OverlayTextOp(
             runs, startX + iconSpace, baseline,
@@ -412,9 +412,8 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
      * unit when there is no value, never a made-up 0.
      */
     private fun iconChip(widget: OverlayWidget, box: PixelBox) {
-        val rawReading = widget.reading()
-        val reading = displayedReading(widget.metric, rawReading, input.dials)
-        val look = Look(widget, rawReading)
+        val reading = widget.reading()
+        val look = Look(widget, reading)
         val radius = (widget.style.cornerRadius * box.value / 64f).coerceAtMost(box.height / 2)
         ops += OverlayRectOp(box.left, box.top, box.right, box.bottom, radius, fill = look.background)
         val unit = input.strings.unit(widget.metric, input.system)
@@ -431,7 +430,7 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
         val targetX = box.cx - content / 2
         val left = input.contentPosition?.position(widget.id, targetX) ?: targetX
         val baseline = box.cy + v * 0.36f
-        if (measure.iconsAvailable) ops += OverlayIconOp(overlayIconShown(widget, rawReading), left, box.cy - iconSize / 2, iconSize, look.accent)
+        if (measure.iconsAvailable) ops += OverlayIconOp(overlayIconShown(widget, reading), left, box.cy - iconSize / 2, iconSize, look.accent)
         ops += OverlayTextOp(runs, left + iconSize + iconGap, baseline)
     }
 
@@ -453,9 +452,8 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
     }
 
     private fun quarterDial(widget: OverlayWidget, box: PixelBox, left: Boolean) {
-        val rawReading = widget.reading()
-        val reading = displayedReading(widget.metric, rawReading, input.dials)
-        val look = Look(widget, rawReading)
+        val reading = widget.reading()
+        val look = Look(widget, reading)
         val radius = box.width / 2
         val stroke = widget.arc.thickness * radius / 226f
         gauge(
@@ -475,9 +473,8 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
     }
 
     private fun fullDial(widget: OverlayWidget, box: PixelBox) {
-        val rawReading = widget.reading()
-        val reading = displayedReading(widget.metric, rawReading, input.dials)
-        val look = Look(widget, rawReading)
+        val reading = widget.reading()
+        val look = Look(widget, reading)
         val radius = box.width / 2
         val stroke = widget.arc.thickness * (if (widget.placement != null) frame.scaledUnit else frame.unit * LEGACY_SIZE)
         gauge(widget, reading, box.cx, box.cy, radius, FULL_START, FULL_SWEEP, stroke, look.accent)
@@ -514,9 +511,8 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
     }
 
     private fun bar(widget: OverlayWidget, box: PixelBox) {
-        val rawReading = widget.reading()
-        val reading = displayedReading(widget.metric, rawReading, input.dials)
-        val look = Look(widget, rawReading)
+        val reading = widget.reading()
+        val look = Look(widget, reading)
         val spec = widget.bar
         val unit = input.strings.unit(widget.metric, input.system)
         val text = videoValueText(widget.metric, reading, input.system)
@@ -565,9 +561,8 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
     }
 
     private fun text(widget: OverlayWidget, box: PixelBox) {
-        val rawReading = widget.reading()
-        val reading = displayedReading(widget.metric, rawReading, input.dials)
-        val look = Look(widget, rawReading)
+        val reading = widget.reading()
+        val look = Look(widget, reading)
         val unit = input.strings.unit(widget.metric, input.system)
         val gap = box.unit * 0.27f
         val scale = fit(widget.metric, unit, box.value, box.unit, box.width, gap)
@@ -589,8 +584,8 @@ private class OverlaySceneBuilder(private val input: OverlaySceneInput, private 
             chip(input.strings.noLink, y, PINK_COLOR, ON_PINK_COLOR)
             y += (CHIP_HEIGHT + CHIP_GAP) * frame.unit
         }
-        overlayWarning(input.preset, input.snapshot)?.let { widget ->
-            val reading = displayedReading(widget.metric, widget.reading(), input.dials)
+        overlayWarning(input.preset, input.snapshot, input.dials)?.let { widget ->
+            val reading = widget.reading()
             val unit = input.strings.unit(widget.metric, input.system)
             chip("${label(widget)} ${videoValueText(widget.metric, reading, input.system)} $unit".trim(), y, ORANGE_COLOR, ON_ORANGE_COLOR)
             y += (CHIP_HEIGHT + CHIP_GAP) * frame.unit

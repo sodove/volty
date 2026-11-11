@@ -336,7 +336,8 @@ object MotionAggregator {
                 s.data.faults.map { if (labelled) "${s.controller.label}: $it" else it }
             },
             isConnected = true,
-            timestamp = d.maxOfOrNull { it.timestamp } ?: Clock.System.now()
+            timestamp = d.maxOfOrNull { it.timestamp } ?: Clock.System.now(),
+            inputSample = d.singleOrNull()?.inputSample,
         )
     }
 
