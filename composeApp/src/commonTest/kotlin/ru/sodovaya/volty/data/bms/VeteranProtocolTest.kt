@@ -13,6 +13,60 @@ import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 
 class VeteranProtocolTest {
 
+    @Test fun pattonSCompletesEachPackOnItsSecondCellPage() {
+        val protocol = VeteranProtocol()
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+        fun feed(page: Int, mv: Int, count: Int? = null) {
+            protocol.onNotification(bmsFrame(page, IntArray(15) { mv }, reportedCellCount = count, versionRaw = 7003))
+        }
+        fun deltas() = observed.flatMap { packet ->
+            packet.readings.filter { it.metric == TelemetryMetric.CELL_DELTA && it.value != null }
+                .map { packet.localIndex to it.value }
+        }
+        feed(1, 3900, 30)
+        feed(6, 4300) // The other pack has not sent its first page.
+        assertTrue(deltas().isEmpty())
+        feed(5, 4000, 30)
+        feed(2, 4100)
+        feed(6, 4050)
+        val completed = deltas()
+        assertEquals(listOf(0, 1), completed.map { it.first })
+        assertEquals(200.0, assertNotNull(completed[0].second), 1e-6)
+        assertEquals(50.0, assertNotNull(completed[1].second), 1e-6)
+        assertEquals((15..29).toList(), observed.last {
+            it.origin == TelemetryOrigin.BATTERY && it.role == TelemetryRole.CONTRIBUTOR
+        }
+            .readings.filter { it.metric == TelemetryMetric.CELL }.map { it.cellIndex })
+        feed(1, 3300, 30)
+        protocol.onNotification(bmsFrame(packet = 0, versionRaw = 7003))
+        feed(2, 4150)
+        assertEquals(completed, deltas(), "the next cycle must not reuse the previous first page")
+        feed(1, 4100, 30)
+        protocol.reset()
+        feed(2, 4150)
+        assertEquals(completed, deltas())
+    }
+
+    @Test fun veteranSweepWaitsForTheTailAndRejectsInvalidCells() {
+        val protocol = VeteranProtocol()
+        val observed = mutableListOf<TelemetryObservation>()
+        protocol.telemetryObserver = observed::add
+        fun deltas() = observed.flatMap { it.readings }
+            .filter { it.metric == TelemetryMetric.CELL_DELTA }.mapNotNull { it.value }
+        fun feed(firstMv: Int, tailMv: Int) {
+            protocol.onNotification(bmsFrame(1, IntArray(15) { firstMv }, reportedCellCount = 36))
+            protocol.onNotification(bmsFrame(2, IntArray(15) { 4100 }))
+            assertTrue(deltas().isEmpty())
+            protocol.onNotification(bmsFrame(3, IntArray(6) { if (it == 5) tailMv else 4050 },
+                temperatures = IntArray(6) { 2500 }))
+        }
+        feed(firstMv = 3500, tailMv = 0)
+        assertTrue(deltas().isEmpty())
+        feed(firstMv = 4000, tailMv = 4200)
+        assertEquals(200.0, deltas().single(), 1e-6)
+    }
+
     @Test fun observerPublishesOnlyCompleteFreshControllerFrameAndSeparateDerivedRail() {
         val protocol = VeteranProtocol()
         val observed = mutableListOf<TelemetryObservation>()

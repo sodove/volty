@@ -18,6 +18,32 @@ class HistoryReadRepositorySqlTest {
         return SqlDelightHistoryStore(VoltyDatabaseProvider(driver))
     }
 
+    @Test fun completedVeteranRideRecoversCellSummaryFromRecordedPages() = runTest {
+        val store = fixture()
+        val source = HistorySource("native-history-v1:17:00:11:22:33:44:556:VETERAN7:BATTERY1:011:CONTRIBUTOR0:0:",
+            HistorySourceKind.BATTERY, "Patton S")
+        val delta = HistorySeriesKey(source.id, "cell_delta_mv")
+        fun tick(offset: Long) = origin.copy(epochMillis = origin.epochMillis + offset, elapsedMillis = origin.elapsedMillis + offset)
+        fun page(offset: Long, first: Int, volts: Double) = (first until first + 15).map { index ->
+            HistorySample(tick(offset), HistorySeriesKey(source.id, "cell_v", index), volts)
+        } + HistorySample(tick(offset), delta, null, HistoryUnknownReason.PARTIAL_SOURCE)
+        store.begin(HistoryRide("ride", "wheel", origin, null, HistoryRideStatus.RECORDING), listOf(source))
+        val gap = HistoryMarker(tick(450), HistoryMarkerKind.BLE_GAP, source.id)
+        store.append(HistoryBatch("ride", page(100, 0, 3.829) + page(300, 15, 4.046) +
+            page(400, 0, 3.5) + page(500, 15, 4.3) +
+            page(800, 0, 4.0) + page(1000, 15, 4.05), emptyList(), listOf(gap)))
+        store.finish("ride", tick(2000), HistoryRideStatus.COMPLETED)
+        val repository = DefaultHistoryReadRepository(store)
+        val range = HistoryRange(tick(250).epochMillis, tick(1500).epochMillis)
+        val recovered = repository.series("ride", delta, range).samples.filter { it.value != null }
+        assertEquals(listOf(tick(300), tick(1000)), recovered.map { it.tick })
+        assertEquals(217.0, assertNotNull(recovered.first().value), 1e-6)
+        assertEquals(50.0, assertNotNull(recovered.last().value), 1e-6)
+        assertEquals(217.0, assertNotNull(repository.stats("ride", delta, range).maximum), 1e-6)
+        assertFalse(repository.stats("ride", delta, range).complete)
+        assertTrue(repository.hasKnownValue("ride", delta, range))
+    }
+
     @Test fun aRealEqualTimePageBoundaryKeepsBothSidesAndDoesNotInventSummaryStats() = runTest {
         val store = fixture()
         val source = HistorySource("pack", HistorySourceKind.BATTERY, "Recorded battery")

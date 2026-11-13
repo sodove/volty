@@ -7,7 +7,9 @@ import ru.sodovaya.volty.domain.model.DeviceFactKey
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryRole
+import ru.sodovaya.volty.domain.model.VeteranCellSweep
 import kotlin.math.abs
+import kotlin.time.TimeSource
 
 /**
  * Passive Veteran/Leaperkim telemetry (Sherman, Abrams, Sherman S, Patton,
@@ -90,6 +92,7 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
 
     private val buffer = ByteArrayAccumulator()
     private val bms = Array(2) { BmsState() }
+    private val cellClock = TimeSource.Monotonic.markNow()
     private var mainData: BmsData? = null
     private var motion: ControllerData? = null
     private var smartBmsSeen = false
@@ -395,7 +398,8 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
         }
         observeTelemetry(TelemetryOrigin.BATTERY, bmsIndex) {
             observedVeteranSmartBms(frame, packet,
-                state.reportedCellCount ?: expectedCellCount(majorVersion, hardwareCodeValue))
+                state.reportedCellCount ?: expectedCellCount(majorVersion, hardwareCodeValue),
+                state.cellSweep, cellClock.elapsedNow().inWholeMilliseconds)
         }
     }
 
@@ -410,6 +414,7 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
 
     private inner class BmsState {
         val cells = arrayOfNulls<Float>(MAX_BMS_CELLS)
+        val cellSweep = VeteranCellSweep()
         var currentA: Float? = null
         var reportedCellCount: Int? = null
         var reportedSoc: Float? = null
@@ -417,6 +422,7 @@ class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics, Protoc
 
         fun reset() {
             cells.fill(null)
+            cellSweep.reset()
             currentA = null
             reportedCellCount = null
             reportedSoc = null

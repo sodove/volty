@@ -20,6 +20,7 @@ class DefaultHistoryReadRepository(
     private val maxWalkPages: Int = 10,
 ) : HistoryReadRepository {
     init { require(maxReadPages in 1..64); require(maxWalkPages in 1..64) }
+    private val veteranCells = VeteranCellHistory(store, computeDispatcher)
 
     override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
         require(limit in 1..PAGE_SIZE)
@@ -43,7 +44,8 @@ class DefaultHistoryReadRepository(
 
     override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries {
         require(maxPoints in 3..600)
-        val origin = ride(rideId)?.started ?: return emptySeries(key, null)
+        val ride = ride(rideId) ?: return emptySeries(key, null)
+        val origin = ride.started
         if (!available(rideId, key)) return emptySeries(key, origin)
         val allMarkers = read { store.markers(rideId, range) }.toList()
         check(allMarkers.size <= PAGE_SIZE) { "History marker read exceeded its bound" }
@@ -51,13 +53,24 @@ class DefaultHistoryReadRepository(
         val overview = HistoryOverviewAccumulator(markers, maxPoints)
         var after: HistoryCursor? = null
         var previousAxis: Long? = null
+        var hasValue = false
         repeat(maxReadPages) { pageIndex ->
             val page = read { store.samples(rideId, key, range, after, PAGE_SIZE) }
             previousAxis = checkSamplePage(origin, key, range, after, PAGE_SIZE, page, previousAxis)
             val next = page.next
+            hasValue = hasValue || page.items.any { it.value != null }
             overview.offerPage(page.items)
             if (next == null || pageIndex == maxReadPages - 1) {
-                return HistorySeries(key, overview.snapshot(), markers, page.truncated || next != null, origin)
+                val truncated = page.truncated || next != null
+                if (!hasValue && !truncated && VeteranCellHistory.appliesTo(ride, key)) {
+                    val recovered = veteranCells.recover(ride, key, range, markers)
+                    if (recovered.any { it.value != null }) {
+                        val projection = HistoryOverviewAccumulator(markers, maxPoints)
+                        projection.offerPage(recovered)
+                        return HistorySeries(key, projection.snapshot(), markers, false, origin)
+                    }
+                }
+                return HistorySeries(key, overview.snapshot(), markers, truncated, origin)
             }
             after = next
         }
@@ -83,6 +96,11 @@ class DefaultHistoryReadRepository(
         val ride = ride(rideId)
         if (ride == null || !available(rideId, key)) return HistoryStats(null, null, null, false)
         var stored = read { store.stats(rideId, key, range) }
+        if (stored.maximum == null && VeteranCellHistory.appliesTo(ride, key)) {
+            val markers = read { store.markers(rideId, range) }.filter { it.sourceId == null || it.sourceId == key.sourceId }
+            val recovered = veteranCells.recover(ride, key, range, markers)
+            return historyStats(recovered, markers).copy(complete = false)
+        }
         if (stored.pendingWalk) {
             val (complete, gap) = settledCompleteness(ride, key, range)
             stored = stored.copy(complete = complete, hasGap = gap, pendingWalk = false)
@@ -96,8 +114,12 @@ class DefaultHistoryReadRepository(
 
     /** Cheapest honest "has a known value": the store's stats (a maximum query), never the unknown-or-gap walk. */
     override suspend fun hasKnownValue(rideId: String, key: HistorySeriesKey, range: HistoryRange): Boolean {
-        if (ride(rideId) == null || !available(rideId, key)) return false
-        return read { store.stats(rideId, key, range) }.maximum != null
+        val ride = ride(rideId) ?: return false
+        if (!available(rideId, key)) return false
+        if (read { store.stats(rideId, key, range) }.maximum != null) return true
+        if (!VeteranCellHistory.appliesTo(ride, key)) return false
+        val markers = read { store.markers(rideId, range) }.filter { it.sourceId == null || it.sourceId == key.sourceId }
+        return veteranCells.recover(ride, key, range, markers).any { it.value != null }
     }
 
     private val walkCache = HashMap<Triple<String, HistorySeriesKey, HistoryRange>, Pair<Boolean, Boolean>>()

@@ -25,22 +25,31 @@ internal fun observedVeteranRail(data: ControllerData, voltageCurveSoc: Float?):
     TelemetryReading.measured(TelemetryMetric.SOC, voltageCurveSoc?.toDouble() ?: 0.0, voltageCurveSoc != null),
 )
 
-/** Mirror VeteranProtocol's page layout, but emit only facts in this CRC-validated
- * body. Retained current/cells/SoC and cross-page voltage sums are never restamped.
+/** Emit the cells in this CRC-validated page and summarize only a complete ordered sweep.
+ * Retained current/cells/SoC and cross-page pack voltage are never restamped.
  * parseAvailable already strips the CRC. An earlier helper subtracted the
  * trailer again here and lost the last two earned cells of a complete page.
  */
-internal fun observedVeteranSmartBms(frame: ByteArray, page: Int, expectedCells: Int?): List<TelemetryReading> {
+internal fun observedVeteranSmartBms(frame: ByteArray, page: Int, expectedCells: Int?,
+    sweep: VeteranCellSweep, elapsedMillis: Long): List<TelemetryReading> {
     val bodyEnd = frame.size
     fun unsigned(offset: Int): Int? = if (offset + 1 < bodyEnd)
         ((frame[offset].toInt() and 255) shl 8) or (frame[offset + 1].toInt() and 255) else null
     fun signed(offset: Int) = unsigned(offset)?.toShort()?.toInt()
     fun absent(metric: TelemetryMetric) = TelemetryReading(metric, null, TelemetryUnknown.PARTIAL_SOURCE)
     return buildList {
+        fun markIncomplete() {
+            add(absent(TelemetryMetric.CELL_MIN))
+            add(absent(TelemetryMetric.CELL_MAX))
+            add(absent(TelemetryMetric.CELL_DELTA))
+        }
         when (page) {
-            0, 4 -> add(signed(if (page == 0) 69 else 71)?.let {
-                TelemetryReading.measured(TelemetryMetric.CURRENT, -it / 100.0)
-            } ?: absent(TelemetryMetric.CURRENT))
+            0, 4 -> {
+                add(signed(if (page == 0) 69 else 71)?.let {
+                    TelemetryReading.measured(TelemetryMetric.CURRENT, -it / 100.0)
+                } ?: absent(TelemetryMetric.CURRENT))
+                if (sweep.startCycle()) markIncomplete()
+            }
             1, 2, 3, 5, 6, 7 -> {
                 val first = when (page) { 1, 5 -> 0; 2, 6 -> 15; else -> 30 }
                 val offset = if (first == 30) 59 else 53
@@ -52,13 +61,19 @@ internal fun observedVeteranSmartBms(frame: ByteArray, page: Int, expectedCells:
                     else TelemetryReading(TelemetryMetric.CELL, null, TelemetryUnknown.INVALID_VALUE, first + local)
                 } }
                 addAll(cells)
-                val complete = first == 0 && declared != null && cells.size == declared && cells.all { it.value != null }
-                val values = cells.mapNotNull { it.value }
-                if (complete) {
-                    add(TelemetryReading.measured(TelemetryMetric.CELL_MIN, values.min()))
-                    add(TelemetryReading.measured(TelemetryMetric.CELL_MAX, values.max()))
-                    add(TelemetryReading.measured(TelemetryMetric.CELL_DELTA, (values.max() - values.min()) * 1000))
-                } else addAll(listOf(absent(TelemetryMetric.CELL_MIN), absent(TelemetryMetric.CELL_MAX), absent(TelemetryMetric.CELL_DELTA)))
+                if (count > 0) {
+                    val values = cells.mapNotNull { it.value }.takeIf { it.size == count }.orEmpty()
+                    when (val result = sweep.offer(VeteranCellSweep.Page(first, cells.size,
+                        values.minOrNull(), values.maxOrNull()), declared, elapsedMillis)) {
+                        is VeteranCellSweep.Result.Complete -> {
+                            add(TelemetryReading.measured(TelemetryMetric.CELL_MIN, result.summary.minimum))
+                            add(TelemetryReading.measured(TelemetryMetric.CELL_MAX, result.summary.maximum))
+                            add(TelemetryReading.measured(TelemetryMetric.CELL_DELTA, result.summary.deltaMv))
+                        }
+                        VeteranCellSweep.Result.Partial -> markIncomplete()
+                        null -> Unit
+                    }
+                }
                 if (page == 2 && 50 < bodyEnd) {
                     val soc = frame[50].toInt() and 255
                     add(when {
