@@ -253,13 +253,13 @@ internal fun absentSummaryApplies(active: Config): Boolean = active is Config.Ri
  * Retraction: a dashboard on top used to be COVERED ([Ride] -> [Ride, card]). Back from the card
  * revealed the frozen dashboard, and back from that one-entry stack went nowhere, so the rider had
  * to restart the app (field report 2026-10-26). The dead dashboard is now replaced there too, and
- * a card left at the bottom gets the garage under it - where a disconnect lands anyway.
+ * a card left at the bottom gets the garage under it if the stack does not already contain it.
  */
 internal fun stackAfterAbsence(stack: List<Config>, vehicleId: String?): List<Config>? {
     if (stack.none(::absentSummaryApplies)) return null
+    val garage = configAfterDisconnect()
     if (vehicleId == null) {
         val remaining = stack.filterNot(::absentSummaryApplies)
-        val garage = configAfterDisconnect()
         return if (garage in remaining) remaining else listOf(garage) + remaining
     }
     val summary = Config.VehicleOverview(vehicleId)
@@ -271,7 +271,7 @@ internal fun stackAfterAbsence(stack: List<Config>, vehicleId: String?): List<Co
             else -> { placed = true; listOf(summary) }
         }
     }
-    return if (swapped.first() == summary) listOf(configAfterDisconnect()) + swapped else swapped
+    return if (swapped.first() == summary && garage !in swapped) listOf(garage) + swapped else swapped
 }
 
 /**
@@ -1002,7 +1002,9 @@ class DefaultRootComponent(
                     onOpenRideRequested = { rideId -> goTo(Config.History(rideId)) },
                     onEditRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     onAlertsRequested = { id -> goTo(Config.VehicleAlerts(id)) },
-                    onBackRequested = { nav.pop() },
+                    onBackRequested = {
+                        if (stack.value.backStack.isEmpty()) replaceAll(configAfterDisconnect()) else nav.pop()
+                    },
                     seed = seed,
                 ))
             }

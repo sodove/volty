@@ -153,6 +153,20 @@ class RootNavigationTest {
     }
 
     @Test
+    fun losingConnectionWhileTheGarageIsOpenKeepsTheGarageOnTop() {
+        val garage = configAfterDisconnect()
+        val card = Config.VehicleOverview("v")
+        val (nav, stack) = buildStack(Config.Ride)
+        nav.push(garage)
+
+        nav.navigate { current -> stackAfterAbsence(current, "v") ?: current }
+
+        assertEquals(listOf(card, garage), stack.value.items.map { it.configuration })
+        nav.pop()
+        assertEquals(card, stack.value.active.configuration)
+    }
+
+    @Test
     fun withoutASavedVehicleTheBackStackDropsLiveScreensAndKeepsHistory() {
         val history = Config.History()
         val garage = configAfterDisconnect()
