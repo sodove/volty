@@ -525,7 +525,14 @@ class DefaultRootComponent(
     override val rideAvailable: Value<Boolean> = _rideAvailable
     private val _vehicleConnected = MutableValue(liveVehicle() != null)
     override val vehicleConnected: Value<Boolean> = _vehicleConnected
+
+    // Decompose can restore these children synchronously inside childStack.
     private var pendingOverviewSeed: VehicleOverviewSeed? = null
+    private val vehicleOverviewHistoryReader by lazy(::vehicleHistoryReader)
+    /** Skip's draft, waiting for the editor it opens; read once by [Config.VehicleEdit]'s factory. */
+    private val pendingEditorSeeds = mutableMapOf<String, WizardHandoff>()
+    /** Set only while the summary was opened for an absent vehicle. */
+    private var absentSummaryVehicleId: String? = null
 
     init {
         lifecycle.doOnDestroy {
@@ -591,9 +598,6 @@ class DefaultRootComponent(
         }
     }
 
-    /** Set only while the summary was opened for an absent vehicle, so a rider-opened card is never closed. */
-    private var absentSummaryVehicleId: String? = null
-
     private fun leaveAbsentSummary() {
         val id = absentSummaryVehicleId ?: return
         absentSummaryVehicleId = null
@@ -648,9 +652,6 @@ class DefaultRootComponent(
         leaveVehicleEdit(nav, stack.value.items.size, homeConfig())
     }
 
-    /** Skip's draft, waiting for the editor it opens; read once by [Config.VehicleEdit]'s factory. */
-    private val pendingEditorSeeds = mutableMapOf<String, WizardHandoff>()
-
     private fun openEditorFromWizard(handoff: WizardHandoff) {
         val seedId = "seed-${kotlin.random.Random.nextLong()}"
         pendingEditorSeeds[seedId] = handoff
@@ -692,8 +693,6 @@ class DefaultRootComponent(
         return ru.sodovaya.volty.presentation.vehicle.VehicleHistoryReader(
             ru.sodovaya.volty.data.history.PreparedHistoryReadRepository(get(), clock::prepare), clock::readTick)
     }
-
-    private val vehicleOverviewHistoryReader by lazy(::vehicleHistoryReader)
 
     override fun onOpenGroupMap() {
         goTo(Config.GroupMap)
