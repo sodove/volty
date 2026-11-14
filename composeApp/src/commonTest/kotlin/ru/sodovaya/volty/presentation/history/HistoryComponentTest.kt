@@ -356,18 +356,20 @@ class HistoryComponentTest {
 
     private open inner class Deletion : HistoryRideDeletionRepository {
         val prepared = mutableListOf<HistoryRide>(); val confirmed = mutableListOf<HistoryRideDeletionRequest>()
-        override suspend fun prepare(ride: HistoryRide): HistoryRideDeletionRequest {
-            prepared += ride; return HistoryRideDeletionRequest(ride, 1, 1, this)
+        override suspend fun prepare(rides: List<HistoryRide>): HistoryRideDeletionRequest {
+            prepared += rides
+            return HistoryRideDeletionRequest(rides.map { HistoryRideDeletionEntry(it, 1, 1) }, this)
         }
         override suspend fun confirm(request: HistoryRideDeletionRequest): HistoryRideDeletionResult {
-            confirmed += request; return HistoryRideDeletionResult(request.ride.favoriteSource(), false)
+            confirmed += request
+            return HistoryRideDeletionResult(request.rides.map { it.favoriteSource() }.toSet(), false)
         }
     }
     private fun TestScope.withDeletion(repo: Repo, deletion: Deletion, favorites: Favorites? = null, media: Media? = null) =
         DefaultHistoryComponent(DefaultComponentContext(LifecycleRegistry(Lifecycle.State.RESUMED)), backgroundScope, repo,
             { HistoryTick(6000, 5010, 1) }, {}, favoriteStore = favorites, mediaRepository = media, deletionRepository = deletion)
 
-    @Test fun selectedRideDeletionClearsOwnedSelectionAndMediaAndRefreshesCatalogAndFavorites() = runTest {
+    @Test fun batchDeletionIncludingTheOpenRideClearsOwnedSelectionAndRefreshesCatalogAndFavorites() = runTest {
         var deleted = false
         val repo = object : Repo() { override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> {
             val page = super.rides(before); return if (deleted) HistoryPage(emptyList(), null, false) else page
@@ -380,10 +382,15 @@ class HistoryComponentTest {
         try {
             c.refresh(); c.loadFavorites(); c.openFavorite(assertNotNull(favorites.saved)); runCurrent(); c.loadMedia(); runCurrent()
             assertEquals(1, c.state.value.media.items.size); assertEquals("a", c.state.value.detail.ride?.id)
+            val selected = listOf(ride("a"), ride("b"))
+            c.loadOlder(); runCurrent()
+            assertEquals(selected, c.state.value.catalog.rides)
             val reads = repo.catalogReads
-            c.requestRideDeletion(ride("a")); runCurrent(); assertEquals(1L, c.state.value.deletion.confirmation?.favoriteCount)
+            c.requestRideDeletion(selected); runCurrent()
+            assertEquals(2L, c.state.value.deletion.confirmation?.favoriteCount)
             c.confirmRideDeletion(); runCurrent()
             assertEquals(1, deletion.confirmed.size); assertEquals(HistoryDestination.CATALOG, c.state.value.destination)
+            assertEquals(selected.map { it.favoriteSource() }.toSet(), c.state.value.deletion.result?.sources)
             assertNull(c.state.value.selectedRideId); assertNull(c.state.value.detail.ride); assertTrue(c.state.value.route.fixes.isEmpty())
             assertNull(c.state.value.selectedFavorite); assertTrue(c.state.value.media.items.isEmpty()); assertNull(c.state.value.media.favoriteId)
             assertTrue(repo.catalogReads > reads); assertTrue(c.state.value.catalog.rides.isEmpty()); assertTrue(c.state.value.favorites.items.isEmpty())
@@ -400,20 +407,20 @@ class HistoryComponentTest {
             assertTrue(entered.isCompleted); c.openRide("b"); runCurrent(); release.complete(Unit); runCurrent()
             assertEquals("b", c.state.value.selectedRideId); assertEquals("b", c.state.value.detail.ride?.id)
             assertEquals(HistoryDestination.RIDE, c.state.value.destination); assertEquals(1, repo.detailReads.count { it == "b" })
-            assertEquals(ride("a").favoriteSource(), c.state.value.deletion.result?.source)
+            assertEquals(setOf(ride("a").favoriteSource()), c.state.value.deletion.result?.sources)
             c.dismissRideDeletionResult(); assertNull(c.state.value.deletion.result)
         } finally { release.complete(Unit); c.close(); runCurrent() }
     }
     @Test fun navigationDismissesUnconfirmedDeletionAndLatePrepareCannotReopenIt() = runTest {
         val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
-        val deletion = object : Deletion() { override suspend fun prepare(ride: HistoryRide) = withContext(NonCancellable) {
-            entered.complete(Unit); release.await(); super.prepare(ride)
+        val deletion = object : Deletion() { override suspend fun prepare(rides: List<HistoryRide>) = withContext(NonCancellable) {
+            entered.complete(Unit); release.await(); super.prepare(rides)
         } }
         val c = withDeletion(Repo(), deletion)
         try {
             c.openRide("a"); runCurrent(); c.requestRideDeletion(ride("a")); runCurrent(); assertTrue(entered.isCompleted)
             c.openRide("b"); runCurrent(); release.complete(Unit); runCurrent()
-            assertNull(c.state.value.deletion.target); assertNull(c.state.value.deletion.confirmation)
+            assertTrue(c.state.value.deletion.targets.isEmpty()); assertNull(c.state.value.deletion.confirmation)
             c.confirmRideDeletion(); runCurrent(); assertTrue(deletion.confirmed.isEmpty())
         } finally { release.complete(Unit); c.close(); runCurrent() }
     }

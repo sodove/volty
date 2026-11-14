@@ -17,4 +17,15 @@
     <string name="history_ride_delete_result_success">Запись поездки удалена.</string>
     <string name="history_ride_delete_result_cleanup_pending">Запись поездки удалена. Очистка связанных файлов ещё не завершена; приложение повторит её позже.</string>
     <string name="history_ride_delete_result_ok">ОК</string>
+    <string name="history_rides_select">Выбрать поездки</string>
+    <string name="history_rides_selected_count">Выбрано: %1$d</string>
+    <string name="history_rides_select_one">Выбрать поездку</string>
+    <string name="history_rides_delete_selected">Удалить выбранное</string>
+    <string name="history_rides_delete_title">Удалить выбранные поездки (%1$d)?</string>
+    <string name="history_rides_delete_body">Записи выбранных поездок будут удалены из Volty вместе с графиками и данными маршрутов.</string>
+    <string name="history_rides_deleting">Удаляем выбранные поездки…</string>
+    <string name="history_rides_delete_confirm">Удалить поездки</string>
+    <string name="history_rides_deleted">Удалено поездок: %1$d</string>
+    <string name="history_rides_delete_result_success">Записи выбранных поездок удалены.</string>
+    <string name="history_rides_cleanup_pending">Очистка связанных файлов ещё не завершена. Приложение повторит её позже.</string>
 </resources>

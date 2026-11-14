@@ -17,4 +17,15 @@
     <string name="history_ride_delete_result_success">The ride recording was deleted.</string>
     <string name="history_ride_delete_result_cleanup_pending">The ride recording was deleted. Cleanup of its files is still pending and will be retried later.</string>
     <string name="history_ride_delete_result_ok">OK</string>
+    <string name="history_rides_select">Select rides</string>
+    <string name="history_rides_selected_count">Selected: %1$d</string>
+    <string name="history_rides_select_one">Select ride</string>
+    <string name="history_rides_delete_selected">Delete selected</string>
+    <string name="history_rides_delete_title">Delete %1$d selected rides?</string>
+    <string name="history_rides_delete_body">This removes the selected recordings from Volty, including their graph and GPS data.</string>
+    <string name="history_rides_deleting">Deleting selected rides…</string>
+    <string name="history_rides_delete_confirm">Delete rides</string>
+    <string name="history_rides_deleted">Rides deleted: %1$d</string>
+    <string name="history_rides_delete_result_success">The selected recordings were deleted.</string>
+    <string name="history_rides_cleanup_pending">Cleanup of related files is pending and will be retried later.</string>
 </resources>

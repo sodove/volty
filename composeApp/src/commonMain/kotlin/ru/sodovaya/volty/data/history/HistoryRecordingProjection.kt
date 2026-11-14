@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.history
 
+import ru.sodovaya.volty.data.ble.isNativeVescHistoryController
 import ru.sodovaya.volty.domain.history.*
 
 internal data class PreparedHistoryProjection(val batch: HistoryBatch, val next: HistoryRecordingProjection)
@@ -11,8 +12,9 @@ internal class HistoryRecordingProjection(
     private val maxSeries: Int = 2048,
 ) {
     private val sourceKinds = sources.associate { it.id to it.kind }
-    private data class Series(val summary: HistoryBucketAccumulator, val detail: HistoryDetailGate) {
-        fun fork() = Series(summary.fork(), detail.fork())
+    private val fullDetailSources = sources.filter(::isNativeVescHistoryController).mapTo(mutableSetOf()) { it.id }
+    private data class Series(val summary: HistoryBucketAccumulator, val detailGate: HistoryDetailGate?) {
+        fun fork() = Series(summary.fork(), detailGate?.fork())
     }
     private val series = linkedMapOf<HistorySeriesKey, Series>()
     private val lastTicks = mutableMapOf<HistorySeriesKey, HistoryTick>()
@@ -52,7 +54,7 @@ internal class HistoryRecordingProjection(
             if (marker.kind == HistoryMarkerKind.GPS_GAP) return
             series.forEach { (key, value) ->
                 if (marker.sourceId == null || marker.sourceId == key.sourceId) {
-                    detail += value.detail.flush()
+                    detail += value.detailGate?.flush().orEmpty()
                     value.summary.mark(marker)?.let(::retain)
                 }
             }
@@ -69,14 +71,15 @@ internal class HistoryRecordingProjection(
             }
             val current = series[sample.key] ?: run {
                 require(series.size < maxSeries) { "History series capacity exceeded" }
-                Series(HistoryBucketAccumulator(ride.started, sample.key), HistoryDetailGate(ride.started, sample.key))
-                    .also { series[sample.key] = it }
+                val detailGate = if (sample.key.sourceId in fullDetailSources) null else HistoryDetailGate(ride.started, sample.key)
+                Series(HistoryBucketAccumulator(ride.started, sample.key), detailGate).also { series[sample.key] = it }
             }
             current.summary.offer(sample).forEach(::retain)
-            detail += current.detail.offer(sample)
+            val detailGate = current.detailGate
+            if (detailGate == null) detail += sample else detail += detailGate.offer(sample)
         }
         while (markerIndex < markers.size) mark(markers[markerIndex++])
-        if (flushDetail) series.values.forEach { detail += it.detail.flush() }
+        if (flushDetail) series.values.forEach { detail += it.detailGate?.flush().orEmpty() }
         return batch.copy(samples = detail.sortedBy { it.tick.elapsedMillis }, buckets = summaries.values.toList())
     }
 }

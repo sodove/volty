@@ -36,9 +36,10 @@ data class HistoryRideCardText(val title: String, val subtitle: String, val deta
 fun HistoryRideCard(text: HistoryRideCardText, segments: List<HistoryMapSegment>, selected: Boolean,
     onClick: () -> Unit, modifier: Modifier = Modifier, previewLoading: Boolean = false,
     previewPartial: Boolean = false, previewError: Boolean = false, statsError: Boolean = false, onRetry: () -> Unit = {},
-    image: HistoryPreviewImage? = null, onDelete: (() -> Unit)? = null) {
+    image: HistoryPreviewImage? = null, onDelete: (() -> Unit)? = null,
+    enabled: Boolean = true, checked: Boolean? = null, onToggleSelection: () -> Unit = {}) {
     val accent = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.tertiary
-    Surface(onClick = onClick, modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
+    Surface(onClick = onClick, enabled = enabled, modifier = modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
         border = BorderStroke(1.dp, if (selected) accent else MaterialTheme.colorScheme.outlineVariant)) {
         Row(Modifier.heightIn(min = 88.dp).padding(end = 12.dp),
@@ -71,9 +72,12 @@ fun HistoryRideCard(text: HistoryRideCardText, segments: List<HistoryMapSegment>
                 if (previewError) Text(stringResource(Res.string.history_preview_unavailable), style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (onDelete != null) IconButton(onClick = onDelete) {
+            if (checked != null) {
+                val label = stringResource(Res.string.history_rides_select_one)
+                Checkbox(checked, { onToggleSelection() }, Modifier.semantics { contentDescription = label })
+            } else if (onDelete != null) IconButton(onClick = onDelete) {
                 Icon(Icons.Default.DeleteOutline, stringResource(Res.string.history_ride_delete_title), tint = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else if (enabled) Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

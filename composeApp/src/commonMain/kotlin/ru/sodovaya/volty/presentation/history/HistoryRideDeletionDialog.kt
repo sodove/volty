@@ -22,36 +22,19 @@ import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.history.HistoryRide
 import ru.sodovaya.volty.domain.history.HistoryRideDeletionFailure
-import volty.composeapp.generated.resources.Res
-import volty.composeapp.generated.resources.history_ride_delete_cancel
-import volty.composeapp.generated.resources.history_ride_delete_confirm
-import volty.composeapp.generated.resources.history_ride_delete_counts
-import volty.composeapp.generated.resources.history_ride_delete_failure_active_recording
-import volty.composeapp.generated.resources.history_ride_delete_failure_conflict
-import volty.composeapp.generated.resources.history_ride_delete_failure_not_found
-import volty.composeapp.generated.resources.history_ride_delete_failure_source_changed
-import volty.composeapp.generated.resources.history_ride_delete_failure_storage
-import volty.composeapp.generated.resources.history_ride_delete_preparing
-import volty.composeapp.generated.resources.history_ride_delete_result_cleanup_pending
-import volty.composeapp.generated.resources.history_ride_delete_result_success
-import volty.composeapp.generated.resources.history_ride_delete_retry
-import volty.composeapp.generated.resources.history_ride_delete_title
-import volty.composeapp.generated.resources.history_ride_delete_deleting
-import volty.composeapp.generated.resources.history_ride_delete_result_title
-import volty.composeapp.generated.resources.history_ride_delete_result_ok
-import volty.composeapp.generated.resources.history_ride_delete_body
+import volty.composeapp.generated.resources.*
 
 @Composable
 fun HistoryRideDeletionDialog(
     state: HistoryRideDeletionState,
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
-    onRetry: (HistoryRide) -> Unit,
+    onRetry: (List<HistoryRide>) -> Unit,
     onDismissResult: () -> Unit,
 ) {
-    val target = state.target
-    if (target != null) {
+    if (state.targets.isNotEmpty()) {
         val confirmation = state.confirmation
+        val multiple = state.targets.size > 1
         AlertDialog(
             onDismissRequest = { if (!state.deleting) onDismiss() },
             text = {
@@ -64,7 +47,11 @@ fun HistoryRideDeletionDialog(
                 ) {
                     // The title scrolls with the impact text. A separate fixed
                     // title can consume the whole body at 200% font in landscape.
-                    Text(stringResource(Res.string.history_ride_delete_title), style = MaterialTheme.typography.headlineSmall)
+                    Text(
+                        if (multiple) stringResource(Res.string.history_rides_delete_title, state.targets.size)
+                        else stringResource(Res.string.history_ride_delete_title),
+                        style = MaterialTheme.typography.headlineSmall,
+                    )
                     if (state.preparing) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -76,7 +63,7 @@ fun HistoryRideDeletionDialog(
                     }
 
                     if (confirmation != null) {
-                        Text(stringResource(Res.string.history_ride_delete_body))
+                        Text(stringResource(if (multiple) Res.string.history_rides_delete_body else Res.string.history_ride_delete_body))
                         Text(
                             stringResource(
                                 Res.string.history_ride_delete_counts,
@@ -88,7 +75,7 @@ fun HistoryRideDeletionDialog(
 
                     if (state.deleting) {
                         LinearProgressIndicator(Modifier.fillMaxWidth())
-                        Text(stringResource(Res.string.history_ride_delete_deleting))
+                        Text(stringResource(if (multiple) Res.string.history_rides_deleting else Res.string.history_ride_delete_deleting))
                     }
 
                     state.error?.let { failure ->
@@ -102,7 +89,7 @@ fun HistoryRideDeletionDialog(
             confirmButton = {
                 if (state.error != null) {
                     TextButton(
-                        onClick = { onRetry(target) },
+                        onClick = { onRetry(state.targets) },
                         enabled = !state.busy,
                     ) {
                         Text(stringResource(Res.string.history_ride_delete_retry))
@@ -112,7 +99,7 @@ fun HistoryRideDeletionDialog(
                         onClick = onConfirm,
                         enabled = confirmation != null && !state.busy && state.error == null,
                     ) {
-                        Text(stringResource(Res.string.history_ride_delete_confirm))
+                        Text(stringResource(if (multiple) Res.string.history_rides_delete_confirm else Res.string.history_ride_delete_confirm))
                     }
                 }
             },
@@ -126,16 +113,21 @@ fun HistoryRideDeletionDialog(
     }
 
     state.result?.let { result ->
+        val multiple = result.sources.size > 1
         AlertDialog(
             onDismissRequest = onDismissResult,
-            title = { Text(stringResource(Res.string.history_ride_delete_result_title)) },
+            title = {
+                Text(if (multiple) stringResource(Res.string.history_rides_deleted, result.sources.size)
+                    else stringResource(Res.string.history_ride_delete_result_title))
+            },
             text = {
                 Text(
                     stringResource(
-                        if (result.cleanupPending) {
-                            Res.string.history_ride_delete_result_cleanup_pending
-                        } else {
-                            Res.string.history_ride_delete_result_success
+                        when {
+                            result.cleanupPending && multiple -> Res.string.history_rides_cleanup_pending
+                            result.cleanupPending -> Res.string.history_ride_delete_result_cleanup_pending
+                            multiple -> Res.string.history_rides_delete_result_success
+                            else -> Res.string.history_ride_delete_result_success
                         },
                     ),
                 )

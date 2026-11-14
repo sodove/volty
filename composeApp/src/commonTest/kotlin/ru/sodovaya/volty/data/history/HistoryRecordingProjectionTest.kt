@@ -1,7 +1,14 @@
 package ru.sodovaya.volty.data.history
 
+import ru.sodovaya.volty.data.ble.LinkSpec
+import ru.sodovaya.volty.data.ble.OwnedSource
+import ru.sodovaya.volty.data.ble.ProtocolKind
+import ru.sodovaya.volty.data.ble.nativeHistorySourcesForLink
 import ru.sodovaya.volty.domain.history.*
+import ru.sodovaya.volty.domain.model.*
 import kotlin.test.*
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 class HistoryRecordingProjectionTest {
     private val origin = HistoryTick(10000, 100, 1)
@@ -31,6 +38,42 @@ class HistoryRecordingProjectionTest {
         assertEquals(3, continued.sampleCount)
         assertEquals(200.0 / 3600, continued.energyWh)
         assertEquals(2, projection.prepare(first, true).batch.buckets.single().sampleCount)
+    }
+
+    @OptIn(ExperimentalTime::class)
+    @Test fun nativeVescControllersRetainEveryReceivedSampleWithoutIncreasingOtherSources() {
+        val address = "AA:BB:CC:DD:EE:01"
+        val controller = Controller(0, "ESC", ControllerType.VESC, address)
+        val vehicle = Vehicle("bike", "Bike", "bicycle", emptyList(), listOf(controller),
+            chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0))
+        val directLink = LinkSpec(address, ProtocolKind.VESC, listOf(OwnedSource(0)), listOf(OwnedSource(0)))
+        val gatewayLink = directLink.copy(ownedControllers = listOf(OwnedSource(0, canId = 117)))
+        val direct = nativeHistorySourcesForLink(directLink, vehicle).values
+        val gatewayVehicle = vehicle.copy(controllers = listOf(controller.copy(canId = 117)))
+        val gateway = nativeHistorySourcesForLink(gatewayLink, gatewayVehicle).values
+        val other = HistorySource("native-history-v1:17:${address}6:BEGODE", HistorySourceKind.CONTROLLER, "Other")
+        val registered = direct + gateway + other
+        val times = 0L..450L step 50
+        fun readings(source: HistorySource, metricId: String, unknownAt: Long? = null) = times.map { time ->
+            val unknown = time == unknownAt
+            HistorySample(sample(time, 10.0).tick, HistorySeriesKey(source.id, metricId),
+                if (unknown) null else 10.0, if (unknown) HistoryUnknownReason.UNAVAILABLE else null)
+        }
+        val vescControllers = (direct + gateway).filter { it.kind == HistorySourceKind.CONTROLLER }
+        assertEquals(2, vescControllers.size)
+        val vescReadings = vescControllers.flatMap { readings(it, "speed_kmh", unknownAt = 250L) }
+        val otherReadings = registered.filter { it.kind != HistorySourceKind.CONTROLLER }.flatMap { source ->
+            val metricId = if (source.kind == HistorySourceKind.REPORTED_CAN) "battery_current_a" else "voltage_v"
+            readings(source, metricId)
+        } + readings(other, "speed_kmh")
+        val result = HistoryRecordingProjection(ride, registered)
+            .prepare(batch(*(vescReadings + otherReadings).toTypedArray()), false)
+        assertEquals(vescReadings.sortedBy { it.tick.elapsedMillis }, result.batch.samples)
+        val flushed = result.next.prepare(batch(), true).batch.samples
+        assertEquals(otherReadings.groupBy { it.key }.values.flatMap { listOf(it.first(), it.last()) }
+            .sortedBy { it.tick.elapsedMillis }, flushed)
+        assertEquals(registered.size, result.batch.buckets.size)
+        assertTrue(result.batch.buckets.all { it.sampleCount == times.count().toLong() })
     }
 
     @Test fun markersAreAppliedBeforeLaterSamplesAndPreventEnergyAcrossGap() {

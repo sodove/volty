@@ -47,7 +47,8 @@ interface HistoryComponent {
     fun openMedia(item: HistoryMediaRecord)
     fun consumeMediaOpen()
     fun cancelMediaImport()
-    fun requestRideDeletion(ride: HistoryRide)
+    fun requestRideDeletion(ride: HistoryRide) = requestRideDeletion(listOf(ride))
+    fun requestRideDeletion(rides: List<HistoryRide>)
     fun confirmRideDeletion()
     fun dismissRideDeletion()
     fun dismissRideDeletionResult()
@@ -108,11 +109,12 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
     }
     override fun export(format: HistoryExportFormat) { if (lifetime.isActive) exports.start(format) }
     override fun dismissExport() { if (lifetime.isActive) exports.dismiss() }
-    override fun requestRideDeletion(ride: HistoryRide) {
+    override fun requestRideDeletion(rides: List<HistoryRide>) {
         if (!lifetime.isActive) return
         val current = state.value
-        if (current.detail.ride?.favoriteSource() == ride.favoriteSource() ||
-            current.catalog.rides.any { it.favoriteSource() == ride.favoriteSource() }) deletion.prepare(ride)
+        val available = current.catalog.rides.mapTo(mutableSetOf()) { it.favoriteSource() }
+        current.detail.ride?.favoriteSource()?.let(available::add)
+        if (rides.all { it.favoriteSource() in available }) deletion.prepare(rides)
     }
     override fun confirmRideDeletion() { if (lifetime.isActive) deletion.confirm() }
     override fun dismissRideDeletion() { if (lifetime.isActive) deletion.dismiss() }
@@ -195,10 +197,11 @@ class DefaultHistoryComponent(componentContext: ComponentContext, parentScope: C
                 val result = next.result
                 if (result != null && result !== handledDeletion) {
                     handledDeletion = result
-                    if (selectedSource == result.source) clearSelection()
-                    visiblePreviewIds = visiblePreviewIds.filterNot { it == result.source.rideId }
-                    previewImages?.forget(result.source.rideId)
-                    catalog.forget(result.source)
+                    if (selectedSource in result.sources) clearSelection()
+                    val ids = result.sources.mapTo(mutableSetOf()) { it.rideId }
+                    visiblePreviewIds = visiblePreviewIds.filterNot { it in ids }
+                    ids.forEach { previewImages?.forget(it) }
+                    catalog.forget(result.sources)
                     refresh()
                     favorites.refresh()
                 }

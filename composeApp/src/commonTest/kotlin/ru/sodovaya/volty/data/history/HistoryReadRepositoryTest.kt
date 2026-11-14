@@ -53,6 +53,39 @@ class HistoryReadRepositoryTest {
         assertEquals(listOf(1.0, 2.0), result.samples.map { it.value })
     }
 
+    @Test fun twoHourVescChartAtTwentyHertzRetainsBothEndpointsAndPeaksWithinItsReadBudget() = runTest {
+        val controller = HistorySource("native-gateway-history-v1:17:AA:BB:CC:DD:EE:014:VESC3:117", HistorySourceKind.CONTROLLER, "VESC")
+        val seriesKey = HistorySeriesKey(controller.id, "speed_kmh")
+        val lastIndex = 144_000
+        val range = HistoryRange(origin.epochMillis, origin.epochMillis + 7_200_000)
+        val pageSizes = mutableListOf<Int>()
+        val store = object : HistoryStore by Store() {
+            override suspend fun sources(rideId: String) = listOf(controller)
+
+            override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange,
+                after: HistoryCursor?, limit: Int): HistoryPage<HistorySample> {
+                val first = (after?.stableId?.toInt() ?: -1) + 1
+                val last = minOf(first + limit - 1, lastIndex)
+                val rows = (first..last).map { index ->
+                    val speed = when (index) { 500 -> 0.0; 143_500 -> 65.0; else -> 25.0 }
+                    sample(index * 50L, speed).copy(key = key)
+                }
+                pageSizes += rows.size
+                val next = if (last < lastIndex) HistoryCursor(rows.last().tick.epochMillis, last.toString()) else null
+                return HistoryPage(rows, next, next != null)
+            }
+        }
+
+        val result = DefaultHistoryReadRepository(store).series(ride.id, seriesKey, range)
+
+        assertFalse(result.truncated)
+        assertTrue(result.samples.size <= 600)
+        assertEquals(origin, result.samples.first().tick)
+        assertEquals(range.endEpochMillis, result.samples.last().tick.epochMillis)
+        assertEquals(setOf(0.0, 25.0, 65.0), result.samples.map { it.value }.toSet())
+        assertEquals(List(7) { 20_000 } + 4_001, pageSizes)
+    }
+
     @Test fun absentSourceForbiddenMetricAndWrongCellShapeCannotReadNumericData() = runTest {
         val store = Store()
         val repository = DefaultHistoryReadRepository(store)

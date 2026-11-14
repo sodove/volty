@@ -58,24 +58,17 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
     val asOf = state.battery.maxOfOrNull { it.atEpochMillis } ?: state.lastRide?.ended?.epochMillis
     // Keep the reveal state above the lazy item so settled content does not replay on scroll or back.
     var rideListRevealed by rememberSaveable { mutableStateOf(false) }
-    var olderTotalsRevealed by rememberSaveable { mutableStateOf(false) }
     val rideListReveal = remember { Animatable(if (rideListRevealed) 1f else 0f) }
-    val olderTotalsReveal = remember { Animatable(if (olderTotalsRevealed) 1f else 0f) }
     val latestRideId = state.lastRide?.id
     val hasRides = state.rides.isNotEmpty()
-    val hasOlderSubtitles = state.rideTotals.any { (id, totals) ->
-        id != latestRideId && totals.any { it.kind in rideSubtitleKinds }
-    }
+    val olderTotalsModifiers = state.rideTotals.mapNotNull { (id, totals) ->
+        if (id == latestRideId || totals.none { it.kind in rideSubtitleKinds }) return@mapNotNull null
+        id to key(id) { olderTotalsRevealModifier() }
+    }.toMap()
     LaunchedEffect(hasRides) {
         if (hasRides && !rideListRevealed) {
             rideListReveal.animateTo(1f, tween(320))
             rideListRevealed = true
-        }
-    }
-    LaunchedEffect(hasOlderSubtitles) {
-        if (hasOlderSubtitles && !olderTotalsRevealed) {
-            olderTotalsReveal.animateTo(1f, tween(320))
-            olderTotalsRevealed = true
         }
     }
     val ridesVisible by remember { derivedStateOf { rideListReveal.value > 0f } }
@@ -132,13 +125,12 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
                     ) {
                         SectionLabel(stringResource(Res.string.vehicle_overview_rides))
                         ElevatedCard(shape = RoundedCornerShape(22.dp)) {
-                            val olderTotalsModifier = Modifier.graphicsLayer { alpha = olderTotalsReveal.value }
                             state.rides.forEachIndexed { i, ride ->
                                 key(ride.id) {
                                     if (i > 0) HorizontalDivider(Modifier.padding(start = 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
                                     RideRow(ride, state.rideTotals[ride.id], now,
                                         enabled = ridesVisible,
-                                        totalsModifier = if (ride.id == latestRideId) Modifier else olderTotalsModifier,
+                                        totalsModifier = olderTotalsModifiers[ride.id] ?: Modifier,
                                     ) { component.onOpenRide(ride.id) }
                                 }
                             }
@@ -148,6 +140,19 @@ fun VehicleOverviewScreen(component: VehicleOverviewComponent) {
             }
         }
     }
+}
+
+@Composable
+private fun olderTotalsRevealModifier(): Modifier {
+    var revealed by rememberSaveable { mutableStateOf(false) }
+    val reveal = remember { Animatable(if (revealed) 1f else 0f) }
+    LaunchedEffect(Unit) {
+        if (!revealed) {
+            revealed = true
+            reveal.animateTo(1f, tween(320))
+        }
+    }
+    return Modifier.graphicsLayer { alpha = reveal.value }
 }
 
 @Composable

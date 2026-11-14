@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import ru.sodovaya.volty.domain.history.*
 
-data class HistoryRideDeletionState(val available: Boolean = false, val target: HistoryRide? = null,
+data class HistoryRideDeletionState(val available: Boolean = false, val targets: List<HistoryRide> = emptyList(),
     val confirmation: HistoryRideDeletionRequest? = null, val preparing: Boolean = false,
     val deleting: Boolean = false, val error: HistoryRideDeletionFailure? = null,
     val result: HistoryRideDeletionResult? = null) { val busy: Boolean get() = preparing || deleting }
@@ -21,17 +21,19 @@ class HistoryRideDeletionComponent(context: ComponentContext, parentScope: Corou
     private var generation = Any()
     private var job: Job? = null
     init { context.lifecycle.doOnDestroy { close() } }
-    fun prepare(ride: HistoryRide) {
+    fun prepare(rides: List<HistoryRide>) {
         val target = repository ?: return
         if (!lifetime.isActive || state.value.deleting) return
+        val selected = rides.distinctBy { it.favoriteSource() }
+        if (selected.isEmpty()) return
         val captured = Any(); generation = captured
         val old = job; job = null; old?.cancel()
-        mutableState.value = HistoryRideDeletionState(available = true, target = ride, preparing = true)
+        mutableState.value = HistoryRideDeletionState(available = true, targets = selected, preparing = true)
         if (!current(captured)) return
         launch(captured) {
-            val preview = target.prepare(ride)
-            check(preview.ride.favoriteSource() == ride.favoriteSource())
-            return@launch { previous -> previous.copy(target = preview.ride, confirmation = preview) }
+            val preview = target.prepare(selected)
+            check(preview.rides.map { it.favoriteSource() } == selected.map { it.favoriteSource() })
+            return@launch { previous -> previous.copy(targets = preview.rides, confirmation = preview) }
         }
     }
     fun confirm() {
@@ -43,8 +45,8 @@ class HistoryRideDeletionComponent(context: ComponentContext, parentScope: Corou
         if (!current(captured)) return
         launch(captured) {
             val result = target.confirm(confirmation)
-            check(result.source == confirmation.ride.favoriteSource())
-            return@launch { previous -> previous.copy(target = null, confirmation = null, result = result) }
+            check(result.sources == confirmation.rides.map { it.favoriteSource() }.toSet())
+            return@launch { previous -> previous.copy(targets = emptyList(), confirmation = null, result = result) }
         }
     }
     fun dismiss() {

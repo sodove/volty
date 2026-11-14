@@ -9,6 +9,7 @@ import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.domain.model.*
 import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import ru.sodovaya.volty.presentation.history.HistoryTotalKind
 import kotlin.test.*
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -195,7 +196,7 @@ class VehicleOverviewComponentTest {
         return HistoryRoutePage(fixes.first().tick, HistoryPage(fixes, null, false), emptyList())
     }
 
-    @Test fun publishesTheOverviewBeforeRevealingOlderTotalsTogether() = runTest {
+    @Test fun publishesEachOlderRideAsSoonAsItsTotalsFinishReading() = runTest {
         val routeRequested = CompletableDeferred<Unit>()
         val routeReady = CompletableDeferred<Unit>()
         val firstOlderTotalsReady = CompletableDeferred<Unit>()
@@ -250,15 +251,40 @@ class VehicleOverviewComponentTest {
         assertEquals(52.0, ready.battery.single().value("soc_percent"))
         assertTrue(ready.lastTotals.isNotEmpty())
         assertEquals(setOf("r2"), ready.rideTotals.keys)
+        assertFalse(lastOlderTotalsRequested.isCompleted, "the next older ride waits for the first read to finish")
 
         firstOlderTotalsReady.complete(Unit)
         runCurrent()
         assertTrue(lastOlderTotalsRequested.isCompleted, "the first older ride has finished reading")
-        assertEquals(setOf("r2"), component.state.value.rideTotals.keys, "older totals are published as one batch")
+        val firstTotals = component.state.value.rideTotals
+        assertEquals(setOf("r2", "r1"), firstTotals.keys,
+            "the first older ride is visible while the next ride's totals are still loading")
+        assertEquals(3_600_000.0, firstTotals.getValue("r1").single { it.kind == HistoryTotalKind.DURATION_MILLIS }.value)
 
         lastOlderTotalsReady.complete(Unit)
         runCurrent()
         assertEquals(setOf("r2", "r1", "r0"), component.state.value.rideTotals.keys)
+    }
+
+    @Test fun continuesReadingOlderRidesAfterAnUnreadableRide() = runTest {
+        val history = object : History() {
+            override val pages = listOf(HistoryPage(listOf(
+                ride("r2", "bike", 20_000_000), ride("r1", "bike", 10_000_000), ride("r0", "bike", 1_000_000),
+            ), null, false))
+
+            override suspend fun sources(rideId: String): List<HistorySource> {
+                if (rideId == "r1") error("storage failure")
+                return super.sources(rideId)
+            }
+        }
+        val overview = component(history)
+        runCurrent()
+
+        val state = overview.state.value
+        assertEquals(listOf("r2", "r1", "r0"), state.rides.map { it.id })
+        assertEquals(setOf("r2", "r0"), state.rideTotals.keys)
+        assertTrue(state.rideTotals.getValue("r0").isNotEmpty())
+        assertFalse(state.error)
     }
 
     @Test fun garageBatteryIsVisibleBeforeTheHistoryReadAndReplacedByTheLatestRide() = runTest {

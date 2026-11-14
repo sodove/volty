@@ -59,12 +59,18 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     val catalogList = rememberLazyListState()
     val favoritesList = rememberLazyListState()
     var listOpen by remember { mutableStateOf(false) }
+    var deletionSelection by remember(listOpen) { mutableStateOf<Set<HistoryFavoriteSource>?>(null) }
     var metricsOpen by remember(state.selectedRideId) { mutableStateOf(false) }
     var favoritesTab by remember { mutableStateOf(false) }
     var trimOpen by remember(state.selectedRideId) { mutableStateOf(false) }
     var mediaOpen by remember(state.media.favoriteId) { mutableStateOf(false) }
     LaunchedEffect(state.deletion.result) {
-        if (state.deletion.result != null) { listOpen = false; metricsOpen = false; trimOpen = false; mediaOpen = false }
+        val result = state.deletion.result ?: return@LaunchedEffect
+        if (state.selectedRideId == null || (deletionSelection == null && result.sources.size == 1)) listOpen = false
+        deletionSelection = null
+        metricsOpen = false
+        trimOpen = false
+        mediaOpen = false
     }
     LaunchedEffect(owner, state.media.favoriteId) {
         if (state.media.favoriteId != null) owner.loadMedia()
@@ -85,7 +91,9 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         if (state.destination == HistoryDestination.RIDE && state.mapMetricKey != null) chartsExpanded = false
     }
     BackHandler(enabled = !listOpen && !metricsOpen && !trimOpen && !mediaOpen && state.media.open == null &&
-        state.deletion.target == null && state.deletion.result == null && state.export.source == null) { owner.back() }
+        state.deletion.targets.isEmpty() && state.deletion.result == null && state.export.source == null) {
+        if (deletionSelection != null) deletionSelection = null else owner.back()
+    }
     LaunchedEffect(owner, content.phase, listOpen) {
         if ((content.phase == HistoryScreenPhase.CATALOG || listOpen) && !state.catalog.loaded && !state.catalog.refreshing)
             owner.refresh()
@@ -99,16 +107,53 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         if (state.favorites.available) FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(!favoritesTab, { favoritesTab = false }, label = { Text(stringResource(Res.string.history_title), maxLines = 1) })
-            FilterChip(favoritesTab, { favoritesTab = true }, label = { Text(stringResource(Res.string.history_favorites), maxLines = 1) })
+            FilterChip(favoritesTab, { deletionSelection = null; favoritesTab = true },
+                label = { Text(stringResource(Res.string.history_favorites), maxLines = 1) })
         }
         if (favoritesTab) HistoryFavoritesScreen(state.favorites, state.selectedFavorite?.id,
             { listOpen = false; owner.openFavorite(it) }, owner::loadFavorites, owner::loadOlderFavorites,
             owner::deleteFavorite, Modifier.fillMaxWidth().weight(1f), favoritesList)
-        else
-        HistoryRideList(state.catalog, state.selectedRideId, openRide, owner::refresh, owner::loadOlder, Modifier.fillMaxWidth().weight(1f),
-            vehicleNames, state.previews, reduceMotion, owner::setVisibleRides, owner::retryPreview,
-            catalogList, state.previewImages, state.previewRevision, owner::setVisiblePreviewImages,
-            onDelete = if (state.deletion.available) owner::requestRideDeletion else null, cardStats = state.cardStats)
+        else {
+            val selection = deletionSelection
+            val selectedRides = if (selection == null) emptyList() else state.catalog.rides.filter {
+                canRequestRideDeletion(it) && it.favoriteSource() in selection
+            }
+            if (state.deletion.available) {
+                FlowRow(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (selection == null) {
+                        if (state.catalog.rides.any(::canRequestRideDeletion)) {
+                            TextButton(onClick = { deletionSelection = emptySet() }) {
+                                Text(stringResource(Res.string.history_rides_select))
+                            }
+                        }
+                    } else {
+                        TextButton(onClick = { deletionSelection = null }) {
+                            Text(stringResource(Res.string.history_ride_delete_cancel))
+                        }
+                        TextButton(
+                            onClick = { owner.requestRideDeletion(selectedRides) },
+                            enabled = selectedRides.isNotEmpty() && !state.deletion.busy,
+                        ) {
+                            Text(stringResource(Res.string.history_rides_delete_selected))
+                        }
+                        Text(stringResource(Res.string.history_rides_selected_count, selectedRides.size),
+                            Modifier.align(Alignment.CenterVertically), style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+            }
+            HistoryRideList(state.catalog, state.selectedRideId, openRide, owner::refresh, owner::loadOlder,
+                Modifier.fillMaxWidth().weight(1f), vehicleNames, state.previews, reduceMotion,
+                owner::setVisibleRides, owner::retryPreview, catalogList, state.previewImages, state.previewRevision,
+                owner::setVisiblePreviewImages,
+                onDelete = if (state.deletion.available) owner::requestRideDeletion else null,
+                cardStats = state.cardStats, selection = selection, onToggleSelection = { ride ->
+                    deletionSelection?.let { current ->
+                        val source = ride.favoriteSource()
+                        deletionSelection = if (source in current) current - source else current + source
+                    }
+                })
+        }
         }
     }
     BoxWithConstraints(modifier.fillMaxSize().background(
@@ -116,7 +161,9 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
         else MaterialTheme.colorScheme.background).safeDrawingPadding()) {
         if (content.phase == HistoryScreenPhase.CATALOG) {
             Scaffold(topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_title)) },
-                windowInsets = WindowInsets(0), navigationIcon = { HistoryBack(owner::back) }) }) { padding ->
+                windowInsets = WindowInsets(0), navigationIcon = {
+                    HistoryBack { if (deletionSelection != null) deletionSelection = null else owner.back() }
+                }) }) { padding ->
                 catalog(Modifier.fillMaxSize().padding(padding), (maxHeight / 3).coerceAtMost(240.dp))
             }
         } else {
@@ -247,7 +294,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                 HistoryChartsScreen(owner, state, cursorMaxAgeMillis, Modifier.fillMaxSize(), applySystemInsets = false)
         }
     }
-    if (listOpen) ModalBottomSheet(onDismissRequest = { listOpen = false },
+    if (listOpen && content.phase != HistoryScreenPhase.CATALOG) ModalBottomSheet(onDismissRequest = { listOpen = false },
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
         Text(stringResource(Res.string.history_title), Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall)

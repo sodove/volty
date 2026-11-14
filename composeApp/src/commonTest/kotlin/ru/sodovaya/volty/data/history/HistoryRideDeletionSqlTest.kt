@@ -61,7 +61,7 @@ class HistoryRideDeletionSqlTest {
         val ride = assertNotNull(LegacyHistoryReader(f.provider).ride("old"))
         val deletion = SqlDelightHistoryRideDeletion(f.provider, isLegacyActive = { false })
         val request = deletion.prepare(ride)
-        assertNull(request.ride.ended)
+        assertNull(request.rides.single().ended)
         assertNull(f.db.rideRowQueries.selectById("old").executeAsOne().endedAt)
         deletion.confirm(request)
         assertNull(f.db.rideRowQueries.selectById("old").executeAsOneOrNull())
@@ -95,7 +95,7 @@ class HistoryRideDeletionSqlTest {
         f.media.reserve(id, "fav", "image/png"); f.media.complete(id, 3, "a".repeat(64), null)
         f.media.reserve(otherId, "second", "video/mp4")
         val request = f.deletion.prepare(ride)
-        assertEquals(ride, request.ride); assertEquals(2L, request.favoriteCount); assertEquals(2L, request.mediaCount)
+        assertEquals(listOf(ride), request.rides); assertEquals(2L, request.favoriteCount); assertEquals(2L, request.mediaCount)
         assertNotNull(f.store.ride("ride")); assertEquals(2, f.favorites.page().items.size)
         assertEquals(setOf(HistoryMediaStatus.READY, HistoryMediaStatus.IMPORTING), f.media.all().map { it.status }.toSet())
     }
@@ -107,7 +107,7 @@ class HistoryRideDeletionSqlTest {
         val result = f.deletion.confirm(f.deletion.prepare(ride))
         assertTrue(result.cleanupPending)
         assertEquals(1L, HistoryPreviewPurgeJournal(f.provider).pendingGeneration())
-        assertEquals(ride.favoriteSource(), result.source); assertNull(f.store.ride("ride")); assertNotNull(f.store.ride("other"))
+        assertEquals(setOf(ride.favoriteSource()), result.sources); assertNull(f.store.ride("ride")); assertNotNull(f.store.ride("other"))
         tables.forEach { assertEquals(0L, f.count(it, "ride"), it); assertEquals(1L, f.count(it, "other"), it) }
         assertNull(f.favorites.get("fav")); assertNotNull(f.favorites.get("keep"))
         assertEquals(HistoryMediaStatus.DELETING, f.media.all().single { it.id == id }.status)
@@ -117,6 +117,59 @@ class HistoryRideDeletionSqlTest {
         val f = fixture(); val ride = f.closed(); val request = f.deletion.prepare(ride); f.favorite(ride)
         expect(HistoryRideDeletionFailure.CONFLICT) { f.deletion.confirm(request) }
         assertNotNull(f.store.ride("ride")); assertNotNull(f.favorites.get("fav"))
+    }
+
+    @Test fun multiRideDeletionIsAtomicAndCleansUpOnce() = runTest {
+        val f = fixture()
+        val first = f.closed()
+        val second = f.closed("second")
+        val untouched = f.closed("untouched")
+        f.favorite(first)
+        f.media.reserve(id, "fav", "image/png")
+        f.media.complete(id, 3, "a".repeat(64), null)
+        var cleanups = 0
+        val deletion = SqlDelightHistoryRideDeletion(f.provider, cleanup = { cleanups++; HistoryMediaRecovery() })
+        val selection = listOf(first, second, first)
+        val stale = deletion.prepare(selection)
+        assertEquals(listOf(first, second), stale.rides)
+        assertEquals(1L, stale.favoriteCount)
+        assertEquals(1L, stale.mediaCount)
+        f.favorite(second, "new")
+
+        expect(HistoryRideDeletionFailure.CONFLICT) { deletion.confirm(stale) }
+        assertNotNull(f.store.ride(first.id))
+        assertNotNull(f.store.ride(second.id))
+        assertNotNull(f.favorites.get("fav"))
+        assertEquals(0, cleanups)
+
+        val fresh = deletion.prepare(selection)
+        assertEquals(2L, fresh.favoriteCount)
+        val result = deletion.confirm(fresh)
+        assertEquals(setOf(first.favoriteSource(), second.favoriteSource()), result.sources)
+        assertEquals(1, cleanups)
+        assertNull(f.store.ride(first.id))
+        assertNull(f.store.ride(second.id))
+        assertNotNull(f.store.ride(untouched.id))
+        assertTrue(f.favorites.page().items.isEmpty())
+        assertEquals(HistoryMediaStatus.DELETING, f.media.all().single().status)
+    }
+
+    @Test fun deletingARidePendingConversionRemovesItsStagedRowsOnly() = runTest {
+        val f = fixture()
+        val ride = f.closed()
+        val other = f.closed("other")
+        f.driver.execute(null, "CREATE TABLE HistorySampleV2 (rideId TEXT NOT NULL)", 0)
+        for (item in listOf(ride, other)) {
+            f.driver.execute(null, "INSERT INTO HistorySampleV2 VALUES (?)", 1) { bindString(0, item.id) }
+            f.db.transaction { HistoryCompactSampleWriter(f.db).delete(item.id) }
+        }
+
+        f.deletion.confirm(f.deletion.prepare(ride))
+
+        assertNull(f.store.ride(ride.id))
+        assertEquals(0L, f.count("HistorySampleV2", ride.id))
+        assertNotNull(f.store.ride(other.id))
+        assertEquals(1L, f.count("HistorySampleV2", other.id))
     }
     @Test fun newCopyAfterPreviewRequiresFreshConfirmationAndKeepsItsState() = runTest {
         val f = fixture(); val ride = f.closed(); f.favorite(ride); val request = f.deletion.prepare(ride)

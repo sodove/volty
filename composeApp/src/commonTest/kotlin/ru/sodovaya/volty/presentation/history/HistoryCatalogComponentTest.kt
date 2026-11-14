@@ -20,8 +20,8 @@ class HistoryCatalogComponentTest {
         val c = component(repo)
         try {
             c.refresh(); runCurrent(); c.loadOlder(); runCurrent(); assertTrue(entered.isCompleted)
-            c.forget(other.favoriteSource()); assertEquals(2, c.state.value.rides.size)
-            c.forget(ride("a").favoriteSource()); assertEquals(listOf("b"), c.state.value.rides.map { it.id })
+            c.forget(setOf(other.favoriteSource())); assertEquals(2, c.state.value.rides.size)
+            c.forget(setOf(ride("a").favoriteSource())); assertEquals(listOf("b"), c.state.value.rides.map { it.id })
             gate.complete(Unit); runCurrent(); assertEquals(listOf("b"), c.state.value.rides.map { it.id })
             assertFalse(c.state.value.loadingOlder)
         } finally { gate.complete(Unit); c.close(); runCurrent() }

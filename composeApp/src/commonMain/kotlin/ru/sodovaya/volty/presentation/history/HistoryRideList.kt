@@ -43,7 +43,8 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
     reduceMotion: Boolean = false, onVisibleChanged: (List<String>) -> Unit = {}, onRetryPreview: (String) -> Unit = {},
     listState: LazyListState = rememberLazyListState(), previewImages: HistoryPreviewImagesState = HistoryPreviewImagesState(),
     previewRevision: Long = 0, onVisibleImagesChanged: (List<HistoryPreviewImageKey>) -> Unit = {},
-    onDelete: ((HistoryRide) -> Unit)? = null, cardStats: HistoryCardStatsState = HistoryCardStatsState()) {
+    onDelete: ((HistoryRide) -> Unit)? = null, cardStats: HistoryCardStatsState = HistoryCardStatsState(),
+    selection: Set<HistoryFavoriteSource>? = null, onToggleSelection: (HistoryRide) -> Unit = {}) {
     val zone = TimeZone.currentSystemDefault()
     val latestVisible by rememberUpdatedState(onVisibleChanged)
     val latestImages by rememberUpdatedState(onVisibleImagesChanged)
@@ -73,7 +74,7 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
     DisposableEffect(Unit) { onDispose { latestVisible(emptyList()); latestImages(emptyList()) } }
     Column(modifier) {
     LazyColumn(Modifier.weight(1f), state = listState, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item("refresh") { TextButton(onClick = onRefresh, enabled = !state.refreshing && !state.loadingOlder) {
+        if (selection == null) item("refresh") { TextButton(onClick = onRefresh, enabled = !state.refreshing && !state.loadingOlder) {
             Text(stringResource(Res.string.history_refresh))
         } }
         if (state.refreshing) item("loading") { LinearProgressIndicator(Modifier.fillMaxWidth()) }
@@ -81,6 +82,8 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
             Text(stringResource(Res.string.history_empty), Modifier.padding(16.dp))
         }
         items(state.rides, key = { "ride:${it.id}" }) { ride ->
+            val selectable = canRequestRideDeletion(ride)
+            val checked = selection?.contains(ride.favoriteSource())?.takeIf { selectable }
             val date = remember(ride.started.epochMillis, zone) { runCatching {
                 val value = Instant.fromEpochMilliseconds(ride.started.epochMillis).toLocalDateTime(zone)
                 "${value.date} · ${value.hour.toString().padStart(2, '0')}:${value.minute.toString().padStart(2, '0')}"
@@ -98,13 +101,15 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
             HistoryRideCard(HistoryRideCardText(vehicleNames[ride.vehicleId] ?: stringResource(Res.string.history_ride_title),
                 date ?: stringResource(Res.string.history_date_unknown), listOfNotNull(duration, status).joinToString(" · "),
                 cardStats.stats[ride.id]?.maxDuty?.let { stringResource(Res.string.history_card_max_duty, historyCardMark(it) + it.text()) }),
-                previews.previews[ride.id]?.segments.orEmpty(), ride.id == selectedRideId, { onOpen(ride.id) },
+                previews.previews[ride.id]?.segments.orEmpty(), checked ?: (selection == null && ride.id == selectedRideId),
+                { if (selection == null) onOpen(ride.id) else if (selectable) onToggleSelection(ride) },
                 if (reduceMotion) Modifier else Modifier.animateItem(), previewLoading = ride.id in previews.loading,
                 previewPartial = previews.previews[ride.id]?.partial == true, previewError = ride.id in previews.errors, statsError = historyCardStatsRetryOnly(ride.id, previews, cardStats),
                 onRetry = { onRetryPreview(ride.id) }, image = previewImages.images[ride.id]?.takeIf {
                     renderKeys[ride.id] != null && previewImages.renderKeys[ride.id] == renderKeys[ride.id]
-                }, onDelete = onDelete?.takeIf { ride.status == HistoryRideStatus.LEGACY ||
-                    (ride.status != HistoryRideStatus.RECORDING && ride.ended != null) }?.let { action -> { action(ride) } })
+                }, onDelete = onDelete?.takeIf { selection == null && selectable }?.let { action -> { action(ride) } },
+                enabled = selection == null || selectable, checked = checked,
+                onToggleSelection = { onToggleSelection(ride) })
         }
         if (state.error != null) item("error") {
             Text(stringResource(Res.string.history_load_error), color = MaterialTheme.colorScheme.error)
@@ -122,3 +127,6 @@ fun HistoryRideList(state: HistoryCatalogState, selectedRideId: String?, onOpen:
     if (previewImages.images.isNotEmpty()) HistoryPreviewAttribution()
     }
 }
+
+internal fun canRequestRideDeletion(ride: HistoryRide): Boolean =
+    ride.status == HistoryRideStatus.LEGACY || (ride.status != HistoryRideStatus.RECORDING && ride.ended != null)

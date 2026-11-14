@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.history
 
 import kotlinx.coroutines.*
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
+import ru.sodovaya.volty.data.db.hasLegacyHistory
 import ru.sodovaya.volty.domain.history.*
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -12,51 +13,45 @@ class SqlDelightHistoryRideDeletion(provider: VoltyDatabaseProvider,
     private val isLegacyActive: (String) -> Boolean? = { null },
     private val cleanup: suspend () -> HistoryMediaRecovery = { HistoryMediaRecovery() }) : HistoryRideDeletionRepository {
     private val database = provider.database
+    private val driver = provider.driver
     private val queries = database.historyRideDeletionQueries
     private val issuer = Any()
     private val previewPurge = HistoryPreviewPurgeJournal(provider)
 
-    override suspend fun prepare(ride: HistoryRide): HistoryRideDeletionRequest = transaction {
-        val source = ride.favoriteSource()
-        val actual = current(source) ?: fail(HistoryRideDeletionFailure.NOT_FOUND)
-        if (actual.favoriteSource() != source) fail(HistoryRideDeletionFailure.SOURCE_CHANGED)
-        requireClosed(actual)
-        val impact = impact(source)
-        HistoryRideDeletionRequest(actual, impact.favoriteCount, impact.mediaCount, issuer)
+    override suspend fun prepare(rides: List<HistoryRide>): HistoryRideDeletionRequest {
+        val selected = rides.distinctBy { it.favoriteSource() }
+        if (selected.isEmpty()) fail(HistoryRideDeletionFailure.NOT_FOUND)
+        return transaction {
+            HistoryRideDeletionRequest(selected.map { ride ->
+                val source = ride.favoriteSource()
+                val actual = current(source) ?: fail(HistoryRideDeletionFailure.NOT_FOUND)
+                if (actual.favoriteSource() != source) fail(HistoryRideDeletionFailure.SOURCE_CHANGED)
+                requireClosed(actual)
+                val impact = impact(source)
+                HistoryRideDeletionEntry(actual, impact.favoriteCount, impact.mediaCount)
+            }, issuer)
+        }
     }
 
     override suspend fun confirm(request: HistoryRideDeletionRequest): HistoryRideDeletionResult {
         if (request.issuer !== issuer) fail(HistoryRideDeletionFailure.CONFLICT)
-        val source = request.ride.favoriteSource()
         transaction {
-            val actual = current(source) ?: return@transaction
-            if (actual.favoriteSource() != source) fail(HistoryRideDeletionFailure.SOURCE_CHANGED)
-            requireClosed(actual)
-            if (actual != request.ride) fail(HistoryRideDeletionFailure.CONFLICT)
-            val impact = impact(source)
-            if (impact.favoriteCount != request.favoriteCount || impact.mediaCount != request.mediaCount)
-                fail(HistoryRideDeletionFailure.CONFLICT)
-            queries.retireRecordingMedia(source.rideId, source.kind.name, source.vehicleId,
-                source.started.epochMillis, source.started.elapsedMillis, source.started.clockGeneration)
-            queries.deleteRecordingFavorites(source.rideId, source.kind.name, source.vehicleId,
-                source.started.epochMillis, source.started.elapsedMillis, source.started.clockGeneration)
-            // Retraction: originally only V2 had derived preview files. Legacy
-            // CSV/JSON exports now share the same durable derived-file purge.
-            previewPurge.request()
-            if (source.kind == HistoryStorageKind.LEGACY) {
-                database.ridePointRowQueries.deleteByRide(source.rideId)
-                database.rideRowQueries.delete(source.rideId)
-            } else {
-                // Explicit children, including receipt/bucket state, are required
-                // even on SQLite connections with foreign_keys disabled.
-                // Samples, series and key go in this same transaction (ids are reused MAX+1).
-                HistoryCompactSampleWriter(database).delete(source.rideId)
-                database.rideHistoryGpsQueries.deleteGps(source.rideId)
-                database.rideHistoryMarkerQueries.deleteMarkers(source.rideId)
-                database.rideHistoryBucketQueries.deleteBuckets(source.rideId)
-                database.rideHistoryReceiptQueries.deleteReceipts(source.rideId)
-                database.rideHistorySourceQueries.deleteSources(source.rideId)
-                database.rideHistoryV2Queries.deleteRide(source.rideId)
+            val existing = request.entries.mapNotNull { entry ->
+                val source = entry.ride.favoriteSource()
+                val actual = current(source) ?: return@mapNotNull null
+                if (actual.favoriteSource() != source) fail(HistoryRideDeletionFailure.SOURCE_CHANGED)
+                requireClosed(actual)
+                if (actual != entry.ride) fail(HistoryRideDeletionFailure.CONFLICT)
+                val impact = impact(source)
+                if (impact.favoriteCount != entry.favoriteCount || impact.mediaCount != entry.mediaCount)
+                    fail(HistoryRideDeletionFailure.CONFLICT)
+                source
+            }
+            if (existing.isNotEmpty()) {
+                val staged = hasLegacyHistory(driver)
+                val compact = HistoryCompactSampleWriter(database)
+                existing.forEach { delete(it, compact, staged) }
+                previewPurge.request()
             }
         }
         // The database commit is final. Optional file cleanup can be waiting for
@@ -70,7 +65,30 @@ class SqlDelightHistoryRideDeletion(provider: VoltyDatabaseProvider,
         } } }
         catch (cancel: CancellationException) { throw cancel }
         catch (_: Exception) { true } // A post-commit read failure cannot undo deletion.
-        return HistoryRideDeletionResult(source, pending || retainedFiles)
+        return HistoryRideDeletionResult(request.rides.mapTo(mutableSetOf()) { it.favoriteSource() }, pending || retainedFiles)
+    }
+
+    private fun delete(source: HistoryFavoriteSource, compact: HistoryCompactSampleWriter, staged: Boolean) {
+        val id = source.rideId
+        queries.retireRecordingMedia(id, source.kind.name, source.vehicleId,
+            source.started.epochMillis, source.started.elapsedMillis, source.started.clockGeneration)
+        queries.deleteRecordingFavorites(id, source.kind.name, source.vehicleId,
+            source.started.epochMillis, source.started.elapsedMillis, source.started.clockGeneration)
+        if (source.kind == HistoryStorageKind.LEGACY) {
+            database.ridePointRowQueries.deleteByRide(id)
+            database.rideRowQueries.delete(id)
+            return
+        }
+        // Android upgrades can leave these rows in the staging table until conversion.
+        if (staged) driver.execute(null, "DELETE FROM HistorySampleV2 WHERE rideId = ?", 1) { bindString(0, id) }
+        // Explicitly delete children even with SQLite foreign keys disabled.
+        compact.delete(id)
+        database.rideHistoryGpsQueries.deleteGps(id)
+        database.rideHistoryMarkerQueries.deleteMarkers(id)
+        database.rideHistoryBucketQueries.deleteBuckets(id)
+        database.rideHistoryReceiptQueries.deleteReceipts(id)
+        database.rideHistorySourceQueries.deleteSources(id)
+        database.rideHistoryV2Queries.deleteRide(id)
     }
 
     private fun current(source: HistoryFavoriteSource): HistoryRide? = when (source.kind) {

@@ -32,7 +32,7 @@ data class VehicleOverviewState(
     val battery: List<VehicleBatterySnapshot> = emptyList(),
     val lastTotals: List<HistoryTotal> = emptyList(),
     val lastRoute: List<Pair<Double, Double>> = emptyList(),
-    /** The last ride's totals arrive with the overview, then older totals arrive together. */
+    /** The last ride's totals arrive with the overview. Each older ride is added when its read finishes. */
     val rideTotals: Map<String, List<HistoryTotal>> = emptyMap(),
     val error: Boolean = false,
 )
@@ -125,7 +125,7 @@ class DefaultVehicleOverviewComponent(
         } else knownTotals
         routeLoad?.join()
 
-        // The list appears with the latest ride's totals. Older totals stay batched below.
+        // The list appears with the latest ride's totals before reading the older rides.
         mutableState.update {
             it.copy(
                 loading = false,
@@ -136,18 +136,16 @@ class DefaultVehicleOverviewComponent(
             )
         }
 
-        val olderTotals = mutableMapOf<String, List<HistoryTotal>>()
         for (ride in rides.drop(1)) {
-            try {
-                olderTotals[ride.id] = reader.totals(ride.id, reader.recorded(ride))
+            val rideTotals = try {
+                reader.totals(ride.id, reader.recorded(ride))
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (_: Exception) {
-                // An unreadable ride has no totals to publish.
+                continue
             }
-        }
-        if (olderTotals.isNotEmpty()) {
-            mutableState.update { it.copy(rideTotals = it.rideTotals + olderTotals) }
+            currentCoroutineContext().ensureActive()
+            mutableState.update { it.copy(rideTotals = it.rideTotals + (ride.id to rideTotals)) }
         }
     }
 

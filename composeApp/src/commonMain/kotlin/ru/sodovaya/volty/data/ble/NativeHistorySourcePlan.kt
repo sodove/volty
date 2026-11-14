@@ -3,7 +3,11 @@ package ru.sodovaya.volty.data.ble
 import ru.sodovaya.volty.data.history.HistoryTelemetrySource
 import ru.sodovaya.volty.data.history.historySourceKindForTelemetry
 import ru.sodovaya.volty.domain.history.HistorySource
+import ru.sodovaya.volty.domain.history.HistorySourceKind
 import ru.sodovaya.volty.domain.model.*
+
+private const val NATIVE_HISTORY_PREFIX = "native-history-v1:"
+private const val GATEWAY_HISTORY_PREFIX = "native-gateway-history-v1:"
 
 /** Managed selection only: caller must first validate the complete physical plan.
  * One selected path per alias is safe; this cannot authorize concurrent paths.
@@ -58,7 +62,7 @@ private fun nativeHistorySourcesForLink(spec: LinkSpec, vehicle: Vehicle?, singl
         // silently reinterpret a continuous series of the same physical pack.
         val id = if (physicalAlias != null) "native-alias-history-v1:" +
             encodeIdentity(listOf(profile.id, physicalAlias, spec.protocolKind.name))
-        else "native-history-v1:" + encodeIdentity(listOf(spec.address.uppercase(), spec.protocolKind.name,
+        else NATIVE_HISTORY_PREFIX + encodeIdentity(listOf(spec.address.uppercase(), spec.protocolKind.name,
             origin.name, local.toString(), role.name, assembly?.toString().orEmpty(),
             if ((origin == TelemetryOrigin.CONTROLLER && role == TelemetryRole.CONTRIBUTOR) || role == TelemetryRole.DERIVED) calibration else ""))
         result[key] = HistorySource(id, historySourceKindForTelemetry(origin, role), label)
@@ -113,7 +117,7 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle, 
             TelemetryOrigin.CONTROLLER -> {
                 val owned = spec.ownedControllers[source.localIndex]
                 val controller = controllers[source.localIndex]
-                val identity = "native-gateway-history-v1:" + encodeIdentity(listOf(spec.address.uppercase(),
+                val identity = GATEWAY_HISTORY_PREFIX + encodeIdentity(listOf(spec.address.uppercase(),
                     spec.protocolKind.name, owned.canId?.toString() ?: "local", source.role.name,
                     if (source.role == TelemetryRole.CONTRIBUTOR) calibration(controller) else ""))
                 identity to if (source.role == TelemetryRole.REPORTED_CAN) "${controller.label} · CAN" else controller.label
@@ -157,22 +161,31 @@ private fun nativeHistoryForwardedControllers(spec: LinkSpec, profile: Vehicle, 
 /** Length prefixes prevent address/configuration text from merging identity fields. */
 private fun encodeIdentity(fields: List<String>): String = fields.joinToString("") { "${it.length}:$it" }
 
+/** The registered source kind distinguishes controller observations from reported CAN and derived batteries. */
+internal fun isNativeVescHistoryController(source: HistorySource): Boolean {
+    if (source.kind != HistorySourceKind.CONTROLLER) return false
+    val fields = historyIdentityFields(source.id, NATIVE_HISTORY_PREFIX, 2)
+        ?: historyIdentityFields(source.id, GATEWAY_HISTORY_PREFIX, 2)
+    return fields?.get(1) == ProtocolKind.VESC.name
+}
+
 /**
  * The CAN id inside a gateway controller's source identity (`native-gateway-history-v1:`, fields
  * address, protocol, CAN id or `local`, role, calibration — see the CONTROLLER branch above), or
  * null for any other identity. Used only to name export columns like logui's `V117`.
  */
-internal fun historySourceCanId(sourceId: String): Int? {
-    val prefix = "native-gateway-history-v1:"
+internal fun historySourceCanId(sourceId: String): Int? =
+    historyIdentityFields(sourceId, GATEWAY_HISTORY_PREFIX, 3)?.get(2)?.toIntOrNull()?.takeIf { it in 0..254 }
+
+private fun historyIdentityFields(sourceId: String, prefix: String, count: Int): List<String>? {
     if (!sourceId.startsWith(prefix)) return null
-    val fields = mutableListOf<String>()
     var at = prefix.length
-    while (at < sourceId.length && fields.size < 3) {
+    return List(count) {
         val colon = sourceId.indexOf(':', at).takeIf { it > at } ?: return null
         val length = sourceId.substring(at, colon).toIntOrNull()?.takeIf { it >= 0 } ?: return null
-        if (colon + 1 + length > sourceId.length) return null
-        fields += sourceId.substring(colon + 1, colon + 1 + length)
-        at = colon + 1 + length
+        val start = colon + 1
+        if (length > sourceId.length - start) return null
+        at = start + length
+        sourceId.substring(start, at)
     }
-    return fields.getOrNull(2)?.toIntOrNull()?.takeIf { it in 0..254 }
 }

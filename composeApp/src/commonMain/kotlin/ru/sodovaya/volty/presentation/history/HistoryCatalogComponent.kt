@@ -44,10 +44,10 @@ class HistoryCatalogComponent(
         val cursor = current.nextCursor ?: return
         readPage(append = true, before = cursor)
     }
-    fun forget(source: HistoryFavoriteSource) {
+    fun forget(sources: Set<HistoryFavoriteSource>) {
         if (!lifetime.isActive) return
         request = null; val old = job; job = null; old?.cancel()
-        mutableState.value = state.value.copy(rides = state.value.rides.filterNot { it.favoriteSource() == source },
+        mutableState.value = state.value.copy(rides = state.value.rides.filterNot { it.favoriteSource() in sources },
             refreshing = false, loadingOlder = false)
     }
 
