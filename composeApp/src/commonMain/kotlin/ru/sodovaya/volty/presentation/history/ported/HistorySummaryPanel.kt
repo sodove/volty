@@ -3,49 +3,33 @@
 // Original project author: Kacper Kozak. See README.md and LICENSE in this directory.
 package ru.sodovaya.volty.presentation.history
 
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.EnterTransition
-import androidx.compose.animation.ExitTransition
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.ScrollState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
-import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
-import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.presentation.ride.LocalLightHudPalette
 import ru.sodovaya.volty.presentation.vehicle.TotalTile
+import ru.sodovaya.volty.presentation.vehicle.TotalsTiles
 import ru.sodovaya.volty.util.formatFixed
 import volty.composeapp.generated.resources.*
 import kotlin.math.abs
@@ -63,81 +47,60 @@ internal fun HistorySummaryPanel(
     modifier: Modifier = Modifier,
     reduceMotion: Boolean = false,
 ) {
-    val expandedLabel = stringResource(if (expanded) Res.string.history_summary_collapse else Res.string.history_summary_expand)
-    val headline = historyCollapsedTotals(totals.totals)
-    val details = historyExpandedTotals(totals.totals).filterNot { it in headline }
-    val headlineScroll = rememberScrollState()
-    val wrapExpanded = expanded && headlineScroll.maxValue in 1 until Int.MAX_VALUE
     val palette = LocalLightHudPalette.current
-    val chevronRotation by animateFloatAsState(
-        if (expanded) 180f else 0f,
-        animationSpec = if (reduceMotion) snap() else tween(200),
-        label = "historySummaryChevron",
-    )
-    Column(
-        modifier.fillMaxWidth().heightIn(min = 48.dp)
-            .semantics { stateDescription = expandedLabel }
-            .clickable(role = Role.Button, onClickLabel = expandedLabel, onClick = { onExpandedChange(!expanded) }),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Column(Modifier.weight(1f, fill = false), horizontalAlignment = Alignment.CenterHorizontally) {
+    val tileColor = palette.surfaceStrong.copy(alpha = palette.surfaceStrong.alpha * 0.78f)
+    HistoryHudSurface(modifier.fillMaxWidth()) {
+        Column(if (reduceMotion) Modifier else Modifier.animateContentSize()) {
             when {
-                totals.loading -> LinearProgressIndicator(Modifier.width(40.dp).height(2.dp))
-                headline.isEmpty() -> Text(stringResource(Res.string.history_summary_recording), color = palette.text,
-                    style = MaterialTheme.typography.labelMedium)
-                else -> AnimatedContent(
-                    targetState = wrapExpanded,
-                    transitionSpec = {
-                        if (reduceMotion) (EnterTransition.None togetherWith ExitTransition.None).using(null)
-                        else (fadeIn(tween(170)) togetherWith fadeOut(tween(120))).using(
-                            SizeTransform { _, _ -> tween(220) },
+                totals.loading -> LinearProgressIndicator(Modifier.fillMaxWidth().padding(12.dp))
+                totals.totals.isEmpty() -> Text(
+                    stringResource(Res.string.history_summary_unavailable), Modifier.padding(12.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                else -> {
+                    val tiles = Modifier.weight(1f, fill = false).padding(top = 10.dp)
+                    if (expanded) {
+                        TotalsTiles(
+                            historyExpandedTotals(totals.totals),
+                            tiles.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp),
+                            containerColor = tileColor,
                         )
-                    },
-                    label = "historySummaryHeadline",
-                ) { wrap ->
-                    if (wrap) HistorySummaryTiles(
-                        headline + details, Modifier.verticalScroll(rememberScrollState()),
-                    ) else HistorySummaryStrip(headline, headlineScroll)
-                }
-            }
-            AnimatedVisibility(
-                visible = expanded && !wrapExpanded,
-                modifier = Modifier.weight(1f, fill = false),
-                enter = if (reduceMotion) EnterTransition.None else
-                    expandVertically(tween(240), expandFrom = Alignment.Top) + fadeIn(tween(200)),
-                exit = if (reduceMotion) ExitTransition.None else
-                    shrinkVertically(tween(200), shrinkTowards = Alignment.Top) + fadeOut(tween(140)),
-            ) {
-                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(top = 4.dp)) {
-                    if (details.isEmpty()) {
-                        val label = if (totals.totals.isEmpty()) Res.string.history_summary_unavailable else Res.string.history_summary_recording
-                        Text(stringResource(label), Modifier.align(Alignment.CenterHorizontally),
-                            color = palette.text, style = MaterialTheme.typography.labelSmall)
                     } else {
-                        HistorySummaryTiles(details)
+                        TotalsStrip(historyCollapsedTotals(totals.totals), tileColor, tiles)
+                    }
+                    Box(
+                        Modifier.fillMaxWidth().height(36.dp)
+                            .clickable(role = Role.Button, onClick = { onExpandedChange(!expanded) }),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = stringResource(
+                                if (expanded) Res.string.history_summary_collapse else Res.string.history_summary_expand,
+                            ),
+                            modifier = Modifier.size(20.dp),
+                            tint = palette.muted,
+                        )
                     }
                 }
             }
         }
-        if (!totals.loading) Icon(
-            Icons.Default.KeyboardArrowDown, contentDescription = null,
-            Modifier.size(16.dp).rotate(chevronRotation), tint = palette.muted,
-        )
     }
 }
 
 @Composable
-private fun HistorySummaryStrip(totals: List<HistoryTotal>, scroll: ScrollState) {
+private fun TotalsStrip(totals: List<HistoryTotal>, tileColor: Color, modifier: Modifier = Modifier) {
+    val scroll = rememberScrollState()
     Row(
-        Modifier.fillMaxWidth()
+        modifier.fillMaxWidth()
+            // Mask the tiles themselves so the current map tint shows through the trailing edge.
             .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
             .drawWithContent {
                 drawContent()
                 val forward = scroll.canScrollForward
                 val backward = scroll.canScrollBackward
                 if (size.width > 0 && (forward || backward)) {
-                    val fade = (24.dp.toPx() / size.width).coerceAtMost(0.49f)
+                    val fade = (36.dp.toPx() / size.width).coerceAtMost(0.49f)
                     val left = if (layoutDirection == LayoutDirection.Ltr) backward else forward
                     val right = if (layoutDirection == LayoutDirection.Ltr) forward else backward
                     drawRect(
@@ -151,30 +114,11 @@ private fun HistorySummaryStrip(totals: List<HistoryTotal>, scroll: ScrollState)
                     )
                 }
             }
-            .horizontalScroll(scroll),
+            .horizontalScroll(scroll)
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        HistorySummaryTileItems(totals)
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun HistorySummaryTiles(totals: List<HistoryTotal>, modifier: Modifier = Modifier) {
-    FlowRow(
-        modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        HistorySummaryTileItems(totals)
-    }
-}
-
-@Composable
-private fun HistorySummaryTileItems(totals: List<HistoryTotal>) {
-    val surface = LocalLightHudPalette.current.surfaceStrong
-    totals.forEach { total ->
-        key(total.kind) {
-            TotalTile(total, compact = true, containerColor = surface.copy(alpha = surface.alpha * 0.78f))
-        }
+        totals.forEach { TotalTile(it, tileColor) }
     }
 }
 

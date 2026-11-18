@@ -1243,7 +1243,6 @@
     <string name="radio_permission_denied">Для рации нужны микрофон и доступ к устройствам поблизости</string>
     <string name="radio_export_diagnostics">Отправить диагностику рации</string>
     <string name="history_summary_range">Сводка · видимый диапазон</string>
-    <string name="history_summary_recording">Сводка · вся запись</string>
     <string name="history_summary_expand">Развернуть сводку</string>
     <string name="history_summary_collapse">Свернуть сводку</string>
     <string name="history_summary_source_unavailable">Источник записи недоступен</string>

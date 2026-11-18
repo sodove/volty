@@ -1245,7 +1245,6 @@
     <string name="radio_permission_denied">The radio needs the microphone and access to nearby devices</string>
     <string name="radio_export_diagnostics">Share radio diagnostics</string>
     <string name="history_summary_range">Summary · displayed range</string>
-    <string name="history_summary_recording">Summary · whole recording</string>
     <string name="history_summary_expand">Expand summary</string>
     <string name="history_summary_collapse">Collapse summary</string>
     <string name="history_summary_source_unavailable">Recorded source unavailable</string>

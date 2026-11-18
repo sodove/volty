@@ -11,14 +11,14 @@ class HistorySummaryLayoutTest {
     private val produced = listOf(DISTANCE_KM, DURATION_MILLIS, MOVING_MILLIS, AVERAGE_KMH, MAX_KMH, ENERGY_WH, WH_PER_KM,
         BATTERY_USED_PERCENT, MAX_POWER_W, MAX_DUTY_PERCENT, CONTROLLER_TEMP_C).map(::t)
 
-    @Test fun theCollapsedHudCarriesDistanceTimePeakSpeedAndConsumption() {
-        assertEquals(listOf(DISTANCE_KM, DURATION_MILLIS, MAX_KMH, WH_PER_KM),
+    @Test fun theCollapsedRowCarriesTheHeadlineNumbersAndNotMovingTime() {
+        assertEquals(listOf(DISTANCE_KM, DURATION_MILLIS, AVERAGE_KMH, MAX_KMH, MAX_DUTY_PERCENT, WH_PER_KM, BATTERY_USED_PERCENT),
             historyCollapsedTotals(produced).map { it.kind })
     }
 
     @Test fun theTopSpeedIsInTheCollapsedRowEvenWhenEarlierTilesExist() {
         // An earlier revision took the first four tiles, so the top speed only showed once the panel was expanded.
-        assertEquals(listOf(MAX_KMH), historyCollapsedTotals(listOf(t(AVERAGE_KMH), t(MAX_KMH))).map { it.kind })
+        assertEquals(listOf(AVERAGE_KMH, MAX_KMH), historyCollapsedTotals(listOf(t(MAX_KMH), t(AVERAGE_KMH))).map { it.kind })
     }
 
     @Test fun theExpandedViewKeepsEveryTileOnceWithMovingAfterTheHeadline() {
