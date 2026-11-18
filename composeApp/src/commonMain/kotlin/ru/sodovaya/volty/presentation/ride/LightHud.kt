@@ -6,7 +6,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Icon
@@ -99,34 +98,41 @@ internal fun LightVehiclePill(
     onClickLabel: String? = null,
 ) {
     val palette = LocalLightHudPalette.current
-    val shape = RoundedCornerShape(22.dp)
+    val shape = CircleShape
     Box(
         modifier.clickable(role = Role.Button, onClickLabel = onClickLabel, onClick = onClick)
             .minimumInteractiveComponentSize(),
         contentAlignment = Alignment.Center,
     ) {
-        Row(
+        Box(
             Modifier.fillMaxWidth().heightIn(min = 36.dp).clip(shape).background(palette.surfaceStrong)
-                .border(1.dp, Color(0x445A8C99), shape).padding(horizontal = 14.dp, vertical = 3.dp),
-            horizontalArrangement = Arrangement.Center,
-            verticalAlignment = Alignment.CenterVertically,
+                .border(1.dp, palette.text.copy(alpha = 0.17f), shape)
+                .padding(horizontal = 10.dp, vertical = 4.dp),
         ) {
-            if (statusColor != null) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(statusColor))
-                Spacer(Modifier.size(7.dp))
-            }
-            Column(Modifier.weight(1f, fill = false), horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    name, color = palette.text,
-                    style = TextStyle(fontSize = lightHudSp(12f, layoutMode), lineHeight = lightHudSp(14f, layoutMode),
-                        fontWeight = FontWeight.SemiBold),
+            Column(
+                Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 20.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (statusColor != null) {
+                        Box(Modifier.size(7.dp).clip(CircleShape).background(statusColor))
+                        Spacer(Modifier.width(7.dp))
+                    }
+                    Text(
+                        name, color = palette.text,
+                        style = TextStyle(fontSize = lightHudSp(12f, layoutMode), lineHeight = lightHudSp(14f, layoutMode),
+                            fontWeight = FontWeight.SemiBold),
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                if (subtitle != null) Text(
+                    subtitle, color = palette.muted,
+                    style = TextStyle(fontSize = lightHudSp(9f, layoutMode), lineHeight = lightHudSp(11f, layoutMode)),
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                 )
-                if (subtitle != null) Text(subtitle, color = palette.muted, fontSize = lightHudSp(9f, layoutMode),
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Spacer(Modifier.size(3.dp))
-            Icon(Icons.Default.ExpandMore, contentDescription = null, tint = palette.muted, modifier = Modifier.size(18.dp))
+            Icon(Icons.Default.ExpandMore, contentDescription = null, tint = palette.muted,
+                modifier = Modifier.align(Alignment.CenterEnd).size(16.dp))
         }
     }
 }

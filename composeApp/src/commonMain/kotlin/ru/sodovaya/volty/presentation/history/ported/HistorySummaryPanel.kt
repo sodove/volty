@@ -67,6 +67,7 @@ internal fun HistorySummaryPanel(
     val headline = historyCollapsedTotals(totals.totals)
     val details = historyExpandedTotals(totals.totals).filterNot { it in headline }
     val headlineScroll = rememberScrollState()
+    val wrapExpanded = expanded && headlineScroll.maxValue in 1 until Int.MAX_VALUE
     val palette = LocalLightHudPalette.current
     val chevronRotation by animateFloatAsState(
         if (expanded) 180f else 0f,
@@ -80,36 +81,42 @@ internal fun HistorySummaryPanel(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        when {
-            totals.loading -> LinearProgressIndicator(Modifier.width(40.dp).height(2.dp))
-            headline.isEmpty() -> Text(stringResource(Res.string.history_summary_recording), color = palette.text,
-                style = MaterialTheme.typography.labelMedium)
-            else -> AnimatedContent(
-                targetState = expanded && headlineScroll.maxValue in 1 until Int.MAX_VALUE,
-                transitionSpec = {
-                    if (reduceMotion) (EnterTransition.None togetherWith ExitTransition.None).using(null)
-                    else (fadeIn(tween(170)) togetherWith fadeOut(tween(120))).using(
-                        SizeTransform { _, _ -> tween(220) },
-                    )
-                },
-                label = "historySummaryHeadline",
-            ) { wrap ->
-                if (wrap) HistorySummaryTiles(headline) else HistorySummaryStrip(headline, headlineScroll)
+        Column(Modifier.weight(1f, fill = false), horizontalAlignment = Alignment.CenterHorizontally) {
+            when {
+                totals.loading -> LinearProgressIndicator(Modifier.width(40.dp).height(2.dp))
+                headline.isEmpty() -> Text(stringResource(Res.string.history_summary_recording), color = palette.text,
+                    style = MaterialTheme.typography.labelMedium)
+                else -> AnimatedContent(
+                    targetState = wrapExpanded,
+                    transitionSpec = {
+                        if (reduceMotion) (EnterTransition.None togetherWith ExitTransition.None).using(null)
+                        else (fadeIn(tween(170)) togetherWith fadeOut(tween(120))).using(
+                            SizeTransform { _, _ -> tween(220) },
+                        )
+                    },
+                    label = "historySummaryHeadline",
+                ) { wrap ->
+                    if (wrap) HistorySummaryTiles(
+                        headline + details, Modifier.verticalScroll(rememberScrollState()),
+                    ) else HistorySummaryStrip(headline, headlineScroll)
+                }
             }
-        }
-        AnimatedVisibility(
-            visible = expanded,
-            modifier = Modifier.weight(1f, fill = false),
-            enter = if (reduceMotion) EnterTransition.None else expandVertically(tween(240), expandFrom = Alignment.Top) + fadeIn(tween(200)),
-            exit = if (reduceMotion) ExitTransition.None else shrinkVertically(tween(200), shrinkTowards = Alignment.Top) + fadeOut(tween(140)),
-        ) {
-            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(top = 4.dp)) {
-                if (details.isEmpty()) {
-                    val label = if (totals.totals.isEmpty()) Res.string.history_summary_unavailable else Res.string.history_summary_recording
-                    Text(stringResource(label), Modifier.align(Alignment.CenterHorizontally),
-                        color = palette.text, style = MaterialTheme.typography.labelSmall)
-                } else {
-                    HistorySummaryTiles(details)
+            AnimatedVisibility(
+                visible = expanded && !wrapExpanded,
+                modifier = Modifier.weight(1f, fill = false),
+                enter = if (reduceMotion) EnterTransition.None else
+                    expandVertically(tween(240), expandFrom = Alignment.Top) + fadeIn(tween(200)),
+                exit = if (reduceMotion) ExitTransition.None else
+                    shrinkVertically(tween(200), shrinkTowards = Alignment.Top) + fadeOut(tween(140)),
+            ) {
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(top = 4.dp)) {
+                    if (details.isEmpty()) {
+                        val label = if (totals.totals.isEmpty()) Res.string.history_summary_unavailable else Res.string.history_summary_recording
+                        Text(stringResource(label), Modifier.align(Alignment.CenterHorizontally),
+                            color = palette.text, style = MaterialTheme.typography.labelSmall)
+                    } else {
+                        HistorySummaryTiles(details)
+                    }
                 }
             }
         }
@@ -152,9 +159,9 @@ private fun HistorySummaryStrip(totals: List<HistoryTotal>, scroll: ScrollState)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun HistorySummaryTiles(totals: List<HistoryTotal>) {
+private fun HistorySummaryTiles(totals: List<HistoryTotal>, modifier: Modifier = Modifier) {
     FlowRow(
-        Modifier.fillMaxWidth(),
+        modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         HistorySummaryTileItems(totals)
