@@ -5,25 +5,15 @@ import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.util.formatFixed
 import volty.composeapp.generated.resources.*
 
-/**
- * Moving time stays in the expanded view. The scrollable strip keeps the average, top speed
- * and peak PWM available alongside distance, time, consumption and battery.
- */
-internal fun historyCollapsedTotals(totals: List<HistoryTotal>): List<HistoryTotal> =
-    COLLAPSED_ORDER.mapNotNull { kind -> totals.firstOrNull { it.kind == kind } }
+/** Both layouts show the same recorded totals, with the headline metrics first. */
+internal fun historySummaryTotals(totals: List<HistoryTotal>): List<HistoryTotal> =
+    totals.sortedBy { SUMMARY_PRIORITY[it.kind] ?: Int.MAX_VALUE }
 
-/** The expanded summary: every tile, moving time after the headline ones it qualifies. */
-internal fun historyExpandedTotals(totals: List<HistoryTotal>): List<HistoryTotal> {
-    val headline = historyCollapsedTotals(totals)
-    val moving = totals.filter { it.kind == HistoryTotalKind.MOVING_MILLIS }
-    return headline + moving + totals.filter { it !in headline && it.kind != HistoryTotalKind.MOVING_MILLIS }
-}
-
-private val COLLAPSED_ORDER = listOf(
+private val SUMMARY_PRIORITY = listOf(
     HistoryTotalKind.DISTANCE_KM, HistoryTotalKind.DURATION_MILLIS, HistoryTotalKind.AVERAGE_KMH,
     HistoryTotalKind.MAX_KMH, HistoryTotalKind.MAX_DUTY_PERCENT, HistoryTotalKind.WH_PER_KM,
-    HistoryTotalKind.BATTERY_USED_PERCENT,
-)
+    HistoryTotalKind.BATTERY_USED_PERCENT, HistoryTotalKind.MOVING_MILLIS,
+).withIndex().associate { (index, kind) -> kind to index }
 
 internal fun HistoryTotalKind.title() = when (this) {
     HistoryTotalKind.DISTANCE_KM -> Res.string.history_total_distance

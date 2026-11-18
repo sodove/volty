@@ -11,27 +11,21 @@ class HistorySummaryLayoutTest {
     private val produced = listOf(DISTANCE_KM, DURATION_MILLIS, MOVING_MILLIS, AVERAGE_KMH, MAX_KMH, ENERGY_WH, WH_PER_KM,
         BATTERY_USED_PERCENT, MAX_POWER_W, MAX_DUTY_PERCENT, CONTROLLER_TEMP_C).map(::t)
 
-    @Test fun theCollapsedRowCarriesTheHeadlineNumbersAndNotMovingTime() {
-        assertEquals(listOf(DISTANCE_KM, DURATION_MILLIS, AVERAGE_KMH, MAX_KMH, MAX_DUTY_PERCENT, WH_PER_KM, BATTERY_USED_PERCENT),
-            historyCollapsedTotals(produced).map { it.kind })
-    }
-
-    @Test fun theTopSpeedIsInTheCollapsedRowEvenWhenEarlierTilesExist() {
-        // An earlier revision took the first four tiles, so the top speed only showed once the panel was expanded.
-        assertEquals(listOf(AVERAGE_KMH, MAX_KMH), historyCollapsedTotals(listOf(t(MAX_KMH), t(AVERAGE_KMH))).map { it.kind })
-    }
-
-    @Test fun theExpandedViewKeepsEveryTileOnceWithMovingAfterTheHeadline() {
-        val expanded = historyExpandedTotals(produced).map { it.kind }
-        assertEquals(produced.map { it.kind }.toSet(), expanded.toSet())
-        assertEquals(produced.size, expanded.size)
+    @Test fun theSummaryKeepsEveryTileWithHeadlineNumbersFirst() {
         assertEquals(listOf(DISTANCE_KM, DURATION_MILLIS, AVERAGE_KMH, MAX_KMH, MAX_DUTY_PERCENT, WH_PER_KM,
-            BATTERY_USED_PERCENT, MOVING_MILLIS), expanded.take(8))
+            BATTERY_USED_PERCENT, MOVING_MILLIS, ENERGY_WH, MAX_POWER_W, CONTROLLER_TEMP_C),
+            historySummaryTotals(produced).map { it.kind })
     }
 
     @Test fun missingTilesAreSimplyAbsent() {
         val sparse = listOf(DURATION_MILLIS, MAX_KMH).map(::t)
-        assertEquals(listOf(DURATION_MILLIS, MAX_KMH), historyCollapsedTotals(sparse).map { it.kind })
-        assertEquals(listOf(DURATION_MILLIS, MAX_KMH), historyExpandedTotals(sparse).map { it.kind })
+        assertEquals(sparse, historySummaryTotals(sparse))
+    }
+
+    @Test fun aShortRideKeepsPowerAndControllerTemperatureInTheStrip() {
+        val recorded = listOf(DISTANCE_KM, DURATION_MILLIS, MAX_KMH, BATTERY_USED_PERCENT, MAX_POWER_W,
+            MAX_DUTY_PERCENT, CONTROLLER_TEMP_C).map(::t)
+        assertEquals(listOf(DISTANCE_KM, DURATION_MILLIS, MAX_KMH, MAX_DUTY_PERCENT, BATTERY_USED_PERCENT,
+            MAX_POWER_W, CONTROLLER_TEMP_C), historySummaryTotals(recorded).map { it.kind })
     }
 }

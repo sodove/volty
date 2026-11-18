@@ -58,15 +58,23 @@ internal fun HistorySummaryPanel(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 else -> {
+                    val summary = historySummaryTotals(totals.totals)
+                    val toggleLabel = stringResource(
+                        if (expanded) Res.string.history_summary_collapse else Res.string.history_summary_expand,
+                    )
                     val tiles = Modifier.weight(1f, fill = false).padding(top = 10.dp)
                     if (expanded) {
                         TotalsTiles(
-                            historyExpandedTotals(totals.totals),
+                            summary,
                             tiles.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 12.dp),
                             containerColor = tileColor,
                         )
                     } else {
-                        TotalsStrip(historyCollapsedTotals(totals.totals), tileColor, tiles)
+                        TotalsStrip(
+                            summary,
+                            tileColor,
+                            tiles.clickable(role = Role.Button, onClickLabel = toggleLabel) { onExpandedChange(true) },
+                        )
                     }
                     Box(
                         Modifier.fillMaxWidth().height(36.dp)
@@ -75,9 +83,7 @@ internal fun HistorySummaryPanel(
                     ) {
                         Icon(
                             if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
-                            contentDescription = stringResource(
-                                if (expanded) Res.string.history_summary_collapse else Res.string.history_summary_expand,
-                            ),
+                            contentDescription = toggleLabel,
                             modifier = Modifier.size(20.dp),
                             tint = palette.muted,
                         )
