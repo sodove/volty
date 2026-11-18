@@ -62,7 +62,9 @@ internal fun HistorySummaryPanel(
                     val toggleLabel = stringResource(
                         if (expanded) Res.string.history_summary_collapse else Res.string.history_summary_expand,
                     )
+                    val toggle = { onExpandedChange(!expanded) }
                     val tiles = Modifier.weight(1f, fill = false).padding(top = 10.dp)
+                        .clickable(role = Role.Button, onClickLabel = toggleLabel, onClick = toggle)
                     if (expanded) {
                         TotalsTiles(
                             summary,
@@ -70,15 +72,11 @@ internal fun HistorySummaryPanel(
                             containerColor = tileColor,
                         )
                     } else {
-                        TotalsStrip(
-                            summary,
-                            tileColor,
-                            tiles.clickable(role = Role.Button, onClickLabel = toggleLabel) { onExpandedChange(true) },
-                        )
+                        TotalsStrip(summary, tileColor, tiles)
                     }
                     Box(
                         Modifier.fillMaxWidth().height(36.dp)
-                            .clickable(role = Role.Button, onClick = { onExpandedChange(!expanded) }),
+                            .clickable(role = Role.Button, onClick = toggle),
                         contentAlignment = Alignment.Center,
                     ) {
                         Icon(
