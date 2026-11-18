@@ -226,21 +226,25 @@ fun List<DiscoveredDevice>.withScanHit(hit: DiscoveredDevice): List<DiscoveredDe
     val at = indexOfFirst { it.address == hit.address }
     if (at < 0) return this + hit
     val old = this[at]
+    val merged = old.mergeScanHit(hit)
+    if (merged == old) return this
+    return toMutableList().also { it[at] = merged }
+}
+
+internal fun DiscoveredDevice.mergeScanHit(hit: DiscoveredDevice): DiscoveredDevice {
     // A remembered address claim is an explicit rider fact. It must survive
     // later advertisements, and a conflicting detector field must not leak
     // back through the nullable merge.
     val remembered = when {
         hit.typeProvenance == DeviceTypeProvenance.REMEMBERED -> hit
-        old.typeProvenance == DeviceTypeProvenance.REMEMBERED -> old
+        typeProvenance == DeviceTypeProvenance.REMEMBERED -> this
         else -> null
     }
-    val merged = hit.copy(
-        name = hit.name ?: old.name,
-        bmsType = if (remembered != null) remembered.bmsType else (hit.bmsType ?: old.bmsType),
-        controllerType = if (remembered != null) remembered.controllerType else (hit.controllerType ?: old.controllerType),
+    return hit.copy(
+        name = hit.name ?: name,
+        bmsType = if (remembered != null) remembered.bmsType else (hit.bmsType ?: bmsType),
+        controllerType = if (remembered != null) remembered.controllerType else (hit.controllerType ?: controllerType),
         typeProvenance = remembered?.typeProvenance ?: DeviceTypeProvenance.DETECTED,
-        knownVehicle = hit.knownVehicle ?: old.knownVehicle
+        knownVehicle = hit.knownVehicle ?: knownVehicle
     )
-    if (merged == old) return this
-    return toMutableList().also { it[at] = merged }
 }

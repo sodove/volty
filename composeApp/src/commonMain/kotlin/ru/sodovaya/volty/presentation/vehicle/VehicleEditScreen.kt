@@ -112,6 +112,7 @@ import volty.composeapp.generated.resources.vehicle_hub_on
 import volty.composeapp.generated.resources.vehicle_hub_speed_volume
 import volty.composeapp.generated.resources.vehicle_save
 import volty.composeapp.generated.resources.vehicle_save_blocked
+import volty.composeapp.generated.resources.vehicle_save_source_required
 
 private const val VEHICLE_PAGE_MS = 250
 
@@ -150,10 +151,7 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                     TextButton(onClick = component::onCancel) { Text(stringResource(Res.string.action_cancel)) }
                 },
                 actions = {
-                    // Deliberately NOT disabled on `!canSave`. A Save that is
-                    // simply dead tells a rider nothing; tapping it sets
-                    // `saveBlocked`, which prints the banner and points at the
-                    // sources that contradict each other.
+                    // Save remains tappable so the component can show why it refused the draft.
                     TextButton(onClick = component::onSave, enabled = !state.saving) {
                         if (state.saving) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         else Text(stringResource(Res.string.vehicle_save))
@@ -186,9 +184,14 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            if (state.saveBlocked) {
+            val saveError = when {
+                state.missingSourceError -> Res.string.vehicle_save_source_required
+                state.saveBlocked -> Res.string.vehicle_save_blocked
+                else -> null
+            }
+            if (saveError != null) {
                 Text(
-                    text = stringResource(Res.string.vehicle_save_blocked),
+                    text = stringResource(saveError),
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onErrorContainer,
                     modifier = Modifier

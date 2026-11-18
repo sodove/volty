@@ -4,9 +4,12 @@ import com.juul.kable.Peripheral
 import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
+import com.juul.kable.write
+import com.juul.kable.writeWithoutResponse
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.CanBusScanner
+import ru.sodovaya.volty.data.bms.JkBmsProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.ProtocolDiagnostics
 import ru.sodovaya.volty.data.bms.deviceFactsOf
@@ -20,6 +23,7 @@ import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -159,10 +163,11 @@ internal class ConnectionSession(
      */
     private suspend fun writeCommand(
         characteristic: com.juul.kable.Characteristic,
-        command: ByteArray
+        command: ByteArray,
+        writeType: WriteType = WriteType.WithoutResponse,
     ) {
         if (!shouldWriteProtocolCommand(protocol, liveBegodeAdvertisement)) return
-        peripheral.write(characteristic, command, WriteType.WithoutResponse)
+        peripheral.write(characteristic, command, writeType)
     }
 
     /**
@@ -236,6 +241,8 @@ internal class ConnectionSession(
         telemetryCapture?.prepareForObservation()
         if (torn) return Result.failure(IllegalStateException("Session retired during recording preparation"))
 
+        val jk = protocol as? JkBmsProtocol
+        val jkSubscription = jk?.let { CompletableDeferred<Unit>() }
         observeJob = parentScope.launch {
             try {
                 // Wait for service discovery to complete before subscribing.
@@ -259,22 +266,17 @@ internal class ConnectionSession(
                 peripheral.observe(
                     notifyChar,
                     // The handshake MUST go out only AFTER notifications are
-                    // actually enabled (CCCD written). JK BMS streams cell data
-                    // solely in response to a one-shot 0x96 and never repeats it
-                    // (pollCommands is empty), so a handshake raced ahead of the
-                    // live subscription is lost forever and the device looks
-                    // connected-but-silent. A fixed pre-write delay couldn't
-                    // guarantee this — service discovery + CCCD enable on Android
-                    // routinely exceeds it. Kable's onSubscription fires exactly
-                    // after notifications are enabled, matching the ordering the
-                    // reference (fl4p/batmon-ha jikong.py) relies on:
-                    // start_notify → then write 0x97/0x96. Polling BMS types
-                    // (JBD/Daly/ANT) masked this by re-sending every cycle.
+                    // actually enabled (CCCD written). JK waits for replies in a
+                    // separate job so this callback can return and deliver them.
                     onSubscription = {
-                        delay(BleConfig.handshakeWarmupMs)
-                        for (cmd in protocol.handshakeCommands()) {
-                            writeCommand(writeChar, cmd)
-                            delay(BleConfig.writeSpacingMs.coerceAtLeast(100L))
+                        if (jkSubscription != null) {
+                            jkSubscription.complete(Unit)
+                        } else {
+                            delay(BleConfig.handshakeWarmupMs)
+                            for (cmd in protocol.handshakeCommands()) {
+                                writeCommand(writeChar, cmd)
+                                delay(BleConfig.writeSpacingMs.coerceAtLeast(100L))
+                            }
                         }
                     }
                 ).collect { data ->
@@ -323,11 +325,6 @@ internal class ConnectionSession(
             }
         }
 
-        // Note: the handshake is issued from the observe(onSubscription) hook
-        // above — NOT here — so it can never race ahead of the live
-        // notification subscription. Poll-based protocols still (re)send their
-        // poll commands below; that path self-heals by design.
-        //
         // Two poll shapes, and the protocol picks which one it is. A
         // [SerialPollSource] owns its own request/reply dialogue — a CAN
         // gateway must keep exactly ONE forwarded request in flight and match
@@ -335,7 +332,20 @@ internal class ConnectionSession(
         // cannot express. Everything else keeps the burst path bit-for-bit:
         // `as?` is null for every protocol that does not opt in.
         val serial = protocol as? SerialPollSource
-        if (serial != null) {
+        if (jk != null && jkSubscription != null) {
+            pollingJob = parentScope.launch {
+                try {
+                    jkSubscription.await()
+                    delay(BleConfig.handshakeWarmupMs)
+                    val (characteristic, writeType) = jkWriteEndpoint(writeChar)
+                    jk.startTelemetry { command -> writeCommand(characteristic, command, writeType) }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    println("[VOLTY-BLE] JK startup: ${e::class.simpleName}: ${e.message}")
+                }
+            }
+        } else if (serial != null) {
             pollingJob = parentScope.launch {
                 try {
                     serial.runPollLoop { cmd ->
@@ -428,6 +438,20 @@ internal class ConnectionSession(
         }
 
         return Result.success(Unit)
+    }
+
+    private fun jkWriteEndpoint(
+        requested: com.juul.kable.Characteristic,
+    ): Pair<com.juul.kable.Characteristic, WriteType> {
+        val candidates = peripheral.services.value.orEmpty()
+            .firstOrNull { it.serviceUuid == requested.serviceUuid }
+            ?.characteristics.orEmpty()
+            .filter { it.characteristicUuid == requested.characteristicUuid }
+        candidates.firstOrNull { it.properties.writeWithoutResponse }
+            ?.let { return it to WriteType.WithoutResponse }
+        candidates.firstOrNull { it.properties.write }
+            ?.let { return it to WriteType.WithResponse }
+        error("No writable JK characteristic ${requested.characteristicUuid}")
     }
 
     /**

@@ -93,8 +93,8 @@ abstract class VerifyProductionReleaseTask : DefaultTask() {
     }
 }
 
-val appVersionCode = 107
-val appVersionName = "0.7.84"
+val appVersionCode = 108
+val appVersionName = "0.7.85"
 val glesRideHud = providers.gradleProperty("voltyGlesRideHud").map { it.toBooleanStrict() }.orElse(true)
 val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
     value.toBooleanStrictOrNull()

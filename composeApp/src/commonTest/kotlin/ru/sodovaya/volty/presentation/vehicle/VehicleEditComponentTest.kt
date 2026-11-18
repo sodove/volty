@@ -429,7 +429,8 @@ class VehicleEditComponentTest {
         onCancelled: () -> Unit = {},
         backDispatcher: BackDispatcher? = null,
         onOpenPwmWizard: () -> Unit = {},
-        lifecycle: LifecycleRegistry = newLifecycle()
+        lifecycle: LifecycleRegistry = newLifecycle(),
+        seed: VehicleEditSeed? = null
     ): DefaultVehicleEditComponent {
         val ctx = DefaultComponentContext(lifecycle, backHandler = backDispatcher)
         bmsRepo.energyResetStore = energyStore
@@ -450,7 +451,8 @@ class VehicleEditComponentTest {
             energyStore = energyStore,
             rangeSource = rangeSource,
             prefilledBmsType = prefilledBmsType,
-            prefilledBmsAddress = prefilledBmsAddress
+            prefilledBmsAddress = prefilledBmsAddress,
+            seed = seed
         )
     }
 
@@ -1015,6 +1017,83 @@ class VehicleEditComponentTest {
         assertEquals(VehicleEditSection.IDENTITY, c.section.value)
         assertTrue(c.state.value.nameError)
         assertTrue(repo.upserts.isEmpty())
+    }
+
+    @Test
+    fun `a new vehicle without sources opens the source controls until a controller is added`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(emptyList())
+        var saved = 0
+        val c = component(
+            repo,
+            vehicleId = null,
+            onSaved = { saved++ },
+            seed = VehicleEditSeed(VehicleDraft(), "", "generic", SecondaryGauge.DUTY, PackTopology.PARALLEL)
+        )
+        advanceUntilIdle()
+        assertEquals(0, c.state.value.draft.sourceCount, "the wizard was skipped before adding a device")
+        c.onNameChanged("Fresh")
+        c.onOpenSection(VehicleEditSection.IDENTITY)
+        val canSaveWithoutSources = c.state.value.canSave
+        assertFalse(c.state.value.missingSourceError)
+
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(VehicleEditSection.LAYOUT, c.section.value)
+        assertFalse(canSaveWithoutSources)
+        assertTrue(c.state.value.missingSourceError)
+        assertFalse(c.state.value.saving)
+        assertTrue(repo.upserts.isEmpty())
+        assertEquals(0, saved)
+
+        c.onAddController(ControllerType.VESC, "VE:01")
+        assertFalse(c.state.value.missingSourceError)
+        assertTrue(c.state.value.canSave)
+        c.onSave()
+        advanceUntilIdle()
+
+        val vehicle = repo.upserts.single()
+        assertEquals("Fresh", vehicle.name)
+        assertEquals("VE:01", vehicle.controllers.single().address)
+        assertTrue(vehicle.packs.isEmpty())
+        assertEquals(1, saved)
+    }
+
+    @Test
+    fun `removing the last stored controller refuses save when the draft battery is stale`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val existing = existingVehicle().copy(controllers = listOf(originalControllers.first()))
+        val repo = FakeVehicleRepo(listOf(existing))
+        var saved = 0
+        val c = component(repo, onSaved = { saved++ })
+        advanceUntilIdle()
+
+        c.onRemoveController(c.state.value.draft.controllers.single().key)
+        assertTrue(c.state.value.draft.controllers.isEmpty())
+        assertEquals("AA:BB", c.state.value.draft.packs.single().address)
+        val latest = existing.copy(packs = emptyList())
+        repo.upsert(latest)
+
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(VehicleEditSection.LAYOUT, c.section.value)
+        assertFalse(c.state.value.canSave)
+        assertTrue(c.state.value.missingSourceError)
+        assertFalse(c.state.value.saving)
+        assertEquals(listOf(latest), repo.upserts)
+        assertEquals(0, saved)
+
+        c.onAddPack(BmsType.JK_BMS, "JK:01")
+        assertFalse(c.state.value.missingSourceError)
+        assertTrue(c.state.value.canSave)
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals("JK:01", repo.upserts.last().packs.last().bmsAddress)
+        assertTrue(repo.upserts.last().controllers.isEmpty())
+        assertEquals(1, saved)
     }
 
     @Test

@@ -453,6 +453,20 @@ internal fun leaveVehicleEdit(
     if (stackSize > 1) navigation.pop() else navigation.replaceAll(home)
 }
 
+/** Deleting the vehicle also removes any remaining screen that needs its saved profile. */
+internal fun stackAfterVehicleDeletion(stack: List<Config>, vehicleId: String, home: Config): List<Config> =
+    stack.filterNot { config ->
+        when (config) {
+            is Config.VehicleOverview -> config.vehicleId == vehicleId
+            is Config.VehicleEdit -> config.vehicleId == vehicleId
+            is Config.VehicleAlerts -> config.vehicleId == vehicleId
+            is Config.VehicleInfo -> config.vehicleId == vehicleId
+            is Config.PwmCalibration -> config.vehicleId == vehicleId
+            is Config.AutoConnect -> config.vehicleId == vehicleId
+            else -> false
+        }
+    }.ifEmpty { listOf(home) }
+
 /**
  * Put home in front of setup without destroying setup itself.
  *
@@ -644,12 +658,17 @@ class DefaultRootComponent(
         liveVehicleForNavigation(bmsRepository.connectionState.value, bmsRepository.activeVehicle.value)
 
     /**
-     * Every composer terminal callback takes the same total route. This covers
-     * wizard/editor cancellation and deletion, including the one-entry stack
-     * left after picker connection where a plain `pop()` would be inert.
+     * Cancellation reveals the caller, with a home fallback for a sole editor
+     * left after picker connection.
      */
     private fun leaveActiveComposer() {
         leaveVehicleEdit(nav, stack.value.items.size, homeConfig())
+    }
+
+    private fun leaveDeletedVehicle(vehicleId: String) {
+        if (absentSummaryVehicleId == vehicleId) absentSummaryVehicleId = null
+        val home = permissionGatedConfig(homeConfig(), permissionsChecker.missingPermissions())
+        nav.navigate { current -> stackAfterVehicleDeletion(current, vehicleId, home) }
     }
 
     private fun openEditorFromWizard(handoff: WizardHandoff) {
@@ -909,12 +928,7 @@ class DefaultRootComponent(
                         bmsRepository = get(),
                         onSaved = { replaceAll(homeConfig()) },
                         onCancelled = ::leaveActiveComposer,
-                        // A picker-created editor is the sole entry after its
-                        // successful connection. Deleting it must therefore
-                        // use the same total exit as Cancel: `pop()` alone is
-                        // inert there and would leave the now-deleted form's
-                        // Save control able to recreate the vehicle.
-                        onDeleted = ::leaveActiveComposer,
+                        onDeleted = { config.vehicleId?.let(::leaveDeletedVehicle) },
                         // Both prefills are already optional, so a source-less
                         // (controller-only) active connection simply prefills
                         // nothing instead of throwing.

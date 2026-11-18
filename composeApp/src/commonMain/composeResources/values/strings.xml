@@ -359,6 +359,7 @@
     <string name="units_open">Units (km / mi)</string>
     <string name="units_open_subtitle">App-wide setting, shared by every vehicle</string>
     <string name="vehicle_save_blocked">Cannot save: two settings below contradict each other. Fix the sources marked in red.</string>
+    <string name="vehicle_save_source_required">Add a controller or battery to save this vehicle.</string>
     <string name="composer_issue_conflicting_kinds">This link already carries a different protocol. One Bluetooth link speaks one protocol.</string>
     <string name="composer_issue_duplicate_can_id">CAN id %1$d is claimed twice on this link.</string>
     <string name="composer_issue_ambiguous_gateway">More than one source here claims to be the gateway itself. Give the others a CAN id.</string>

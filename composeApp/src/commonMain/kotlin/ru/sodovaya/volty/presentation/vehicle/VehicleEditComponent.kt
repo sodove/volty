@@ -494,6 +494,8 @@ interface VehicleEditComponent : DraftExitComponent {
         val packsEdited: Boolean = false,
         val controllersEdited: Boolean = false,
         val nameError: Boolean = false,
+        /** Save found that the resulting vehicle would have no controller or pack. */
+        val missingSourceError: Boolean = false,
         /**
          * [onSave] refused because of a blocking [ComposerIssue] — the
          * counterpart of [nameError], so a screen that wires only the button
@@ -661,7 +663,9 @@ interface VehicleEditComponent : DraftExitComponent {
          * it concerns ([issuesBySource]). This property is the same fact for
          * anything that wants to ask *before* the tap; nothing does today.
          */
-        val canSave: Boolean get() = name.isNotBlank() && !capacityError && !pwmThresholdError && !pwmManualError && issues.none { it.blocksSave(isEditing) }
+        val canSave: Boolean
+            get() = name.isNotBlank() && draft.sourceCount > 0 && !missingSourceError &&
+                !capacityError && !pwmThresholdError && !pwmManualError && issues.none { it.blocksSave(isEditing) }
 
         /**
          * Whether the "yield BMS to head unit while riding" toggle applies at
@@ -1392,6 +1396,7 @@ class DefaultVehicleEditComponent(
                 issues = validate(d, s.telemetry),
                 packsEdited = s.packsEdited || packs,
                 controllersEdited = s.controllersEdited || controllers,
+                missingSourceError = s.missingSourceError && d == s.draft,
                 saveBlocked = false,
                 // Also derived from the draft: editing a controller's address
                 // (or removing it) changes whether anything VESC of this
@@ -1660,13 +1665,14 @@ class DefaultVehicleEditComponent(
             onOpenSection(VehicleEditSection.PWM)
             return
         }
+        if (s.draft.sourceCount == 0) {
+            showMissingSourceError(s.draft)
+            return
+        }
         // A blocking issue is a self-contradictory config: conflicting protocol
         // kinds at one address or two sources claiming one CAN id (both of
         // which `planLinks` throws on), or two sources on one gateway link both
-        // claiming to be the gateway itself (which it cannot see). Refusing the
-        // save is the composer's half of "the UI must not be able to reach that
-        // failure"; [State.canSave] is the same fact for the screen to disable
-        // the button with. Nothing here catches anything.
+        // claiming to be the gateway itself (which it cannot see).
         //
         // Reported like [State.nameError] rather than returning silently: a
         // screen that wires only the button would otherwise look dead.
@@ -1683,7 +1689,11 @@ class DefaultVehicleEditComponent(
             // editing a stale copy of it would be the same defect wearing a
             // different hat.
             val existing = if (s.isEditing) vehicleRepository.get(vehicleId!!) else null
-            val v = existing?.withEdits(s) ?: newVehicle(s, id = vehicleId ?: "v-${Random.nextLong()}")
+            val v = if (existing != null) existing.withEdits(s) else newVehicle(s, id = vehicleId ?: "v-${Random.nextLong()}")
+            if (v == null) {
+                showMissingSourceError(s.draft)
+                return@launch
+            }
             vehicleRepository.upsert(v)
             // G §9.2 item 7, and **the whole of it**. The learned dial ranges are not part of a
             // vehicle's description at all since `8.sqm` — they live in `GaugePeakRow`, reached only
@@ -1721,6 +1731,7 @@ class DefaultVehicleEditComponent(
             // values still differ from this snapshot and the root guard asks.
             val completed = _state.value.copy(
                 saving = false,
+                missingSourceError = false,
                 savedValues = s.editableValues
             )
             // A prompt and its private continuation are one state-machine
@@ -1733,6 +1744,11 @@ class DefaultVehicleEditComponent(
             exitCoordinator.afterSave()
             onSaved()
         }
+    }
+
+    private fun showMissingSourceError(attemptedDraft: VehicleDraft) {
+        _state.update { it.copy(saving = false, missingSourceError = it.draft == attemptedDraft) }
+        if (_state.value.missingSourceError) onOpenSection(VehicleEditSection.LAYOUT)
     }
 
     override fun onCancel() = requestExit(onCancelled)
@@ -1822,7 +1838,7 @@ internal fun parseBegodeCurrentOffset(text: String): Float? = text.trim().replac
  * freshly-read vehicle before it is projected, so a cell count the auto-fill
  * wrote while the form was open is not reverted by a save that renamed a pack.
  */
-private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
+private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle? {
     // The draft is the ONLY writer of `controllers`, motor geometry included —
     // one writer, so there is no second copy of the "blank field falls back to
     // MotorConfig()'s default" rule to drift (it is stated once, in
@@ -1834,11 +1850,17 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
     // asymmetry is deliberate — a controller-only edit leaves `packs` to the
     // stored row, which is what keeps a branch persisted underneath this form
     // from being dropped, and nothing writes `controllers` underneath us.
-    val nextControllers = if (s.controllersEdited || s.packsEdited) {
-        s.draft.reanchoredTo(this).toControllers()
+    val editsSources = s.controllersEdited || s.packsEdited
+    val draft = if (editsSources) s.draft.reanchoredTo(this) else s.draft
+    val nextControllers = if (editsSources) draft.toControllers() else controllers
+    val nextPacks = if (s.packsEdited) {
+        draft.toPacks()
     } else {
-        controllers
+        // The first pack's name follows the vehicle. Later packs keep their own labels.
+        packs.mapIndexed { i, p -> if (i == 0) p.copy(label = s.name) else p }
     }
+    if (nextPacks.isEmpty() && nextControllers.isEmpty()) return null
+
     return copy(
         name = s.name,
         iconKey = s.iconKey,
@@ -1846,15 +1868,7 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
         topology = s.topology,
         averagingWindowMin = s.averagingWindowMin,
         alertConfig = alertConfig.withEdits(s),
-        packs = if (s.packsEdited) {
-            s.draft.reanchoredTo(this).toPacks()
-        } else {
-            // Index 0 ONLY: a wheel's second branch keeps the positional label
-            // `expandedTo` gave it, and a pack-less vehicle maps an empty list to
-            // an empty list — no phantom battery, and no `packs.isEmpty()` special
-            // case to forget.
-            packs.mapIndexed { i, p -> if (i == 0) p.copy(label = s.name) else p }
-        },
+        packs = nextPacks,
         controllers = nextControllers,
         dashboardStyle = s.dashboardStyle,
         secondaryGauge = s.secondaryGauge,

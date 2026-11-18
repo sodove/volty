@@ -1,5 +1,8 @@
 package ru.sodovaya.volty.data.bms
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.DeviceFact
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
@@ -10,7 +13,7 @@ import ru.sodovaya.volty.domain.model.TelemetryMetric
 /**
  * JK BMS protocol (JK02).
  *
- * BLE: single service 0xFFE0, single characteristic 0xFFE1 (notify + write).
+ * BLE: service 0xFFE0; 0xFFE1 may be shared or exposed as two instances with different properties.
  *
  * Command frame (20 bytes):
  *   AA 55 90 EB [addr] [len] [13 value bytes, zero-padded] [crc]
@@ -47,6 +50,8 @@ class JkBmsProtocol(
     private var numCells: Int = maxCells
     private var fwOffset: Int = 0 // 0 for 24s firmware, 32 for 32s firmware
     private var lastData: BmsData? = null
+    private var firstDeviceInfo = CompletableDeferred<Unit>()
+    private var firstStatus = CompletableDeferred<Unit>()
     // Defaults size the old live decoder; only device/settings replies qualify history.
     private var historyLayout: Int? = null
     private var historyDeclaredCells: Int? = null
@@ -68,6 +73,24 @@ class JkBmsProtocol(
         buildCommand(0x96)   // Query state → starts continuous streaming
     )
 
+    /** Run after subscription, alongside the collector that assembles and checks the replies. */
+    internal suspend fun startTelemetry(write: suspend (ByteArray) -> Unit) {
+        val (infoRequest, statusRequest) = handshakeCommands()
+        val info = firstDeviceInfo
+        val status = firstStatus
+        write(infoRequest)
+        if (withTimeoutOrNull(DEVICE_INFO_TIMEOUT_MS) { info.await() } != null) {
+            delay(DEVICE_INFO_SETTLE_MS)
+        }
+        // Some devices report status without answering device info. Keep a bounded
+        // fallback, and recover a dropped stream request without reconnecting.
+        repeat(STATUS_REQUEST_ATTEMPTS) {
+            if (status.isCompleted) return
+            write(statusRequest)
+            if (withTimeoutOrNull(STATUS_TIMEOUT_MS) { status.await() } != null) return
+        }
+    }
+
     override fun pollCommands(): List<ByteArray> = emptyList() // JK streams after 0x96
 
     override val pollIntervalMs: Long = 0L // Not used — streaming
@@ -82,6 +105,8 @@ class JkBmsProtocol(
     override fun reset() {
         buffer.reset()
         lastData = null
+        firstDeviceInfo = CompletableDeferred()
+        firstStatus = CompletableDeferred()
         numCells = maxCells
         fwOffset = 0
         historyLayout = null
@@ -164,8 +189,14 @@ class JkBmsProtocol(
     private fun parseResponse(type: Int, buf: ByteArray) {
         when (type) {
             0x01 -> parseSettings(buf)
-            0x02 -> parseCellData(buf)
-            0x03 -> parseDeviceInfo(buf)
+            0x02 -> {
+                parseCellData(buf)
+                if (lastData != null) firstStatus.complete(Unit)
+            }
+            0x03 -> {
+                parseDeviceInfo(buf)
+                firstDeviceInfo.complete(Unit)
+            }
         }
     }
 
@@ -335,6 +366,11 @@ class JkBmsProtocol(
     }
 
     companion object {
+        private const val DEVICE_INFO_TIMEOUT_MS = 2_000L
+        private const val DEVICE_INFO_SETTLE_MS = 100L
+        private const val STATUS_TIMEOUT_MS = 1_000L
+        private const val STATUS_REQUEST_ATTEMPTS = 3
+
         // Bit 0 → "Charge Overtemperature", bit 15 → "Charge short circuit".
         // Order matches the esphome ERRORS table; names are shortened for the
         // single-line banner.

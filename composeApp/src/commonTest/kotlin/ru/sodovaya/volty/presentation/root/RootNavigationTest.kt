@@ -416,9 +416,7 @@ class RootNavigationTest {
         nav.replaceAll(editor)
         assertEquals(listOf(editor), stack.value.items.map { it.configuration })
 
-        // Mirrors RootComponent's onDeleted callback. Its exit is deliberately
-        // the same total operation as Cancel, rather than a bare `pop()`.
-        leaveVehicleEdit(nav, stack.value.items.size, Config.Dashboard)
+        nav.navigate { stackAfterVehicleDeletion(it, "v1", Config.Dashboard) }
 
         assertEquals(
             Config.Dashboard,
@@ -426,6 +424,31 @@ class RootNavigationTest {
             "deletion must remove the picker-created editor, not leave its Save control live"
         )
         assertEquals(listOf(Config.Dashboard), stack.value.items.map { it.configuration })
+    }
+
+    @Test
+    fun deleting_from_an_offline_overview_returns_to_the_retained_garage() {
+        val garage = Config.Picker(mode = "cold")
+        val (nav, stack) = buildStack(garage)
+        nav.push(Config.VehicleOverview("v1"))
+        nav.push(Config.VehicleEdit(vehicleId = "v1"))
+
+        nav.navigate { stackAfterVehicleDeletion(it, "v1", garage) }
+
+        assertEquals(listOf(garage), stack.value.items.map { it.configuration })
+    }
+
+    @Test
+    fun deleting_a_vehicle_keeps_screens_for_other_vehicles_and_recorded_rides() {
+        val garage = Config.Picker(mode = "cold")
+        val otherEditor = Config.VehicleEdit(vehicleId = "v2")
+        val ride = Config.History("ride")
+        val original = listOf(
+            garage, otherEditor, Config.VehicleOverview("v1"), ride,
+            Config.VehicleAlerts("v1"), Config.VehicleEdit(vehicleId = "v1"),
+        )
+
+        assertEquals(listOf(garage, otherEditor, ride), stackAfterVehicleDeletion(original, "v1", garage))
     }
 
     // ----- G2 Task 3: navigating to somewhere already in the stack -----

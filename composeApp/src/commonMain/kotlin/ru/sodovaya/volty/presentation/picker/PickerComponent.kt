@@ -27,12 +27,17 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -93,27 +98,75 @@ class DefaultPickerComponent(
     override val state: StateFlow<PickerComponent.State> = _state.asStateFlow()
 
     private var scanJob: Job? = null
+    private var savedByAddress = emptyMap<String, Vehicle>()
+    private val scanHits = mutableMapOf<String, DiscoveredDevice>()
+    private val nearbyScanSeenAddresses = mutableSetOf<String>()
 
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
-        scope.launch { startScan() }
+        scope.launch { observeSavedVehicles() }
+        loadGlances?.let { load ->
+            scope.launch {
+                state.filter { it.savedLoaded }
+                    .map { snapshot -> snapshot.saved.map(Vehicle::id).toSet() }
+                    .distinctUntilChanged()
+                    .collectLatest { ids ->
+                        val glances = try { load(ids) }
+                        catch (cancel: CancellationException) { throw cancel }
+                        catch (_: Exception) { emptyMap() }
+                        currentCoroutineContext().ensureActive()
+                        _state.update { snapshot ->
+                            if (snapshot.saved.map(Vehicle::id).toSet() == ids) {
+                                snapshot.copy(glances = glances, glancesLoaded = true)
+                            } else snapshot
+                        }
+                    }
+            }
+        }
     }
 
-    private suspend fun startScan() {
-        val saved = vehicleRepository.vehicles.first()
-        val garage = saved.filterNot { v -> v.isGuest || v.isDemo }
-        _state.update { it.copy(saved = garage, savedLoaded = true) }
-        // History reads run beside the scan; the garage renders its vehicles before their numbers arrive.
-        loadGlances?.let { load -> scope.launch {
-            val glances = try { load(garage.map { it.id }.toSet()) }
-                catch (cancel: CancellationException) { throw cancel }
-                catch (_: Exception) { emptyMap() }
-            _state.update { it.copy(glances = glances, glancesLoaded = true) }
-        } }
-        // Indexed by every address of every vehicle, not just the primary pack's:
-        // a controller-only vehicle has no pack address, so keying on that alone
-        // meant its own advertisement never matched it. See [vehiclesByAddress].
-        val savedByAddress: Map<String, Vehicle> = vehiclesByAddress(saved)
+    private suspend fun observeSavedVehicles() {
+        vehicleRepository.vehicles.collect { vehicles ->
+            val garage = vehicles.filterNot { it.isGuest || it.isDemo }
+            val previous = state.value
+            if (previous.savedLoaded && previous.saved == garage) return@collect
+
+            val previousAddresses = savedByAddress.keys
+            savedByAddress = vehiclesByAddress(garage)
+            // A provisional vehicle can be rolled back after the scan stopped for connection.
+            // Restore the original scan hit so the rider can retry from the same screen.
+            val removedHits = (previousAddresses - savedByAddress.keys).mapNotNull(scanHits::get)
+            val (nearbyHits, unknownHits) = removedHits.partition { it.bmsType != null }
+            nearbyHits.forEach { nearbyScanSeenAddresses += it.address }
+            val connected = (bmsRepository.connectionState.value as? ConnectionState.Connected)?.vehicle
+            val savedIds = garage.map(Vehicle::id).toSet()
+            _state.update { snapshot ->
+                val otherNearby = nearbyHits.fold(snapshot.otherNearby.filterNot { it.address in savedByAddress }) { list, hit ->
+                    list.withScanHit(hit)
+                }
+                val otherDevices = unknownHits.fold(snapshot.otherDevices.filterNot { it.address in savedByAddress }) { list, hit ->
+                    if (otherNearby.any { it.address == hit.address }) list else list.withScanHit(hit)
+                }
+                snapshot.copy(
+                    saved = garage,
+                    savedLoaded = true,
+                    myInRange = savedVehiclesInRange(connected),
+                    otherNearby = otherNearby,
+                    otherDevices = otherDevices.sortedByDescending(DiscoveredDevice::rssi),
+                    glances = snapshot.glances.filterKeys { it in savedIds },
+                )
+            }
+            if (!previous.savedLoaded) startScan()
+        }
+    }
+
+    private fun savedVehiclesInRange(connected: Vehicle?): List<Vehicle> {
+        val connectedMatch = connected?.takeUnless(Vehicle::isGuest)?.let { savedByAddress[it.primaryAddress] }
+        return (scanHits.keys.mapNotNull(savedByAddress::get) + listOfNotNull(connectedMatch))
+            .distinctBy(Vehicle::id)
+    }
+
+    private fun startScan() {
         // BLE peripherals don't advertise while we hold an active connection,
         // so a scan would render an empty list and the user is left wondering
         // what's wrong. Seed the picker with the currently-connected device so
@@ -124,9 +177,6 @@ class DefaultPickerComponent(
         // withdrawn as soon as the live state ends. Keep real scan hits as a
         // separate source so withdrawing the seed cannot hide a device that
         // the scanner actually observed during this picker session.
-        val scanSeenVehicleIds = mutableSetOf<String>()
-        val scanSeenAddresses = mutableSetOf<String>()
-        var connectedSeedVehicleId: String? = null
         var connectedSeedAddress: String? = null
         scope.launch {
             bmsRepository.connectionState.collect { connection ->
@@ -137,27 +187,19 @@ class DefaultPickerComponent(
                 val addressMatch = liveVehicle?.let { savedByAddress[it.primaryAddress] }
                 val savedMatch = addressMatch
                     ?.takeUnless { liveVehicle?.isGuest == true }
-                val nextSeedVehicleId = savedMatch?.id
                 val nextSeedAddress = liveVehicle?.primaryAddress
-                val oldVehicleId = connectedSeedVehicleId
                 val oldAddress = connectedSeedAddress
                 _state.update { s ->
-                    var myInRange = s.myInRange
+                    val myInRange = savedVehiclesInRange(liveVehicle)
                     var otherNearby = s.otherNearby
-                    if (oldVehicleId != null && oldVehicleId != nextSeedVehicleId &&
-                        oldVehicleId !in scanSeenVehicleIds
-                    ) {
-                        myInRange = myInRange.filterNot { it.id == oldVehicleId }
-                    }
                     if (oldAddress != null && oldAddress != nextSeedAddress &&
-                        oldAddress !in scanSeenAddresses
+                        oldAddress !in nearbyScanSeenAddresses
                     ) {
                         otherNearby = otherNearby.filterNot { it.address == oldAddress }
                     }
                     if (liveVehicle == null) {
                         s.copy(myInRange = myInRange, otherNearby = otherNearby)
                     } else if (savedMatch != null) {
-                        if (myInRange.none { it.id == savedMatch.id }) myInRange = myInRange + savedMatch
                         otherNearby = otherNearby.filterNot { it.address == nextSeedAddress }
                         s.copy(myInRange = myInRange, otherNearby = otherNearby)
                     } else {
@@ -176,14 +218,15 @@ class DefaultPickerComponent(
                         )
                     }
                 }
-                connectedSeedVehicleId = nextSeedVehicleId
                 connectedSeedAddress = nextSeedAddress
             }
         }
         scanJob = scope.launch {
-            bmsRepository.scanAll().collect { dev ->
-                val matched = savedByAddress[dev.address]
-                if (matched != null) scanSeenVehicleIds += matched.id
+            bmsRepository.scanAll().collect { hit ->
+                val matched = savedByAddress[hit.address]
+                // The scanner resolved this metadata against the saved list at subscription time.
+                val dev = if (hit.knownVehicle != null) hit.copy(knownVehicle = null) else hit
+                scanHits[hit.address] = scanHits[hit.address]?.mergeScanHit(dev) ?: dev
                 val beforeHit = _state.value
                 if (matched == null &&
                     (dev.bmsType != null || beforeHit.otherNearby.any { it.address == dev.address })
@@ -192,7 +235,7 @@ class DefaultPickerComponent(
                     // A saved match goes to myInRange; an undetected new address
                     // goes to otherDevices and cannot keep a synthetic nearby
                     // row alive merely by sharing its address.
-                    scanSeenAddresses += dev.address
+                    nearbyScanSeenAddresses += dev.address
                 }
                 _state.update { s ->
                     when {

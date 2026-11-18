@@ -357,6 +357,7 @@
     <string name="units_open">Единицы (км / мили)</string>
     <string name="units_open_subtitle">Общая настройка приложения, одна на все транспорты</string>
     <string name="vehicle_save_blocked">Нельзя сохранить: настройки ниже противоречат друг другу. Исправьте источники, отмеченные красным.</string>
+    <string name="vehicle_save_source_required">Чтобы сохранить ТС, добавьте контроллер или батарею.</string>
     <string name="composer_issue_conflicting_kinds">На этой линии уже другой протокол. Одна Bluetooth-линия говорит на одном протоколе.</string>
     <string name="composer_issue_duplicate_can_id">CAN id %1$d занят на этой линии дважды.</string>
     <string name="composer_issue_ambiguous_gateway">Больше одного источника выдаёт себя за саму приборку. Задайте остальным CAN id.</string>

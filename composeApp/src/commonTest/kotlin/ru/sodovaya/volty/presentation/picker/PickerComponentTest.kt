@@ -21,6 +21,7 @@ import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -49,7 +50,8 @@ class PickerComponentTest {
     private class FakeBmsRepo(
         private val scan: List<DiscoveredDevice>,
         /** What [connect] answers — a failure stands in for an unreachable device. */
-        private val connectResult: Result<Unit> = Result.success(Unit)
+        private val connectResult: Result<Unit> = Result.success(Unit),
+        private val completeConnection: CompletableDeferred<Unit>? = null,
     ) : BmsRepository {
         val guestConnects = mutableListOf<Pair<String, BmsType>>()
         val vehicleConnects = mutableListOf<Vehicle>()
@@ -59,7 +61,11 @@ class PickerComponentTest {
         override val activeVehicle = MutableStateFlow<Vehicle?>(null)
         override val connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
         override fun scanAll(): Flow<DiscoveredDevice> = scan.asFlow()
-        override suspend fun connect(vehicle: Vehicle): Result<Unit> { vehicleConnects += vehicle; return connectResult }
+        override suspend fun connect(vehicle: Vehicle): Result<Unit> {
+            vehicleConnects += vehicle
+            completeConnection?.await()
+            return connectResult
+        }
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> { guestConnects += address to type; return Result.success(Unit) }
         override suspend fun connectDemo(profile: DemoProfile): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() {}
@@ -84,10 +90,18 @@ class PickerComponentTest {
         /** Everything the store holds right now — an orphan row shows up here. */
         val stored: List<Vehicle> get() = store.values.toList()
 
-        override val vehicles: Flow<List<Vehicle>> = flowOf(saved)
+        override val vehicles = MutableStateFlow(saved)
         override suspend fun get(id: String): Vehicle? = store[id]
-        override suspend fun upsert(vehicle: Vehicle) { upserts += vehicle; store[vehicle.id] = vehicle }
-        override suspend fun delete(id: String) { deletes += id; store.remove(id) }
+        override suspend fun upsert(vehicle: Vehicle) {
+            upserts += vehicle
+            store[vehicle.id] = vehicle
+            vehicles.value = stored
+        }
+        override suspend fun delete(id: String) {
+            deletes += id
+            store.remove(id)
+            vehicles.value = stored
+        }
         override suspend fun touch(id: String) {}
         // Explicit, because both of VehicleRepository's gauge-peak members are abstract:
         // no fake gets a silent default. Nothing in this file rides a learned dial range
@@ -157,6 +171,60 @@ class PickerComponentTest {
     @AfterTest
     fun tearDown() {
         Dispatchers.resetMain()
+    }
+
+    @Test
+    fun `retained garage shows new vehicles and drops deleted vehicles and their presence`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val existing = vehicle("existing", "AA:BB")
+        val new = controllerVehicle("new", "CC:DD")
+        val repo = FakeVehicleRepo(listOf(existing))
+        val (garage, _) = component(
+            mode = "cold",
+            scan = listOf(device("AA:BB", BmsType.JK_BMS), device("CC:DD", null)),
+            vehicleRepo = repo,
+        )
+        runCurrent()
+        assertEquals(listOf(existing), garage.state.value.saved)
+        assertEquals(listOf(existing), garage.state.value.myInRange)
+
+        repo.upsert(new)
+        runCurrent()
+        assertEquals(listOf(existing, new), garage.state.value.saved)
+        assertEquals(listOf(existing, new), garage.state.value.myInRange)
+        assertTrue(garage.state.value.otherDevices.none { it.address == "CC:DD" })
+
+        repo.delete(existing.id)
+        runCurrent()
+        assertEquals(listOf(new), garage.state.value.saved)
+        assertEquals(listOf(new), garage.state.value.myInRange)
+    }
+
+    @Test
+    fun `failed provisional connection restores its discovered device without another scan hit`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val hit = device("AA:BB", null, controllerType = ControllerType.VESC)
+        val completeConnection = CompletableDeferred<Unit>()
+        val ble = FakeBmsRepo(
+            scan = listOf(hit),
+            connectResult = Result.failure(IllegalStateException("Out of range")),
+            completeConnection = completeConnection,
+        )
+        val (garage, _) = component(mode = "cold", scan = emptyList(), bmsRepo = ble)
+        runCurrent()
+        assertEquals(listOf(hit), garage.state.value.otherDevices)
+
+        garage.onConnectWithType(hit, SourceChoice.Controller(ControllerType.VESC))
+        runCurrent()
+        assertEquals(listOf(hit.address), garage.state.value.saved.map { it.controllers.single().address })
+        assertTrue(garage.state.value.otherDevices.isEmpty())
+
+        completeConnection.complete(Unit)
+        runCurrent()
+        assertTrue(garage.state.value.saved.isEmpty())
+        assertTrue(garage.state.value.myInRange.isEmpty())
+        assertEquals(listOf(hit), garage.state.value.otherDevices)
+        assertEquals("Out of range", garage.state.value.error)
     }
 
     @Test
