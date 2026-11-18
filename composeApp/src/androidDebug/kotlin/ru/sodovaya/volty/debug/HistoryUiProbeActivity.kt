@@ -51,9 +51,11 @@ class HistoryUiProbeActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val favoriteFixture = intent.getBooleanExtra("favorites", false)
         val stored = favoriteFixture || intent.getBooleanExtra("stored", false)
-        val home = favoriteFixture || intent.getBooleanExtra("home", false)
+        val hud = !stored && intent.getBooleanExtra("hud", false)
+        val home = hud || favoriteFixture || intent.getBooleanExtra("home", false)
         val catalog = stored || intent.getBooleanExtra("catalog", false)
-        val repository = if (stored) getKoin().get<HistoryReadRepository>()
+        val repository = if (hud) HistoryHudUiProbeRepository()
+            else if (stored) getKoin().get<HistoryReadRepository>()
             else ProbeReader(intent.getBooleanExtra("omitFirstSource", false),intent.getBooleanExtra("remotePreviewArea", false),
                 home || intent.getBooleanExtra("summary", false) || intent.getBooleanExtra("charts", false),
                 home || intent.getBooleanExtra("charts", false), intent.getLongExtra("readDelayMillis", 0).coerceIn(0, 3000))
@@ -63,7 +65,8 @@ class HistoryUiProbeActivity : ComponentActivity() {
             favoriteStore = getKoin().get<HistoryFavoriteRepository>(), mediaRepository = getKoin().get<HistoryMediaRepository>(),
             deletionRepository = if (stored) getKoin().get<HistoryRideDeletionRepository>() else null,
             exportRepository = if (stored) getKoin().get<ru.sodovaya.volty.domain.history.HistoryExportRepository>() else null,
-            recordingRepository = intent.getStringExtra("recordingPanel")?.let { HistoryRecordingUiProbeRepository(it) })
+            recordingRepository = intent.getStringExtra("recordingPanel")?.let { HistoryRecordingUiProbeRepository(it) },
+            totalsRepository = repository.takeIf { hud }, defaultMetrics = hud)
         if (intent.getBooleanExtra("charts", false)) lifecycleScope.launch {
             var previous: Pair<HistoryRange?,HistoryRange?>? = null
             owner.state.collect { state ->
@@ -86,17 +89,22 @@ class HistoryUiProbeActivity : ComponentActivity() {
                 store.finish(id, fixes.last().tick, HistoryRideStatus.COMPLETED)
             }
             owner.openRide(id)
-        } else if (catalog) owner.refresh() else owner.openRide(if (home) "fixture-0" else "fixture")
+        } else if (hud) owner.openRide("hud-probe")
+        else if (catalog) owner.refresh() else owner.openRide(if (home) "fixture-0" else "fixture")
         setContent {
             VoltyTheme {
                 val state by owner.state.collectAsState()
                 if (home) {
-                    if (!stored) LaunchedEffect(state.detail.ride?.id) {
+                    if (!stored && !hud) LaunchedEffect(state.detail.ride?.id) {
                         if (state.detail.ride != null) listOf(HistorySeriesKey("fixture-a", "power_w"),
                             HistorySeriesKey("fixture-a", "voltage_v"), HistorySeriesKey("fixture-b", "current_a")).forEach(owner::addMetric)
                     }
-                    HistoryScreen(owner, { 0 }, 1000, vehicleNames = if (stored) emptyMap() else
-                        mapOf("fixture-vehicle-0" to "Scooter", "fixture-vehicle-1" to "Bicycle", "fixture-vehicle-2" to "Wheel"),
+                    val names = when {
+                        hud -> mapOf("hud-probe-wheel" to "Demo wheel")
+                        stored -> emptyMap()
+                        else -> mapOf("fixture-vehicle-0" to "Scooter", "fixture-vehicle-1" to "Bicycle", "fixture-vehicle-2" to "Wheel")
+                    }
+                    HistoryScreen(owner, { if (hud) 5_000 else 0 }, if (hud) 5_000 else 1_000, vehicleNames = names,
                         reduceMotion = intent.getBooleanExtra("reduceMotion", false))
                     return@VoltyTheme
                 }

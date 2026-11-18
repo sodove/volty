@@ -167,10 +167,18 @@ internal fun TotalsTiles(totals: List<HistoryTotal>, modifier: Modifier = Modifi
 }
 
 @Composable
-internal fun TotalTile(total: HistoryTotal) {
-    Column(Modifier.clip(RoundedCornerShape(12.dp)).background(MaterialTheme.colorScheme.surfaceContainerHigh)
-        .padding(horizontal = 10.dp, vertical = 7.dp)) {
+internal fun TotalTile(
+    total: HistoryTotal,
+    compact: Boolean = false,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerHigh,
+) {
+    Column(Modifier.clip(RoundedCornerShape(12.dp)).background(containerColor)
+        .padding(horizontal = if (compact) 6.dp else 10.dp, vertical = if (compact) 5.dp else 7.dp)) {
         Text(stringResource(total.kind.title()), fontSize = 10.5.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
-        Text(historyTotalPrefix(total) + total.text(), fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+        Text(
+            historyTotalPrefix(total) + total.text(),
+            color = if (compact) MaterialTheme.colorScheme.onSurface else Color.Unspecified,
+            fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+        )
     }
 }

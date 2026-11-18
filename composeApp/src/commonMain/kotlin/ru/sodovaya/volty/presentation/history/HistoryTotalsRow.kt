@@ -1,34 +1,23 @@
 package ru.sodovaya.volty.presentation.history
 
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.util.formatFixed
 import volty.composeapp.generated.resources.*
 
-/**
- * The headline tiles of the collapsed summary, in order: what was ridden, how long, how fast, how hard. Moving time
- * is left to the expanded view (rider, 2026-10-28: two times in the short row say nothing; peak PWM does). The
- * collapsed row scrolls sideways and fades its last tile, so nothing is dropped for lack of width; an earlier
- * revision took the first four tiles, which hid the top speed until the panel was expanded.
- */
+/** Headline distance and time, plus the secondary speed and consumption readouts when earned. */
 internal fun historyCollapsedTotals(totals: List<HistoryTotal>): List<HistoryTotal> =
-    COLLAPSED_ORDER.mapNotNull { kind -> totals.firstOrNull { it.kind == kind } }
+    listOf(HistoryTotalKind.DISTANCE_KM, HistoryTotalKind.DURATION_MILLIS, HistoryTotalKind.MAX_KMH, HistoryTotalKind.WH_PER_KM)
+        .mapNotNull { kind -> totals.firstOrNull { it.kind == kind } }
 
 /** The expanded summary: every tile, moving time after the headline ones it qualifies. */
 internal fun historyExpandedTotals(totals: List<HistoryTotal>): List<HistoryTotal> {
-    val headline = historyCollapsedTotals(totals)
+    val headline = SUMMARY_ORDER.mapNotNull { kind -> totals.firstOrNull { it.kind == kind } }
     val moving = totals.filter { it.kind == HistoryTotalKind.MOVING_MILLIS }
     return headline + moving + totals.filter { it !in headline && it.kind != HistoryTotalKind.MOVING_MILLIS }
 }
 
-private val COLLAPSED_ORDER = listOf(
+private val SUMMARY_ORDER = listOf(
     HistoryTotalKind.DISTANCE_KM, HistoryTotalKind.DURATION_MILLIS, HistoryTotalKind.AVERAGE_KMH,
     HistoryTotalKind.MAX_KMH, HistoryTotalKind.MAX_DUTY_PERCENT, HistoryTotalKind.WH_PER_KM,
     HistoryTotalKind.BATTERY_USED_PERCENT,

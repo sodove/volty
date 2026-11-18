@@ -6,19 +6,12 @@
 package ru.sodovaya.volty.presentation.history
 
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
-import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.PhotoLibrary
@@ -27,10 +20,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
@@ -40,7 +33,10 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.toLocalDateTime
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.history.*
+import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
+import ru.sodovaya.volty.presentation.common.SyncLightDashboardSystemBars
 import ru.sodovaya.volty.presentation.map.*
+import ru.sodovaya.volty.presentation.ride.*
 import volty.composeapp.generated.resources.*
 
 /** One selected read owner and one native map across home/fullscreen charts.
@@ -86,7 +82,7 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     }
     var summaryExpanded by remember(state.selectedRideId) { mutableStateOf(false) }
     // Closed by default: the map and the totals are the ride at a glance; charts are opened on purpose.
-    var chartsExpanded by remember { mutableStateOf(false) }
+    var chartsExpanded by remember(state.selectedRideId) { mutableStateOf(false) }
     LaunchedEffect(state.destination, state.mapMetricKey) {
         if (state.destination == HistoryDestination.RIDE && state.mapMetricKey != null) chartsExpanded = false
     }
@@ -158,38 +154,36 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
     }
     BoxWithConstraints(modifier.fillMaxSize().background(
         if (mapHost != null && content.phase != HistoryScreenPhase.CATALOG) androidx.compose.ui.graphics.Color.Transparent
-        else MaterialTheme.colorScheme.background).safeDrawingPadding()) {
+        else MaterialTheme.colorScheme.background)) {
         if (content.phase == HistoryScreenPhase.CATALOG) {
-            Scaffold(topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_title)) },
+            Scaffold(Modifier.safeDrawingPadding(), topBar = { TopAppBar(title = { Text(stringResource(Res.string.history_title)) },
                 windowInsets = WindowInsets(0), navigationIcon = {
                     HistoryBack { if (deletionSelection != null) deletionSelection = null else owner.back() }
                 }) }) { padding ->
                 catalog(Modifier.fillMaxSize().padding(padding), (maxHeight / 3).coerceAtMost(240.dp))
             }
         } else {
-            val wide = maxWidth >= 600.dp && maxWidth > maxHeight
             val density = LocalDensity.current
             val direction = LocalLayoutDirection.current
-            // The standalone map is inside safeDrawingPadding. The retained
-            // root map is outside it, and extends behind the bottom call/radio dock.
-            val externalTop = if (mapHost != null) WindowInsets.safeDrawing.getTop(density) else 0
-            val safeBottom = if (mapHost != null) WindowInsets.safeDrawing.getBottom(density) else 0
-            val externalBottom = mapViewportHeight?.let {
-                val viewportPixels = with(density) { it.roundToPx() }
-                (viewportPixels - constraints.maxHeight - externalTop).coerceAtLeast(safeBottom)
-            } ?: safeBottom
-            val externalLeft = if (mapHost != null) WindowInsets.safeDrawing.getLeft(density, direction) else 0
-            val externalRight = if (mapHost != null) WindowInsets.safeDrawing.getRight(density, direction) else 0
-            val panelWidth = if (wide) maxWidth * 0.5f else maxWidth
-            val panelHeight = if (wide) maxHeight else maxHeight * 0.55f
-            val summaryHeight = maxHeight * when {
-                summaryExpanded -> 0.62f
-                density.fontScale > 1.3f -> 0.45f
-                else -> 0.28f
-            }
-            // A short landscape window must still show the first earned value,
-            // not merely its heading; the panel keeps its own bounded scrolling.
-            val readableSummaryHeight = summaryHeight.coerceAtLeast(minOf(180.dp, maxHeight * 0.65f))
+            val safeDrawing = WindowInsets.safeDrawing
+            val externalTop = safeDrawing.getTop(density)
+            val safeBottom = safeDrawing.getBottom(density)
+            // Both maps extend beneath the system bars. The retained map also
+            // extends behind any root call/radio dock below this screen.
+            val dockHeight = mapViewportHeight?.let { with(density) { it.roundToPx() } - constraints.maxHeight } ?: 0
+            val externalBottom = safeBottom + dockHeight.coerceAtLeast(0)
+            val externalLeft = safeDrawing.getLeft(density, direction)
+            val externalRight = safeDrawing.getRight(density, direction)
+            val usableWidth = (maxWidth - with(density) { (externalLeft + externalRight).toDp() }).coerceAtLeast(0.dp)
+            val usableHeight = (maxHeight - with(density) { (externalTop + safeBottom).toDp() }).coerceAtLeast(0.dp)
+            val wide = usableWidth >= 600.dp && usableWidth > usableHeight
+            val panelWidth = if (wide) maxWidth * 0.46f else maxWidth
+            val summaryHeight = (usableHeight * 0.40f).coerceIn(64.dp, 300.dp)
+            val chartHeight = if (wide) (usableHeight - 154.dp).coerceIn(80.dp, 160.dp)
+                else (usableHeight * 0.28f).coerceIn(128.dp, 168.dp)
+            val layoutMode = lightLayoutMode(usableWidth.value, usableHeight.value)
+            val darkTheme = LocalVoltyDarkTheme.current
+            if (mapHost == null && state.destination == HistoryDestination.RIDE) SyncLightDashboardSystemBars(darkTheme)
             var topPixels by remember { mutableIntStateOf(0) }
             var panelPixels by remember { mutableIntStateOf(0) }
             var fitSequence by remember { mutableLongStateOf(0) }
@@ -204,9 +198,13 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
             val coloring = rememberHistoryMapColoring(identity, content.detail, content.route, state.mapMetricKey,
                 gpsMaxAgeMillis, state.mapMetricKey?.let(cursorMaxAgeMillis) ?: 0)
             val scene = geometry.copy(coloring = coloring, mediaFixes = mediaPositions)
-            val insets = HistoryMapInsets(sidePadding + externalLeft, topPixels + sidePadding + externalTop,
-                (if (wide) with(density) { panelWidth.roundToPx() } + sidePadding else sidePadding) + externalRight,
-                (if (wide) sidePadding else panelPixels + sidePadding) + externalBottom)
+            val chartOnRight = wide && chartsExpanded
+            val rightPanelPixels = if (chartOnRight) with(density) { panelWidth.roundToPx() } else 0
+            val insets = HistoryMapInsets(
+                sidePadding + externalLeft, topPixels + sidePadding + externalTop,
+                rightPanelPixels + sidePadding + externalRight,
+                (if (chartOnRight) 0 else panelPixels) + sidePadding + externalBottom,
+            )
             var fit by remember(identity, fitSequence) { mutableStateOf<MapCameraRequest.FitHistory?>(null) }
             val measured = topPixels > 0 && (wide || panelPixels > 0)
             // Freeze measured padding for this command. A panel animation must not
@@ -217,8 +215,9 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
             }
             val mapScene = historyMapNavigationScene(scene, fit)
             if (mapHost == null) PlatformRideMapLayer(mapScene,
-                MaterialTheme.colorScheme.surface.luminance() < 0.5f, {}, Modifier.fillMaxSize(),
-                onHistoryMediaClick = { id -> state.media.items.singleOrNull { it.id == id }?.let(owner::openMedia) })
+                darkTheme, {}, Modifier.matchParentSize(),
+                onHistoryMediaClick = { id -> state.media.items.singleOrNull { it.id == id }?.let(owner::openMedia) },
+                showAttribution = false)
             else SideEffect {
                 val source = content.detail?.ride?.favoriteSource()
                 val range = content.detail?.range
@@ -226,78 +225,115 @@ fun HistoryScreen(owner: HistoryComponent, cursorMaxAgeMillis: (HistorySeriesKey
                 else mapHost.clear(owner)
             }
             if (state.destination != HistoryDestination.CHARTS) {
-            Column(Modifier.align(Alignment.TopStart).fillMaxWidth(if (wide) 0.5f else 1f)
-                .onSizeChanged { topPixels = it.height }.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 3.dp) {
-                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        HistoryBack(owner::back)
-                        Text(stringResource(Res.string.history_title), Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                        if (state.export.available && content.phase == HistoryScreenPhase.READY)
-                            IconButton(onClick = owner::openExport) { Icon(Icons.Default.Share, stringResource(Res.string.history_export_title)) }
-                        if (state.media.available && state.media.favoriteId != null) IconButton(onClick = { mediaOpen = true }) {
-                            Icon(Icons.Default.PhotoLibrary, stringResource(Res.string.history_media_title))
+                LightMapVignette(darkTheme, Modifier.matchParentSize())
+                CompositionLocalProvider(LocalLightHudPalette provides lightHudPalette()) {
+                    val headerPadding = 6.dp
+                    val panelPadding = 10.dp
+                    val detail = content.detail
+                    val title = state.selectedFavorite?.name ?: detail?.ride?.let { vehicleNames[it.vehicleId] }
+                        ?: stringResource(Res.string.history_ride_title)
+                    val subtitle = detail?.ride?.started?.epochMillis?.let { historyRideDate(it) }
+                        ?: stringResource(Res.string.history_date_unknown)
+                    val actions = buildList {
+                        if (state.favorites.available && detail?.availableRange?.let { it.endEpochMillis > it.startEpochMillis } == true) {
+                            add(HistoryRideAction(
+                                stringResource(if (state.selectedFavorite == null) Res.string.history_favorite_add else Res.string.history_favorite_edit),
+                                if (state.selectedFavorite == null) Icons.Default.StarBorder else Icons.Default.Star,
+                            ) { submitted = false; trimOpen = true })
                         }
-                        if (state.favorites.available && content.detail?.availableRange?.let { it.endEpochMillis > it.startEpochMillis } == true)
-                            IconButton(onClick = { submitted = false; trimOpen = true }) {
-                                Icon(if (state.selectedFavorite == null) Icons.Default.StarBorder else Icons.Default.Star,
-                                    stringResource(if (state.selectedFavorite == null) Res.string.history_favorite_add else Res.string.history_favorite_edit))
-                            }
-                        IconButton(onClick = { fitSequence++ }, enabled = scene.segments.isNotEmpty()) {
-                            Icon(Icons.Default.MyLocation, stringResource(Res.string.history_fit_route))
+                        if (state.media.available && state.media.favoriteId != null) {
+                            add(HistoryRideAction(stringResource(Res.string.history_media_title), Icons.Default.PhotoLibrary) { mediaOpen = true })
+                        }
+                        if (state.export.available && content.phase == HistoryScreenPhase.READY) {
+                            add(HistoryRideAction(stringResource(Res.string.history_export_title), Icons.Default.Share, owner::openExport))
                         }
                     }
-                }
-                if (content.detail != null) HistorySummaryPanel(state.totals, summaryExpanded, { summaryExpanded = it },
-                    Modifier.fillMaxWidth().heightIn(max = readableSummaryHeight), reduceMotion)
-                HistoryRouteStatus(content, owner)
-            }
-            Surface(Modifier.align(if (wide) Alignment.CenterEnd else Alignment.BottomCenter).width(panelWidth)
-                .heightIn(max = panelHeight).onSizeChanged { panelPixels = it.height },
-                shape = RoundedCornerShape(topStart = 16.dp, topEnd = if (wide) 0.dp else 16.dp), tonalElevation = 3.dp) {
-                val scrollChrome = panelHeight < 480.dp || density.fontScale > 1.3f
-                Column((if (reduceMotion) Modifier else Modifier.animateContentSize(tween(180)))
-                    .then(if (scrollChrome) Modifier.verticalScroll(rememberScrollState()) else Modifier)) {
-                    val neighbors = historyRideNeighbors(state.catalog.rides.map { it.id }, state.selectedRideId)
-                    val title = state.selectedFavorite?.name ?: content.detail?.ride?.let { vehicleNames[it.vehicleId] }
-                        ?: stringResource(Res.string.history_ride_title)
-                    val subtitle = content.detail?.ride?.started?.epochMillis?.let { historyRideDate(it) }
-                        ?: stringResource(Res.string.history_date_unknown)
-                    HistoryNavigationStrip(title, subtitle, neighbors.previousId != null, neighbors.nextId != null,
-                        { neighbors.previousId?.let(openRide) }, { neighbors.nextId?.let(openRide) },
-                        { listOpen = true }, owner::showCharts, { metricsOpen = true }, Modifier.padding(8.dp), singleRow = wide)
-                    if (content.phase == HistoryScreenPhase.READY) {
-                        Surface(onClick = { chartsExpanded = !chartsExpanded }, color = MaterialTheme.colorScheme.surfaceContainerHigh) {
-                            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Text(stringResource(Res.string.history_charts_title), Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                                IconButton(onClick = { chartsExpanded = !chartsExpanded }) {
-                                    Icon(if (chartsExpanded) Icons.Default.ExpandMore else Icons.Default.ExpandLess,
-                                        stringResource(if (chartsExpanded) Res.string.history_charts_collapse else Res.string.history_charts_expand))
+                    Column(
+                        platformNavigationGlass(
+                            Modifier.align(Alignment.TopStart).fillMaxWidth(if (wide) 0.56f else 1f),
+                            fade = MapGlassFade.BOTTOM,
+                        ).padding(bottom = MapGlassFadeDepth)
+                            .windowInsetsPadding(safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+                            .onSizeChanged { topPixels = it.height }
+                            .padding(horizontal = headerPadding).padding(top = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        HistoryRideHeader(title, subtitle, layoutMode, { listOpen = true }, owner::back, actions)
+                        if (detail != null) HistorySummaryPanel(
+                            state.totals, summaryExpanded,
+                            onExpandedChange = { expanded ->
+                                summaryExpanded = expanded
+                                if (expanded) chartsExpanded = false
+                            },
+                            modifier = Modifier.padding(horizontal = panelPadding - headerPadding)
+                                .heightIn(max = summaryHeight),
+                            reduceMotion = reduceMotion,
+                        )
+                        if (content.phase == HistoryScreenPhase.READY) HistoryRouteStatus(content, owner)
+                        else HistoryHudSurface(Modifier.fillMaxWidth()) { HistoryDetailStatus(content.phase, owner::retrySelectedRide) }
+                    }
+                    if (scene.segments.isNotEmpty()) {
+                        LightCircleButton(
+                            Icons.Default.LocationSearching, stringResource(Res.string.history_fit_route),
+                            Modifier.align(if (wide) Alignment.TopEnd else Alignment.CenterEnd)
+                                .offset(y = if (wide) maxHeight * 0.22f else 0.dp)
+                                .windowInsetsPadding(safeDrawing.only(WindowInsetsSides.Horizontal))
+                                .padding(end = 10.dp),
+                        ) { fitSequence++ }
+                    }
+                    Column(
+                        platformNavigationGlass(
+                            Modifier.align(Alignment.BottomEnd).width(panelWidth),
+                            fade = MapGlassFade.TOP,
+                        ).padding(top = MapGlassFadeDepth)
+                            .windowInsetsPadding(safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal))
+                            .onSizeChanged { panelPixels = it.height }
+                            .padding(horizontal = panelPadding),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalAlignment = Alignment.End,
+                    ) {
+                        if (content.phase == HistoryScreenPhase.READY && detail != null) {
+                            state.mapMetricKey?.let { key ->
+                                HistoryHudSurface(Modifier.fillMaxWidth()) {
+                                    HistoryMapColorLegend(detail, key, coloring, { owner.selectMapMetric(null) })
                                 }
                             }
+                            HistoryRideAnalysis(
+                                detail, state, owner, chartsExpanded,
+                                onToggle = {
+                                    chartsExpanded = !chartsExpanded
+                                    if (chartsExpanded) summaryExpanded = false
+                                },
+                                onOpenMetrics = { metricsOpen = true },
+                                cursorMaxAgeMillis = cursorMaxAgeMillis,
+                                reduceMotion = reduceMotion,
+                                chartModifier = Modifier.fillMaxWidth().height(chartHeight),
+                            )
                         }
-                        if (chartsExpanded) HistoryChartPanel(checkNotNull(content.detail), owner::selectTime, cursorMaxAgeMillis,
-                            Modifier.fillMaxWidth().then(if (scrollChrome) Modifier.height(240.dp) else Modifier.weight(1f)),
-                            state.windowPreview, owner, compact = true, mapMetricKey = state.mapMetricKey,
-                            onSelectMapMetric = owner::selectMapMetric)
-                        state.mapMetricKey?.let { key -> HistoryMapColorLegend(checkNotNull(content.detail), key, coloring,
-                            { owner.selectMapMetric(null) }) }
-                        HistoryTimelineControls(checkNotNull(content.detail).copy(range = state.windowPreview ?: content.detail.range),
-                            owner::selectRange, owner::selectTime, compact = true, applyNavigationInsets = false)
-                    } else HistoryDetailStatus(content.phase, owner::retrySelectedRide)
-                    HistoryPreviewAttribution()
+                        MapAttributionCorner(darkTheme)
+                    }
                 }
-            }
             }
             // Keep the same map mounted beneath the opaque chart page; there is no
             // second map/read owner and returning does not recreate its camera.
             if (state.destination == HistoryDestination.CHARTS)
-                HistoryChartsScreen(owner, state, cursorMaxAgeMillis, Modifier.fillMaxSize(), applySystemInsets = false)
+                HistoryChartsScreen(owner, state, cursorMaxAgeMillis,
+                    Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding(),
+                    applySystemInsets = false)
         }
     }
     if (listOpen && content.phase != HistoryScreenPhase.CATALOG) ModalBottomSheet(onDismissRequest = { listOpen = false },
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         containerColor = MaterialTheme.colorScheme.surfaceContainer) {
-        Text(stringResource(Res.string.history_title), Modifier.padding(horizontal = 24.dp), style = MaterialTheme.typography.headlineSmall)
+        val neighbors = historyRideNeighbors(state.catalog.rides.map { it.id }, state.selectedRideId)
+        Row(Modifier.fillMaxWidth().padding(start = 24.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text(stringResource(Res.string.history_title), Modifier.weight(1f), style = MaterialTheme.typography.headlineSmall,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            HistoryRideStepButtons(
+                neighbors.previousId?.let { id -> { openRide(id) } },
+                neighbors.nextId?.let { id -> { openRide(id) } },
+            )
+        }
         catalog(Modifier.fillMaxWidth().heightIn(max = 640.dp).imePadding(), 240.dp)
     }
     if (metricsOpen && content.detail != null) HistoryMetricDrawer(content.detail, owner::loadSourceMetrics,
@@ -359,8 +395,8 @@ private fun HistoryBack(onBack: () -> Unit) {
 
 @Composable
 private fun HistoryDetailStatus(phase: HistoryScreenPhase, onRetry: () -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(24.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (phase == HistoryScreenPhase.LOADING) LinearProgressIndicator(Modifier.fillMaxWidth())
+    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (phase == HistoryScreenPhase.LOADING) LinearProgressIndicator(Modifier.fillMaxWidth().height(2.dp))
         Text(stringResource(when (phase) {
             HistoryScreenPhase.NOT_FOUND -> Res.string.history_ride_missing
             HistoryScreenPhase.ERROR -> Res.string.history_ride_load_error
@@ -381,7 +417,7 @@ private fun HistoryRouteStatus(content: HistoryScreenContent, owner: HistoryComp
         route.truncated || route.capped || route.nextCursor != null -> Res.string.history_preview_partial
         else -> null
     } ?: return
-    Surface(shape = RoundedCornerShape(12.dp), tonalElevation = 3.dp) {
+    HistoryHudSurface {
         Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text(stringResource(label), style = MaterialTheme.typography.labelMedium)
             if (route?.error != null) TextButton(onClick = owner::retryRoute) { Text(stringResource(Res.string.history_retry)) }

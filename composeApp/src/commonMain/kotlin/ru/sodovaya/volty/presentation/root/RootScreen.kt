@@ -108,6 +108,7 @@ import ru.sodovaya.volty.presentation.map.NavigationTrailPoint
 import ru.sodovaya.volty.presentation.map.RideMapTrailSample
 import ru.sodovaya.volty.presentation.map.ChannelMapScreen
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
+import ru.sodovaya.volty.presentation.common.SyncLightDashboardSystemBars
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.stats.MotionReadings
@@ -203,6 +204,9 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val offlineActionScope = rememberCoroutineScope()
     val activeRide = active as? RootComponent.Child.Ride
     val activeRideState = activeRide?.component?.state?.collectAsState()?.value
+    if (activeRideState?.style == DashboardStyle.LIGHT || historyState?.destination == HistoryDestination.RIDE) {
+        SyncLightDashboardSystemBars(darkTheme)
+    }
     val activeChromeVisible = bottomTabBarVisible(chromeDestination(active), activeRideState?.style)
     val lastChrome = remember { arrayOf(active) }
     if (activeChromeVisible) SideEffect { lastChrome[0] = active }

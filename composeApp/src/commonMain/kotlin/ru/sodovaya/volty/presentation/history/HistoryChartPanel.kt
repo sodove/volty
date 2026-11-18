@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipRect
@@ -38,13 +39,20 @@ fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
     mapMetricKey: HistorySeriesKey? = null, onSelectMapMetric: ((HistorySeriesKey) -> Unit)? = null) {
     val text = historyMetricText()
     val labels = historySourceLabels(state.sources)
-    LazyColumn(modifier, contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    val padding = if (compact) 8.dp else 16.dp
+    LazyColumn(modifier, contentPadding = PaddingValues(padding), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         if (state.selectedKeys.isEmpty()) item("empty") {
             Text(stringResource(Res.string.history_metrics_selected_empty))
         }
         items(state.selectedKeys, key = ::historyMetricItemKey) { key ->
-            Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 2.dp) {
-                Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Surface(
+                shape = MaterialTheme.shapes.medium,
+                color = if (compact) Color.Transparent else MaterialTheme.colorScheme.surface,
+                contentColor = LocalContentColor.current,
+                tonalElevation = if (compact) 0.dp else 2.dp,
+            ) {
+                Column(Modifier.fillMaxWidth().padding(horizontal = if (compact) 4.dp else 12.dp,
+                    vertical = if (compact) 0.dp else 12.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 2.dp else 6.dp)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                     FlowRow(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(text.title(key), style = MaterialTheme.typography.titleSmall)
@@ -60,7 +68,7 @@ fun HistoryChartPanel(state: HistoryDetailState, onSelectTime: (Long?) -> Unit,
                     val source = state.sources.singleOrNull { it.id == key.sourceId }
                     val descriptor = HistoryMetricRegistry.descriptor(key.metricId)
                     val stats = state.stats[key]?.takeIf { source?.kind in descriptor?.sourceKinds.orEmpty() }
-                    if (stats != null && key !in state.loadingKeys && key !in state.metricErrors) {
+                    if (!compact && stats != null && key !in state.loadingKeys && key !in state.metricErrors) {
                         val summary = historyMetricSummary(key, stats)
                         FlowRow(horizontalArrangement = Arrangement.spacedBy(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             SummaryCell(stringResource(Res.string.history_summary_min), summary.minimum, summary.unit)

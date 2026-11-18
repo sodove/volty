@@ -1,6 +1,5 @@
 package ru.sodovaya.volty.presentation.ride
 
-import ru.sodovaya.volty.domain.video.OverlayPalette
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -31,7 +30,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BatteryFull
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material.icons.filled.Navigation
@@ -51,14 +49,12 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -73,7 +69,6 @@ import ru.sodovaya.volty.domain.model.DutySource
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
-import ru.sodovaya.volty.presentation.common.SyncLightDashboardSystemBars
 import ru.sodovaya.volty.presentation.navigation.LightNavigationCallbacks
 import ru.sodovaya.volty.presentation.navigation.LightNavigationDockPolicy
 import ru.sodovaya.volty.presentation.navigation.LightNearbyPlacement
@@ -108,56 +103,8 @@ import volty.composeapp.generated.resources.no_battery
 import volty.composeapp.generated.resources.navigation_open
 import volty.composeapp.generated.resources.navigation_recenter
 import kotlin.math.roundToInt
-import kotlin.math.sqrt
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-
-internal data class LightHudPalette(
-    val text: Color,
-    val muted: Color,
-    val surface: Color,
-    val surfaceStrong: Color,
-    val cyan: Color,
-    val green: Color,
-    val battery: Color,
-    val orange: Color,
-    val pink: Color,
-)
-
-private val DarkLightHudPalette = LightHudPalette(
-    text = Color(OverlayPalette.TEXT),
-    muted = Color(OverlayPalette.MUTED),
-    surface = Color(OverlayPalette.SURFACE),
-    surfaceStrong = Color(OverlayPalette.SURFACE_STRONG),
-    cyan = Color(OverlayPalette.CYAN),
-    green = Color(OverlayPalette.GREEN),
-    battery = Color(OverlayPalette.BATTERY),
-    orange = Color(OverlayPalette.ORANGE),
-    pink = Color(OverlayPalette.PINK),
-)
-
-private val BrightLightHudPalette = LightHudPalette(
-    text = Color(0xFF10232D),
-    muted = Color(0xFF435A64),
-    surface = Color(0xB8FFFFFF),
-    surfaceStrong = Color(0xD9FFFFFF),
-    cyan = Color(0xFF007C99),
-    green = Color(0xFF00856C),
-    battery = Color(0xFF008A4E),
-    orange = Color(0xFFB65A00),
-    pink = Color(0xFFB31B52),
-)
-
-internal val LocalLightHudPalette = staticCompositionLocalOf { DarkLightHudPalette }
-
-private fun lightHudTextScale(layoutMode: LightLayoutMode): Float = when (layoutMode) {
-    LightLayoutMode.COMPACT -> 1f
-    LightLayoutMode.MEDIUM -> 1.10f
-    LightLayoutMode.WIDE -> 1.16f
-}
-
-private fun lightHudSp(base: Float, layoutMode: LightLayoutMode) =
-    (base * lightHudTextScale(layoutMode)).sp
 
 private fun lightTopGraphHeight(layoutMode: LightLayoutMode): Float = when (layoutMode) {
     LightLayoutMode.COMPACT -> 20f
@@ -191,14 +138,7 @@ internal fun LightRideDashboard(
     navigationState: LightNavigationState? = null,
     navigationCallbacks: LightNavigationCallbacks? = null,
 ) {
-    SyncLightDashboardSystemBars(darkTheme = LocalVoltyDarkTheme.current)
-    val mapPalette = ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette.current
-    val darkTheme = LocalVoltyDarkTheme.current
-    val palette = (if (darkTheme) DarkLightHudPalette else BrightLightHudPalette).copy(
-        text = Color(mapPalette.text), muted = Color(mapPalette.textMuted),
-        surface = Color(mapPalette.hudSurface).copy(alpha = if (darkTheme) 0.40f else LIGHT_HUD_SURFACE_ALPHA),
-        surfaceStrong = Color(mapPalette.hudSurfaceStrong).copy(alpha = if (darkTheme) 0.50f else LIGHT_HUD_SURFACE_STRONG_ALPHA),
-    )
+    val palette = lightHudPalette()
     val targetTelemetry = LightDashboardMapper.values(
         motion = state.motion,
         battery = state.battery,
@@ -640,31 +580,7 @@ private fun LightTopBar(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         LightCircleButton(Icons.Default.Groups, "Nearby", onClick = onNearby)
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .clickable(onClick = onPillClick)
-                .minimumInteractiveComponentSize(),
-            contentAlignment = Alignment.Center,
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(36.dp)
-                    .clip(RoundedCornerShape(22.dp))
-                    .background(LocalLightHudPalette.current.surfaceStrong)
-                    .border(1.dp, Color(0x445A8C99), RoundedCornerShape(22.dp))
-                    .padding(horizontal = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.Center,
-            ) {
-                Box(Modifier.size(7.dp).clip(CircleShape).background(statusColor))
-                Spacer(Modifier.size(7.dp))
-                Text(name, color = LocalLightHudPalette.current.text, style = TextStyle(fontSize = lightHudSp(12f, layoutMode), lineHeight = lightHudSp(14f, layoutMode), fontWeight = FontWeight.SemiBold))
-                Spacer(Modifier.size(3.dp))
-                Icon(Icons.Default.ExpandMore, contentDescription = null, tint = LocalLightHudPalette.current.muted, modifier = Modifier.size(18.dp))
-            }
-        }
+        LightVehiclePill(name, layoutMode, onPillClick, Modifier.weight(1f), statusColor = statusColor)
         LightCircleButton(Icons.Default.Settings, "Настройки", onClick = onSettings)
     }
 }
@@ -802,26 +718,6 @@ private fun LightBatteryLine(readout: LightReadout, soc: LightReadout, line: Lig
     }
 }
 
-@Composable
-private fun LightCircleButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit = {}) {
-    Box(
-        modifier = Modifier
-            .clickable(onClick = onClick)
-            .minimumInteractiveComponentSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .background(LocalLightHudPalette.current.surface),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(icon, contentDescription = description, tint = LocalLightHudPalette.current.text.copy(alpha = 0.85f), modifier = Modifier.size(18.dp))
-        }
-    }
-}
-
 /**
  * Shown only when no map is mounted under the HUD. It is the theme's map
  * background, the same colour the real map's backing box paints. Retraction:
@@ -835,26 +731,6 @@ private fun LightCircleButton(icon: androidx.compose.ui.graphics.vector.ImageVec
 private fun LightMapFallback() {
     val background = Color(ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette.current.background)
     Box(Modifier.fillMaxSize().background(background))
-}
-
-@Composable
-private fun LightMapVignette(darkTheme: Boolean, modifier: Modifier = Modifier) {
-    val spec = lightMapOverlaySpec(darkTheme)
-    val tint = Color(ru.sodovaya.volty.presentation.map.LocalVoltyMapPalette.current.background)
-    Canvas(modifier) {
-        val center = Offset(size.width / 2f, size.height / 2f)
-        val radius = sqrt(center.x * center.x + center.y * center.y)
-        drawRect(
-            brush = Brush.radialGradient(
-                0f to tint.copy(alpha = spec.vignetteCenterAlpha),
-                spec.clearUntilFraction to tint.copy(alpha = spec.vignetteCenterAlpha),
-                spec.edgeStartFraction to tint.copy(alpha = spec.vignetteEdgeAlpha * 0.55f),
-                1f to tint.copy(alpha = spec.vignetteEdgeAlpha),
-                center = center,
-                radius = radius,
-            ),
-        )
-    }
 }
 
 private const val MAX_HISTORY_POINTS = 40

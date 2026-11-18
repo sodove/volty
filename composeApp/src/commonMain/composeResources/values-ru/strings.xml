@@ -1126,6 +1126,8 @@
     <string name="history_map_unknown">Серый: нет подтверждённого значения показателя</string>
     <string name="history_charts_expand">Показать графики</string>
     <string name="history_charts_collapse">Скрыть графики</string>
+    <string name="history_charts_fullscreen">Открыть графики на весь экран</string>
+    <string name="history_ride_actions">Действия с поездкой</string>
     <string name="history_ride_loading">Загрузка поездки…</string>
     <string name="history_ride_missing">Эта поездка больше недоступна</string>
     <string name="history_ride_load_error">Не удалось прочитать поездку</string>

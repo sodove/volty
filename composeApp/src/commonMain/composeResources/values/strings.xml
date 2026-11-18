@@ -1128,6 +1128,8 @@
     <string name="history_map_unknown">Grey: no confirmed metric value</string>
     <string name="history_charts_expand">Show charts</string>
     <string name="history_charts_collapse">Hide charts</string>
+    <string name="history_charts_fullscreen">Open full-screen charts</string>
+    <string name="history_ride_actions">Ride actions</string>
     <string name="history_ride_loading">Loading ride…</string>
     <string name="history_ride_missing">This ride is no longer available</string>
     <string name="history_ride_load_error">Could not read this ride</string>

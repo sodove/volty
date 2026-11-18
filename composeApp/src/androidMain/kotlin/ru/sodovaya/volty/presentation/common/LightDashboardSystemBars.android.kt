@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.common
 
 import android.app.Activity
 import android.graphics.Color
+import android.os.Build
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.SideEffect
@@ -19,11 +20,17 @@ actual fun SyncLightDashboardSystemBars(darkTheme: Boolean) {
         val oldNavigationColor = window.navigationBarColor
         val oldLightStatusBars = controller.isAppearanceLightStatusBars
         val oldLightNavigationBars = controller.isAppearanceLightNavigationBars
+        val oldStatusContrast = if (Build.VERSION.SDK_INT >= 29) window.isStatusBarContrastEnforced else false
+        val oldNavigationContrast = if (Build.VERSION.SDK_INT >= 29) window.isNavigationBarContrastEnforced else false
         onDispose {
             window.statusBarColor = oldStatusColor
             window.navigationBarColor = oldNavigationColor
             controller.isAppearanceLightStatusBars = oldLightStatusBars
             controller.isAppearanceLightNavigationBars = oldLightNavigationBars
+            if (Build.VERSION.SDK_INT >= 29) {
+                window.isStatusBarContrastEnforced = oldStatusContrast
+                window.isNavigationBarContrastEnforced = oldNavigationContrast
+            }
         }
     }
     SideEffect {
@@ -32,7 +39,8 @@ actual fun SyncLightDashboardSystemBars(darkTheme: Boolean) {
         controller.isAppearanceLightNavigationBars = !darkTheme
         window.statusBarColor = Color.TRANSPARENT
         window.navigationBarColor = Color.TRANSPARENT
-        if (android.os.Build.VERSION.SDK_INT >= 29) {
+        if (Build.VERSION.SDK_INT >= 29) {
+            window.isStatusBarContrastEnforced = false
             window.isNavigationBarContrastEnforced = false
         }
     }

@@ -528,7 +528,7 @@ private fun AndroidMapLibreView(
                 .fillMaxSize()
                 .hazeSource(state = hazeState, zIndex = 0f),
         )
-        MapTopBottomBlur(hazeState = hazeState, modifier = Modifier.fillMaxSize())
+        if (scene.history == null) MapTopBottomBlur(hazeState, Modifier.fillMaxSize())
         if (historyCoverKey != null) {
             key(historyCoverKey, darkTheme) {
                 val coverAlpha by animateFloatAsState(
