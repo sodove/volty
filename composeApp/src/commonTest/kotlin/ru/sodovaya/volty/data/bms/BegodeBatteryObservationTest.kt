@@ -40,12 +40,20 @@ class BegodeBatteryObservationTest {
     @Test fun bootTelemetryIsAbsentAndRealZeroCurrentIsEarned() {
         val protocol = BegodeProtocol(); val events = capture(protocol)
         protocol.onNotification(telemetry(0, 0, boot = true))
+        val placeholder = assertNotNull(protocol.latestData(0))
+        assertFalse(placeholder.hasCurrent)
+        assertFalse(placeholder.hasPower)
         // Retraction: this asserted CURRENT = UNAVAILABLE on the boot frame. A placeholder frame makes no claim about the
         // current, so it is omitted (no observation), exactly as the controller-power fix (Task 6) omits an unpaired 0x00.
         assertTrue(events.single().readings.none { it.metric == TelemetryMetric.CURRENT || it.metric == TelemetryMetric.POWER })
         protocol.onNotification(telemetry(0, 0))
+        val measured = assertNotNull(protocol.latestData(0))
+        assertTrue(measured.hasCurrent)
+        assertEquals(0f, measured.current, 0f)
+        assertTrue(measured.hasPower)
         assertEquals(0.0, assertNotNull(events.last().read(TelemetryMetric.CURRENT).value), 0.0)
         protocol.onNotification(telemetry(0, 0, boot = true))
+        assertFalse(assertNotNull(protocol.latestData(0)).hasCurrent)
         assertTrue(events.last().readings.none { it.metric == TelemetryMetric.CURRENT })
     }
 

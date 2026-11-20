@@ -403,8 +403,8 @@ class BegodeProtocol(
          * the field's real scale is ~0.1009 V/unit.
          */
         var packVoltageV = 0f
-        /** Branch current (A), positive = charging. */
-        var currentA = 0f
+        /** Branch current (A), positive = charging. Null for a voltage-only frame. */
+        var currentA: Float? = null
         /** Two temperatures per section, indexed [section * 2 + sensor]. */
         val sectionTemps = arrayOfNulls<Float>(4)
         /** Per-section voltage (V) — parsed for the pack-materialisation task. */
@@ -416,7 +416,7 @@ class BegodeProtocol(
         fun reset() {
             sawTelemetry = false
             packVoltageV = 0f
-            currentA = 0f
+            currentA = null
             sectionTemps.fill(null)
             sectionVoltageV.fill(0f)
             cells.clear()
@@ -2094,7 +2094,6 @@ class BegodeProtocol(
         // from it downstream cannot disagree with the sign of its own current.
         val rawDischargeA = frame.i16BE(8) * 0.1f
         val bmsMultiplier = currentSettings().bmsMultiplier
-        branch.currentA = -rawDischargeA * bmsMultiplier
 
         // Two temperature sensors per section, degrees Celsius directly.
         val t1 = frame.i16BE(10)
@@ -2107,9 +2106,11 @@ class BegodeProtocol(
         // cannot look like this — a live 20S section never sits at 0.0 V — so
         // the discriminator is the all-zero payload, not the temperature value:
         // 0 C with a non-zero section voltage is accepted as real winter data.
-        // On a boot frame keep the previous known values (or none) instead of
-        // publishing zeros that would feed the dashboard and alert thresholds.
+        // A T4 without a smart BMS sends this shape throughout the session.
+        // Keep its pack voltage, leave current unknown and retain any previous
+        // section readings. A real BMS reporting 0 A still earns that reading.
         val isBootPlaceholder = t1 == 0 && t2 == 0 && sectionVoltageRaw == 0
+        branch.currentA = if (isBootPlaceholder) null else -rawDischargeA * bmsMultiplier
         // Compare the same physical half of each BMS on every sample. The
         // whole-pack field tracks the controller rail and is not an independent
         // witness. Alternating halves would introduce their balancing difference.
@@ -2174,9 +2175,9 @@ class BegodeProtocol(
 
     /**
      * Rebuild the branch's [BmsData] from accumulated state. Gated on the 0x01
-     * frame: without it there is no voltage. A wheel without a smart BMS never
-     * sends one — such a wheel is served by the synthetic live-frame pack
-     * instead (see [liveData]).
+     * frame: without it there is no branch voltage. An earlier revision assumed
+     * only smart BMS wheels sent 0x01. The T4 sends it with real pack voltage and
+     * empty section fields. Wheels without 0x01 use the synthetic pack in [liveData].
      *
      * [packIndex] is used for exactly one thing beyond the branch state
      * itself: branch 0 is the one [updateDerivedCellCount] learns from — the
@@ -2205,8 +2206,10 @@ class BegodeProtocol(
         }
         branch.lastData = BmsData(
             voltage = voltage,
-            current = current,
-            power = voltage * current,
+            current = current ?: 0f,
+            hasCurrent = current != null,
+            power = voltage * (current ?: 0f),
+            hasPower = current != null,
             // The 0x01 frame has voltage but no fuel gauge. Cells are the
             // first evidence from which a branch's charge can be estimated,
             // but a partial page is not enough. The strict count gate is the

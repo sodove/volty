@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.model.TelemetryReading
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.stats.MotionAggregator
+import ru.sodovaya.volty.domain.stats.batteryInputCurrent
 import ru.sodovaya.volty.domain.video.VideoMetric
 import ru.sodovaya.volty.domain.video.VideoTimeline
 import ru.sodovaya.volty.presentation.common.groupPackCells
@@ -457,6 +458,23 @@ class BegodeProtocolTest {
                 "branch $packIndex temp count after full fixture"
             )
         }
+    }
+
+    @Test
+    @OptIn(ExperimentalTime::class)
+    fun t4VoltageOnlyBranchLeavesBatteryCurrentToTheController() {
+        val protocol = BegodeProtocol()
+        BegodeT4Fixture.notifications.forEach(protocol::onNotification)
+
+        val battery = assertNotNull(protocol.latestData(0))
+        val motion = assertNotNull(protocol.latestMotion(0))
+        val now = maxOf(battery.timestamp, motion.timestamp).toEpochMilliseconds()
+        assertTrue(battery.voltage > 0f, "the voltage-only branch is still published")
+        assertTrue(motion.hasBatteryCurrent)
+        assertEquals(0.34f, motion.batteryCurrentA, 0.001f)
+        assertEquals(0.34f, assertNotNull(batteryInputCurrent(motion, battery, now)).dischargePositiveAmps, 0.001f)
+        assertFalse(battery.hasCurrent)
+        assertFalse(battery.hasPower)
     }
 
     @Test
