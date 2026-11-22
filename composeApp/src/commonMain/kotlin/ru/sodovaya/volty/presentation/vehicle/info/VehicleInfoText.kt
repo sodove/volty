@@ -175,6 +175,7 @@ fun InfoChoice.stringRes(): StringResource = when (this) {
         InfoChoice.SERIES_PROOF_NONE -> Res.string.info_choice_series_proof_none
         InfoChoice.REJECTED_RULE_ODOMETER_WITNESS -> Res.string.info_choice_rejected_rule_odometer_witness
         InfoChoice.REJECTED_RULE_PACK_VOLTAGE_WITNESS -> Res.string.info_choice_rejected_rule_pack_voltage_witness
+        InfoChoice.REJECTED_RULE_PACK_VOLTAGE_JUMP -> Res.string.info_choice_rejected_rule_pack_voltage_jump
         InfoChoice.ODOMETER_WITNESS_DISTRUSTED -> Res.string.info_choice_odometer_witness_distrusted
         InfoChoice.PWM_EVIDENCE_UNKNOWN -> Res.string.info_choice_pwm_evidence_unknown
         InfoChoice.PWM_EVIDENCE_NEVER_REPORTED -> Res.string.info_choice_pwm_evidence_never_reported

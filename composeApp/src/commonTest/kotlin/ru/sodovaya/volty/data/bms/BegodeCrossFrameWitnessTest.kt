@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryObservation
 import ru.sodovaya.volty.domain.plausibility.LedgerKind
 import ru.sodovaya.volty.domain.plausibility.PlausibilityRule
 import kotlin.test.Test
@@ -180,6 +182,55 @@ class BegodeCrossFrameWitnessTest {
         stale.onNotification(live)
         stale.onNotification(packAt(1200))
         assertEquals(1L, stale.rejectedFrameCount, "a new live frame makes the reference fresh again")
+    }
+
+    @Test fun aSinglePackVoltageSpikeCannotReachLiveDataOrHistoryWhenTheWitnessIsStale() {
+        val p = certified()
+        p.onNotification(live.copyOf().also { it[2] = 0x16; it[3] = 0xD0.toByte() }) // 87.6 V on 24S
+        p.onNotification(packAt(876))
+        p.onNotification(motion(0, 0))
+        val before = assertNotNull(p.latestData(0))
+        val observations = mutableListOf<TelemetryObservation>()
+        p.telemetryObserver = { observations += it }
+
+        // Reconstruct the CSV's voltage and current words. A non-zero temperature makes this a non-placeholder.
+        val spike = packAt(32640).also { it[8] = 0x1C; it[9] = 0x04; it[11] = 1 }
+        p.onNotification(spike)
+
+        assertSame(before, p.latestData(0))
+        assertTrue(observations.isEmpty())
+        assertEquals(1L, p.rejectedFrameCount)
+        val rejection = p.rejectedFrames().single()
+        assertEquals(0x01, rejection.frameType)
+        assertEquals(PlausibilityRule.PACK_VOLTAGE_JUMP, rejection.rule)
+
+        // The real peak in the CSV was 73.72 A. A pending 0x01 must not delay a 0x07 current change.
+        p.onNotification(motion(0, 0).also { it[2] = 0x1C; it[3] = 0xCC.toByte() })
+        assertEquals(73.72f, assertNotNull(p.latestMotion(0)).batteryCurrentA, 0.01f)
+        val current = observations.single().readings.single { it.metric == TelemetryMetric.CONTROLLER_BATTERY_CURRENT }
+        assertEquals(73.72, assertNotNull(current.value), 0.01)
+        observations.clear()
+
+        p.onNotification(packAt(877))
+        assertEquals(87.7f, assertNotNull(p.latestData(0)).voltage, 0.01f)
+        assertTrue(observations.isNotEmpty())
+
+        p.onNotification(spike)
+        assertEquals(87.7f, assertNotNull(p.latestData(0)).voltage, 0.01f, "recovery clears the previous candidate")
+    }
+
+    @Test fun aLargePackVoltageChangeWithoutALiveWitnessNeedsTwoAgreeingFrames() {
+        val p = certified()
+        p.onNotification(live.copyOf().also { it[2] = 0x17; it[3] = 0x70 }) // 90 V on 24S
+        p.onNotification(packAt(900))
+        p.onNotification(motion(0, 0))
+
+        p.onNotification(packAt(1800))
+        assertEquals(90f, assertNotNull(p.latestData(0)).voltage, 0.01f)
+
+        p.onNotification(packAt(1801))
+        assertEquals(180.1f, assertNotNull(p.latestData(0)).voltage, 0.01f)
+        assertEquals(1L, p.rejectedFrameCount)
     }
 
     // --- final review M4: ledger entries carry wall-clock time ---------------------------------------------------------

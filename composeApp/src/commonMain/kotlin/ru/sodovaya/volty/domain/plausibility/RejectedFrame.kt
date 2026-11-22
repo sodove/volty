@@ -13,6 +13,9 @@ enum class PlausibilityRule(val token: String) {
 
     /** A session trip's distance counter (VESC, Veteran, KingSong, Ninebot legacy, InMotion) stepped backwards and was held by the counter gate. */
     TRIP_COUNTER_STEP("trip_counter_step"),
+
+    /** A Begode branch voltage changed by a factor of two or more and needs a confirming frame. */
+    PACK_VOLTAGE_JUMP("pack_voltage_jump"),
 }
 
 /**

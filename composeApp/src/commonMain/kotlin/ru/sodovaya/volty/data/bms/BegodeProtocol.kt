@@ -403,6 +403,8 @@ class BegodeProtocol(
          * the field's real scale is ~0.1009 V/unit.
          */
         var packVoltageV = 0f
+        /** Large voltage change held until a second frame from this branch confirms it. */
+        var pendingPackVoltageV: Float? = null
         /** Branch current (A), positive = charging. Null for a voltage-only frame. */
         var currentA: Float? = null
         /** Two temperatures per section, indexed [section * 2 + sensor]. */
@@ -416,6 +418,7 @@ class BegodeProtocol(
         fun reset() {
             sawTelemetry = false
             packVoltageV = 0f
+            pendingPackVoltageV = null
             currentA = null
             sectionTemps.fill(null)
             sectionVoltageV.fill(0f)
@@ -2049,19 +2052,40 @@ class BegodeProtocol(
      * False-positive risk: a wheel whose two boards sample far apart in time under heavy sag. It would show as
      * the rejection counter growing on a healthy wheel. Read-only; nothing is sent.
      */
-    private fun rejectedByPackVoltageWitness(frame: ByteArray): Boolean {
-        if (!branchVoltageCertified || genuineLiveVoltageRaw <= 0 || isZeroPaddedPayload(frame)) return false
+    private fun freshPackVoltageWitness(): Float? {
+        if (!branchVoltageCertified || genuineLiveVoltageRaw <= 0) return null
         // Only against a reference of THIS frame cycle (final review M1): the measured 0.01 % spread is for a pair about
         // 3 ms apart, but a lost 0x00 leaves the reference 600 to 900 ms old, and a T4 sagging several volts under a hard
         // pull would then reject a correct 0x01. An earlier revision judged against a live voltage of any age; that was
         // wrong because the witness only holds for a simultaneous pair. A stale reference skips the check (nothing rejected).
-        if (motionFramesSinceLive > R13_MAX_MOTION_FRAMES_SINCE_LIVE) return false
-        val count = derivedCellCountValue ?: return false
-        val expectedV = genuineLiveVoltageRaw * 0.01f * count / 16f
-        val packV = frame.u16BE(6) * 0.1f
-        if (abs(packV - expectedV) <= expectedV * R13_TOLERANCE) return false
-        recordRejection(0x01, PlausibilityRule.R13_PACK_VOLTAGE_WITNESS, frame,
-            "${(expectedV * 10).toInt() / 10.0} V", "${(packV * 10).toInt() / 10.0} V")
+        if (motionFramesSinceLive > R13_MAX_MOTION_FRAMES_SINCE_LIVE) return null
+        val count = derivedCellCountValue ?: return null
+        return genuineLiveVoltageRaw * 0.01f * count / 16f
+    }
+
+    private fun rejectedPackVoltage(frame: ByteArray, branch: BranchState, packV: Float): Boolean {
+        val pending = branch.pendingPackVoltageV
+        branch.pendingPackVoltageV = null
+        if (isZeroPaddedPayload(frame)) return false
+
+        val expectedV = freshPackVoltageWitness()
+        if (expectedV != null) {
+            if (abs(packV - expectedV) <= expectedV * R13_TOLERANCE) return false
+            recordRejection(0x01, PlausibilityRule.R13_PACK_VOLTAGE_WITNESS, frame,
+                "${(expectedV * 10).toInt() / 10.0} V", "${(packV * 10).toInt() / 10.0} V")
+            return true
+        }
+
+        // Without a fresh live frame, ordinary voltage sag is accepted immediately. A change by a
+        // factor of two or more against this branch's own last sample needs a matching successor.
+        // A T4 capture contained an isolated 3264 V frame after an ordinary 87.6 V frame.
+        val previousV = branch.packVoltageV
+        if (previousV <= 0f || packV <= 0f) return false
+        if (packV > previousV / PACK_VOLTAGE_JUMP_FACTOR && packV < previousV * PACK_VOLTAGE_JUMP_FACTOR) return false
+        if (pending != null && abs(packV - pending) <= pending * R13_TOLERANCE) return false
+        branch.pendingPackVoltageV = packV
+        recordRejection(0x01, PlausibilityRule.PACK_VOLTAGE_JUMP, frame,
+            "${(previousV * 10).toInt() / 10.0} V", "${(packV * 10).toInt() / 10.0} V")
         return true
     }
 
@@ -2074,14 +2098,15 @@ class BegodeProtocol(
     private fun parseBmsTelemetry(frame: ByteArray) {
         val bmsnum = frame.u8(19)
         if (bmsnum > 3) return
-        if (rejectedByPackVoltageWitness(frame)) return
-        retireSyntheticPack()
         val branch = branches[bmsnum shr 1]
+        val packV = frame.u16BE(6) * 0.1f
+        if (rejectedPackVoltage(frame, branch, packV)) return
+        retireSyntheticPack()
         val section = bmsnum and 1
 
         branch.sawTelemetry = true
         if (bmsnum shr 1 == 0) branchTelemetryFrames++
-        branch.packVoltageV = frame.u16BE(6) * 0.1f
+        branch.packVoltageV = packV
         // NEGATED, and the negation is the fix from the 2026-08-01 field test:
         // on a physically charging pack this read as discharge and vice versa.
         // The wheel's smart-BMS branch frame is discharge-positive, the same
@@ -2711,6 +2736,7 @@ class BegodeProtocol(
 
         /** R13: how far a 0x01 pack voltage may sit from the scaled live voltage (fraction). Measured spread 0.01 %. */
         private const val R13_TOLERANCE = 0.03f
+        private const val PACK_VOLTAGE_JUMP_FACTOR = 2f
 
         /** A quarter of one series cell: 1 % at 24S, still far from the neighbouring whole counts. */
         private const val BRANCH_RATIO_TOLERANCE = 0.25f

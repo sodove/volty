@@ -1554,6 +1554,7 @@
     <string name="info_choice_series_proof_none">not proven</string>
     <string name="info_choice_rejected_rule_odometer_witness">odometer did not match the since-power-on counter</string>
     <string name="info_choice_rejected_rule_pack_voltage_witness">0x01 voltage did not match the live frame</string>
+    <string name="info_choice_rejected_rule_pack_voltage_jump">0x01 voltage jump was not confirmed</string>
     <string name="info_choice_odometer_witness_distrusted">the since-power-on counter does not match the odometer; the check is off</string>
     <string name="info_choice_link_online">Online</string>
     <string name="info_choice_link_offline">Offline</string>
