@@ -853,6 +853,12 @@
     <string name="settings_offline_resume">Resume</string>
     <string name="settings_offline_delete">Delete</string>
     <string name="settings_offline_status_ready">Ready · %1$s</string>
+    <string name="settings_offline_map_missing">Map tiles are missing</string>
+    <string name="settings_offline_map_preparing">Preparing map tiles</string>
+    <string name="settings_offline_map_progress">Downloading map · %1$d tiles</string>
+    <string name="settings_offline_map_failed">Couldn’t download map tiles</string>
+    <string name="settings_offline_map_download">Download map tiles</string>
+    <string name="settings_offline_map_retry">Retry map download</string>
     <string name="settings_offline_status_update">Update available · %1$s</string>
     <string name="settings_offline_status_downloading">Downloading · %1$s / %2$s</string>
     <string name="settings_offline_status_paused">Paused · %1$s / %2$s</string>

@@ -10,6 +10,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import org.maplibre.android.offline.OfflineRegionError
 import org.maplibre.android.offline.OfflineTilePyramidRegionDefinition
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackDefinition
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackKey
@@ -79,7 +80,7 @@ class AndroidOfflineMapPackManagerTest {
         assertEquals(0, client.createCount)
         assertEquals(30_000L, client.tileLimit)
         assertEquals(1, restored.resumeCount)
-        assertEquals(OfflineMapPackState.Preparing, manager.states.value.single())
+        assertEquals(OfflineMapPackState.Preparing, manager.states.value.values.single())
     }
 
     @Test
@@ -97,7 +98,7 @@ class AndroidOfflineMapPackManagerTest {
 
         manager.prepare(DEFINITION)
 
-        assertEquals(OfflineMapPackState.Ready, manager.states.value.single())
+        assertEquals(OfflineMapPackState.Ready, manager.states.value.values.single())
         assertEquals(1, restored.pauseCount)
     }
 
@@ -109,12 +110,56 @@ class AndroidOfflineMapPackManagerTest {
 
         client.pack.emitStatus(ACTIVE_INCOMPLETE)
         advanceUntilIdle()
-        assertEquals(OfflineMapPackState.Downloading(11, 8, 20), manager.states.value.single())
+        assertEquals(OfflineMapPackState.Downloading(11, 8, 20), manager.states.value.values.single())
 
         client.pack.emitStatus(ACTIVE_COMPLETE)
         advanceUntilIdle()
-        assertEquals(OfflineMapPackState.Ready, manager.states.value.single())
+        assertEquals(OfflineMapPackState.Ready, manager.states.value.values.single())
         assertEquals(1, client.pack.pauseCount)
+    }
+
+    @Test
+    fun transient_connection_and_server_errors_do_not_stop_an_active_download() = runTest {
+        for (reason in listOf(
+            OfflineRegionError.REASON_CONNECTION,
+            OfflineRegionError.REASON_SERVER,
+        )) {
+            val client = FakeOfflinePackClient()
+            val manager = AndroidOfflineMapPackManager(client, AndroidOfflineMapPackStore(), this)
+            manager.prepare(DEFINITION)
+
+            client.pack.emitStatus(ACTIVE_INCOMPLETE)
+            advanceUntilIdle()
+            client.pack.emitError(reason, "temporary network failure")
+            advanceUntilIdle()
+
+            assertEquals(OfflineMapPackState.Downloading(11, 8, 20), manager.states.value.values.single())
+            assertEquals(0, client.pack.pauseCount)
+
+            client.pack.emitStatus(ACTIVE_COMPLETE)
+            advanceUntilIdle()
+
+            assertEquals(OfflineMapPackState.Ready, manager.states.value.values.single())
+            assertEquals(1, client.pack.pauseCount)
+        }
+    }
+
+    @Test
+    fun restored_complete_status_without_downloaded_tiles_is_not_ready() = runTest {
+        val store = AndroidOfflineMapPackStore()
+        val restored = FakeOfflinePack(
+            metadata = store.encode(DEFINITION),
+            initialStatus = COMPLETE_WITHOUT_TILES,
+        )
+        val manager = AndroidOfflineMapPackManager(
+            FakeOfflinePackClient(listOf(restored)),
+            store,
+            this,
+        )
+
+        manager.prepare(DEFINITION)
+
+        assertTrue(manager.states.value.values.single() != OfflineMapPackState.Ready)
     }
 
     @Test
@@ -127,7 +172,7 @@ class AndroidOfflineMapPackManagerTest {
 
         manager.pause(DEFINITION.key)
 
-        assertEquals(OfflineMapPackState.Preparing, manager.states.value.single())
+        assertEquals(OfflineMapPackState.Preparing, manager.states.value.values.single())
         assertEquals(1, client.pack.pauseCount)
     }
 
@@ -140,12 +185,12 @@ class AndroidOfflineMapPackManagerTest {
         client.pack.emitTileLimit()
         client.pack.emitStatus(ACTIVE_COMPLETE)
         advanceUntilIdle()
-        assertEquals(OfflineMapPackState.Failed("tile_limit"), manager.states.value.single())
+        assertEquals(OfflineMapPackState.Failed("tile_limit"), manager.states.value.values.single())
 
         manager.resume(DEFINITION.key)
         client.pack.emitError("TILE_LIMIT", "tile limit exceeded")
         advanceUntilIdle()
-        assertEquals(OfflineMapPackState.Failed("tile_limit"), manager.states.value.single())
+        assertEquals(OfflineMapPackState.Failed("tile_limit"), manager.states.value.values.single())
     }
 
     @Test
@@ -161,7 +206,7 @@ class AndroidOfflineMapPackManagerTest {
         client.pack.emitStatus(ACTIVE_COMPLETE)
         dispatcher.runLast()
 
-        assertEquals(OfflineMapPackState.Failed("tile_limit"), manager.states.value.single())
+        assertEquals(OfflineMapPackState.Failed("tile_limit"), manager.states.value.values.single())
         managerScope.cancel()
     }
 
@@ -248,7 +293,7 @@ class AndroidOfflineMapPackManagerTest {
 
         manager.delete(DEFINITION.key)
 
-        assertEquals(OfflineMapPackState.Failed("sdk_error"), manager.states.value.single())
+        assertEquals(OfflineMapPackState.Failed("sdk_error"), manager.states.value.values.single())
         assertTrue(client.pack.currentObserver != null)
 
         client.pack.deleteGate = CompletableDeferred(Result.success(Unit))
@@ -392,6 +437,14 @@ class AndroidOfflineMapPackManagerTest {
             isComplete = true,
             completedResources = 20,
             completedTiles = 17,
+            requiredResources = 20,
+            requiredResourcesIsPrecise = true,
+        )
+        private val COMPLETE_WITHOUT_TILES = SdkOfflinePackStatus(
+            isActive = false,
+            isComplete = true,
+            completedResources = 0,
+            completedTiles = 0,
             requiredResources = 20,
             requiredResourcesIsPrecise = true,
         )

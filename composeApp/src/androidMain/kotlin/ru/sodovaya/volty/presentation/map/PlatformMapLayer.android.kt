@@ -44,9 +44,12 @@ import dev.chrisbanes.haze.rememberHazeState
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.koin.compose.koinInject
 import org.maplibre.geojson.Feature
 import org.maplibre.geojson.FeatureCollection
 import org.maplibre.geojson.LineString
@@ -83,6 +86,9 @@ import org.maplibre.android.style.layers.PropertyFactory.textSize
 import org.maplibre.android.style.sources.GeoJsonSource
 import ru.sodovaya.volty.domain.location.RideLocationFix
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackKey
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackManager
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackState
 import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
 import ru.sodovaya.volty.presentation.history.HistoryMapScene
 import ru.sodovaya.volty.presentation.history.HISTORY_MAP_LOW_ARGB
@@ -233,43 +239,77 @@ private fun AndroidMapLibreView(
     val cameraSmoother = remember(cacheKey) { RideMapCameraSmoother() }
     val hazeState = rememberHazeState()
     val mapView = remember(context, cacheKey) { MapViewCache.obtain(cacheKey, context, palette.background) }
+    val offlineMapPacks: OfflineMapPackManager = koinInject()
+    var mapLoadFinished by remember(mapView) { mutableStateOf(false) }
 
     DisposableEffect(hazeState) {
         publishMapHazeState(hazeState)
         onDispose { publishMapHazeState(null) }
     }
 
-    LaunchedEffect(map, darkTheme) {
+    DisposableEffect(mapView) {
+        val loaded = MapView.OnDidFinishLoadingMapListener { mapLoadFinished = true }
+        val failed = MapView.OnDidFailLoadingMapListener { mapLoadFinished = false }
+        mapView.addOnDidFinishLoadingMapListener(loaded)
+        mapView.addOnDidFailLoadingMapListener(failed)
+        onDispose {
+            mapView.removeOnDidFinishLoadingMapListener(loaded)
+            mapView.removeOnDidFailLoadingMapListener(failed)
+        }
+    }
+
+    LaunchedEffect(map, darkTheme, offlineMapPacks) {
         val readyMap = map ?: return@LaunchedEffect
         val targetStyleUrl = MapRenderSourcePolicy.styleUrl(darkTheme)
-        if (readyMap.style?.uri == targetStyleUrl &&
-            readyMap.style?.isFullyLoaded == true
-        ) {
-            readyMap.style?.let { style ->
+        val cachedStyle = readyMap.style?.takeIf { it.uri == targetStyleUrl && it.isFullyLoaded }
+        fun readyPacks(packs: Map<OfflineMapPackKey, OfflineMapPackState>): Set<OfflineMapPackKey> =
+            packs.filter { (key, state) ->
+                key.ofmStyleUrl == targetStyleUrl && state == OfflineMapPackState.Ready
+            }.keys
+
+        var knownReady = readyPacks(offlineMapPacks.states.value)
+
+        fun requestStyle(reload: Boolean) {
+            styleReady = false
+            mapLoadFinished = false
+            readyMap.setStyle(Style.Builder().fromUri(targetStyleUrl)) { style ->
+                if (style.uri != MapRenderSourcePolicy.styleUrl(latestDarkTheme.value)) return@setStyle
+                LegacyBuildingLayer.add(style)
+                configureStyle(style, darkTheme)
                 styleThemer.apply(style, latestPalette.value, darkTheme)
                 applyOverlayTheme(style, latestPalette.value)
+                if (!reload) {
+                    lastCameraRequest = null
+                    if (defaultRideMapCameraPolicy.appliesWithoutTarget) {
+                        readyMap.moveCamera(
+                            CameraUpdateFactory.newCameraPosition(
+                                CameraPosition.Builder(readyMap.cameraPosition)
+                                    .tilt(defaultRideMapCameraPolicy.tiltDegrees)
+                                    .build(),
+                            ),
+                        )
+                    }
+                }
+                styleReady = true
             }
-            styleReady = true
-            return@LaunchedEffect
         }
-        styleReady = false
-        readyMap.setStyle(Style.Builder().fromUri(targetStyleUrl)) { style ->
-            if (style.uri != MapRenderSourcePolicy.styleUrl(latestDarkTheme.value)) return@setStyle
-            LegacyBuildingLayer.add(style)
-            configureStyle(style, darkTheme)
-            styleThemer.apply(style, latestPalette.value, darkTheme)
-            applyOverlayTheme(style, latestPalette.value)
-            lastCameraRequest = null
-            if (defaultRideMapCameraPolicy.appliesWithoutTarget) {
-                readyMap.moveCamera(
-                    CameraUpdateFactory.newCameraPosition(
-                        CameraPosition.Builder(readyMap.cameraPosition)
-                            .tilt(defaultRideMapCameraPolicy.tiltDegrees)
-                            .build(),
-                    ),
-                )
-            }
+
+        if (cachedStyle == null) {
+            requestStyle(reload = false)
+        } else {
+            styleThemer.apply(cachedStyle, latestPalette.value, darkTheme)
+            applyOverlayTheme(cachedStyle, latestPalette.value)
             styleReady = true
+        }
+
+        offlineMapPacks.states.map(::readyPacks).distinctUntilChanged().collect { ready ->
+            val added = ready.any { it !in knownReady }
+            knownReady = ready
+            // Keep the existing GL view and camera. Only replay a style request
+            // if it started before the cache was populated and never finished.
+            if (added && (!styleReady || !mapLoadFinished)) {
+                requestStyle(reload = true)
+            }
         }
     }
 

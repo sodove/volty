@@ -851,6 +851,12 @@
     <string name="settings_offline_resume">Продолжить</string>
     <string name="settings_offline_delete">Удалить</string>
     <string name="settings_offline_status_ready">Готово · %1$s</string>
+    <string name="settings_offline_map_missing">Тайлы карты не загружены</string>
+    <string name="settings_offline_map_preparing">Готовим загрузку карты</string>
+    <string name="settings_offline_map_progress">Загружаем карту · тайлов %1$d</string>
+    <string name="settings_offline_map_failed">Не удалось скачать тайлы карты</string>
+    <string name="settings_offline_map_download">Скачать тайлы</string>
+    <string name="settings_offline_map_retry">Повторить загрузку карты</string>
     <string name="settings_offline_status_update">Доступно обновление · %1$s</string>
     <string name="settings_offline_status_downloading">Скачивание · %1$s / %2$s</string>
     <string name="settings_offline_status_paused">Пауза · %1$s / %2$s</string>

@@ -190,6 +190,10 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val vehicleConnected by component.vehicleConnected.subscribeAsState()
     val offlineRegions: OfflineRegionPackageRepository = koinInject()
     val offlinePreparation: OfflineRegionPreparationCoordinator = koinInject()
+    val offlineMapStyle = OfflineMapStyleVariant.forTheme(darkTheme)
+    LaunchedEffect(offlinePreparation, offlineMapStyle) {
+        offlinePreparation.setMapStyle(offlineMapStyle)
+    }
     val offlineRegionStates by offlineRegions.states.collectAsState()
     val meteredApproval = offlineRegionStates.firstOrNull {
         it.status == OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL
@@ -309,14 +313,19 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             groupMapCameraRequest++
         }
     }
-    // Preparation belongs to the map host lifecycle: a non-null fix starts one
-    // keyed request; later GPS samples and recompositions cannot start another.
-    LaunchedEffect(rideMapVisible, ownFix != null, darkTheme, offlineRegionStates.size) {
+    val installedOfflineRegions = remember(offlineRegionStates) {
+        offlineRegionStates.filter { it.isInstalled }.map { it.region }
+    }
+    val currentInstalledRegion = if (rideMapVisible) {
+        ownFix?.let { fix -> installedOfflineRegions.firstOrNull { it.bounds.contains(fix.coordinate) } }
+    } else null
+    // Recheck when installing or entering an installed cell while the map is open.
+    LaunchedEffect(rideMapVisible, ownFix != null, offlineRegionStates.size, currentInstalledRegion?.regionId, offlineMapStyle) {
         if (rideMapVisible) {
             ownFix?.let {
                 offlinePreparation.prepareCurrentRegion(
                     coordinate = it.coordinate,
-                    style = if (darkTheme) OfflineMapStyleVariant.DARK else OfflineMapStyleVariant.BRIGHT,
+                    style = offlineMapStyle,
                 )
             }
         }
@@ -578,7 +587,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                             runCatching {
                                 offlinePreparation.prepareExplicitRegionConfirmed(
                                     regionId = region.region.regionId,
-                                    style = if (darkTheme) OfflineMapStyleVariant.DARK else OfflineMapStyleVariant.BRIGHT,
+                                    style = offlineMapStyle,
                                 )
                             }
                         }

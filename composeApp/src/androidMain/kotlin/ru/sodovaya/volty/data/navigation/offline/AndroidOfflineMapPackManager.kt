@@ -52,9 +52,8 @@ class AndroidOfflineMapPackManager internal constructor(
     private val callbackQueue = ArrayDeque<QueuedCallback>()
     private var callbackDrainScheduled = false
     private val packs = linkedMapOf<OfflineMapPackKey, PackEntry>()
-    private val stateByKey = linkedMapOf<OfflineMapPackKey, OfflineMapPackState>()
-    private val _states = MutableStateFlow<List<OfflineMapPackState>>(emptyList())
-    override val states: StateFlow<List<OfflineMapPackState>> = _states
+    private val _states = MutableStateFlow<Map<OfflineMapPackKey, OfflineMapPackState>>(emptyMap())
+    override val states: StateFlow<Map<OfflineMapPackKey, OfflineMapPackState>> = _states
 
     private var loaded = false
 
@@ -232,6 +231,9 @@ class AndroidOfflineMapPackManager internal constructor(
             }
 
             override fun onError(reason: String, message: String) {
+                // MapLibre keeps these requests active and retries with backoff.
+                // Pausing here cancels the retry and leaves a partial pack on disk.
+                if (reason == OfflineRegionError.REASON_CONNECTION || reason == OfflineRegionError.REASON_SERVER) return
                 dispatchCallback(entry, generation) { current ->
                     failLocked(current, "$reason $message".failureCode())
                 }
@@ -308,6 +310,10 @@ class AndroidOfflineMapPackManager internal constructor(
     private suspend fun applyStatusLocked(entry: PackEntry, status: SdkOfflinePackStatus) {
         if (state(entry.key) is OfflineMapPackState.Failed) return
         entry.downloadActive = status.isActive
+        if (status.isComplete && status.completedTiles == 0L) {
+            failLocked(entry, "no_tiles")
+            return
+        }
         entry.complete = status.isComplete
         publishStatusLocked(entry, status)
         if (status.isComplete && status.isActive) {
@@ -326,24 +332,12 @@ class AndroidOfflineMapPackManager internal constructor(
         }
     }
 
-    override fun state(key: OfflineMapPackKey): OfflineMapPackState? = synchronized(stateByKey) {
-        stateByKey[key]
+    private fun update(key: OfflineMapPackKey, state: OfflineMapPackState) {
+        _states.value = _states.value + (key to state)
     }
 
-    private fun update(key: OfflineMapPackKey, state: OfflineMapPackState) = synchronized(stateByKey) {
-        stateByKey[key] = state
-        publishStatesLocked()
-    }
-
-    private fun removeState(key: OfflineMapPackKey) = synchronized(stateByKey) {
-        stateByKey.remove(key)
-        publishStatesLocked()
-    }
-
-    private fun publishStatesLocked() {
-        _states.value = stateByKey.entries
-            .sortedWith(compareBy({ it.key.regionId }, { it.key.style.name }, { it.key.ofmStyleUrl }))
-            .map { it.value }
+    private fun removeState(key: OfflineMapPackKey) {
+        _states.value = _states.value - key
     }
 
     private fun OfflineMapPackDefinition.toSdkDefinition(pixelRatio: Float) =

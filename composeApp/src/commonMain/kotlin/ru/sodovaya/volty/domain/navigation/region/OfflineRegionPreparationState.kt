@@ -22,6 +22,7 @@ sealed interface OfflineNavigationComponentState {
 
 data class OfflineRegionPreparationState(
     val regionId: String,
+    val mapStyle: OfflineMapStyleVariant,
     val map: OfflineMapPackState,
     val search: OfflineNavigationComponentState,
     val routing: OfflineNavigationComponentState,
@@ -59,6 +60,7 @@ object OfflineCurrentCoveragePolicy {
 
 interface OfflineRegionPreparationCoordinator {
     val states: StateFlow<List<OfflineRegionPreparationState>>
+    fun setMapStyle(style: OfflineMapStyleVariant)
 
     /** Updated by [prepareCurrentRegion]; drives the honest "not available offline" notice. */
     val currentCoverage: StateFlow<OfflineCurrentCoverage>
@@ -81,5 +83,5 @@ interface OfflineRegionPreparationCoordinator {
         prepareExplicitRegion(regionId, style)
     }
     suspend fun pause(regionId: String)
-    suspend fun retry(regionId: String)
+    suspend fun retry(regionId: String, style: OfflineMapStyleVariant)
 }

@@ -22,10 +22,8 @@ object OfflineMapPackPolicy {
         require(DEFAULT_MIN_ZOOM in 0..MAX_SUPPORTED_ZOOM && DEFAULT_MAX_ZOOM in DEFAULT_MIN_ZOOM..MAX_SUPPORTED_ZOOM) {
             "invalid map zoom range"
         }
-        val styleUrl = style.url
-        require(styleUrl.startsWith(OFM_STYLE_BASE_URL + "/")) { "style URL must be an OFM style URL" }
         return OfflineMapPackDefinition(
-            key = OfflineMapPackKey(region.regionId, style, styleUrl),
+            key = OfflineMapPackKey(region.regionId, style, style.ofmStyleUrl),
             bounds = region.bounds,
             minZoom = DEFAULT_MIN_ZOOM,
             maxZoom = DEFAULT_MAX_ZOOM,
@@ -47,9 +45,6 @@ object OfflineMapPackPolicy {
         }
     }
 
-    private val OfflineMapStyleVariant.url: String
-        get() = "$OFM_STYLE_BASE_URL/${name.lowercase()}"
-
     private fun xTile(longitude: Double, size: Long): Long =
         floor(((longitude + 180.0) / 360.0) * size).toLong().coerceIn(0L, size - 1L)
 
@@ -59,7 +54,6 @@ object OfflineMapPackPolicy {
         return floor(normalized * size).toLong().coerceIn(0L, size - 1L)
     }
 
-    private const val OFM_STYLE_BASE_URL = "https://tiles.openfreemap.org/styles"
     private const val MAX_SUPPORTED_ZOOM = 22
     private const val MAX_MERCATOR_LATITUDE = 85.05112878
 }

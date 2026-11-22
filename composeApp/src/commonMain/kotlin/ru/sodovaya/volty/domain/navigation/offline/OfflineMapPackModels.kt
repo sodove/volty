@@ -3,9 +3,13 @@ package ru.sodovaya.volty.domain.navigation.offline
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionBounds
 import kotlinx.coroutines.flow.StateFlow
 
-enum class OfflineMapStyleVariant {
-    BRIGHT,
-    DARK,
+enum class OfflineMapStyleVariant(val ofmStyleUrl: String) {
+    BRIGHT("https://tiles.openfreemap.org/styles/bright"),
+    DARK("https://tiles.openfreemap.org/styles/dark");
+
+    companion object {
+        fun forTheme(dark: Boolean): OfflineMapStyleVariant = if (dark) DARK else BRIGHT
+    }
 }
 
 data class OfflineMapPackKey(
@@ -38,10 +42,9 @@ sealed interface OfflineMapPackState {
 
 /** The platform-independent lifecycle boundary for native map packs. */
 interface OfflineMapPackManager {
-    val states: StateFlow<List<OfflineMapPackState>>
+    val states: StateFlow<Map<OfflineMapPackKey, OfflineMapPackState>>
 
-    /** Returns the state for one durable pack identity when the platform can provide it. */
-    fun state(key: OfflineMapPackKey): OfflineMapPackState? = null
+    fun state(key: OfflineMapPackKey): OfflineMapPackState? = states.value[key]
 
     suspend fun prepare(definition: OfflineMapPackDefinition)
     suspend fun pause(key: OfflineMapPackKey)

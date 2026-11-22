@@ -68,10 +68,10 @@ interface SettingsComponent {
     fun onMicLimiterCeilingChanged(dbfs: Float)
     fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean)
     fun onRefreshOfflineRegions()
-    fun onDownloadOfflineRegion(regionId: String)
-    fun onConfirmMeteredOfflineRegion(regionId: String)
+    fun onDownloadOfflineRegion(regionId: String, style: OfflineMapStyleVariant)
+    fun onConfirmMeteredOfflineRegion(regionId: String, style: OfflineMapStyleVariant)
     fun onPauseOfflineRegion(regionId: String)
-    fun onResumeOfflineRegion(regionId: String)
+    fun onResumeOfflineRegion(regionId: String, style: OfflineMapStyleVariant)
     fun onDeleteOfflineRegion(regionId: String)
     fun onEditVehicle(id: String)
     fun onDeleteVehicle(id: String)
@@ -267,25 +267,25 @@ class DefaultSettingsComponent(
             }
         }
     }
-    override fun onDownloadOfflineRegion(regionId: String) {
+    override fun onDownloadOfflineRegion(regionId: String, style: OfflineMapStyleVariant) {
         scope.launch {
             runCatching {
-                offlinePreparationCoordinator.prepareExplicitRegion(regionId, OfflineMapStyleVariant.BRIGHT)
+                offlinePreparationCoordinator.prepareExplicitRegion(regionId, style)
             }
         }
     }
-    override fun onConfirmMeteredOfflineRegion(regionId: String) {
+    override fun onConfirmMeteredOfflineRegion(regionId: String, style: OfflineMapStyleVariant) {
         scope.launch {
             runCatching {
-                offlinePreparationCoordinator.prepareExplicitRegionConfirmed(regionId, OfflineMapStyleVariant.BRIGHT)
+                offlinePreparationCoordinator.prepareExplicitRegionConfirmed(regionId, style)
             }
         }
     }
     override fun onPauseOfflineRegion(regionId: String) {
         scope.launch { runCatching { offlinePreparationCoordinator.pause(regionId) } }
     }
-    override fun onResumeOfflineRegion(regionId: String) {
-        scope.launch { runCatching { offlinePreparationCoordinator.retry(regionId) } }
+    override fun onResumeOfflineRegion(regionId: String, style: OfflineMapStyleVariant) {
+        scope.launch { runCatching { offlinePreparationCoordinator.retry(regionId, style) } }
     }
     override fun onDeleteOfflineRegion(regionId: String) {
         scope.launch { runCatching { offlineRegionsRepository.deletePackage(regionId) } }

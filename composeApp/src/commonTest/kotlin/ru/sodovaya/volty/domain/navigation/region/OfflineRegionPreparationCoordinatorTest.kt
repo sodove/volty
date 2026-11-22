@@ -95,13 +95,31 @@ class OfflineRegionPreparationCoordinatorTest {
     }
 
     @Test
+    fun confirming_on_mobile_after_a_theme_change_discards_the_waiting_old_style() = runTest {
+        val map = FakeMapManager()
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
+        val network = FakeNetwork(OfflineNetworkAvailability.METERED)
+        val coordinator = coordinator(map, packages, backgroundScope, network = network)
+        runCurrent()
+
+        coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
+        coordinator.setMapStyle(OfflineMapStyleVariant.DARK)
+        coordinator.prepareExplicitRegionConfirmed("first", OfflineMapStyleVariant.DARK)
+        network.availability = OfflineNetworkAvailability.UNMETERED
+        coordinator.retryPending()
+
+        assertEquals(listOf(OfflineMapStyleVariant.DARK), map.preparedStyles)
+        assertEquals(2, packages.requestCalls)
+    }
+
+    @Test
     fun retry_releases_a_failed_key_for_an_explicit_second_attempt() = runTest {
         val map = FakeMapManager()
         val packages = FakePackages(regionState(OfflineRegionPackageStatus.FAILED))
         val coordinator = coordinator(map, packages, backgroundScope)
 
         coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
-        coordinator.retry("first")
+        coordinator.retry("first", OfflineMapStyleVariant.BRIGHT)
 
         assertEquals(2, map.prepareCalls)
         assertTrue(packages.requestCalls >= 2)
@@ -264,10 +282,10 @@ class OfflineRegionPreparationCoordinatorTest {
     }
 
     @Test
-    fun ready_region_with_a_missing_map_pack_waits_for_unmetered_without_prompting() = runTest {
+    fun installed_region_resumes_pending_tiles_when_mobile_data_returns() = runTest {
         val map = FakeMapManager()
         val packages = FakePackages(regionState(OfflineRegionPackageStatus.READY, installed = true))
-        val network = FakeNetwork(OfflineNetworkAvailability.METERED)
+        val network = FakeNetwork(OfflineNetworkAvailability.OFFLINE)
         val coordinator = coordinator(map, packages, backgroundScope, network = network)
         runCurrent()
 
@@ -275,8 +293,8 @@ class OfflineRegionPreparationCoordinatorTest {
         assertEquals(0, map.prepareCalls)
         assertEquals(0, packages.requestCalls)
 
-        network.availability = OfflineNetworkAvailability.UNMETERED
-        network.changes.emit(OfflineNetworkAvailability.UNMETERED)
+        network.availability = OfflineNetworkAvailability.METERED
+        network.changes.emit(OfflineNetworkAvailability.METERED)
         runCurrent()
         advanceUntilIdle()
 
@@ -300,21 +318,16 @@ class OfflineRegionPreparationCoordinatorTest {
     }
 
     @Test
-    fun completed_installed_region_is_not_touched_even_on_a_metered_network() = runTest {
-        val store = InMemoryOfflineRegionPreparationStore().apply {
-            markCompleted("first", OfflineMapStyleVariant.BRIGHT, "r1")
-        }
+    fun a_completed_native_pack_is_not_prepared_again() = runTest {
         val map = FakeMapManager()
         val packages = FakePackages(regionState(OfflineRegionPackageStatus.READY, installed = true))
-        val coordinator = DefaultOfflineRegionPreparationCoordinator(
-            mapPacks = map, packages = packages, scope = backgroundScope, store = store,
-            network = OfflineNetworkStatus { OfflineNetworkAvailability.METERED },
-        )
+        val coordinator = coordinator(map, packages, backgroundScope, OfflineNetworkAvailability.METERED)
+        coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
 
-        coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+        coordinator.retry("first", OfflineMapStyleVariant.BRIGHT)
 
         assertEquals(0, packages.requestCalls)
-        assertEquals(0, map.prepareCalls)
+        assertEquals(1, map.prepareCalls)
     }
 
     @Test
@@ -362,15 +375,28 @@ class OfflineRegionPreparationCoordinatorTest {
     }
 
     @Test
-    fun settings_prepares_the_theme_the_map_is_showing_not_bright() = runTest {
+    fun settings_prepares_the_theme_passed_by_the_screen_even_after_opening_the_map_in_another_theme() = runTest {
         val map = FakeMapManager()
         val packages = FakePackages(regionState(OfflineRegionPackageStatus.READY, installed = true))
         val coordinator = coordinator(map, packages, backgroundScope, OfflineNetworkAvailability.UNMETERED)
-        // The map observed DARK but its pack is not complete yet (preparation interrupted).
-        coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.DARK)
-        coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
+        coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+        coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.DARK)
 
-        assertEquals(listOf(OfflineMapStyleVariant.DARK), map.preparedStyles.distinct())
+        assertEquals(listOf(OfflineMapStyleVariant.BRIGHT, OfflineMapStyleVariant.DARK), map.preparedStyles)
+    }
+
+    @Test
+    fun package_metadata_cannot_report_tiles_ready_without_a_native_pack() = runTest {
+        val map = FakeMapManager()
+        val packages = FakePackages(
+            regionState(OfflineRegionPackageStatus.READY, installed = true).copy(mapPackState = OfflineMapPackState.Ready),
+        )
+        val coordinator = coordinator(map, packages, backgroundScope)
+        runCurrent()
+
+        val state = coordinator.states.value.single()
+        assertEquals(OfflineMapPackState.Missing, state.map)
+        assertEquals(OfflineNavigationComponentState.Ready, state.search)
     }
 
     // ---- Review I1: explicit actions on an installed region that is NOT current must work ----
@@ -394,7 +420,7 @@ class OfflineRegionPreparationCoordinatorTest {
         val packages = FakePackages(installedButBehind(OfflineRegionPackageStatus.PAUSED))
         val coordinator = coordinator(FakeMapManager(), packages, backgroundScope, OfflineNetworkAvailability.UNMETERED)
 
-        coordinator.retry("first")
+        coordinator.retry("first", OfflineMapStyleVariant.BRIGHT)
 
         assertEquals(1, packages.requestCalls)
     }
@@ -405,7 +431,7 @@ class OfflineRegionPreparationCoordinatorTest {
         val coordinator = coordinator(FakeMapManager(), packages, backgroundScope, OfflineNetworkAvailability.UNMETERED)
 
         coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
-        coordinator.retry("first")
+        coordinator.retry("first", OfflineMapStyleVariant.BRIGHT)
 
         assertTrue(packages.requestCalls >= 2)
     }
@@ -445,7 +471,7 @@ class OfflineRegionPreparationCoordinatorTest {
         val coordinator = coordinator(FakeMapManager(), packages, backgroundScope, OfflineNetworkAvailability.METERED)
 
         coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
-        coordinator.retry("first")
+        coordinator.retry("first", OfflineMapStyleVariant.BRIGHT)
 
         assertEquals(0, packages.requestCalls)
     }
@@ -467,22 +493,21 @@ class OfflineRegionPreparationCoordinatorTest {
     }
 
     @Test
-    fun a_stale_completion_marker_does_not_block_an_explicit_reinstall() = runTest {
-        // A deleted-then-redownloaded region keeps its durable completion marker.
-        // The marker may only short-circuit an INSTALLED region.
-        val store = InMemoryOfflineRegionPreparationStore().apply {
-            markCompleted("first", OfflineMapStyleVariant.BRIGHT, "r1")
-        }
+    fun cached_bright_tiles_count_as_ready_only_for_bright() = runTest {
         val map = FakeMapManager()
-        val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
-        val coordinator = DefaultOfflineRegionPreparationCoordinator(
-            mapPacks = map, packages = packages, scope = backgroundScope, store = store,
-        )
-
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.READY, installed = true))
+        val coordinator = coordinator(map, packages, backgroundScope)
         coordinator.prepareExplicitRegion("first", OfflineMapStyleVariant.BRIGHT)
+        assertEquals(OfflineMapPackState.Ready, coordinator.states.value.single().map)
 
-        assertEquals(1, packages.requestCalls)
-        assertEquals(1, map.prepareCalls)
+        coordinator.setMapStyle(OfflineMapStyleVariant.DARK)
+        runCurrent()
+        assertEquals(OfflineMapStyleVariant.DARK, coordinator.states.value.single().mapStyle)
+        assertEquals(OfflineMapPackState.Missing, coordinator.states.value.single().map)
+
+        coordinator.retry("first", OfflineMapStyleVariant.DARK)
+        assertEquals(OfflineMapPackState.Ready, coordinator.states.value.single().map)
+        assertEquals(0, packages.requestCalls)
     }
 
     private fun coordinator(
@@ -520,19 +545,16 @@ class OfflineRegionPreparationCoordinatorTest {
     private class FakeMapManager(
         val prepareGate: CompletableDeferred<Unit>? = null,
     ) : OfflineMapPackManager {
-        private val _states = MutableStateFlow<List<OfflineMapPackState>>(emptyList())
+        private val _states = MutableStateFlow<Map<OfflineMapPackKey, OfflineMapPackState>>(emptyMap())
         override val states = _states
-        private val byKey = mutableMapOf<OfflineMapPackKey, OfflineMapPackState>()
         var prepareCalls = 0
             private set
         val preparedStyles = mutableListOf<OfflineMapStyleVariant>()
-        override fun state(key: OfflineMapPackKey): OfflineMapPackState? = byKey[key]
         override suspend fun prepare(definition: OfflineMapPackDefinition) {
             prepareCalls++
             preparedStyles += definition.key.style
             prepareGate?.await()
-            byKey[definition.key] = OfflineMapPackState.Ready
-            _states.value = byKey.values.toList()
+            _states.value = _states.value + (definition.key to OfflineMapPackState.Ready)
         }
         override suspend fun pause(key: OfflineMapPackKey) = Unit
         override suspend fun resume(key: OfflineMapPackKey) = Unit

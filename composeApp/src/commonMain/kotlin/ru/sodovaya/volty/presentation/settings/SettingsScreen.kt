@@ -86,6 +86,8 @@ import volty.composeapp.generated.resources.settings_offline_coverage_unavailabl
 import volty.composeapp.generated.resources.settings_offline_coverage_download
 import volty.composeapp.generated.resources.settings_offline_storage_line
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackState
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapStyleVariant
+import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
@@ -200,6 +202,12 @@ import volty.composeapp.generated.resources.settings_offline_status_downloading
 import volty.composeapp.generated.resources.settings_offline_status_paused
 import volty.composeapp.generated.resources.settings_offline_status_waiting_network
 import volty.composeapp.generated.resources.settings_offline_status_metered
+import volty.composeapp.generated.resources.settings_offline_map_missing
+import volty.composeapp.generated.resources.settings_offline_map_preparing
+import volty.composeapp.generated.resources.settings_offline_map_progress
+import volty.composeapp.generated.resources.settings_offline_map_failed
+import volty.composeapp.generated.resources.settings_offline_map_download
+import volty.composeapp.generated.resources.settings_offline_map_retry
 import volty.composeapp.generated.resources.settings_offline_status_queued
 import volty.composeapp.generated.resources.settings_offline_status_preparing
 import volty.composeapp.generated.resources.settings_offline_status_installing
@@ -875,6 +883,7 @@ private fun OfflineMapsPage(
     onQueryChange: (String) -> Unit,
     onDeleteRequest: (OfflineRegionPackageState) -> Unit,
 ) {
+    val mapStyle = OfflineMapStyleVariant.forTheme(LocalVoltyDarkTheme.current)
     Text(
         stringResource(Res.string.settings_offline_navigation_subtitle),
         fontSize = 12.sp,
@@ -900,7 +909,7 @@ private fun OfflineMapsPage(
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Text(stringResource(Res.string.settings_offline_coverage_unavailable), fontSize = 12.sp)
-            TextButton(onClick = { component.onDownloadOfflineRegion(coverage.regionId) }) {
+            TextButton(onClick = { component.onDownloadOfflineRegion(coverage.regionId, mapStyle) }) {
                 Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(Modifier.size(6.dp))
                 Text(stringResource(Res.string.settings_offline_coverage_download))
@@ -985,6 +994,7 @@ private fun OfflineMapsPage(
             OfflineRegionRow(
                 region = region,
                 preparation = state.offlinePreparation.firstOrNull { it.regionId == region.region.regionId },
+                mapStyle = mapStyle,
                 component = component,
                 onDeleteRequest = { onDeleteRequest(region) },
             )
@@ -1076,10 +1086,13 @@ private fun DatabaseShareRow(state: SettingsComponent.State, component: Settings
 private fun OfflineRegionRow(
     region: OfflineRegionPackageState,
     preparation: OfflineRegionPreparationState?,
+    mapStyle: OfflineMapStyleVariant,
     component: SettingsComponent,
     onDeleteRequest: () -> Unit,
 ) {
     val release = region.latestRelease
+    val regionId = region.region.regionId
+    val mapState = preparation?.takeIf { it.mapStyle == mapStyle }?.map ?: OfflineMapPackState.Missing
     val version = when (region.status) {
         OfflineRegionPackageStatus.UPDATE_AVAILABLE -> release?.releaseVersion
         else -> region.installedReleaseVersion ?: release?.releaseVersion
@@ -1099,7 +1112,7 @@ private fun OfflineRegionRow(
         OfflineRegionPackageStatus.VERIFYING,
         OfflineRegionPackageStatus.DELETING -> {
             action = if (region.status == OfflineRegionPackageStatus.DOWNLOADING) {
-                { component.onPauseOfflineRegion(region.region.regionId) }
+                { component.onPauseOfflineRegion(regionId) }
             } else null
             actionIcon = if (action != null) Icons.Default.Pause else null
             actionText = stringResource(Res.string.settings_offline_pause)
@@ -1107,19 +1120,19 @@ private fun OfflineRegionRow(
         OfflineRegionPackageStatus.PAUSED,
         OfflineRegionPackageStatus.WAITING_FOR_NETWORK,
         OfflineRegionPackageStatus.QUEUED -> {
-            action = { component.onResumeOfflineRegion(region.region.regionId) }
+            action = { component.onResumeOfflineRegion(regionId, mapStyle) }
             actionIcon = Icons.Default.PlayArrow
             actionText = stringResource(Res.string.settings_offline_resume)
         }
         OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL -> {
-            action = { component.onConfirmMeteredOfflineRegion(region.region.regionId) }
+            action = { component.onConfirmMeteredOfflineRegion(regionId, mapStyle) }
             actionIcon = Icons.Default.Download
             actionText = stringResource(Res.string.settings_offline_download_mobile)
         }
         OfflineRegionPackageStatus.NOT_INSTALLED,
         OfflineRegionPackageStatus.UPDATE_AVAILABLE,
         OfflineRegionPackageStatus.FAILED -> {
-            action = { component.onDownloadOfflineRegion(region.region.regionId) }
+            action = { component.onDownloadOfflineRegion(regionId, mapStyle) }
             actionIcon = Icons.Default.Download
             actionText = if (region.status == OfflineRegionPackageStatus.NOT_INSTALLED &&
                 region.onDemand && release == null
@@ -1140,20 +1153,25 @@ private fun OfflineRegionRow(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(OfflineRegionDisplayNamePolicy.displayName(region.region), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        val tileStatus = when (mapState) {
+            OfflineMapPackState.Missing, OfflineMapPackState.Ready -> null
+            OfflineMapPackState.Preparing -> stringResource(Res.string.settings_offline_map_preparing)
+            is OfflineMapPackState.Downloading ->
+                stringResource(Res.string.settings_offline_map_progress, mapState.completedTiles)
+            is OfflineMapPackState.Failed -> stringResource(Res.string.settings_offline_map_failed)
+        }
+        val statusText = if (region.status == OfflineRegionPackageStatus.READY && mapState != OfflineMapPackState.Ready) {
+            tileStatus ?: stringResource(Res.string.settings_offline_map_missing)
+        } else {
+            offlineRegionStatusText(region, version)
+        }
         Text(
-            offlineRegionStatusText(region, version),
+            statusText,
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        preparation?.let { progress ->
-            val mapStatus = when (val map = progress.map) {
-                OfflineMapPackState.Missing -> null
-                OfflineMapPackState.Preparing -> stringResource(Res.string.settings_offline_status_preparing)
-                is OfflineMapPackState.Downloading -> stringResource(Res.string.settings_offline_status_downloading, "${map.completedTiles} tiles", "")
-                OfflineMapPackState.Ready -> stringResource(Res.string.settings_offline_status_ready, "map")
-                is OfflineMapPackState.Failed -> stringResource(Res.string.settings_offline_status_failed)
-            }
-            if (mapStatus != null) Text(mapStatus, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (region.status != OfflineRegionPackageStatus.READY && tileStatus != null) {
+            Text(tileStatus, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (release != null) {
             Text(
@@ -1165,6 +1183,20 @@ private fun OfflineRegionRow(
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        if (region.status == OfflineRegionPackageStatus.READY &&
+            (mapState == OfflineMapPackState.Missing || mapState is OfflineMapPackState.Failed)
+        ) {
+            TextButton(onClick = { component.onResumeOfflineRegion(regionId, mapStyle) }) {
+                Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    stringResource(
+                        if (mapState is OfflineMapPackState.Failed) Res.string.settings_offline_map_retry
+                        else Res.string.settings_offline_map_download,
+                    ),
+                )
+            }
         }
         if (action != null && actionIcon != null) {
             TextButton(onClick = action) {

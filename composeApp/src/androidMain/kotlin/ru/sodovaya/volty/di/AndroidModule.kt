@@ -25,7 +25,6 @@ import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineRegionPackageStor
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineValhallaRuntime
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineMapPackManager
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineMapPackStore
-import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineRegionPreparationStore
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackManager
 import ru.sodovaya.volty.domain.navigation.region.OfflineDownloadPreferences
 import ru.sodovaya.volty.domain.navigation.region.OfflineFirstNavigationRepository
@@ -36,7 +35,6 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionRuntime
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationCoordinator
 import ru.sodovaya.volty.domain.navigation.region.DefaultOfflineRegionPreparationCoordinator
-import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationStore
 import ru.sodovaya.volty.domain.navigation.region.OfflineStorageMeter
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineStorageMeter
 import ru.sodovaya.volty.data.prefs.AppPrefs
@@ -542,13 +540,11 @@ val androidModule = module {
             pixelRatio = androidContext().resources.displayMetrics.density,
         )
     }
-    single<OfflineRegionPreparationStore> { AndroidOfflineRegionPreparationStore(androidContext()) }
     single<OfflineRegionPreparationCoordinator> {
         DefaultOfflineRegionPreparationCoordinator(
             mapPacks = get(),
             packages = get(),
             scope = get(named(OFFLINE_DOWNLOAD_SCOPE)),
-            store = get(),
             network = get(),
             preferences = {
                 OfflineDownloadPreferences(

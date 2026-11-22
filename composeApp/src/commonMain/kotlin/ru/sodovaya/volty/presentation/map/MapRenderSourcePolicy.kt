@@ -1,10 +1,11 @@
 package ru.sodovaya.volty.presentation.map
 
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapStyleVariant
+
 /** Native MapLibre packs cache these same URLs; location and connectivity never select a style. */
 object MapRenderSourcePolicy {
     fun styleUrl(darkTheme: Boolean): String =
-        if (darkTheme) "https://tiles.openfreemap.org/styles/dark"
-        else "https://tiles.openfreemap.org/styles/bright"
+        OfflineMapStyleVariant.forTheme(darkTheme).ofmStyleUrl
 }
 
 internal data class LegacyBuildingLayerDefinition(
